@@ -1,23 +1,23 @@
 {
-  "version": "0.1.1",
-  "notes": "### Added\n\n- **Check for Updates… in the app menu.** Answers either way: \"Up to date\" or\n  \"Couldn't check\", rather than going quiet the way the background check does.\n  A check nobody asked for stays silent; one you asked for doesn't.\n- **Stop now stops background tasks.** Stopping a turn left backgrounded tasks\n  running, so the session sat busy until they drained on their own. Stop now\n  interrupts the turn and stops each outstanding task.\n- **You can send while a background task runs.** A prompt typed with a task\n  outstanding was queued behind a turn boundary that a background shell never\n  produces, so it sat there. It sends now.\n- **Confetti when a session settles**, on the same beat as the sound.\n\n### Fixed\n\n- **Esc no longer leaves fullscreen.** With the composer unfocused, Esc fell\n  through to the webview, which macOS reads as \"leave fullscreen\" — so the\n  window resized instead of the key cancelling anything.\n- **The blocked-install reason moved into a tooltip.** It sat under the button\n  as a standing line of prose, which read as a permanent second row.",
-  "pub_date": "2026-08-14T10:46:20.989Z",
+  "version": "0.1.2",
+  "notes": "### Added\n\n- **The window is glass.** The desktop shows through the transcript, while\n  cards, menus and the composer keep their own fill — so the wallpaper reads as\n  the room the app sits in rather than a wash over the text. Fullscreen drops\n  it, since there's nothing behind a fullscreen window to show through.\n- **A scroll-to-bottom button.** Scrolling up unpins the transcript for good,\n  so a session that kept growing left no way back to the live end but a drag.\n\n### Fixed\n\n- **The titlebar drags the window again.** Every drag was being rejected before\n  it started, and the parts of the bar carrying a label — session title, project\n  name, branch — were dead to the pointer even once it wasn't.\n- **Long paths in the file and command pickers no longer spill past the row.**\n  They ellipsize.\n- **The send hint hides while a picker is open.** It sat behind the list, and it\n  was untrue there anyway: Enter completes the highlighted row.\n\n### Changed\n\n- **Stepping between sessions is ⌘⇧↑/↓**, was ⌘⌥↑/↓.\n- **Shift+Tab is stated on the permission button's tooltip**, rather than only\n  inside the menu it opens — where the modes already are.",
+  "pub_date": "2026-08-15T06:56:27.630Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXFlTGphKzBWZ1dEYTd1a0t5WGhqakFOZlF1blRoOGU5K1JWVmJZV3pDcm8xT0RrOUpPZ21HK1JPVzNwRWI4TzAycFRsREs2SFBHWTExTDFESHVlTWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NzA0MzczCWZpbGU6RHJheS5hcHAudGFyLmd6ClZua0JQWmdzdGdYblJTQklucVJoZzM5dElUU00zbEVJZ3NwUnd4cm1YRFd1NVRzTm9hYjJkMkp0ZDl5dURhZzFnRncwMGpnT242a3lYOWdMR2crM0R3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW9Cck04dnE2WmFDbzJuRlFIMUp3OFV0R1ljOU1YUmhPSGtNWU1BeW5uVWp1M1FkVVFlYUR5VjRpTG1UQzZiWXZYcUpmMkpDNVFrR0xKc2pTc1c1ZmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Nzc2OTgxCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1mMGdZMzdCMWo2djMvSzAzYnhURVk2a2txb0hHcHpDVW5tZXZNTnpJa2gyVVBpUGhyRUkyeEUwdWR3UU5ha0thckhTbE9naFU1b2o5WGJOajZYUEFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXFlTGphKzBWZ1dEYTd1a0t5WGhqakFOZlF1blRoOGU5K1JWVmJZV3pDcm8xT0RrOUpPZ21HK1JPVzNwRWI4TzAycFRsREs2SFBHWTExTDFESHVlTWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NzA0MzczCWZpbGU6RHJheS5hcHAudGFyLmd6ClZua0JQWmdzdGdYblJTQklucVJoZzM5dElUU00zbEVJZ3NwUnd4cm1YRFd1NVRzTm9hYjJkMkp0ZDl5dURhZzFnRncwMGpnT242a3lYOWdMR2crM0R3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW9Cck04dnE2WmFDbzJuRlFIMUp3OFV0R1ljOU1YUmhPSGtNWU1BeW5uVWp1M1FkVVFlYUR5VjRpTG1UQzZiWXZYcUpmMkpDNVFrR0xKc2pTc1c1ZmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Nzc2OTgxCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1mMGdZMzdCMWo2djMvSzAzYnhURVk2a2txb0hHcHpDVW5tZXZNTnpJa2gyVVBpUGhyRUkyeEUwdWR3UU5ha0thckhTbE9naFU1b2o5WGJOajZYUEFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.2/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXFlTGphKzBWZ1dEYTd1a0t5WGhqakFOZlF1blRoOGU5K1JWVmJZV3pDcm8xT0RrOUpPZ21HK1JPVzNwRWI4TzAycFRsREs2SFBHWTExTDFESHVlTWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NzA0MzczCWZpbGU6RHJheS5hcHAudGFyLmd6ClZua0JQWmdzdGdYblJTQklucVJoZzM5dElUU00zbEVJZ3NwUnd4cm1YRFd1NVRzTm9hYjJkMkp0ZDl5dURhZzFnRncwMGpnT242a3lYOWdMR2crM0R3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW9Cck04dnE2WmFDbzJuRlFIMUp3OFV0R1ljOU1YUmhPSGtNWU1BeW5uVWp1M1FkVVFlYUR5VjRpTG1UQzZiWXZYcUpmMkpDNVFrR0xKc2pTc1c1ZmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Nzc2OTgxCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1mMGdZMzdCMWo2djMvSzAzYnhURVk2a2txb0hHcHpDVW5tZXZNTnpJa2gyVVBpUGhyRUkyeEUwdWR3UU5ha0thckhTbE9naFU1b2o5WGJOajZYUEFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXFlTGphKzBWZ1dEYTd1a0t5WGhqakFOZlF1blRoOGU5K1JWVmJZV3pDcm8xT0RrOUpPZ21HK1JPVzNwRWI4TzAycFRsREs2SFBHWTExTDFESHVlTWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NzA0MzczCWZpbGU6RHJheS5hcHAudGFyLmd6ClZua0JQWmdzdGdYblJTQklucVJoZzM5dElUU00zbEVJZ3NwUnd4cm1YRFd1NVRzTm9hYjJkMkp0ZDl5dURhZzFnRncwMGpnT242a3lYOWdMR2crM0R3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW9Cck04dnE2WmFDbzJuRlFIMUp3OFV0R1ljOU1YUmhPSGtNWU1BeW5uVWp1M1FkVVFlYUR5VjRpTG1UQzZiWXZYcUpmMkpDNVFrR0xKc2pTc1c1ZmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Nzc2OTgxCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1mMGdZMzdCMWo2djMvSzAzYnhURVk2a2txb0hHcHpDVW5tZXZNTnpJa2gyVVBpUGhyRUkyeEUwdWR3UU5ha0thckhTbE9naFU1b2o5WGJOajZYUEFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.1.2/Dray_universal.app.tar.gz"
     }
   }
 }
