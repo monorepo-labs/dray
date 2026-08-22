@@ -118,6 +118,18 @@ function MarkdownImpl({ children, streaming = false, className }: MarkdownProps)
         // the table with no structure at all — put it back on the rows.
         "[&_th]:border-b [&_th]:border-border/60",
         "[&_tbody_tr]:border-b [&_tbody_tr]:border-border/30",
+        // A cell that cannot break sets the table's width: one file path in a
+        // bot's summary table pushed every other column out of the PR panel and
+        // left the reader scrolling sideways to read a sentence. Anywhere rather
+        // than break-word, because only `anywhere` shrinks the cell's min-content
+        // width, which is what the auto layout measures. The wrapper keeps its
+        // own scroll for a table that is genuinely wide.
+        // The header cell needs its `whitespace-nowrap` lifted first, or the
+        // wrap rule is dead on it — nowrap outranks overflow-wrap.
+        "[&_th]:whitespace-normal [&_th]:wrap-anywhere [&_td]:wrap-anywhere",
+        // With cells now several lines tall, a middle-aligned short cell floats
+        // opposite the middle of a paragraph beside it.
+        "[&_td]:align-top",
 
         // Streamdown sets its own vertical rhythm; strip the leading and
         // trailing margin so a message sits flush in the transcript's gap.

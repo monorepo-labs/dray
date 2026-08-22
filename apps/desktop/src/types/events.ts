@@ -526,7 +526,24 @@ export type PrComment = { author: string,
  * The commenter's picture. `None` for an account that has none, which the
  * panel draws as their initial rather than as a gap.
  */
-avatar: string | null, body: string, createdAt: string, url: string, kind: CommentKind, };
+avatar: string | null, body: string, createdAt: string, url: string, kind: CommentKind, 
+/**
+ * The file an inline review comment hangs on — `path:line`, or the path
+ * alone once GitHub has forgotten which line it pointed at. `None` for
+ * everything on the conversation timeline, which hangs on nothing.
+ */
+path: string | null, 
+/**
+ * Whether the thread has been settled. False for every row that is not a
+ * thread, since only a review thread can be resolved.
+ */
+resolved: boolean, 
+/**
+ * The rest of the thread, oldest first. Only an inline comment carries
+ * any: a PR's own conversation is flat, so a reply is either part of a
+ * review thread or it is a new comment.
+ */
+replies: Array<PrComment>, };
 
 /**
  * Why there is nothing to show, when the reason is not "this branch has no PR".
@@ -583,9 +600,9 @@ mergeStateStatus: string,
  */
 reviewDecision: string | null, checks: Array<PrCheck>, 
 /**
- * Comments and reviews in one list, oldest first — the order GitHub reads
- * them in, and the only order in which a bot's reply to a review makes
- * sense.
+ * Comments, reviews and inline threads in one list, oldest first — the
+ * order GitHub reads them in, and the only order in which a bot's reply to
+ * a review makes sense. A thread is one entry carrying its own replies.
  */
 comments: Array<PrComment>, 
 /**

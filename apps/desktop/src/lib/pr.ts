@@ -144,6 +144,18 @@ export function firstLine(body: string): string {
   );
 }
 
+/// What an inline thread's row calls the place it hangs — the filename and the
+/// line, out of a path that carries both.
+///
+/// The directory goes: the pane is half a window wide and a deep path spends
+/// the whole row saying where in the tree a file sits, which is the half a
+/// reader who is looking at this PR already knows. The full path rides the
+/// row's `title`, which is what that attribute is for here — text the app is
+/// truncating rather than a fact it is hiding.
+export function threadLabel(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
 /// Bodies as bots write them, minus the machinery they hide their state in.
 ///
 /// Vercel opens every comment with a base64 blob on a `[vc]: #…` line and

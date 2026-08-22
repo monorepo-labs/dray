@@ -69,6 +69,17 @@ pub struct PrComment {
     pub created_at: String,
     pub url: String,
     pub kind: CommentKind,
+    /// The file an inline review comment hangs on — `path:line`, or the path
+    /// alone once GitHub has forgotten which line it pointed at. `None` for
+    /// everything on the conversation timeline, which hangs on nothing.
+    pub path: Option<String>,
+    /// Whether the thread has been settled. False for every row that is not a
+    /// thread, since only a review thread can be resolved.
+    pub resolved: bool,
+    /// The rest of the thread, oldest first. Only an inline comment carries
+    /// any: a PR's own conversation is flat, so a reply is either part of a
+    /// review thread or it is a new comment.
+    pub replies: Vec<PrComment>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -94,9 +105,9 @@ pub struct PullRequest {
     /// repo requires no review, which `gh` reports as an empty string.
     pub review_decision: Option<String>,
     pub checks: Vec<PrCheck>,
-    /// Comments and reviews in one list, oldest first — the order GitHub reads
-    /// them in, and the only order in which a bot's reply to a review makes
-    /// sense.
+    /// Comments, reviews and inline threads in one list, oldest first — the
+    /// order GitHub reads them in, and the only order in which a bot's reply to
+    /// a review makes sense. A thread is one entry carrying its own replies.
     pub comments: Vec<PrComment>,
     /// Lines added and removed across the whole PR, and how many files moved.
     /// The same figures the changes panel shows for a turn, for the same
@@ -149,7 +160,8 @@ query($owner:String!,$repo:String!,$branch:String!){
    additions deletions changedFiles
    author{login avatarUrl}
    comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
-   reviews(first:50){nodes{author{login avatarUrl} body submittedAt state}}
+   reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
+   reviewThreads(first:50){nodes{isResolved path line comments(first:50){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
    commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
      __typename
      ... on StatusContext{context state targetUrl avatarUrl}
@@ -283,11 +295,25 @@ struct RawComment {
     created_at: String,
     #[serde(default)]
     url: String,
+    /// The review this was left under. Absent on a conversation comment, which
+    /// belongs to no review at all.
+    #[serde(default)]
+    pull_request_review: Option<RawNodeId>,
+}
+
+/// A node named only so it can be pointed at.
+#[derive(Deserialize)]
+struct RawNodeId {
+    #[serde(default)]
+    id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawReview {
+    /// What the threads left under it name it by.
+    #[serde(default)]
+    id: String,
     #[serde(default)]
     author: Option<RawAuthor>,
     #[serde(default)]
@@ -296,6 +322,23 @@ struct RawReview {
     submitted_at: String,
     #[serde(default)]
     state: String,
+}
+
+/// One inline conversation: where it hangs, whether it is settled, and every
+/// comment on it — the first is what opened it and the rest are replies.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawThread {
+    #[serde(default)]
+    is_resolved: bool,
+    #[serde(default)]
+    path: Option<String>,
+    /// Null once the code it pointed at has been pushed over: GitHub keeps the
+    /// thread and forgets the line.
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    comments: Option<Nodes<RawComment>>,
 }
 
 #[derive(Deserialize)]
@@ -351,12 +394,63 @@ struct RawPr {
     comments: Option<Nodes<RawComment>>,
     #[serde(default)]
     reviews: Option<Nodes<RawReview>>,
+    /// The inline conversations. Not reachable through `reviews`: the review
+    /// they were left under carries only its own body, which for a review that
+    /// is nothing but file comments is empty.
+    #[serde(default)]
+    review_threads: Option<Nodes<RawThread>>,
     /// Only the tip commit's rollup is asked for: a check reported against an
     /// older commit is describing code that has since been pushed over.
     #[serde(default)]
     commits: Option<Nodes<RawCommitNode>>,
     #[serde(default)]
     updated_at: String,
+}
+
+impl RawComment {
+    /// A timeline row with nothing hanging off it. A thread's own root fills
+    /// the rest in afterwards; everything else is already complete.
+    fn map(self, kind: CommentKind) -> PrComment {
+        PrComment {
+            author: login(&self.author),
+            avatar: avatar(&self.author),
+            body: self.body,
+            created_at: self.created_at,
+            url: self.url,
+            kind,
+            path: None,
+            resolved: false,
+            replies: Vec::new(),
+        }
+    }
+}
+
+impl RawThread {
+    /// The thread as one row — the comment that opened it, carrying the rest —
+    /// and the id of the review it was left under, which is what files it.
+    ///
+    /// `None` for a thread whose comments have all been deleted: there is
+    /// nothing left to draw, and the file it hung on is not a comment.
+    fn map(self) -> Option<(Option<String>, PrComment)> {
+        let mut comments = Nodes::take(self.comments).into_iter();
+        let opener = comments.next()?;
+
+        let review = opener
+            .pull_request_review
+            .as_ref()
+            .map(|r| r.id.clone())
+            .filter(|id| !id.is_empty());
+
+        let mut root = opener.map(CommentKind::Comment);
+        root.path = self.path.map(|path| match self.line {
+            Some(line) => format!("{path}:{line}"),
+            None => path,
+        });
+        root.resolved = self.is_resolved;
+        root.replies = comments.map(|c| c.map(CommentKind::Comment)).collect();
+
+        Some((review, root))
+    }
 }
 
 fn login(author: &Option<RawAuthor>) -> String {
@@ -451,34 +545,57 @@ impl RawPr {
 
         let mut comments: Vec<PrComment> = Nodes::take(self.comments)
             .into_iter()
-            .map(|c| PrComment {
-                author: login(&c.author),
-                avatar: avatar(&c.author),
-                body: c.body,
-                created_at: c.created_at,
-                url: c.url,
-                kind: CommentKind::Comment,
-            })
+            .map(|c| c.map(CommentKind::Comment))
             .collect();
 
-        comments.extend(
-            Nodes::take(self.reviews)
-                .into_iter()
-                // A review with no body is the envelope GitHub wraps inline
-                // file comments in. It carries nothing to read, and drawing it
-                // puts an empty card between two that say something.
-                .filter(|r| !r.body.trim().is_empty() || r.state == "APPROVED")
-                .map(|r| PrComment {
-                    kind: review_kind(&r.state),
-                    author: login(&r.author),
-                    avatar: avatar(&r.author),
-                    body: r.body,
-                    created_at: r.submitted_at,
-                    // Reviews carry a node id rather than a URL, so the thread
-                    // they belong to is the closest honest link.
-                    url: url.clone(),
-                }),
-        );
+        // The inline conversations, filed under the review that left them.
+        // Every review comment carries the id of its review, which is the only
+        // thing joining the two: a thread standing on its own row says nothing
+        // about which pass over the code produced it, and next to a
+        // conversation comment it does not read as a reply to anything.
+        let mut threads: HashMap<String, Vec<PrComment>> = HashMap::new();
+        let mut loose: Vec<PrComment> = Vec::new();
+
+        for raw in Nodes::take(self.review_threads) {
+            let Some((review, thread)) = raw.map() else { continue };
+            match review {
+                Some(id) => threads.entry(id).or_default().push(thread),
+                None => loose.push(thread),
+            }
+        }
+
+        comments.extend(Nodes::take(self.reviews).into_iter().filter_map(|r| {
+            let mut replies = threads.remove(&r.id).unwrap_or_default();
+            replies.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+            // A review with no body is the envelope GitHub wraps inline file
+            // comments in. Empty and holding nothing, it draws a card that says
+            // nothing — but empty and holding threads it is the only row that
+            // names who left them, so it stays and they hang off it.
+            if r.body.trim().is_empty() && replies.is_empty() && r.state != "APPROVED" {
+                return None;
+            }
+
+            Some(PrComment {
+                kind: review_kind(&r.state),
+                author: login(&r.author),
+                avatar: avatar(&r.author),
+                body: r.body,
+                created_at: r.submitted_at,
+                // Reviews carry a node id rather than a URL, so the thread
+                // they belong to is the closest honest link.
+                url: url.clone(),
+                path: None,
+                resolved: false,
+                replies,
+            })
+        }));
+
+        // A thread whose review is not on the list — one left beyond the fifty
+        // we ask for — still belongs on the timeline. It reads as its own note,
+        // which is what it is once the review it hung off is out of reach.
+        comments.extend(threads.into_values().flatten());
+        comments.extend(loose);
 
         comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
@@ -766,9 +883,10 @@ mod tests {
     use super::*;
 
     /// A real capture: `gh api graphql` against a PR carrying a Vercel status
-    /// context, a Devin status context, an app-owned check run, a bot review
-    /// and a bot comment. Every avatar in it is one no `<login>.png` guess
-    /// could have produced.
+    /// context, two app-owned check runs, two bot comments, a review with a
+    /// body, two bodyless review envelopes, and four inline threads — one of
+    /// them resolved, two hanging on a line GitHub has since forgotten. Every
+    /// avatar in it is one no `<login>.png` guess could have produced.
     const FIXTURE: &str = include_str!("fixtures/pr_graphql.json");
 
     fn parse() -> PullRequest {
@@ -807,12 +925,105 @@ mod tests {
     #[test]
     fn merges_comments_and_reviews_oldest_first() {
         let pr = parse();
-        assert_eq!(pr.comments.len(), 2);
+        // Two conversation comments and three reviews. The four inline threads
+        // are on none of those rows — they hang off the review that left them.
+        assert_eq!(pr.comments.len(), 5);
         assert_eq!(pr.comments[0].author, "vercel");
         assert_eq!(pr.comments[0].kind, CommentKind::Comment);
-        assert_eq!(pr.comments[1].author, "devin-ai-integration");
-        assert_eq!(pr.comments[1].kind, CommentKind::Reviewed);
-        assert!(pr.comments[0].created_at <= pr.comments[1].created_at);
+        assert!(pr.comments.iter().any(|c| c.kind == CommentKind::Reviewed));
+        assert!(pr.comments.windows(2).all(|w| w[0].created_at <= w[1].created_at));
+        // Nothing on the timeline itself is a file comment.
+        assert!(pr.comments.iter().all(|c| c.path.is_none()));
+    }
+
+    /// Every inline thread sits under its own review, joined by the id its
+    /// first comment carries. Standing on the timeline they read as ordinary
+    /// comments and say nothing about which pass over the code produced them.
+    #[test]
+    fn inline_threads_hang_off_the_review_that_left_them() {
+        let pr = parse();
+        let threads: Vec<_> = pr.comments.iter().flat_map(|c| &c.replies).collect();
+
+        assert_eq!(threads.len(), 4);
+        assert!(threads.iter().all(|t| t.path.is_some()));
+        assert_eq!(threads.iter().filter(|t| t.resolved).count(), 1);
+        // Devin left two file comments in one pass, so both are on one row.
+        let devin = pr
+            .comments
+            .iter()
+            .find(|c| c.author == "devin-ai-integration")
+            .expect("devin's review");
+        assert_eq!(devin.replies.len(), 2);
+        // A line GitHub still knows is appended; one it has forgotten leaves
+        // the path standing alone.
+        assert!(threads
+            .iter()
+            .any(|t| t.path.as_deref() == Some("apps/desktop/src/hooks/useRepo.ts:80")));
+        assert!(threads.iter().any(|t| {
+            t.path.as_deref() == Some("apps/desktop/src/components/changes/ChangesView.tsx")
+        }));
+    }
+
+    /// A review that is nothing but file comments has an empty body, and it is
+    /// the only row that names who left them.
+    #[test]
+    fn a_bodyless_review_holding_threads_is_kept() {
+        let pr = parse();
+        let envelopes: Vec<_> = pr
+            .comments
+            .iter()
+            .filter(|c| c.body.trim().is_empty() && !c.replies.is_empty())
+            .collect();
+
+        assert_eq!(envelopes.len(), 2);
+        assert!(envelopes.iter().all(|e| e.author == "greptile-apps"));
+    }
+
+    /// A thread's later comments are replies inside it, not rows of their own.
+    /// No capture holds one yet, so this pins the shape.
+    #[test]
+    fn a_threads_later_comments_are_replies() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,
+            "reviews":{"nodes":[{"id":"R1","author":{"login":"bot"},"body":"",
+              "state":"COMMENTED","submittedAt":"2026-01-01T00:00:00Z"}]},
+            "reviewThreads":{"nodes":[
+            {"isResolved":false,"path":"src/main.rs","line":12,"comments":{"nodes":[
+              {"author":{"login":"bot"},"body":"this leaks","createdAt":"2026-01-01T00:00:00Z",
+               "pullRequestReview":{"id":"R1"}},
+              {"author":{"login":"me"},"body":"fixed","createdAt":"2026-01-01T00:05:00Z",
+               "pullRequestReview":{"id":"R1"}}]}}]}}]}}}}"#;
+        let prs = read_prs(out).expect("thread parses");
+
+        assert_eq!(prs[0].comments.len(), 1);
+        let thread = &prs[0].comments[0].replies[0];
+        assert_eq!(thread.author, "bot");
+        assert_eq!(thread.path.as_deref(), Some("src/main.rs:12"));
+        assert_eq!(thread.replies.len(), 1);
+        assert_eq!(thread.replies[0].author, "me");
+        // The row sorts by what opened the thread, not by its last reply.
+        assert_eq!(thread.created_at, "2026-01-01T00:00:00Z");
+    }
+
+    /// A thread whose review is out of reach still belongs on the timeline —
+    /// it reads as its own note, which is what it is with nothing to hang off.
+    #[test]
+    fn a_thread_with_no_review_of_its_own_stands_alone() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
+            {"path":"src/main.rs","line":3,"comments":{"nodes":[
+              {"author":{"login":"bot"},"body":"look here","createdAt":"2026-01-01T00:00:00Z"}]}}]}}]}}}}"#;
+        let prs = read_prs(out).expect("orphan thread parses");
+
+        assert_eq!(prs[0].comments.len(), 1);
+        assert_eq!(prs[0].comments[0].path.as_deref(), Some("src/main.rs:3"));
+    }
+
+    /// Every comment on a thread can be deleted, and what is left is a file
+    /// path rather than anything to draw.
+    #[test]
+    fn an_empty_thread_draws_no_row() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
+            {"path":"src/main.rs","comments":{"nodes":[]}}]}}]}}}}"#;
+        assert!(read_prs(out).expect("empty thread parses")[0].comments.is_empty());
     }
 
     /// GraphQL sends `null` where the repo requires no review, and an empty
@@ -834,12 +1045,13 @@ mod tests {
         );
     }
 
-    /// Null connections are the shape a PR with no checks and no comments
-    /// arrives in, and they must not fail the response.
+    /// Null connections are the shape a PR with no checks, no comments and no
+    /// threads arrives in, and they must not fail the response.
     #[test]
     fn null_connections_read_as_empty() {
         let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
-            {"number":7,"comments":{"nodes":null},"reviews":null,"commits":{"nodes":[]}}]}}}}"#;
+            {"number":7,"comments":{"nodes":null},"reviews":null,"reviewThreads":{"nodes":null},
+             "commits":{"nodes":[]}}]}}}}"#;
         let prs = read_prs(out).expect("nulls parse");
         assert!(prs[0].checks.is_empty() && prs[0].comments.is_empty());
     }
@@ -930,7 +1142,7 @@ mod tests {
     #[test]
     fn diff_counts_come_through() {
         let pr = parse();
-        assert_eq!((pr.additions, pr.deletions, pr.changed_files), (167, 4, 8));
+        assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
     }
 
     #[test]

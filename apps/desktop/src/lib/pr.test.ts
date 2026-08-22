@@ -8,6 +8,7 @@ import {
   sessionBranch,
   stripBotMarkers,
   summarizeChecks,
+  threadLabel,
 } from "./pr";
 import type { PrCheck, PullRequest } from "@/types/events";
 
@@ -169,5 +170,18 @@ describe("prBadgeCount", () => {
     expect(
       prBadgeCount([pr(), pr({ isDraft: true }), pr({ state: "MERGED" })]),
     ).toBe(2);
+  });
+});
+
+describe("threadLabel", () => {
+  it("keeps the filename and the line, and drops the directory", () => {
+    expect(threadLabel("apps/desktop/src/hooks/useRepo.ts:80")).toBe("useRepo.ts:80");
+  });
+
+  // GitHub forgets the line once the code has been pushed over, and leaves
+  // the path standing alone.
+  it("reads a path with no line", () => {
+    expect(threadLabel("apps/desktop/src/lib/pr.ts")).toBe("pr.ts");
+    expect(threadLabel("README.md")).toBe("README.md");
   });
 });

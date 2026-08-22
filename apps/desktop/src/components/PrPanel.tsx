@@ -28,7 +28,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { usePullRequest, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
-import { firstLine, mergeReadiness, stripBotMarkers, summarizeChecks, type Tone } from "@/lib/pr";
+import {
+  firstLine,
+  mergeReadiness,
+  stripBotMarkers,
+  summarizeChecks,
+  threadLabel,
+  type Tone,
+} from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type {
   MergeMethod,
@@ -578,48 +585,133 @@ const VERDICT: Record<PrComment["kind"], { word?: string; tone?: string }> = {
 /// The author's picture stands in for the icon that used to sit here. It says
 /// who in the same space, and a column of identical speech bubbles said nothing
 /// at all.
+///
+/// A review opens onto what it said and every file comment it left, so the
+/// timeline stays a list of things people did rather than one of every sentence
+/// they wrote. A row that only holds file comments has no body at all, and is
+/// then the only thing naming who left them.
 function CommentCard({ comment }: { comment: PrComment }) {
   const { word, tone } = VERDICT[comment.kind];
   const body = stripBotMarkers(comment.body);
+  const replies = comment.replies;
 
   const [open, setOpen] = useState(false);
+  const expandable = Boolean(body) || replies.length > 0;
+  const preview = !open && Boolean(body);
+  const count = !open && replies.length > 0;
 
   return (
     <article className="px-3">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        disabled={!body}
+        disabled={!expandable}
         className="flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-left text-ui disabled:cursor-default"
       >
         <ChevronRight
           className={cn(
             "size-3 shrink-0 text-muted-foreground/60 transition-transform",
             open && "rotate-90",
-            !body && "invisible",
+            !expandable && "invisible",
           )}
         />
         <Avatar src={comment.avatar} name={comment.author} />
         <span className="shrink-0 text-sidebar-foreground">{comment.author}</span>
         {word && <span className={cn("shrink-0", tone)}>{word}</span>}
 
+        {/* Where the note hangs, which for an inline comment is most of what it
+            is about. It keeps its width where the preview gives way, since a
+            half-clipped filename names nothing. */}
+        {comment.path && (
+          <span className="shrink-0 font-mono text-muted-foreground" title={comment.path}>
+            {threadLabel(comment.path)}
+          </span>
+        )}
+        {comment.resolved && <span className="shrink-0 text-muted-foreground/60">resolved</span>}
+
         {/* Closed, the first line stands in for the body — a row that says only
             who wrote it makes the reader open every one to find the one that
             matters. */}
-        {!open && body && (
+        {preview && (
           <span className="min-w-0 flex-1 truncate text-muted-foreground">{firstLine(body)}</span>
         )}
 
-        <span className={cn("shrink-0 text-muted-foreground", open && "ml-auto")}>
+        {/* The preview is the only thing here that flexes, so whatever comes
+            first after it takes the push to the right edge in its place. */}
+        {count && (
+          <span className={cn("shrink-0 text-muted-foreground", !preview && "ml-auto")}>
+            {replies.length} {replies.length === 1 ? "reply" : "replies"}
+          </span>
+        )}
+
+        <span className={cn("shrink-0 text-muted-foreground", !preview && !count && "ml-auto")}>
           {relativeTime(comment.createdAt)}
         </span>
       </button>
 
-      {/* Bot comments carry tables, badges and preview links, so this is real
-          markdown rather than text — a Vercel comment rendered flat is a wall
-          of pipe characters. */}
-      {open && body && <Markdown className="mb-1 mt-1 pl-6 text-ui">{body}</Markdown>}
+      {open && (
+        <div className="mb-1 mt-1 flex flex-col gap-2 pl-6">
+          {/* Bot comments carry tables, badges and preview links, so this is
+              real markdown rather than text — a Vercel comment rendered flat is
+              a wall of pipe characters. */}
+          {body && <Markdown className="text-ui">{body}</Markdown>}
+
+          <Nest comments={replies} />
+        </div>
+      )}
     </article>
+  );
+}
+
+/// What is folded inside a row: a review's file comments, or a file comment's
+/// replies.
+///
+/// Indented and hung off a rule. Space alone was not enough — anything drawn at
+/// the body's own margin reads as another comment, and this pane is already a
+/// stack of comments — so the rule is what says these belong to the row above
+/// rather than to the PR. Nothing here collapses: it is already behind one
+/// disclosure, and a second click to read a two-line reply is a click to find
+/// out there was nothing to find.
+function Nest({ comments }: { comments: PrComment[] }) {
+  if (!comments.length) return null;
+
+  return (
+    <div className="flex flex-col gap-3 border-l border-border pl-3">
+      {comments.map((comment, i) => (
+        <Nested key={`${comment.author}-${comment.createdAt}-${i}`} comment={comment} />
+      ))}
+    </div>
+  );
+}
+
+/// One of them, with whatever is folded inside it.
+///
+/// It names its author for the reason the timeline row does — a thread is two
+/// people talking, and a wall of bodies says nothing about who is answering
+/// whom — but at a smaller mark and a muted name, so what was said and what it
+/// was said *to* are told apart before either is read. A file comment leads
+/// with the file, which is what makes one worth opening at all.
+function Nested({ comment }: { comment: PrComment }) {
+  const body = stripBotMarkers(comment.body);
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1.5 text-ui">
+        {comment.path && (
+          <span className="min-w-0 truncate font-mono text-sidebar-foreground" title={comment.path}>
+            {threadLabel(comment.path)}
+          </span>
+        )}
+        <Avatar src={comment.avatar} name={comment.author} className="size-3.5 text-[8px]" />
+        <span className="shrink-0 text-muted-foreground">{comment.author}</span>
+        {comment.resolved && <span className="shrink-0 text-muted-foreground/60">resolved</span>}
+        <span className="shrink-0 text-muted-foreground/60">
+          {relativeTime(comment.createdAt)}
+        </span>
+      </div>
+      {body && <Markdown className="text-ui">{body}</Markdown>}
+      <Nest comments={comment.replies} />
+    </div>
   );
 }
 
