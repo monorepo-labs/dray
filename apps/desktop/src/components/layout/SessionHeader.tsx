@@ -1,5 +1,4 @@
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
 import { sessionBranch } from "@/lib/pr";
 import { cn } from "@/lib/utils";
@@ -10,9 +9,13 @@ type SessionHeaderProps = {
   className?: string;
 };
 
-/// One line: `project / title`, then the branch. The sidebar clips titles at
-/// 240px, so this is the one place the full one is legible — hence the tooltip,
-/// and hence the title being the only part that gives way to truncation.
+/// One line: `project / title`, then the branch. The title is the only part
+/// that gives way to truncation, since it is the one thing here the reader
+/// wrote and can recognise from its opening words.
+///
+/// No tooltip on it. It fired on every hover of a title that was not clipped,
+/// which is most of them, and repeated back text already on screen — the one
+/// thing the app's tooltip rule says a tooltip must not do.
 export default function SessionHeader({ session, className }: SessionHeaderProps) {
   if (!session) {
     return (
@@ -35,14 +38,7 @@ export default function SessionHeader({ session, className }: SessionHeaderProps
           /
         </span>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="truncate font-medium text-foreground">{session.title}</span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-80 text-balance">
-            {session.title}
-          </TooltipContent>
-        </Tooltip>
+        <span className="truncate font-medium text-foreground">{session.title}</span>
       </span>
 
       {branch && (

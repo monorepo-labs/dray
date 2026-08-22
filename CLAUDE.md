@@ -88,9 +88,9 @@ That = real entry point — build and run Rust app, start Vite via `beforeDevCom
 
 - `pnpm dev` — frontend only, port 1420 (`strictPort: true`, so busy port = hard failure, no fallback). `invoke` calls do nothing in plain browser, so only useful for pure-CSS/layout work.
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
-- `cd apps/desktop/src-tauri && cargo test` — Rust tests (186: parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
+- `cd apps/desktop/src-tauri && cargo test` — Rust tests (223: parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
-- `pnpm test` — frontend tests (vitest, 88, node environment, no DOM). Scoped to pure logic where being wrong invisible on screen: [streaming.ts](apps/desktop/src/lib/streaming.ts), which have wire format to get wrong and read same committed fixtures Rust tests do rather than keep own captures; and composer's caret arithmetic ([slash.ts](apps/desktop/src/lib/slash.ts), [mention.ts](apps/desktop/src/lib/mention.ts), [highlight.ts](apps/desktop/src/lib/highlight.ts)), where same string open picker or not depending only on cursor position. Components not tested — no DOM here.
+- `pnpm test` — frontend tests (vitest, 126, node environment, no DOM). Scoped to pure logic where being wrong invisible on screen: [streaming.ts](apps/desktop/src/lib/streaming.ts), which have wire format to get wrong and read same committed fixtures Rust tests do rather than keep own captures; and composer's caret arithmetic ([slash.ts](apps/desktop/src/lib/slash.ts), [mention.ts](apps/desktop/src/lib/mention.ts), [highlight.ts](apps/desktop/src/lib/highlight.ts)), where same string open picker or not depending only on cursor position. Components not tested — no DOM here.
 
 ## Architecture: the event pipeline
 
@@ -313,6 +313,48 @@ Only **tip commit's** rollup asked for (`commits(last:1)`) — check reported ag
 **Collapsed preview = plain text, so markup come off first.** `firstLine` strip heading marks, emphasis, and link syntax keeping only its text — `(https://…)` half usually longer than words around it and not clickable in truncating span anyway. Vercel comment's opener otherwise read as raw markdown.
 
 **PR body deliberately unrendered.** It one thing on panel reader wrote themselves, usually longest thing there, and it push checks — part that change — below fold. Title link out for rest. Bot comments *are* rendered as markdown: Vercel comment carry table of deploy links, and flattened to text it wall of pipe characters. `stripBotMarkers` drop `[vc]: #<base64>` line and HTML comments first — both addressed to GitHub rather than to reader, and both survive into rendered markdown as stray line at top of card.
+
+## The repo view
+
+**Main column have tabs now, and Chat = one of them.** [ViewTabs](apps/desktop/src/components/layout/ViewTabs.tsx) sit in header row between session name and `PanelToggle`; `VIEW_TABS` = set *and* order, so Terminal later = one array entry plus one body. Accelerator read off array position (⌘1, ⌘2), not stored per tab — reorder array and keys move with it. Bodies use `TabBody` from `RightPanel`, so transcript **hide, not unmount**: scroll position, follow pin and every highlighted diff survive flip.
+
+**Tab per session, and not persisted.** `panelTab` = standing preference; this = working context for one session. Record keyed by session id in `App`, `?? "chat"` on read. Reopening app onto repo view for every session wrong more often than right.
+
+**Composer hidden off Chat.** Other views not conversations, and composer under them send into session reader can't see. Safe to unmount because `useDraft`/`useAttachments` module-level already — same reason they module-level for empty-state crossing.
+
+**Right panel's changes tab stay, and answer different question.** Panel = "what did this turn do", turn-scoped, beside transcript. View = whole repository. Two surfaces, not duplicate: one follow turns, other follow branch.
+
+**Uncommitted list = HEAD tree against live snapshot**, and that whole trick. `head_tree` = `rev-parse HEAD^{tree}`, paired with `changes_since(cwd, headTree, None)` which snapshot working tree to answer. Commit move HEAD → new tree id → cache key roll onto new baseline by itself. **Nothing invalidate anything** — same bargain frozen turn ranges already make.
+
+**Commit SHA pass `is_tree_id` and every diff path take them unchanged.** ≤64 hex, so `git diff <sha> <sha> --` and `{sha}:{path}` cat-file rev work as-is — commit's own diff = `useChanges(cwd, commit.parent ?? EMPTY_TREE, commit.sha)`. Non-null head = frozen key = read once, cached forever. Root commit's `parent` = `None`, and `EMPTY_TREE` (`4b825dc…`) stand in, so first commit in history open like any other instead of being one row that can't.
+
+**Log record framed on NUL, field on `%x1f`, body last.** `git log -z` separate *commits* with NUL — one byte message cannot carry. Fields = unit separator, and body **last** so `splitn(6)` let it hold anything, separator included. `%P` space-separated, first parent only: merge read as what it brought onto branch, not as everything both side ever did.
+
+**View read, never write — and that not "not yet".** Conversation next door = where work get made and committed, so second place to write commit = second way to do thing reader already asking agent for. No checkbox, no message box, no push button, no discard.
+
+Backend keep `commit_files` and `push_branch` anyway, registered and tested, and `commit.ts` keep checkbox arithmetic beside them. Deliberate: hard part of commit surface = *which* path go in (rename need both name, `--only` promise, literal pathspec), and that reasoning expensive to rediscover. Kept where it can be picked back up, not scattered. **UI absent, capability parked.**
+
+If it come back: commit = `add -A -- <paths>` then `commit -m … -- <paths>`, both `GIT_LITERAL_PATHSPECS=1`. `add` = what make untracked file committable at all (`commit -- <path>` refuse path git never heard of) and what record deletion. Pathspec on `commit` imply `--only`, so **anything staged for unchecked file stay staged and uncommitted** — pinned by test. Porcelain, not temp-index plumbing `snapshot_tree` use: this *meant* to move HEAD, and `commit-tree` leaving real index untouched make every just-committed file read as staged revert after. Checkbox set stored **inverted** (`unchecked`), so file agent write while view open arrive *in* commit like every other change.
+
+**History open in place, and nothing open on arrival.** Not drill-in, not third column: column leave diff narrowest of three, drill-in hide history behind whichever commit open. Row expand under itself instead, both stay on screen. Follow from that: **no default selection** — first commit touching thirty file would push rest of history off screen before reader pick anything. Click open, click again close. **No chevron**: row = control, highlight say which open, second click prove it — arrow only label what row already demonstrate. Commit's *first file* selected on open, which is different question and safe, since file list already bounded by commit reader chose.
+
+**Live file list sort newest edit first; frozen one keep git's order.** Git list path alphabetically, so file just written sit wherever its name fall and reader hunt for it. `sort_by_recency` stat each path and sort descending — but **only when `head` = `None`**, since frozen range name *trees* and what file say on disk today have nothing to do with what it said then (both direction pinned by test). Deletion have no file left to stamp, so it sort bottom; tie break on path so refresh don't shuffle list.
+
+**Face on commit come from email, because git carry no account.** Two route, certain first: GitHub's noreply address (`12345+login@users.noreply.github.com`) *contain* account id, so it resolve exactly — where guessing login from name would not, same 404 trap PR panel already document. Everything else = **Gravatar over SHA-256**, which `crypto.subtle` do, so no hashing dep come with it. `d=404` deliberate: missing account must fail request and leave initial standing, not cover it with generated pattern reading as real person. Both cached per address in module map (`useAvatar`), `null` cached too — address resolving to nothing = settled answer, not retry. `Avatar` now shared with PR panel, since two copy drift on fallback and fallback = part actually seen.
+
+**Filename win the truncation.** One `truncate` span holding `dir + name` clip from *end*, which = filename — exact opposite of intent, and worse in deep tree where path long. So name draw first and `shrink-0`, directory after it and truncating. Right panel's rows keep old order for now.
+
+**Diff in pane, and `diffStyle` = prop on same `DiffView`.** `@pierre/diffs` carry `diffStyle: "split" | "unified"` natively — split = library's own default and what anyone arriving from another git client expect. Toggle = prop change repainting same instance, **never re-tokenize**: layout client-side, worker pool cache keyed on text. Split must travel with `overflow: "scroll"` — library only wire two columns' scroll together when line can overflow. Prop rather than second component because highlighter gate = part easy to get wrong and must exist once. Pref = `ade.diffStyle`, one surface so `useLocalStorage` not singleton.
+
+**Toggle draw both option, not one glyph that swap.** Swapping glyph tried first and read as *picture of current state* — nothing about it say it can be pressed, and split/unified not convention reader arrive expecting. Two segment make choice visible before it made.
+
+**Channel between split halves = reserved scrollbar gutter, not gap.** Each column own horizontally-scrolling box carrying `scrollbar-gutter: stable`, so WebKit reserve classic scrollbar's width at its **inline end** — even though library zero that scrollbar (`::-webkit-scrollbar { width: 0 }`) and only ever *measure* horizontal one. Leave strip of dead background down right of each column: on left column it read as channel between two side, on right as diff stopping short of pane. Also what make two look lopsided — left inset = library's own spacing, right = this. No variable expose it, so `unsafeCSS` (library's own escape hatch, inject into `@layer unsafe` = last in its layer order, so no `!important` needed) carry `[data-code] { scrollbar-gutter: auto; }`. Nothing lost: gutter only ever reserve room for scrollbar drawn at zero width. **Don't reach for `--diffs-gap-inline` here** — that inset "N unmodified lines" bar only, so tightening it shrink bar and leave channel, making asymmetry worse not better.
+
+**Library spacing dialled down from outside, through its shadow root.** `--diffs-gap-block` (8px padding above/below code) and `--diffs-gap-style` (2px rule between gutter and code, which in split view draw channel down middle wide enough to read as two halve drifting apart) both read *inside* shadow DOM with those name — and custom property cross that boundary, so setting them on any ancestor = whole override. `DIFF_SPACING` in [DiffPane](apps/desktop/src/components/changes/DiffPane.tsx). Pane itself carry no padding either: its border = frame, and inset only make code narrower than window it was given.
+
+**History drill in, not third column.** Window can't hold commit list, file list *and* split diff without diff becoming narrowest of three. Selecting commit replace list with its files under back-header; selection kept on step back, so long history don't lose reader's place.
+
+**Selected file derived, never stored.** `find(path) ?? files[0]` — file that stop being changed can't leave pane pointing at nothing, and first-by-position right here where turn panel refuse it: diff have own pane, so opening one hide nothing.
 
 ## Persistence
 
@@ -568,6 +610,12 @@ Several things deliberately unfinished — don't mistake for bugs:
 - **PR panel read and act, never write prose.** No commenting, no replying to review, no requesting review, no closing. Every action there = state change moving work toward landing; anything wanting text box, or ending PR, belong to GitHub for now.
 
 - **Branch left behind after merge.** `--delete-branch` deliberately not passed (see above), and nothing else clean up worktree or its branch — so merged worktree session leave tree at `.claude/worktrees/<name>` and branch beside it. Wanted as own thing, driven by session lifecycle rather than by merge button.
+
+- **Repo view read, commit and push — no fetch, no pull, no discard.** Ahead count against *last known* upstream, so branch someone else pushed to read as level until push itself fail. Discard-changes and stage-hunk deliberately absent: both destroy work, and neither belong in first pass of surface agent also writing to.
+
+- **No count on Changes view tab.** Working-tree file count would force snapshot on every event even while reader sit on Chat — exactly what `active` gate exist to prevent. Sub-tab carry count, since by then reads already running.
+
+- **Blocked commit name no session either.** Same shape as blocked install: button dim while turn run and say nothing about when it free. Turn end unblock it, but nothing tell reader that.
 
 - **No PR indicator in sidebar.** Row show nothing about whether session's branch have open PR — deliberately parked, since answering it for every visible row need per-repo cache and refresh rule panel's own 30s freshness window don't cover.
 

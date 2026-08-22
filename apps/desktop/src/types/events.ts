@@ -317,6 +317,28 @@ export type CheckState = "success" | "failure" | "pending" | "skipped" | "cancel
  */
 export type CommentKind = "comment" | "approved" | "changes_requested" | "reviewed";
 
+/**
+ * One commit, as the history list draws it.
+ */
+export type Commit = { sha: string, 
+/**
+ * First parent — the side this commit's own diff is taken against. `None`
+ * on the root commit, where the caller substitutes git's empty tree. A
+ * merge keeps only its first parent, so it reads as what the merge brought
+ * onto this branch rather than as everything both sides ever did.
+ */
+parent: string | null, subject: string, body: string, author: string, 
+/**
+ * What the history list draws a face from. Git has no account behind a
+ * commit — only whatever the author configured — so this is the only
+ * identity here, and the frontend resolves it to a picture or to a letter.
+ */
+authorEmail: string, 
+/**
+ * RFC 3339, matching every other timestamp that reaches the frontend.
+ */
+authoredAt: string, };
+
 export type ContextWindow = { usedTokens: number, maxTokens: number, };
 
 /**
@@ -798,6 +820,27 @@ export type Subagent = { id: string,
  * Drives the collapsed subagent card's title.
  */
 label: string | null, };
+
+/**
+ * Where the current branch stands against its upstream — everything the push
+ * button needs to name itself.
+ */
+export type SyncStatus = { 
+/**
+ * `None` on a detached HEAD and for a directory that isn't a repo, which
+ * is how the row hides itself rather than offering a push it can't do.
+ */
+branch: string | null, 
+/**
+ * `None` for a branch that has never been pushed — the "publish" case.
+ */
+upstream: string | null, 
+/**
+ * Commits the upstream doesn't have. Zero when there is no upstream: the
+ * button reads "Publish branch" there, and a count would be answering a
+ * question nobody asked yet.
+ */
+ahead: number, };
 
 export type ToolResult = { 
 /**

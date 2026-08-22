@@ -51,7 +51,10 @@ export default function AppShell({
           </div>
         ) : (
           <>
-            <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+            {/* `flex flex-col` so the view tabs' bodies, which size themselves
+                with `flex-1` the way the right panel's do, have a column to
+                grow in. */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
             <div className="shrink-0">{footer}</div>
           </>
         )}

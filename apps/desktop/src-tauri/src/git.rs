@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Stdio,
+    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
@@ -147,11 +148,19 @@ pub async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<()>
 /// Runs git and turns a non-zero exit into an error carrying git's own stderr,
 /// which names the conflicting files — the part the user needs to act on.
 async fn run(cwd: &str, args: &[&str]) -> Result<()> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await?;
+    run_with(cwd, &[], args).await
+}
+
+/// [`run`] with environment overrides. Split out for `GIT_LITERAL_PATHSPECS`,
+/// which the commit path sets and nothing else wants.
+async fn run_with(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+
+    let out = cmd.output().await?;
 
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -282,6 +291,20 @@ pub async fn base_ref_tree(cwd: &str) -> Option<String> {
     (!tree.is_empty()).then_some(tree)
 }
 
+/// The tree HEAD points at — the committed side of "what have I changed but
+/// not committed".
+///
+/// Paired with a `None` head in [`changes_since`], which snapshots the working
+/// tree at read time, so the two together are the repo view's uncommitted list.
+/// `None` for a directory that isn't a repo and for an unborn branch, where
+/// there is no commit yet; both are ordinary states the view draws as empty.
+pub async fn head_tree(cwd: &str) -> Option<String> {
+    let tree = git(cwd, &["rev-parse", "--verify", "-q", "HEAD^{tree}"]).await?;
+
+    let tree = tree.trim().to_string();
+    (!tree.is_empty()).then_some(tree)
+}
+
 /// How one path differs between two snapshots. `added`/`removed` are git's own
 /// numstat figures, so the row and the diff it opens cannot disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -364,6 +387,11 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
         bail!("invalid baseline id");
     }
 
+    // Whether the far side is the working tree as it stands, which is the only
+    // case where the listed paths name files still on disk — and so the only
+    // one that can be ordered by when they were touched.
+    let live = head.is_none();
+
     let head = match head {
         Some(h) => {
             if !is_tree_id(h) {
@@ -376,7 +404,7 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
             .context("could not snapshot the working tree")?,
     };
 
-    let files = match diff_trees(cwd, base, &head).await {
+    let mut files = match diff_trees(cwd, base, &head).await {
         Ok(files) => files,
         Err(e) => {
             // A snapshot is persisted forever but its tree object is not: the
@@ -391,6 +419,10 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
         }
     };
 
+    if live {
+        sort_by_recency(cwd, &mut files).await;
+    }
+
     let added = files.iter().map(|f| f.added).sum();
     let removed = files.iter().map(|f| f.removed).sum();
 
@@ -401,6 +433,35 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
         added,
         removed,
     })
+}
+
+/// Newest edit first, which is the order the working tree is actually read in:
+/// git lists paths alphabetically, so the file just written sits wherever its
+/// name happens to fall and the reader has to hunt for it.
+///
+/// Only ever applied to a live diff — a frozen range names trees, and what a
+/// path's file says on disk today has nothing to do with what it said then.
+/// A deletion has no file left to stamp and sorts to the bottom; ties break on
+/// path so the order is stable between reads rather than shuffling on refresh.
+async fn sort_by_recency(cwd: &str, files: &mut [ChangedFile]) {
+    let mut stamps: HashMap<String, SystemTime> = HashMap::new();
+    for file in files.iter() {
+        let at = fs::metadata(Path::new(cwd).join(&file.path))
+            .await
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        stamps.insert(file.path.clone(), at);
+    }
+
+    let at = |file: &ChangedFile| {
+        stamps
+            .get(&file.path)
+            .copied()
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    };
+
+    files.sort_by(|a, b| at(b).cmp(&at(a)).then_with(|| a.path.cmp(&b.path)));
 }
 
 /// Whether the object database still holds this id.
@@ -774,6 +835,222 @@ fn parse_batch(mut bytes: &[u8], count: usize) -> Vec<Side> {
         out.push(Side::Missing);
     }
     out
+}
+
+/// One commit, as the history list draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct Commit {
+    pub sha: String,
+    /// First parent — the side this commit's own diff is taken against. `None`
+    /// on the root commit, where the caller substitutes git's empty tree. A
+    /// merge keeps only its first parent, so it reads as what the merge brought
+    /// onto this branch rather than as everything both sides ever did.
+    pub parent: Option<String>,
+    pub subject: String,
+    pub body: String,
+    pub author: String,
+    /// What the history list draws a face from. Git has no account behind a
+    /// commit — only whatever the author configured — so this is the only
+    /// identity here, and the frontend resolves it to a picture or to a letter.
+    pub author_email: String,
+    /// RFC 3339, matching every other timestamp that reaches the frontend.
+    pub authored_at: String,
+}
+
+/// Fields separated by unit separators rather than by anything a human types,
+/// with the body **last**: a commit message can contain any character at all,
+/// so only the final field is allowed to be ambiguous, and taking the rest of
+/// the record is exactly what a limited split does with it.
+const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b";
+
+/// Far above what the list pages at. A ceiling rather than a page size: this is
+/// argv, and an unbounded `-n` from the frontend is one typo from reading the
+/// whole history into memory.
+const MAX_LOG_PAGE: u32 = 200;
+
+/// A page of the current branch's history, newest first.
+///
+/// Empty for a directory that isn't a repo and for a branch with no commits
+/// yet — the same "not an error, just nothing to draw" the branch list takes.
+pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>> {
+    let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
+    let skip = format!("--skip={skip}");
+
+    // `-z` separates whole commits with NUL, which is the one byte a message
+    // cannot carry — so record framing survives any message, and the `--`
+    // closes the same rev-or-path ambiguity every diff here closes.
+    let Some(raw) = git(
+        cwd,
+        &["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
+    )
+    .await
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(parse_log(&raw))
+}
+
+fn parse_log(raw: &str) -> Vec<Commit> {
+    raw.split('\0')
+        .filter(|record| !record.trim().is_empty())
+        .filter_map(|record| {
+            // The previous record's body ends in a newline, which lands at the
+            // front of this one.
+            let mut fields = record.trim_start().splitn(7, '\x1f');
+            let sha = fields.next()?.trim().to_string();
+            let parents = fields.next()?;
+            let author = fields.next()?.to_string();
+            let author_email = fields.next()?.trim().to_string();
+            let authored_at = fields.next()?.trim().to_string();
+            let subject = fields.next()?.to_string();
+            let body = fields.next().unwrap_or_default().trim().to_string();
+
+            (!sha.is_empty()).then(|| Commit {
+                sha,
+                parent: parents.split_whitespace().next().map(str::to_string),
+                subject,
+                body,
+                author,
+                author_email,
+                authored_at,
+            })
+        })
+        .collect()
+}
+
+/// Where the current branch stands against its upstream — everything the push
+/// button needs to name itself.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    /// `None` on a detached HEAD and for a directory that isn't a repo, which
+    /// is how the row hides itself rather than offering a push it can't do.
+    pub branch: Option<String>,
+    /// `None` for a branch that has never been pushed — the "publish" case.
+    pub upstream: Option<String>,
+    /// Commits the upstream doesn't have. Zero when there is no upstream: the
+    /// button reads "Publish branch" there, and a count would be answering a
+    /// question nobody asked yet.
+    pub ahead: u32,
+}
+
+/// Infallible by design, like [`list_branches`]: a directory that isn't a repo
+/// answers with the default rather than an error the reader can't act on.
+///
+/// Nothing here fetches. The count is against the *last known* upstream, so a
+/// branch someone else has pushed to reads as fewer commits behind than it is —
+/// the push itself is what surfaces that, as git's own rejection.
+pub async fn sync_status(cwd: &str) -> SyncStatus {
+    let branch = git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "HEAD");
+
+    let Some(branch) = branch else {
+        return SyncStatus::default();
+    };
+
+    let upstream = git(cwd, &["rev-parse", "--abbrev-ref", "@{u}"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let ahead = if upstream.is_some() {
+        git(cwd, &["rev-list", "--count", "@{u}..HEAD"])
+            .await
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    SyncStatus {
+        branch: Some(branch),
+        upstream,
+        ahead,
+    }
+}
+
+/// Git resolves a pathspec as a glob and reads leading `:` as magic, so a file
+/// genuinely named `a*.txt` or `:weird` would stage its neighbours or nothing
+/// at all. These paths come from our own change list and name real files, so
+/// literal is not a restriction — it is what the caller already meant.
+const LITERAL_PATHSPECS: &[(&str, &str)] = &[("GIT_LITERAL_PATHSPECS", "1")];
+
+/// Commits exactly `paths` — the files the reader left checked — and nothing
+/// else.
+///
+/// Two commands rather than one. `add -A` is what makes an untracked file
+/// committable at all (`commit -- <path>` refuses a path git has never heard
+/// of) and what records a deletion. The pathspec on `commit` then implies
+/// `--only`, so the commit is built from HEAD plus these paths: anything the
+/// user had staged for an *unchecked* file stays staged and uncommitted, which
+/// is the promise the checkboxes make.
+///
+/// Porcelain rather than the temp-index plumbing [`snapshot_tree`] uses,
+/// deliberately: this is meant to move HEAD, and a `commit-tree` that left the
+/// real index untouched would leave every just-committed file reading as a
+/// staged revert afterwards.
+pub async fn commit_files(
+    cwd: &str,
+    summary: &str,
+    description: Option<&str>,
+    paths: &[String],
+) -> Result<()> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        bail!("a commit needs a summary");
+    }
+    if paths.is_empty() {
+        bail!("no files are selected to commit");
+    }
+    // A `-` leading path is already closed by the `--` both commands carry;
+    // this is the empty and NUL case, which would silently widen the pathspec.
+    if paths.iter().any(|p| p.is_empty() || p.contains('\0')) {
+        bail!("invalid path in the selection");
+    }
+
+    let mut add = vec!["add", "-A", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    run_with(cwd, LITERAL_PATHSPECS, &add).await?;
+
+    let description = description.map(str::trim).filter(|d| !d.is_empty());
+
+    let mut commit = vec!["commit", "-m", summary];
+    // A second `-m` rather than a joined string: git's own blank line between
+    // subject and body is the convention every tool reading this expects.
+    if let Some(description) = description {
+        commit.push("-m");
+        commit.push(description);
+    }
+    commit.push("--");
+    commit.extend(paths.iter().map(String::as_str));
+
+    run_with(cwd, LITERAL_PATHSPECS, &commit).await
+}
+
+/// Pushes the current branch, publishing it when it has no upstream yet.
+///
+/// No force, ever: a rejected non-fast-forward comes back as git's own stderr
+/// for the reader to deal with, which for a session's own branch usually means
+/// someone else pushed to it.
+pub async fn push_branch(cwd: &str) -> Result<()> {
+    let branch = git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "HEAD")
+        .context("not on a branch, so there is nothing to push")?;
+
+    if git(cwd, &["rev-parse", "--abbrev-ref", "@{u}"]).await.is_some() {
+        return run(cwd, &["push"]).await;
+    }
+
+    // Git's own output for the name, and a branch name cannot begin with `-`.
+    run(cwd, &["push", "-u", "origin", &branch]).await
 }
 
 #[cfg(test)]
@@ -1286,5 +1563,305 @@ mod tests {
         assert_eq!(count_changes(raw), 3);
         assert_eq!(count_changes(""), 0);
         assert_eq!(count_changes("\n"), 0);
+    }
+
+    /// One record in the shape [`LOG_FORMAT`] produces.
+    fn log_record(sha: &str, parents: &str, subject: &str, body: &str) -> String {
+        format!(
+            "{sha}\x1f{parents}\x1fTest\x1ft@example.com\x1f2026-08-22T10:00:00+05:45\x1f{subject}\x1f{body}"
+        )
+    }
+
+    #[test]
+    fn parses_a_log_page_into_commits() {
+        let raw = format!(
+            "{}\0{}\0",
+            log_record("aaa1", "bbb2", "second", "why it happened\n"),
+            log_record("bbb2", "", "init", ""),
+        );
+
+        let commits = parse_log(&raw);
+
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].sha, "aaa1");
+        assert_eq!(commits[0].parent.as_deref(), Some("bbb2"));
+        assert_eq!(commits[0].subject, "second");
+        assert_eq!(commits[0].body, "why it happened");
+        assert_eq!(commits[0].author, "Test");
+        assert_eq!(commits[0].author_email, "t@example.com");
+        assert_eq!(commits[0].authored_at, "2026-08-22T10:00:00+05:45");
+        // The root commit has no parent to diff against — the caller stands
+        // git's empty tree in for it.
+        assert_eq!(commits[1].parent, None);
+        assert_eq!(commits[1].body, "");
+    }
+
+    #[test]
+    fn a_merge_reads_only_its_first_parent() {
+        let commits = parse_log(&log_record("aaa1", "bbb2 ccc3", "merge", ""));
+
+        assert_eq!(commits[0].parent.as_deref(), Some("bbb2"));
+    }
+
+    #[test]
+    fn a_message_carrying_the_field_separator_keeps_its_body_whole() {
+        // The body is the last field precisely so this cannot shift the others.
+        let commits = parse_log(&log_record("aaa1", "bbb2", "subject", "a\x1fb"));
+
+        assert_eq!(commits[0].subject, "subject");
+        assert_eq!(commits[0].body, "a\x1fb");
+    }
+
+    #[tokio::test]
+    async fn head_tree_names_the_committed_side_and_a_non_repo_has_none() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let head = head_tree(at).await.expect("a repo with a commit has a tree");
+
+        // Clean tree, so the working-tree snapshot agrees with HEAD — which is
+        // what makes an empty uncommitted list empty.
+        assert_eq!(snapshot_tree(at).await.as_deref(), Some(head.as_str()));
+
+        let empty = std::env::temp_dir().join(format!("dray-nonrepo-{}", Uuid::now_v7()));
+        fs::create_dir_all(&empty).await.unwrap();
+        assert_eq!(head_tree(empty.to_str().unwrap()).await, None);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&empty).await.ok();
+    }
+
+    #[tokio::test]
+    async fn logs_pages_newest_first() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n").await.unwrap();
+        run(at, &["commit", "-aqm", "second"]).await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\ne\n").await.unwrap();
+        run(at, &["commit", "-aqm", "third"]).await.unwrap();
+
+        let page = log_commits(at, 2, 0).await.unwrap();
+        assert_eq!(
+            page.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+            ["third", "second"],
+        );
+        // The page's own commits chain, which is what lets a row diff against
+        // its parent without a second read.
+        assert_eq!(page[0].parent.as_deref(), Some(page[1].sha.as_str()));
+
+        let next = log_commits(at, 2, 2).await.unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].subject, "init");
+        assert_eq!(next[0].parent, None);
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_directory_that_is_not_a_repo_has_no_history() {
+        let dir = std::env::temp_dir().join(format!("dray-nonrepo-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.unwrap();
+
+        assert!(log_commits(dir.to_str().unwrap(), 50, 0).await.unwrap().is_empty());
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn commits_only_the_checked_paths() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
+        fs::write(dir.join("gone.txt"), "x\ny\nedited\n").await.unwrap();
+        // Untracked, and checked — `commit -- <path>` alone refuses a path git
+        // has never heard of, so this is what proves the `add` is doing work.
+        fs::write(dir.join("new.txt"), "fresh\n").await.unwrap();
+
+        commit_files(
+            at,
+            "commit two of three",
+            None,
+            &["keep.txt".into(), "new.txt".into()],
+        )
+        .await
+        .unwrap();
+
+        let committed = git(at, &["show", "--name-only", "--format=", "HEAD"])
+            .await
+            .unwrap();
+        assert!(committed.contains("keep.txt"));
+        assert!(committed.contains("new.txt"));
+        assert!(!committed.contains("gone.txt"));
+
+        // The unchecked file is still dirty, which is the whole promise the
+        // checkboxes make.
+        let dirty = git(at, &["status", "--porcelain"]).await.unwrap();
+        assert!(dirty.contains("gone.txt"));
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn the_working_tree_lists_the_newest_edit_first() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let base = head_tree(at).await.unwrap();
+
+        // `gone.txt` sorts first alphabetically, so a list still in git's own
+        // order would put it on top whichever was edited last.
+        fs::write(dir.join("gone.txt"), "x\ny\nfirst\n").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nsecond\n").await.unwrap();
+
+        let live = changes_since(at, &base, None).await.unwrap();
+        assert_eq!(
+            live.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["keep.txt", "gone.txt"],
+        );
+
+        // A frozen range describes trees, not the disk, so it keeps git's order
+        // however the files have been touched since.
+        let frozen = snapshot_tree(at).await.unwrap();
+        let then = changes_since(at, &base, Some(&frozen)).await.unwrap();
+        assert_eq!(
+            then.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["gone.txt", "keep.txt"],
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn an_unchecked_file_keeps_what_was_staged_for_it() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        // Someone staged part of `gone.txt` by hand and then left it out of the
+        // commit. The pathspec form of `commit` implies `--only`, so that work
+        // has to survive — otherwise unchecking a file would quietly discard
+        // whatever was already staged for it.
+        fs::write(dir.join("gone.txt"), "x\ny\nstaged\n").await.unwrap();
+        run(at, &["add", "gone.txt"]).await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
+
+        commit_files(at, "keep only", None, &["keep.txt".into()])
+            .await
+            .unwrap();
+
+        let staged = git(at, &["show", ":gone.txt"]).await.unwrap();
+        assert_eq!(staged, "x\ny\nstaged\n");
+        // Staged, and still uncommitted — the commit took only `keep.txt`.
+        let committed = git(at, &["show", "HEAD:gone.txt"]).await.unwrap();
+        assert!(!committed.contains("staged"));
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_checked_deletion_is_committed_as_one() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        fs::remove_file(dir.join("gone.txt")).await.unwrap();
+
+        commit_files(at, "drop it", None, &["gone.txt".into()])
+            .await
+            .unwrap();
+
+        assert!(git(at, &["cat-file", "-e", "HEAD:gone.txt"]).await.is_none());
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_glob_named_file_stages_only_itself() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        // Without GIT_LITERAL_PATHSPECS this pathspec would sweep up every
+        // `a…txt` in the tree — including the decoy.
+        fs::write(dir.join("a*.txt"), "literal\n").await.unwrap();
+        fs::write(dir.join("also.txt"), "decoy\n").await.unwrap();
+
+        commit_files(at, "literal path", None, &["a*.txt".into()])
+            .await
+            .unwrap();
+
+        let committed = git(at, &["show", "--name-only", "--format=", "HEAD"])
+            .await
+            .unwrap();
+        assert!(committed.contains("a*.txt"));
+        assert!(!committed.contains("also.txt"));
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_description_lands_under_a_blank_line() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
+
+        commit_files(at, "subject line", Some("why it happened"), &["keep.txt".into()])
+            .await
+            .unwrap();
+
+        let message = git(at, &["log", "-1", "--format=%B"]).await.unwrap();
+        assert_eq!(message.trim_end(), "subject line\n\nwhy it happened");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn an_empty_summary_or_selection_is_refused() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        assert!(commit_files(at, "   ", None, &["keep.txt".into()]).await.is_err());
+        assert!(commit_files(at, "fine", None, &[]).await.is_err());
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_branch_publishes_then_pushes() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let remote = std::env::temp_dir().join(format!("dray-remote-{}", Uuid::now_v7()));
+        fs::create_dir_all(&remote).await.unwrap();
+        run(remote.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+        run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
+            .await
+            .unwrap();
+
+        // Unpublished: no upstream, and no count to report against one.
+        let before = sync_status(at).await;
+        assert!(before.branch.is_some());
+        assert_eq!(before.upstream, None);
+        assert_eq!(before.ahead, 0);
+
+        push_branch(at).await.unwrap();
+
+        let published = sync_status(at).await;
+        assert!(published.upstream.is_some());
+        assert_eq!(published.ahead, 0);
+
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nmore\n").await.unwrap();
+        commit_files(at, "one more", None, &["keep.txt".into()])
+            .await
+            .unwrap();
+        assert_eq!(sync_status(at).await.ahead, 1);
+
+        push_branch(at).await.unwrap();
+        assert_eq!(sync_status(at).await.ahead, 0);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&remote).await.ok();
     }
 }

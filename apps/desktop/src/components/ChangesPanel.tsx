@@ -2,6 +2,7 @@ import { memo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
+import Counts from "@/components/changes/Counts";
 import DiffView from "@/components/chat/DiffView";
 import { useFileVersions, type useChanges } from "@/hooks/useChanges";
 import { splitPath } from "@/lib/changes";
@@ -79,16 +80,6 @@ function Empty({ children, tone }: { children: React.ReactNode; tone?: "error" }
     >
       {children}
     </p>
-  );
-}
-
-function Counts({ added, removed }: { added: number; removed: number }) {
-  return (
-    <span className="font-mono text-ui">
-      {added > 0 && <span className="text-emerald-500">+{added}</span>}
-      {added > 0 && removed > 0 && " "}
-      {removed > 0 && <span className="text-destructive">−{removed}</span>}
-    </span>
   );
 }
 

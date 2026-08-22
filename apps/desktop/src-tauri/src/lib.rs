@@ -219,6 +219,52 @@ async fn file_change(
         .map_err(|e| e.to_string())
 }
 
+/// The committed side of the repo view's uncommitted list. Paired with a `None`
+/// head on [`changes_since`], which snapshots the working tree to answer — so
+/// the two together are "what have I changed but not committed".
+///
+/// Takes an owned `cwd` where every command around it borrows: an async command
+/// with a borrowed argument has to return `Result`, and neither this nor
+/// [`sync_status`] can fail — a `Result` here would be a lie the caller then has
+/// to handle.
+#[tauri::command]
+async fn head_tree(cwd: String) -> Option<String> {
+    git::head_tree(&cwd).await
+}
+
+/// A page of the current branch's history, newest first. `skip` is what the
+/// list's "load more" advances; the page size is the caller's, capped in `git`.
+#[tauri::command]
+async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<git::Commit>, String> {
+    git::log_commits(cwd, limit, skip)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn sync_status(cwd: String) -> git::SyncStatus {
+    git::sync_status(&cwd).await
+}
+
+/// Commits the checked files alone. `paths` are this session's own change list,
+/// so a path the reader unchecked is one this never sees.
+#[tauri::command]
+async fn commit_files(
+    cwd: &str,
+    summary: &str,
+    description: Option<&str>,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    git::commit_files(cwd, summary, description, &paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn push_branch(cwd: &str) -> Result<(), String> {
+    git::push_branch(cwd).await.map_err(|e| e.to_string())
+}
+
 /// Returns the entry as written so the sidebar re-renders from the stored value
 /// rather than its own guess at it. `None` for an unknown id.
 #[tauri::command]
@@ -392,6 +438,11 @@ pub fn run() {
             checkout_branch,
             changes_since,
             file_change,
+            head_tree,
+            log_commits,
+            sync_status,
+            commit_files,
+            push_branch,
             set_session_flags,
             delete_session,
             mark_session_idle,

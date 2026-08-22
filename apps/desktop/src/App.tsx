@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import Chat from "@/components/Chat";
 import ChangesPanel from "@/components/ChangesPanel";
+import ChangesView from "@/components/changes/ChangesView";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
@@ -17,6 +18,7 @@ import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import { nextPermissionMode } from "@/components/composer/PermissionSelector";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
+import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
@@ -106,6 +108,16 @@ function App() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelTab, setPanelTab] = useLocalStorage<PanelTab>("ade.panelTab", "changes");
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
+
+  // Per session, and deliberately not persisted the way `panelTab` is: which
+  // view you were last on is working context for one session rather than a
+  // standing preference, and reopening the app onto a repo view for every
+  // session would be wrong more often than right.
+  const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
+  const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
+  const setViewTab = (tab: ViewTab) => {
+    if (selectedSessionId) setViewTabs((prev) => ({ ...prev, [selectedSessionId]: tab }));
+  };
 
   // Themes and Shiki's engine are shared by every code surface, so they load
   // once here instead of on the first diff the user happens to open.
@@ -261,6 +273,10 @@ function App() {
   useHotkey("ArrowDown", () => stepSession(1), { shift: true });
   // ⌘E for the right pane against ⌘B for the left.
   useHotkey("e", togglePanel);
+  // By position in the tab row, so a third view needs only a third line here.
+  // No-ops without a session, where there is no row to switch.
+  useHotkey("1", () => setViewTab("chat"));
+  useHotkey("2", () => setViewTab("changes"));
   // No accelerator: Shift+Tab on its own, matching the CLI's own chord for this.
   useHotkey("Tab", () => setPermissionMode(nextPermissionMode(permissionMode)), {
     meta: false,
@@ -349,6 +365,8 @@ function App() {
 
           <SessionHeader session={selectedSession} className="flex-1" />
 
+          {selectedSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+
           {selectedSession && (
             <PanelToggle
               onToggle={handleTogglePanel}
@@ -394,6 +412,12 @@ function App() {
         ) : null
       }
       footer={
+        // Only under the transcript it writes into. The other views are not
+        // conversations, and a composer under them would send into a session
+        // the reader can't see. Safe to unmount: the draft and the attachment
+        // tray are module-level stores precisely because the composer already
+        // unmounts crossing the empty state.
+        selectedSession && viewTab !== "chat" ? null : (
         <ChatInput
           onSend={handleSendMsg}
           commands={slashCommands}
@@ -438,8 +462,13 @@ function App() {
             />
           }
         />
+        )
       }
     >
+      {/* Hidden rather than unmounted, the same bargain the right panel's tabs
+          make: the transcript keeps its scroll position and its highlighted
+          diffs, and the repo view keeps its selection and its reads. */}
+      <TabBody active={viewTab === "chat"}>
       <Chat
         session={selectedSession}
         streamingBlock={
@@ -456,6 +485,21 @@ function App() {
         working={working}
         crowded={!collapsed && panelOpen}
       />
+      </TabBody>
+
+      {selectedSession && (
+        // Keyed by session so the selection, the sub-tab and the commit box
+        // reset with it. Cheap to remount: the reads behind it are cached by
+        // tree id at module level and survive the unmount.
+        <TabBody active={viewTab === "changes"}>
+          <ChangesView
+            key={selectedSession.sessionId}
+            cwd={selectedSession.cwd}
+            active={viewTab === "changes"}
+            revision={revision}
+          />
+        </TabBody>
+      )}
     </AppShell>
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}

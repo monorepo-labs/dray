@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 
+import Avatar from "@/components/Avatar";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import {
@@ -287,33 +288,6 @@ function StateIcon({ pr }: { pr: PullRequest }) {
           : ([GitPullRequest, "text-emerald-500", "Open"] as const);
 
   return <Icon className={cn("size-3.5 shrink-0", tone)} aria-label={label} />;
-}
-
-/// A commenter's or a check reporter's picture, falling back to their initial.
-///
-/// The image is remote and its account may have none, so the letter is the
-/// resting state and the image covers it once it loads — that way a slow or
-/// missing avatar never leaves a hole where a row's left edge should be.
-function Avatar({ src, name }: { src: string | null; name: string }) {
-  const [failed, setFailed] = useState(false);
-
-  return (
-    <span
-      aria-hidden
-      className="relative flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-[9px] uppercase text-muted-foreground"
-    >
-      {name.slice(0, 1)}
-      {src && !failed && (
-        <img
-          src={src}
-          alt=""
-          loading="lazy"
-          onError={() => setFailed(true)}
-          className="absolute inset-0 size-full object-cover"
-        />
-      )}
-    </span>
-  );
 }
 
 /// GitHub's green, on both halves of the split button.
