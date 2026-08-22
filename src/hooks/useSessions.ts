@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
+import { useDockBadge } from "@/hooks/useDockBadge";
 import { dismissNotice, pushNotice, type NoticeKind } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
@@ -1012,6 +1013,10 @@ const askingSessions = useMemo(
     ),
   [asksBySession],
 );
+
+// The dock badge counts the same rows the rail marks, so it lives beside the
+// two maps that decide them rather than in `App`.
+useDockBadge(statusBySession, asksBySession, sessionIndexItems);
 
 // Prompts typed into the running turn and not yet handed to the CLI. Not gated
 // on `busy` like the live state below: a queue only exists while a turn runs,
