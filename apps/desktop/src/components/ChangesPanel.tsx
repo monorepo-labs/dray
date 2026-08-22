@@ -1,28 +1,19 @@
 import { memo, useState } from "react";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
 import DiffView from "@/components/chat/DiffView";
-import { Button } from "@/components/ui/button";
-import { useChanges, useFileVersions } from "@/hooks/useChanges";
+import { useFileVersions, type useChanges } from "@/hooks/useChanges";
 import { splitPath } from "@/lib/changes";
 import { cn } from "@/lib/utils";
 import type { ChangedFile, FileVersions } from "@/types/events";
 
-type ChangesPanelProps = {
+type ChangesPanelProps = ReturnType<typeof useChanges> & {
   /// Where the agent runs. The snapshot is taken here, so for a worktree
   /// session this is the tree, not the project root.
   cwd: string;
   /// The tree id to diff against, or null when the session recorded none.
   baseline: string | null;
-  /// The turn's closing snapshot — the frozen "after" side. Null while the
-  /// turn runs, which diffs against the working tree as it stands now.
-  head: string | null;
-  /// Changes whenever the agent may have written something.
-  revision: string;
-  /// False while the panel is closed or another tab is showing. The component
-  /// stays mounted either way; this only pauses re-reads.
-  active: boolean;
 };
 
 /// What the agent changed since the last prompt, file by file.
@@ -35,12 +26,9 @@ type ChangesPanelProps = {
 export default function ChangesPanel({
   cwd,
   baseline,
-  head,
-  revision,
-  active,
+  changes,
+  error,
 }: ChangesPanelProps) {
-  const { changes, error, loading, refresh } = useChanges(cwd, baseline, head, revision, active);
-
   // A directory that isn't a repo records no snapshot, so there is no "before"
   // to diff — said plainly rather than dressed up as an empty change list.
   if (!baseline) {
@@ -64,18 +52,6 @@ export default function ChangesPanel({
         ) : (
           <span className="text-muted-foreground">No changes yet</span>
         )}
-
-        {/* The panel re-reads on the agent's own events, which say nothing
-            about edits the user makes by hand. This is the way back from that. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="ml-auto -mr-1.5 text-muted-foreground/60 hover:text-muted-foreground"
-          onClick={refresh}
-          title="Refresh"
-        >
-          <RefreshCw className={cn("size-3", loading && "animate-spin")} />
-        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

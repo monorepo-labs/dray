@@ -18,6 +18,7 @@ pub mod binpath;
 pub mod events;
 pub mod files;
 pub mod git;
+pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
 #[path = "models/models.rs"]
@@ -402,6 +403,10 @@ pub fn run() {
             notifications::notify_session,
             updater::check_update,
             updater::install_update,
+            github::prs_for_branch,
+            github::merge_pr,
+            github::reopen_pr,
+            github::mark_pr_ready,
             quit::confirm_quit,
             quit::dismiss_quit,
         ])

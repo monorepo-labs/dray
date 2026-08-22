@@ -305,6 +305,18 @@ oldPath: string | null, status: ChangeStatus, added: number, removed: number,
  */
 binary: boolean, };
 
+/**
+ * Where a check ended up, flattened from the two different shapes GitHub
+ * reports one in. Callers branch on this and never on the wire's own strings.
+ */
+export type CheckState = "success" | "failure" | "pending" | "skipped" | "cancelled" | "neutral";
+
+/**
+ * What kind of entry a timeline row is. A review carries a verdict where a
+ * plain comment carries none, and that verdict is most of what the row says.
+ */
+export type CommentKind = "comment" | "approved" | "changes_requested" | "reviewed";
+
 export type ContextWindow = { usedTokens: number, maxTokens: number, };
 
 /**
@@ -378,6 +390,11 @@ export type McpServer = { name: string,
  * Free-form: `connected`, `pending`, `needs-auth` observed, set undocumented.
  */
 status: string, };
+
+/**
+ * How to land it. The three GitHub offers; the flag each maps to is `gh`'s.
+ */
+export type MergeMethod = "merge" | "squash" | "rebase";
 
 export type Model = { 
 /**
@@ -465,6 +482,41 @@ behavior: PermissionBehavior, };
  */
 export type PermissionOptionKind = "once" | "always_rule" | "always_directory" | "switch_mode" | "deny";
 
+export type PrCheck = { name: string, state: CheckState, 
+/**
+ * Where the log lives. `None` for a check that reports no link.
+ */
+url: string | null, 
+/**
+ * The Actions workflow this run belongs to, when it is one — several
+ * workflows can contribute checks of the same name.
+ */
+workflow: string | null, 
+/**
+ * The mark of whoever reports this check — Vercel's logo on a Vercel
+ * check. It is what makes a list of check names scannable without reading
+ * them, and it cannot be built from the login: see [`QUERY`].
+ */
+avatar: string | null, };
+
+export type PrComment = { author: string, 
+/**
+ * The commenter's picture. `None` for an account that has none, which the
+ * panel draws as their initial rather than as a gap.
+ */
+avatar: string | null, body: string, createdAt: string, url: string, kind: CommentKind, };
+
+/**
+ * Why there is nothing to show, when the reason is not "this branch has no PR".
+ *
+ * Typed rather than a string because the frontend acts differently on each:
+ * a missing `gh` hides the tab outright — the app has no business claiming a
+ * GitHub feature on a machine with no GitHub CLI — while a `gh` that is merely
+ * logged out keeps the tab and says so, since someone who installed it clearly
+ * works with GitHub and the fix is one command.
+ */
+export type PrUnavailable = { "kind": "no_cli" } | { "kind": "not_authenticated" } | { "kind": "no_remote" } | { "kind": "other", "detail": string };
+
 /**
  * A directory the user attached, and the root a session runs in. Distinct from
  * [`crate::store::SessionIndexItem::project_path`], which records where a
@@ -487,6 +539,39 @@ name: string,
  * `last_selected` pointer would be a second place to keep the same fact.
  */
 lastSelected: string, };
+
+export type PullRequest = { number: number, title: string, url: string, 
+/**
+ * `OPEN`, `CLOSED` or `MERGED`, carried through as GitHub's own word.
+ */
+state: string, isDraft: boolean, author: string, baseRefName: string, headRefName: string, 
+/**
+ * `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub is still working
+ * the merge out — which it starts doing lazily, on being asked.
+ */
+mergeable: string, 
+/**
+ * The finer answer: `CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, `UNSTABLE`,
+ * `DRAFT`, `HAS_HOOKS`, `UNKNOWN`.
+ */
+mergeStateStatus: string, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`. `None` where the
+ * repo requires no review, which `gh` reports as an empty string.
+ */
+reviewDecision: string | null, checks: Array<PrCheck>, 
+/**
+ * Comments and reviews in one list, oldest first — the order GitHub reads
+ * them in, and the only order in which a bot's reply to a review makes
+ * sense.
+ */
+comments: Array<PrComment>, 
+/**
+ * Lines added and removed across the whole PR, and how many files moved.
+ * The same figures the changes panel shows for a turn, for the same
+ * reason: a row naming a PR says nothing about how much of one it is.
+ */
+additions: number, deletions: number, changedFiles: number, updatedAt: string, };
 
 /**
  * One question from a [`QuestionsAsked`](AgentEventPayload::QuestionsAsked).

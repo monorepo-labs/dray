@@ -1,6 +1,7 @@
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
+import { sessionBranch } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { SessionSnapshot } from "@/types/events";
 
@@ -24,9 +25,7 @@ export default function SessionHeader({ session, className }: SessionHeaderProps
   // A worktree session's `cwd` is the tree, not the repo, so the project name
   // has to come off `projectPath` or every worktree reads as its own project.
   const project = basename(session.projectPath);
-  const branch = session.worktreeName
-    ? `worktree-${session.worktreeName}`
-    : session.branch;
+  const branch = sessionBranch(session);
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>

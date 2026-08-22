@@ -77,6 +77,28 @@
      they have to be told apart at a glance rather than read as one run. Same
      lightness and chroma, so neither outranks the other. */
   --accent-mention: oklch(0.82 0.13 230);
+
+  /* The merge button, and nothing else. GitHub's own green rather than the
+     app's emerald: this is the one control that acts on GitHub, and matching
+     the colour it has there is most of what makes it recognisable as the same
+     button. The primary fill is a near-white, which on this palette read as the
+     brightest thing on the pane for its least reversible action. */
+  --accent-merge: oklch(0.546 0.139 149);
+  --accent-merge-hover: oklch(0.617 0.152 149);
+  --accent-merge-foreground: oklch(0.985 0 0);
+  /* The seam in the split merge button, as a whole shadow rather than a colour
+     so the blur travels with it. Light, not dark: a dark line on a green fill
+     reads as a gap cut through the button, which is what a black-looking stroke
+     between the two halves was. The 1px blur softens it from a drawn rule into
+     an edge catching light, which is what GitHub's own divider reads as. */
+  --accent-merge-seam: inset 1px 0 1px oklch(1 0 0 / 10%);
+
+  /* Enough to lift a filled button off the surface and no more: on a dark
+     palette a filled button and its background are two flat fields, and without
+     this the only thing saying "button" is the fill itself. Straight down, no
+     spread — a shadow with an offset in x reads as a light source the rest of
+     the app doesn't have. */
+  --shadow-button: 0 1px 4px oklch(0 0 0 / 45%);
 }
 
 @theme inline {
@@ -112,6 +134,9 @@
   --color-accent-thinking: var(--accent-thinking);
   --color-accent-command: var(--accent-command);
   --color-accent-mention: var(--accent-mention);
+  --color-accent-merge: var(--accent-merge);
+  --color-accent-merge-hover: var(--accent-merge-hover);
+  --color-accent-merge-foreground: var(--accent-merge-foreground);
 
   /* A highlight travelling across the text, not a fade of the whole line —
      `background-clip: text` is what confines it to the glyphs, so the element

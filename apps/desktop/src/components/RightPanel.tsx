@@ -1,4 +1,4 @@
-import { GitCompare } from "lucide-react";
+import { GitCompare, GitPullRequest, RefreshCw } from "lucide-react";
 
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ export function PanelToggle({
   onToggle,
   open,
   changes = false,
+  pr = false,
 }: {
   onToggle: () => void;
   open: boolean;
@@ -24,8 +25,17 @@ export function PanelToggle({
   /// otherwise going to sit beside it. Nothing to say once the pane is open:
   /// the changes are on screen, and the toggle goes back to being a toggle.
   changes?: boolean;
+  /// This session has an open pull request, which outranks `changes`.
+  ///
+  /// The two indicators are the same promise — "there is something here, and
+  /// this is the way to it" — so only one can be drawn, and the PR is the one
+  /// worth drawing: it is the tab that opens first, it is the state of the
+  /// work rather than of the last turn, and it is the one that survives the
+  /// next prompt landing. Green, matching the merge button it leads to; the
+  /// changes yellow stays what it means when there is no PR.
+  pr?: boolean;
 }) {
-  const indicating = changes && !open;
+  const indicating = (pr || changes) && !open;
 
   return (
     <Tooltip>
@@ -37,28 +47,38 @@ export function PanelToggle({
           variant="ghost"
           size="icon-sm"
           onClick={onToggle}
-          aria-label={indicating ? "Show changes" : "Toggle panel"}
+          aria-label={
+            indicating ? (pr ? "Show pull request" : "Show changes") : "Toggle panel"
+          }
           className={cn(
             "transition-opacity",
             indicating ? "opacity-100" : "opacity-80 hover:opacity-100",
           )}
         >
           {indicating ? (
-            // Smaller than the panel glyph so it reads the same size: this one
-            // runs corner to corner of its 24 box while the panel icon is 14
-            // units tall in the same box, so matching the numbers makes it the
+            // Smaller than the panel glyph so it reads the same size: these run
+            // corner to corner of their 24 box while the panel icon is 14 units
+            // tall in the same box, so matching the numbers makes them the
             // visibly larger of the two. Stroke 1.5 to match the hand-drawn
             // chrome around it; lucide draws at 2. The colour is on the glyph
             // rather than the button because `ghost` sets `hover:text-
             // foreground`, which would grey it out under the cursor.
-            <GitCompare className="size-4 text-accent-command" strokeWidth={1.5} />
+            pr ? (
+              // `--accent-merge` is a button *fill* — dark enough to carry white
+              // text — and at 1.5px stroke on a dark background it all but
+              // disappeared. This is the emerald the open-PR glyph uses in the
+              // panel itself, so the mark and the thing it points at match.
+              <GitPullRequest className="size-4 text-emerald-500" strokeWidth={1.5} />
+            ) : (
+              <GitCompare className="size-4 text-accent-command" strokeWidth={1.5} />
+            )
           ) : (
             <PanelRightIcon className="size-4.5" dim={!open} />
           )}
         </Button>
       </TooltipTrigger>
       <TooltipContent side="left">
-        {indicating ? "Last turn's changes" : "Toggle Panel"}
+        {indicating ? (pr ? "Open pull request" : "Last turn's changes") : "Toggle Panel"}
         <KbdGroup>
           <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>E</Kbd>
@@ -68,16 +88,35 @@ export function PanelToggle({
   );
 }
 
-/// Which body the right panel is showing. Ordered as the tabs read: changes
-/// first, since it answers "what just happened" and is the one open by default.
-export const PANEL_TABS = ["changes", "subagents"] as const;
+/// Which body the right panel is showing. This is the set, not the order —
+/// see `tabOrder`.
+export const PANEL_TABS = ["changes", "subagents", "pr"] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
 const LABELS: Record<PanelTab, string> = {
   changes: "Changes",
   subagents: "Subagents",
+  // Not "Pull Request": the short form is what anyone working on one calls it,
+  // and the long one is the widest label in a row of three.
+  pr: "PR",
 };
+
+/// Which tabs exist, and in what order.
+///
+/// Changes leads by default — it answers "what just happened" and is the tab
+/// that opens by default. An *open* PR takes the lead instead, because at that
+/// point the session's work is no longer about this turn: it is about landing,
+/// and the first tab is where the eye goes. A merged or closed PR does not,
+/// since it is a record rather than something to act on.
+///
+/// The PR tab is absent entirely for a session that has no PR to show — see
+/// `prTabVisible`. A tab whose only content is "there is nothing here" is one
+/// the eye has to skip past on every session that will never have one.
+export function tabOrder({ pr, prFirst }: { pr: boolean; prFirst: boolean }): readonly PanelTab[] {
+  if (!pr) return ["changes", "subagents"];
+  return prFirst ? (["pr", "changes", "subagents"] as const) : PANEL_TABS;
+}
 
 type RightPanelProps = {
   /// Closed hides the pane rather than unmounting it — its state, caches, and
@@ -89,6 +128,15 @@ type RightPanelProps = {
   /// Rendered beside its tab's label. Only shown above zero — a tab reading
   /// "Subagents 0" says the same thing as the empty state one click away.
   counts?: Partial<Record<PanelTab, number>>;
+  /// This session has an open pull request, so its tab leads — see [tabOrder].
+  prFirst?: boolean;
+  /// There is a pull request tab to draw at all — see `prTabVisible`.
+  pr?: boolean;
+  /// Re-reads whatever the active tab is showing, drawn at the far end of the
+  /// tab row. One button rather than one per panel: it means the same thing
+  /// everywhere, so it belongs to the frame and always sits in the same place.
+  /// Absent for a tab with nothing to re-read.
+  refresh?: { onRefresh: () => void; loading: boolean } | null;
   children: React.ReactNode;
 };
 
@@ -121,6 +169,9 @@ export default function RightPanel({
   tab,
   onTabChange,
   counts,
+  prFirst = false,
+  pr = false,
+  refresh,
   children,
 }: RightPanelProps) {
   return (
@@ -136,7 +187,7 @@ export default function RightPanel({
         className="flex h-(--titlebar-h) shrink-0 items-center gap-0.5 border-b border-border px-2"
         data-tauri-drag-region="deep"
       >
-        {PANEL_TABS.map((value) => (
+        {tabOrder({ pr, prFirst }).map((value) => (
           <button
             key={value}
             type="button"
@@ -154,6 +205,18 @@ export default function RightPanel({
             )}
           </button>
         ))}
+
+        {refresh && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="-mr-0.5 ml-auto text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={refresh.onRefresh}
+            title="Refresh"
+          >
+            <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
+          </Button>
+        )}
       </div>
 
       {children}

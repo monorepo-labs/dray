@@ -27,6 +27,10 @@ docs
 # Staged from vscode-material-icons on every Vite start — see vite.config.ts
 apps/desktop/public/file-icons
 
+# Browser-only harness for looking at panel states without a session or gh.
+# Local tooling, not part of any build — see the PR panel notes in CLAUDE.md.
+apps/desktop/demo
+
 # Next.js
 .next
 out

@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 use tokio::process::Command;
 
 static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static GH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// The absolute path to `claude`, or the bare name as a last resort.
 ///
@@ -36,6 +37,25 @@ pub async fn claude() -> PathBuf {
     // loser just drops its copy.
     let _ = CLAUDE_PATH.set(resolved);
     CLAUDE_PATH.get().cloned().unwrap_or_else(|| PathBuf::from("claude"))
+}
+
+/// The absolute path to `gh`, or `None` where it isn't installed.
+///
+/// `None` rather than a bare-name fallback, unlike [`claude`]: `gh` is optional
+/// here, and the caller turns a missing one into a line telling the reader to
+/// install it. A spawn error naming the binary would be the same fact worded as
+/// a crash.
+///
+/// The answer is cached including its absence, so installing `gh` while the app
+/// runs needs a restart — the same bargain the login-shell probe already makes.
+pub async fn gh() -> Option<PathBuf> {
+    if let Some(path) = GH_PATH.get() {
+        return path.clone();
+    }
+
+    let resolved = resolve("gh").await;
+    let _ = GH_PATH.set(resolved);
+    GH_PATH.get().cloned().flatten()
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install

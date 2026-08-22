@@ -7,6 +7,9 @@ import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import QuitDialog from "@/components/QuitDialog";
+import PrPanel from "@/components/PrPanel";
+import { useChanges } from "@/hooks/useChanges";
+import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, { PanelToggle, TabBody, type PanelTab } from "@/components/RightPanel";
 import Sidebar, { DevBadge, SidebarToggle, sortSessions } from "@/components/Sidebar";
 import SubagentPanel from "@/components/SubagentPanel";
@@ -27,6 +30,7 @@ import { useSessions } from "@/hooks/useSessions";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useUpdater } from "@/hooks/useUpdater";
 import { changeRange, turnChangedTree } from "@/lib/changes";
+import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { playCelebration } from "@/lib/sound";
 import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -117,6 +121,27 @@ function App() {
     [selectedSession?.events, busy],
   );
 
+  // Read here rather than inside the panel: the tab row needs to know whether
+  // there is an open PR before that tab has ever been shown, so ordering it
+  // first can't wait on the panel fetching for itself.
+  const prBranch = selectedSession ? sessionBranch(selectedSession) : null;
+  // `panelTab` and not `activeTab`, which cannot exist yet — it is derived from
+  // this hook's own answer. Harmless: the only case the two disagree is a tab
+  // that isn't drawn, which means no PRs, which means nothing to poll for.
+  const pullRequests = usePullRequest(
+    selectedSession?.cwd ?? "",
+    prBranch,
+    panelOpen && panelTab === "pr",
+  );
+  const hasOpenPr = pullRequests.prs.some((pr) => pr.state === "OPEN");
+  const hasPrTab = prTabVisible(pullRequests.prs, pullRequests.error);
+
+  // The stored tab outlives the session it was chosen in, so it can name one
+  // this session doesn't have. Resolved on read rather than written back:
+  // switching to a session without a PR must not forget that the PR tab is
+  // where the reader was, for when they switch to one that has it.
+  const activeTab: PanelTab = panelTab === "pr" && !hasPrTab ? "changes" : panelTab;
+
   const togglePanel = () => setPanelOpen((prev) => !prev);
 
   // Opens the tab without touching the selection, so a run the reader already
@@ -153,7 +178,12 @@ function App() {
   // opened the subagents tab would be a lie. ⌘E stays a plain toggle: it shows
   // nothing, so it promises nothing.
   const handleTogglePanel = () => {
-    if (!panelOpen && lastTurnChanged) setPanelTab("changes");
+    if (!panelOpen) {
+      // Same precedence the glyph draws with, so the tab that opens is the one
+      // the button was showing.
+      if (hasOpenPr && hasPrTab) setPanelTab("pr");
+      else if (lastTurnChanged) setPanelTab("changes");
+    }
     togglePanel();
   };
 
@@ -161,6 +191,27 @@ function App() {
   // moves as a turn's writes land, and `busy` covers the turn ending, where the
   // final file write and the closing event can arrive in either order.
   const revision = `${selectedSession?.events.length ?? 0}:${busy}`;
+
+  // Both panel bodies are presentational, and their hooks live here for the
+  // same reason: the tab row needs what they know before either tab is opened —
+  // whether a PR tab exists at all, and which refresh the one shared button
+  // should run.
+  const changesData = useChanges(
+    selectedSession?.cwd ?? "",
+    baseline,
+    head,
+    revision,
+    panelOpen && activeTab === "changes",
+  );
+
+  // One button, so the tab decides what it re-reads. Subagents has nothing to
+  // fetch, so it gets none rather than a button that does nothing.
+  const panelRefresh =
+    activeTab === "changes"
+      ? { onRefresh: changesData.refresh, loading: changesData.loading }
+      : activeTab === "pr"
+        ? { onRefresh: pullRequests.refresh, loading: pullRequests.loading }
+        : null;
 
   // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
   // read one array. `projectPath` on the item is the repo root, so a worktree
@@ -299,6 +350,7 @@ function App() {
               onToggle={handleTogglePanel}
               open={panelOpen}
               changes={lastTurnChanged}
+              pr={hasOpenPr && hasPrTab}
             />
           )}
         </header>
@@ -311,20 +363,17 @@ function App() {
         selectedSession ? (
           <RightPanel
             open={panelOpen}
-            tab={panelTab}
+            tab={activeTab}
             onTabChange={setPanelTab}
-            counts={{ subagents: subagents.length }}
+            counts={{ subagents: subagents.length, pr: prBadgeCount(pullRequests.prs) }}
+            prFirst={hasOpenPr}
+            pr={hasPrTab}
+            refresh={panelRefresh}
           >
-            <TabBody active={panelTab === "changes"}>
-              <ChangesPanel
-                cwd={selectedSession.cwd}
-                baseline={baseline}
-                head={head}
-                revision={revision}
-                active={panelOpen && panelTab === "changes"}
-              />
+            <TabBody active={activeTab === "changes"}>
+              <ChangesPanel cwd={selectedSession.cwd} baseline={baseline} {...changesData} />
             </TabBody>
-            <TabBody active={panelTab === "subagents"}>
+            <TabBody active={activeTab === "subagents"}>
               <SubagentPanel
                 runs={subagents}
                 selectedId={selectedSubagentId}
@@ -333,6 +382,9 @@ function App() {
                 onSelect={setSelectedSubagentId}
                 onStopTask={handleStopTask}
               />
+            </TabBody>
+            <TabBody active={hasPrTab && activeTab === "pr"}>
+              <PrPanel branch={prBranch} {...pullRequests} />
             </TabBody>
           </RightPanel>
         ) : null
