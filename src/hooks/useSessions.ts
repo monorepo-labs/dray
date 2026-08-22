@@ -880,7 +880,7 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to
     // say which session, where the card can lean on the sidebar rail for that.
-    notifyOS(sessionId, label, item?.title ?? "");
+    notifyOS(sessionId, kind, label, item?.title ?? "");
     return false;
   }
   if (sessionId === selectedSessionIdRef.current) return true;

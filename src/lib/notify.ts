@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { NoticeKind } from "@/hooks/useNotices";
+
 /// Post a desktop notification that clicks back into its session.
 ///
 /// The whole thing lives in Rust ([notifications.rs](../../src-tauri/src/notifications.rs))
@@ -11,6 +13,6 @@ import { invoke } from "@tauri-apps/api/core";
 /// Fire-and-forget by design: this is the *secondary* channel — the sidebar rail
 /// survives it either way — so a failure must never surface as an error the
 /// reader has to deal with.
-export function notifyOS(sessionId: string, title: string, body: string) {
-  void invoke("notify_session", { sessionId, title, body }).catch(() => {});
+export function notifyOS(sessionId: string, kind: NoticeKind, title: string, body: string) {
+  void invoke("notify_session", { sessionId, kind, title, body }).catch(() => {});
 }

@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub async fn notify_session(
     app: AppHandle,
     session_id: String,
+    kind: String,
     title: String,
     body: String,
 ) -> Result<(), String> {
@@ -42,6 +43,9 @@ pub async fn notify_session(
         let mut notification = notify_rust::Notification::new();
         notification.summary(&title).body(&body).auto_icon();
 
+        #[cfg(target_os = "macos")]
+        notification.sound_name(sound_for(&kind));
+
         let handle = match notification.show() {
             Ok(handle) => handle,
             // Best-effort by design: the in-app notice and the sidebar rail both
@@ -60,11 +64,31 @@ pub async fn notify_session(
         });
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (handle, &app, &session_id);
+            let _ = (handle, &app, &session_id, &kind);
         }
     });
 
     Ok(())
+}
+
+/// Pick the banner's sound from what the session wants.
+///
+/// A banner with no sound at all is delivered silently — notify-rust only calls
+/// `setSound` when a name is set — and silence is worst on exactly this channel,
+/// which fires when the reader is in another app and can neither see the in-app
+/// notice nor hear the sound it plays.
+///
+/// The two kinds are told apart because only one of them is a request: a
+/// question left unanswered holds the session open, so it gets a sound that
+/// stands out from the OS default the reader hears all day. `""` reads like "no
+/// sound" and is the opposite — it is the name `UNNotificationSound.soundNamed:`
+/// resolves to the system default, verified by ear against a named one.
+#[cfg(target_os = "macos")]
+fn sound_for(kind: &str) -> &'static str {
+    match kind {
+        "asking" => "Ping",
+        _ => "",
+    }
 }
 
 /// Ask the OS for permission, once for the life of the process.
