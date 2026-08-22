@@ -28,7 +28,7 @@ jobs:
       # version the conf doesn't carry publishes a manifest no client considers
       # newer, and the release silently reaches nobody. Fail loudly instead.
       - run: |
-          V="$(jq -r .version src-tauri/tauri.conf.json)"
+          V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version v$V" >&2
             exit 1
@@ -49,19 +49,19 @@ jobs:
       # so the hand-written part stays a summary and the file stays the source.
       - id: notes
         run: |
-          V="$(jq -r .version src-tauri/tauri.conf.json)"
+          V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           BODY="$(awk -v want="## $V" '
             $0 == want { found = 1; next }
             found && /^## / { exit }
             found { print }
-          ' CHANGELOG.md)"
+          ' apps/desktop/CHANGELOG.md)"
 
           # A stable release with no section would publish notes saying nothing,
           # which is worth stopping for — same reason the version guard above
           # is fatal. A prerelease is allowed to ship without one.
           if [ -z "$(printf '%s' "$BODY" | tr -d '[:space:]')" ]; then
             if [ "${{ steps.channel.outputs.channel }}" = "stable" ]; then
-              echo "CHANGELOG.md has no '## $V' section" >&2
+              echo "apps/desktop/CHANGELOG.md has no '## $V' section" >&2
               exit 1
             fi
             BODY=""
@@ -96,8 +96,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/src
             ~/.cargo/git/db
-            src-tauri/target
-          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+            apps/desktop/src-tauri/target
+          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
 
       - run: pnpm install --frozen-lockfile
@@ -118,6 +118,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          # The Tauri project no longer sits at the repo root.
+          projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           prerelease: ${{ steps.channel.outputs.prerelease }}
@@ -135,7 +137,7 @@ jobs:
       # the two apart: it fails unless a ticket is actually attached.
       - name: Verify the bundle is notarized
         run: |
-          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName src-tauri/tauri.conf.json).app"
+          APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName apps/desktop/src-tauri/tauri.conf.json).app"
           xcrun stapler validate "$APP"
           spctl --assess --verbose=2 --type exec "$APP"
 

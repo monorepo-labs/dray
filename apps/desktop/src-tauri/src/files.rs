@@ -249,10 +249,10 @@ mod tests {
     /// root-level file has to come back with an empty one and not a stray "/".
     #[test]
     fn splits_the_directory_off_the_name() {
-        let hits = search(&repo(), "CLAUDE.md", 5).unwrap();
-        let root = hits.iter().find(|h| h.path == "CLAUDE.md").unwrap();
+        let hits = search(&repo(), "index.html", 5).unwrap();
+        let root = hits.iter().find(|h| h.path == "index.html").unwrap();
 
-        assert_eq!(root.name, "CLAUDE.md");
+        assert_eq!(root.name, "index.html");
         assert_eq!(root.dir, "");
 
         let nested = search(&repo(), "src/lib/slash.ts", 5)

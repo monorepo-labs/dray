@@ -1,4 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
 allowBuilds:
   # Fetches the platform-specific binary vite runs; without it, builds fail on a
   # clean install.
   esbuild: true
+  # Next's image optimizer; without it `next build` warns and falls back to a
+  # slower JS decoder.
+  sharp: true

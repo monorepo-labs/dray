@@ -19,7 +19,7 @@ on:
     # The cache turns over on the Rust dependency graph, so frontend-only
     # commits have nothing to warm.
     paths:
-      - "src-tauri/**"
+      - "apps/desktop/src-tauri/**"
       - ".github/workflows/warm-cache.yml"
   workflow_dispatch:
 
@@ -75,11 +75,11 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/src
             ~/.cargo/git/db
-            src-tauri/target
+            apps/desktop/src-tauri/target
           # The version bump in every release changes Cargo.lock, so the exact
           # key misses once per release by design. The prefix restore is what
           # carries the tree across; only `dray` itself moved.
-          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
 
       - run: pnpm install --frozen-lockfile
@@ -97,3 +97,4 @@ jobs:
       # `beforeBuildCommand` itself, which is why there is no separate frontend
       # build step.
       - run: pnpm tauri build --no-bundle --target universal-apple-darwin
+        working-directory: apps/desktop

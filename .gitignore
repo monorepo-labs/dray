@@ -25,4 +25,11 @@ dist-ssr
 
 docs
 # Staged from vscode-material-icons on every Vite start — see vite.config.ts
-public/file-icons
+apps/desktop/public/file-icons
+
+# Next.js
+.next
+out
+.vercel
+*.tsbuildinfo
+.gstack/

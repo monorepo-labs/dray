@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* The palette is copied from the desktop app's `[data-theme="neutral"]
+   [data-mode="dark"]` block, value for value. The app ships dark-only, so the
+   site is dark-only too — a light marketing page followed by a dark app reads
+   as two products. Copied rather than imported: nothing should make this site's
+   build depend on the app's tree. */
+@theme {
+  --color-background: oklch(0.145 0 0);
+  --color-foreground: oklch(0.985 0 0);
+  --color-card: oklch(0.205 0 0);
+  --color-surface-raised: oklch(0.19 0 0);
+  --color-muted-foreground: oklch(0.708 0 0);
+  --color-border: oklch(1 0 0 / 10%);
+  --color-command: oklch(0.82 0.13 90);
+  --color-mention: oklch(0.82 0.13 230);
+
+  --radius: 0.625rem;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* react-tweet ships a Twitter-coloured card that reads as a foreign object on
+   this page, and its own dark block is gated on `prefers-color-scheme` — so a
+   visitor whose OS is light got white cards on a dark page. `data-theme="dark"`
+   on <html> pins the side, and these repaint it: card fill, hairline border and
+   type all come from the same values the rest of the site uses. The selector
+   carries an extra class on purpose — the package's own rule is (0,1,0), so a
+   bare `.react-tweet-theme` would only win on source order. */
+[data-theme="dark"] .react-tweet-theme {
+  --tweet-border: 1px solid var(--color-border);
+  --tweet-font-family: var(--font-sans);
+  --tweet-font-color: var(--color-foreground);
+  --tweet-font-color-secondary: var(--color-muted-foreground);
+  --tweet-bg-color: var(--color-card);
+  --tweet-bg-color-hover: var(--color-surface-raised);
+  --tweet-container-margin: 0;
+  --tweet-body-font-size: 0.9375rem;
+  --tweet-body-line-height: 1.4rem;
+}
