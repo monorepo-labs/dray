@@ -291,18 +291,41 @@ pub async fn base_ref_tree(cwd: &str) -> Option<String> {
     (!tree.is_empty()).then_some(tree)
 }
 
+/// Git's empty tree, which every repository can resolve whether or not
+/// anything was ever written into it. Hardcoded rather than looked up: git
+/// knows this id built in, so it needs no object in the database to answer for.
+pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 /// The tree HEAD points at — the committed side of "what have I changed but
 /// not committed".
 ///
 /// Paired with a `None` head in [`changes_since`], which snapshots the working
 /// tree at read time, so the two together are the repo view's uncommitted list.
-/// `None` for a directory that isn't a repo and for an unborn branch, where
-/// there is no commit yet; both are ordinary states the view draws as empty.
+///
+/// A repository whose branch is **unborn** — `git init` with nothing committed
+/// yet — answers with the empty tree rather than `None`. It is the honest
+/// baseline there: with no commit behind it, every file in the tree is an
+/// addition, which is exactly what a diff against the empty tree says. Folding
+/// it into `None` instead would have made a real repository indistinguishable
+/// from a plain directory, and hidden its files until the first commit.
+///
+/// So `None` means one thing only: this is not a repository.
 pub async fn head_tree(cwd: &str) -> Option<String> {
-    let tree = git(cwd, &["rev-parse", "--verify", "-q", "HEAD^{tree}"]).await?;
+    if let Some(tree) = git(cwd, &["rev-parse", "--verify", "-q", "HEAD^{tree}"])
+        .await
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+    {
+        return Some(tree);
+    }
 
-    let tree = tree.trim().to_string();
-    (!tree.is_empty()).then_some(tree)
+    is_repo(cwd).await.then(|| EMPTY_TREE.to_string())
+}
+
+/// Whether git recognises this directory at all, which is the question `HEAD`
+/// cannot answer on its own — a fresh `git init` has no HEAD to resolve.
+async fn is_repo(cwd: &str) -> bool {
+    git(cwd, &["rev-parse", "--git-dir"]).await.is_some()
 }
 
 /// How one path differs between two snapshots. `added`/`removed` are git's own
@@ -1610,6 +1633,30 @@ mod tests {
 
         assert_eq!(commits[0].subject, "subject");
         assert_eq!(commits[0].body, "a\x1fb");
+    }
+
+    #[tokio::test]
+    async fn a_repo_with_no_commit_yet_diffs_against_the_empty_tree() {
+        let dir = std::env::temp_dir().join(format!("dray-unborn-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.unwrap();
+        let at = dir.to_str().unwrap();
+        run(at, &["init", "-q", "."]).await.unwrap();
+        fs::write(dir.join("first.txt"), "hello\n").await.unwrap();
+
+        // A real repository, so it must not read as a plain directory — and its
+        // one file has to be listed, which is the whole point of not folding
+        // this into `None`.
+        let base = head_tree(at).await.expect("an unborn branch still has a repo");
+        assert_eq!(base, EMPTY_TREE);
+
+        let changes = changes_since(at, &base, None).await.unwrap();
+        assert_eq!(
+            changes.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["first.txt"],
+        );
+        assert_eq!(changes.files[0].status, ChangeStatus::Added);
+
+        fs::remove_dir_all(&dir).await.ok();
     }
 
     #[tokio::test]

@@ -324,6 +324,10 @@ Only **tip commit's** rollup asked for (`commits(last:1)`) — check reported ag
 
 **Right panel's changes tab stay, and answer different question.** Panel = "what did this turn do", turn-scoped, beside transcript. View = whole repository. Two surfaces, not duplicate: one follow turns, other follow branch.
 
+**`head_tree` answer `None` for one thing only: not a repository.** Repo with **unborn** branch (`git init`, nothing committed) answer **empty tree** instead — honest baseline there, since with no commit behind it every file = addition, exact thing diff against empty tree say. Folding it into `None` made real repo indistinguishable from plain directory and hid its file until first commit. Empty tree need no object in database: git know that id built in (verified by test diffing against it in fresh repo).
+
+**And `null` alone still say two thing — "no repo" and "not asked yet".** View paint before first read land, so testing id alone announce every real repository as plain directory for frame or two. `useHeadTree` carry `settled` for that, and empty state wait on it.
+
 **Uncommitted list = HEAD tree against live snapshot**, and that whole trick. `head_tree` = `rev-parse HEAD^{tree}`, paired with `changes_since(cwd, headTree, None)` which snapshot working tree to answer. Commit move HEAD → new tree id → cache key roll onto new baseline by itself. **Nothing invalidate anything** — same bargain frozen turn ranges already make.
 
 **Commit SHA pass `is_tree_id` and every diff path take them unchanged.** ≤64 hex, so `git diff <sha> <sha> --` and `{sha}:{path}` cat-file rev work as-is — commit's own diff = `useChanges(cwd, commit.parent ?? EMPTY_TREE, commit.sha)`. Non-null head = frozen key = read once, cached forever. Root commit's `parent` = `None`, and `EMPTY_TREE` (`4b825dc…`) stand in, so first commit in history open like any other instead of being one row that can't.

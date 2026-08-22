@@ -31,9 +31,11 @@ export default function DiffView({
   /// client's, while the worker pool's cache is keyed on the text.
   diffStyle?: "unified" | "split";
   overflow?: "wrap" | "scroll";
-  /// Grow to the height of the container instead of capping. For a pane whose
-  /// whole job is this diff, where the cap the transcript needs would leave
-  /// most of the window empty.
+  /// Let the **loading stand-in** grow to its container instead of capping at
+  /// 96. For a pane whose whole job is this one diff, where the transcript's
+  /// cap leaves a short box floating in an empty window until the grammar
+  /// lands. Only the stand-in: the frame itself clips what overflows it, so a
+  /// full height there would cut long diffs off at the fold.
   fill?: boolean;
   /// Rules injected into the viewer's shadow root, in the library's own
   /// `unsafe` layer. Its escape hatch for the handful of things it styles but
@@ -76,11 +78,7 @@ export default function DiffView({
     [pair, resolvedMode, diffStyle, overflow, unsafeCSS],
   );
 
-  const frame = cn(
-    "overflow-hidden rounded-md border border-border/60 text-code",
-    fill && "h-full",
-    className,
-  );
+  const frame = cn("overflow-hidden rounded-md border border-border/60 text-code", className);
 
   // An unhighlighted stand-in rather than an empty box: a grammar fetch runs
   // from ~10ms to several hundred, and a blank frame that long reads as a

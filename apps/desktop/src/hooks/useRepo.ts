@@ -56,8 +56,13 @@ export function useHeadTree(
   cwd: string,
   revision: string,
   active: boolean,
-): { tree: string | null; refresh: () => void } {
+): { tree: string | null; settled: boolean; refresh: () => void } {
   const [tree, setTree] = useState<string | null>(null);
+  // Whether a read has ever come back for this directory. Without it `null`
+  // says two things at once — "not a repository" and "not asked yet" — and the
+  // view, which paints before the first read lands, would announce the first
+  // while it means the second.
+  const [settled, setSettled] = useState(false);
 
   const issued = useRef(0);
 
@@ -72,18 +77,20 @@ export function useHeadTree(
       })
       // A directory that isn't a repository answers `null`, so there is no
       // error here worth showing — the view draws its empty state either way.
-      .catch(() => issued.current === token && setTree(null));
+      .catch(() => issued.current === token && setTree(null))
+      .finally(() => issued.current === token && setSettled(true));
   }, [cwd]);
 
   const [seeded, setSeeded] = useState(cwd);
   if (seeded !== cwd) {
     setSeeded(cwd);
     setTree(null);
+    setSettled(false);
   }
 
   usePolledRead(cwd, revision, active, read);
 
-  return { tree, refresh: read };
+  return { tree, settled, refresh: read };
 }
 
 export type CommitLog = {

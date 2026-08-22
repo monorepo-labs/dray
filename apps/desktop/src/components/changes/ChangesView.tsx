@@ -86,10 +86,14 @@ export default function ChangesView({
   const showing = subTab === "uncommitted" ? working : commitChanges;
   const selectedFile = subTab === "uncommitted" ? selectedWorking : selectedCommitFile;
 
-  // A directory that isn't a repository has no HEAD to diff against. Said
-  // plainly rather than drawn as an empty change list, which would read as a
-  // clean tree.
-  if (head.tree === null && !working.changes) {
+  // A directory that isn't a repository has nothing to diff. Said plainly
+  // rather than drawn as an empty change list, which would read as a clean
+  // tree — but only once the read has actually answered. Before that `null` is
+  // just "not asked yet", and this view paints before the first read lands, so
+  // testing the id alone announced every real repository as a plain directory
+  // for a frame or two. A repository with no commit yet is not this case: it
+  // answers with the empty tree, so its files list as additions.
+  if (head.settled && head.tree === null && !working.changes) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center border-t border-border px-6 text-ui text-muted-foreground">
         This session is not in a git repository.

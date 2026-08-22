@@ -227,6 +227,9 @@ function Body({
       // this travels with it rather than being a taste choice.
       overflow={diffStyle === "split" ? "scroll" : "wrap"}
       unsafeCSS={DIFF_CSS}
+      // The stand-in shown while the grammar loads fills the pane rather than
+      // sitting as a short box in an empty window.
+      fill
       // The pane is the frame, so the diff brings none of its own.
       className="rounded-none border-0"
     />
