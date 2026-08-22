@@ -1,23 +1,23 @@
 {
-  "version": "0.2.0",
-  "notes": "### Added\n\n- **A session tells you when it wants you.** A turn finishing, a permission\n  request and a question each announce themselves once, on the channel that\n  suits where you are: a desktop notification when Dray isn't focused, a card\n  in the corner when it is focused but that session is off screen, and nothing\n  at all when you're already looking at the transcript. Clicking the desktop\n  notification opens the session it came from.\n- **⌘G opens the oldest card** without reaching for it. The card names what is\n  wanted — \"Needs permission\", \"Task finished\" — and leaves on its own.\n- **The sidebar marks both states, in two colours.** Green means a turn\n  finished and you haven't read it, and clears when you look. Yellow means the\n  session is waiting on an answer, and only answering clears it.\n- **A sound when a session settles**, alongside the card.\n\n### Note\n\nmacOS asks for notification permission the first time Dray posts one. Deny it\nand the in-app card and the sidebar marks still work — the desktop banner is\nthe only thing lost.",
-  "pub_date": "2026-08-21T11:15:57.998Z",
+  "version": "0.3.0",
+  "notes": "### Added\n\n- **A PR tab in the right pane**, beside Changes and Subagents. It shows merge\n  readiness, the checks on the tip commit, and the review and bot comments as\n  one timeline. When a session's branch has an open PR the tab leads the row\n  and the panel toggle turns green — at that point the work is about landing,\n  not about the last turn.\n- **Merging, from the app.** The button names the method — merge, squash or\n  rebase — in its own menu, and arms a confirm before it does anything. A draft\n  can be marked ready and a closed PR reopened.\n- **A dock badge for what's waiting**, counting the same rows the sidebar rail\n  marks: turns you haven't read, and sessions blocked on an answer.\n\n### Fixed\n\n- **Desktop notifications were silent.** They fire only when you're in another\n  app, which is exactly where the in-app sound can't reach you. A question now\n  sounds different from a finished turn.\n\n### Note\n\nThe PR tab runs on the `gh` CLI, so it uses the login and enterprise host you\nalready have. Without `gh`, or on a checkout with no GitHub remote, the tab\nstays hidden; logged out, it says so rather than erroring.",
+  "pub_date": "2026-08-22T08:46:07.157Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWx0NlVxcm5TUTRpRWM5VGpuTzhEelJ2ZnVHcVdPMDIzVkNjbGVscTA4OEIrWUxQSTZ0YzdCWTRkQWNsRmJyeTNXbzFmVTBrc05vdEZsWjZDbFZ1VmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MzEwOTUxCWZpbGU6RHJheS5hcHAudGFyLmd6CjdLelQvNHQxL0E5QVRFOG5vVFJGdCtwUE5sZGs3Z09jYlR1WFBreWNuM1JxQ0Z3R1ZZWnh2c0RXZjZhNGNMUXhzZm9sUVZOYWlFV1QybHFWc0gzU0JBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.2.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW92ekY0UXAwU1l4Z0VZUi9kTk51blRtZll3L3B2SFBIbW91RzdPOGZKMy9CMHlLTWl5aDR2WGd6b0FIZTYvVExPYXZpQzZ4V25kdGFUSkpCTitwcXc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Mzg4MzU5CWZpbGU6RHJheS5hcHAudGFyLmd6Cnd5dm1JZGtuMnNNTU1GZm1OWDgwZmttVzBlK09QdXhoRVljVHRaRGtMUUc5MUdaMVRHQVFWNURzdFJ6ZU1WemdZRGw1bSsrc2Exb0dwUktueUV5bENBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.3.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWx0NlVxcm5TUTRpRWM5VGpuTzhEelJ2ZnVHcVdPMDIzVkNjbGVscTA4OEIrWUxQSTZ0YzdCWTRkQWNsRmJyeTNXbzFmVTBrc05vdEZsWjZDbFZ1VmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MzEwOTUxCWZpbGU6RHJheS5hcHAudGFyLmd6CjdLelQvNHQxL0E5QVRFOG5vVFJGdCtwUE5sZGs3Z09jYlR1WFBreWNuM1JxQ0Z3R1ZZWnh2c0RXZjZhNGNMUXhzZm9sUVZOYWlFV1QybHFWc0gzU0JBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.2.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW92ekY0UXAwU1l4Z0VZUi9kTk51blRtZll3L3B2SFBIbW91RzdPOGZKMy9CMHlLTWl5aDR2WGd6b0FIZTYvVExPYXZpQzZ4V25kdGFUSkpCTitwcXc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Mzg4MzU5CWZpbGU6RHJheS5hcHAudGFyLmd6Cnd5dm1JZGtuMnNNTU1GZm1OWDgwZmttVzBlK09QdXhoRVljVHRaRGtMUUc5MUdaMVRHQVFWNURzdFJ6ZU1WemdZRGw1bSsrc2Exb0dwUktueUV5bENBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.3.0/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWx0NlVxcm5TUTRpRWM5VGpuTzhEelJ2ZnVHcVdPMDIzVkNjbGVscTA4OEIrWUxQSTZ0YzdCWTRkQWNsRmJyeTNXbzFmVTBrc05vdEZsWjZDbFZ1VmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MzEwOTUxCWZpbGU6RHJheS5hcHAudGFyLmd6CjdLelQvNHQxL0E5QVRFOG5vVFJGdCtwUE5sZGs3Z09jYlR1WFBreWNuM1JxQ0Z3R1ZZWnh2c0RXZjZhNGNMUXhzZm9sUVZOYWlFV1QybHFWc0gzU0JBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.2.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW92ekY0UXAwU1l4Z0VZUi9kTk51blRtZll3L3B2SFBIbW91RzdPOGZKMy9CMHlLTWl5aDR2WGd6b0FIZTYvVExPYXZpQzZ4V25kdGFUSkpCTitwcXc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Mzg4MzU5CWZpbGU6RHJheS5hcHAudGFyLmd6Cnd5dm1JZGtuMnNNTU1GZm1OWDgwZmttVzBlK09QdXhoRVljVHRaRGtMUUc5MUdaMVRHQVFWNURzdFJ6ZU1WemdZRGw1bSsrc2Exb0dwUktueUV5bENBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.3.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWx0NlVxcm5TUTRpRWM5VGpuTzhEelJ2ZnVHcVdPMDIzVkNjbGVscTA4OEIrWUxQSTZ0YzdCWTRkQWNsRmJyeTNXbzFmVTBrc05vdEZsWjZDbFZ1VmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MzEwOTUxCWZpbGU6RHJheS5hcHAudGFyLmd6CjdLelQvNHQxL0E5QVRFOG5vVFJGdCtwUE5sZGs3Z09jYlR1WFBreWNuM1JxQ0Z3R1ZZWnh2c0RXZjZhNGNMUXhzZm9sUVZOYWlFV1QybHFWc0gzU0JBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.2.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW92ekY0UXAwU1l4Z0VZUi9kTk51blRtZll3L3B2SFBIbW91RzdPOGZKMy9CMHlLTWl5aDR2WGd6b0FIZTYvVExPYXZpQzZ4V25kdGFUSkpCTitwcXc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Mzg4MzU5CWZpbGU6RHJheS5hcHAudGFyLmd6Cnd5dm1JZGtuMnNNTU1GZm1OWDgwZmttVzBlK09QdXhoRVljVHRaRGtMUUc5MUdaMVRHQVFWNURzdFJ6ZU1WemdZRGw1bSsrc2Exb0dwUktueUV5bENBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.3.0/Dray_universal.app.tar.gz"
     }
   }
 }
