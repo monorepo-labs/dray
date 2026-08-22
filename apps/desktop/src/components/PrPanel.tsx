@@ -152,17 +152,31 @@ function PrRow({
   const open = !collapsible || !collapsed;
   const checks = summarizeChecks(pr.checks);
 
-  const Header = collapsible ? "button" : "div";
+  const toggle = () => setCollapsed((prev) => !prev);
 
   return (
     <div className="border-b border-border last:border-b-0">
-      <Header
+      {/* A div rather than a button, even though it behaves as one: the link
+          inside it is a real button, and a button cannot nest a button. Same
+          shape `SessionRow` uses to carry its pin and settle controls. */}
+      <div
         {...(collapsible
-          ? { type: "button" as const, onClick: () => setCollapsed((prev) => !prev) }
+          ? {
+              role: "button",
+              tabIndex: 0,
+              onClick: toggle,
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggle();
+                }
+              },
+            }
           : {})}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-2.5 text-left text-ui",
-          collapsible && "cursor-pointer transition-colors hover:bg-sidebar-accent/50",
+          collapsible &&
+            "cursor-pointer transition-colors hover:bg-sidebar-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         )}
       >
         {collapsible && (
@@ -177,11 +191,34 @@ function PrRow({
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
         <span className="min-w-0 flex-1 truncate text-sidebar-foreground">{pr.title}</span>
         <Counts added={pr.additions} removed={pr.deletions} />
-      </Header>
+
+        {/* Beside the PR's own name, which is what it points at — and not in
+            the readiness block, where it only existed on the states that draw
+            one. A merged PR draws none at all now, and this is the button that
+            would otherwise have kept that row alive. */}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="-mr-1 shrink-0 text-muted-foreground/60 hover:text-muted-foreground"
+          aria-label="Open on GitHub"
+          title="Open on GitHub"
+          onClick={(e) => {
+            // The row toggles on click, and this sits inside it.
+            e.stopPropagation();
+            void openUrl(pr.url);
+          }}
+        >
+          <ExternalLink className="size-3" />
+        </Button>
+      </div>
 
       {open && (
         <div className="flex flex-col gap-4 pb-3">
-          <Readiness pr={pr} acting={acting} act={act} />
+          {/* Nothing left to say about a merged PR: it has no action on this
+              panel, no base worth naming once the work is on it, and the header
+              already carries the merge glyph. The word "Merged" alone was a
+              whole row repeating the icon two lines above it. */}
+          {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} />}
 
           <Section
             title="Checks"
@@ -358,16 +395,6 @@ function Readiness({
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground/60 hover:text-muted-foreground"
-            onClick={() => void openUrl(pr.url)}
-            title="Open on GitHub"
-          >
-            <ExternalLink className="size-3" />
-          </Button>
-
           {pr.state === "CLOSED" && (
             <Button
               variant="outline"

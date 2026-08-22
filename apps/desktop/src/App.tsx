@@ -182,7 +182,11 @@ function App() {
       // Same precedence the glyph draws with, so the tab that opens is the one
       // the button was showing.
       if (hasOpenPr && hasPrTab) setPanelTab("pr");
-      else if (lastTurnChanged) setPanelTab("changes");
+      // Remembered tabs are restored, with one exception: a PR tab holding
+      // nothing but merged or closed work is a record, and opening the pane
+      // onto a record is not what the reader reached for. Only on open — the
+      // tab stays clickable, so it can still be read on purpose.
+      else if (lastTurnChanged || panelTab === "pr") setPanelTab("changes");
     }
     togglePanel();
   };
