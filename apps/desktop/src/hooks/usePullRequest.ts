@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -76,6 +76,9 @@ type State = {
 /// So the first read is *not* gated on `active` — only the poll is, which is
 /// the half [useChanges](./useChanges.ts) was really guarding. One read per
 /// session selection, deduped by the freshness window below.
+///
+/// Nothing here holds a "current" PR. Something did, and it was the bug: see
+/// `act`.
 export function usePullRequest(cwd: string, branch: string | null, active: boolean) {
   const key = branch ? keyOf(cwd, branch) : null;
 
@@ -86,15 +89,22 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
   }));
   const [acting, setActing] = useState(false);
 
-  /// Which PR the panel is showing, by number rather than by index — a refetch
-  /// can reorder the list (merging one drops it below the open ones) and an
-  /// index would quietly select a different PR underneath the reader.
-  const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
-
-  // Read inside async work that outlives the render it started in, so a fetch
+  // Read inside async work that outlives the render it started in, so a write
   // landing after a session switch can tell it is answering the wrong branch.
   const keyRef = useRef(key);
   keyRef.current = key;
+
+  /// Every write to `state` goes through this.
+  ///
+  /// An action or a read started in one session can land after the reader has
+  /// switched to another: the hook instance is `App`'s and survives the switch,
+  /// so a stale `setState` writes one branch's answer into another's. Guarding
+  /// only the *completions* was not enough — the visible cost was `loading`
+  /// stuck true forever, because a stale refresh set it on the way in and its
+  /// guarded completion then dropped the write that would have cleared it.
+  const commit = useCallback((k: string | null, update: (prev: State) => State) => {
+    if (keyRef.current === k) setState(update);
+  }, []);
 
   const load = useCallback(
     async (force: boolean) => {
@@ -102,34 +112,35 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
 
       const fresh = Date.now() - (fetchedAt.get(key) ?? 0) < FRESH_MS;
       if (!force && fresh && cache.has(key)) {
-        setState({ prs: cache.get(key) ?? [], error: null, loading: false });
+        commit(key, () => ({ prs: cache.get(key) ?? [], error: null, loading: false }));
         return;
       }
 
-      setState((prev) => ({ ...prev, loading: true }));
+      commit(key, (prev) => ({ ...prev, loading: true }));
 
       try {
         const prs = await invoke<PullRequest[]>("prs_for_branch", { cwd, branch });
+        // The cache is keyed, so it is written whatever the reader switched to
+        // meanwhile — the answer is still true of the branch that was asked.
         cache.set(key, prs);
         fetchedAt.set(key, Date.now());
-        if (keyRef.current === key) setState({ prs, error: null, loading: false });
+        commit(key, () => ({ prs, error: null, loading: false }));
       } catch (e) {
         // The previous answer stays up: a failed refresh is a refresh that
         // failed, not the PR going away.
-        if (keyRef.current === key) {
-          setState((prev) => ({ ...prev, error: asUnavailable(e), loading: false }));
-        }
+        commit(key, (prev) => ({ ...prev, error: asUnavailable(e), loading: false }));
       }
     },
-    [cwd, branch, key],
+    [cwd, branch, key, commit],
   );
 
   // Adopt whatever the cache already holds on the way in, so a switch back
-  // paints before the fetch it also kicks off lands. The selection is dropped
-  // with it — it belongs to the branch being left, not to the one arriving.
+  // paints before the fetch it also kicks off lands. `acting` resets with it:
+  // a write still in flight belongs to the branch being left, and leaving the
+  // flag set would disable the arriving session's buttons.
   useEffect(() => {
     setState({ prs: key ? (cache.get(key) ?? []) : [], error: null, loading: false });
-    setSelectedNumber(null);
+    setActing(false);
   }, [key]);
 
   useEffect(() => {
@@ -142,16 +153,9 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
     if (active) void load(false);
   }, [active, load]);
 
-  // Defaults to the first, which the backend has already sorted to be the open
-  // one. Falls back the same way if the selected PR disappears from the list.
-  const pr = useMemo(
-    () => state.prs.find((p) => p.number === selectedNumber) ?? state.prs[0] ?? null,
-    [state.prs, selectedNumber],
-  );
-
   // Only while something can still change by itself — see `isSettling`. Watches
-  // the whole list, not the shown one: a check on the PR behind the selector is
-  // still a check the reader is waiting on.
+  // the whole list, not one row: a check on a PR further down the list is still
+  // a check the reader is waiting on.
   const settling = state.prs.some(isSettling);
   useEffect(() => {
     if (!active || !settling) return;
@@ -160,36 +164,47 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
     return () => clearInterval(id);
   }, [active, settling, load]);
 
-  /// Runs a write against the shown PR and refetches. The refetch is not
-  /// deferred optimism — a merge closes the PR and moves it down the list, so
-  /// the panel reads the new state back rather than guessing at it.
+  /// Runs a write against `number` and refetches.
+  ///
+  /// The PR is an argument, not something this hook remembers. It *was*
+  /// remembered, for a selector the panel stopped drawing when the list
+  /// replaced it — after which nothing ever set the selection, so every row's
+  /// button acted on whichever PR sorted first. A merge is the one action here
+  /// that cannot be taken back, so its target has to come from the row that was
+  /// clicked and from nowhere else.
+  ///
+  /// The refetch is not deferred optimism: a merge closes the PR and moves it
+  /// down the list, so the panel reads the new state back rather than guessing.
   const act = useCallback(
-    async (action: PrAction) => {
-      if (!pr || acting) return;
+    async (number: number, action: PrAction) => {
+      if (acting) return;
+      const k = key;
 
       setActing(true);
       try {
         if (action.kind === "merge") {
-          await invoke("merge_pr", { cwd, number: pr.number, method: action.method });
+          await invoke("merge_pr", { cwd, number, method: action.method });
         } else {
           const command = action.kind === "reopen" ? "reopen_pr" : "mark_pr_ready";
-          await invoke(command, { cwd, number: pr.number });
+          await invoke(command, { cwd, number });
         }
-        setState((prev) => ({ ...prev, error: null }));
+        commit(k, (prev) => ({ ...prev, error: null }));
       } catch (e) {
-        setState((prev) => ({ ...prev, error: asUnavailable(e) }));
+        commit(k, (prev) => ({ ...prev, error: asUnavailable(e) }));
       } finally {
-        setActing(false);
-        await load(true);
+        // Both guarded together: the arriving session owns `acting` now, and
+        // refreshing a branch the reader has left would overwrite its rows.
+        if (keyRef.current === k) {
+          setActing(false);
+          await load(true);
+        }
       }
     },
-    [cwd, pr, acting, load],
+    [cwd, key, acting, load, commit],
   );
 
   return {
     ...state,
-    pr,
-    select: setSelectedNumber,
     acting,
     refresh: useCallback(() => void load(true), [load]),
     act,

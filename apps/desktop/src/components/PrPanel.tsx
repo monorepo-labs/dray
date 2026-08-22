@@ -146,7 +146,7 @@ function PrRow({
   /// collapsing the single row leaves the tab showing one line.
   collapsible: boolean;
   acting: boolean;
-  act: (action: PrAction) => Promise<void>;
+  act: (number: number, action: PrAction) => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState(!defaultOpen);
   const open = !collapsible || !collapsed;
@@ -368,7 +368,7 @@ function Readiness({
 }: {
   pr: PullRequest;
   acting: boolean;
-  act: (action: PrAction) => Promise<void>;
+  act: (number: number, action: PrAction) => Promise<void>;
 }) {
   const [method, setMethod] = useState<MergeMethod>("squash");
   const [confirming, setConfirming] = useState(false);
@@ -401,7 +401,7 @@ function Readiness({
               size="sm"
               className={BUSY}
               disabled={acting}
-              onClick={() => void act({ kind: "reopen" })}
+              onClick={() => void act(pr.number, { kind: "reopen" })}
             >
               {acting && <Loader2 className="animate-spin" />}
               {acting ? busyLabel("reopen") : "Reopen"}
@@ -415,7 +415,7 @@ function Readiness({
                 size="sm"
                 className={BUSY}
                 disabled={acting}
-                onClick={() => void act({ kind: "ready" })}
+                onClick={() => void act(pr.number, { kind: "ready" })}
               >
                 {acting && <Loader2 className="animate-spin" />}
                 {acting ? busyLabel("ready") : "Ready for review"}
@@ -431,7 +431,7 @@ function Readiness({
                   disabled={acting}
                   onClick={() => {
                     setConfirming(false);
-                    void act({ kind: "merge", method });
+                    void act(pr.number, { kind: "merge", method });
                   }}
                 >
                   Confirm {METHOD_LABEL[method].toLowerCase()}
