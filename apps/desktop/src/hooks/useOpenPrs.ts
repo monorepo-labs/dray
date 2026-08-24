@@ -16,9 +16,11 @@ const FRESH_MS = 120_000;
 const cache = new Map<string, Map<string, OpenPr>>();
 const fetchedAt = new Map<string, number>();
 
-/// Repos we are mid-flight on, so two effects landing in the same frame — a
-/// turn ending in a project that is also newly visible — cost one `gh`.
-const inFlight = new Set<string>();
+/// The read currently running for a repo, so two effects landing in the same
+/// frame — a turn ending in a project that is also newly visible — cost one
+/// `gh`. The promise rather than a bare flag, because a *forced* read that
+/// collides has to queue behind it rather than be dropped; see `load`.
+const inFlight = new Map<string, Promise<void>>();
 
 const EMPTY: Map<string, OpenPr> = new Map();
 
@@ -46,15 +48,32 @@ export function useOpenPrs(repoPaths: string[]) {
   const [byRepo, setByRepo] = useState<Map<string, Map<string, OpenPr>>>(() => new Map(cache));
 
   const load = useCallback(async (force: boolean) => {
+    // Deferred rather than dropped, and that distinction is the whole of this
+    // branch. A forced read is one the caller knows something new about — a
+    // turn has just ended and may have opened a pull request — while the read
+    // already running was issued before that. Skipping it on the collision
+    // leaves the pre-creation answer standing until something else happens to
+    // refresh, so the sidebar stays unmarked and the composer keeps offering
+    // Create PR for a branch that has one.
+    const deferred: string[] = [];
+
     const stale = pathsRef.current.filter((path) => {
-      if (inFlight.has(path)) return false;
+      if (inFlight.has(path)) {
+        if (force) deferred.push(path);
+        return false;
+      }
       return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS;
     });
-    if (stale.length === 0) return;
+    if (stale.length === 0 && deferred.length === 0) return;
 
-    await Promise.all(
-      stale.map(async (path) => {
-        inFlight.add(path);
+    const read = async (path: string) => {
+      const running = inFlight.get(path);
+      // Waits for the slot rather than taking it: two reads of one repo answer
+      // the same thing, and letting them overlap makes which one lands last a
+      // race.
+      if (running) await running;
+
+      const attempt = (async () => {
         try {
           const prs = await invoke<OpenPr[]>("open_prs", { cwd: path });
           cache.set(path, new Map(prs.map((pr) => [pr.headRefName, pr])));
@@ -65,10 +84,17 @@ export function useOpenPrs(repoPaths: string[]) {
           cache.set(path, new Map());
         } finally {
           fetchedAt.set(path, Date.now());
-          inFlight.delete(path);
         }
-      }),
-    );
+      })();
+
+      inFlight.set(path, attempt);
+      await attempt;
+      // Only if it is still ours: a later read may already have claimed the
+      // slot while this one was settling.
+      if (inFlight.get(path) === attempt) inFlight.delete(path);
+    };
+
+    await Promise.all([...stale, ...deferred].map(read));
 
     setByRepo(new Map(cache));
   }, []);

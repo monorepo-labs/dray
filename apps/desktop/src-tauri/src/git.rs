@@ -998,11 +998,14 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
         .await
         .map_or(0, |s| count_changes(&s));
 
-    // `default_base` answers `origin/main`; the row compares against a branch
-    // name, so the remote is dropped once, here.
+    // `default_base` answers `origin/<branch>` — the remote is hardcoded there —
+    // so the prefix comes off rather than everything up to the last slash. A
+    // branch name may hold slashes of its own, and `release/current` cut down to
+    // `current` matches nothing, which reads to the handoff row as "you are on a
+    // feature branch" and offers a pull request against the branch itself.
     let default_branch = default_base(cwd)
         .await
-        .map(|base| base.rsplit_once('/').map_or(base.clone(), |(_, b)| b.to_string()));
+        .map(|base| base.strip_prefix("origin/").unwrap_or(&base).to_string());
 
     WorkStatus {
         dirty,
@@ -2483,8 +2486,47 @@ mod tests {
 
         let status = work_status(at).await;
         let default = status.default_branch.expect("a pushed branch resolves one");
-        assert!(!default.contains('/'), "still carries its remote: {default}");
+        assert!(!default.starts_with("origin/"), "still carries its remote: {default}");
         assert_eq!(Some(default), status.branch);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&remote).await.ok();
+    }
+
+    /// Only the remote comes off. A default branch holding slashes of its own —
+    /// `release/current` — cut down to its last segment matches no branch, which
+    /// reads as "you are on a feature branch" and offers a pull request against
+    /// the branch the work is already on.
+    #[tokio::test]
+    async fn work_status_keeps_slashes_inside_the_default_branch_name() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let remote = std::env::temp_dir().join(format!("dray-remote-{}", Uuid::now_v7()));
+
+        fs::create_dir_all(&remote).await.unwrap();
+        run(remote.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+        run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
+            .await
+            .unwrap();
+
+        run(at, &["checkout", "-q", "-b", "release/current"]).await.unwrap();
+        push_branch(at).await.unwrap();
+        // `-b` on the ref git would have written for us, so `origin/HEAD`
+        // resolves the way a cloned repo's does.
+        run(
+            at,
+            &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/current"],
+        )
+        .await
+        .unwrap();
+
+        let status = work_status(at).await;
+        assert_eq!(status.default_branch.as_deref(), Some("release/current"));
+        // And so the handoff row sees it as the branch it is on, not a feature
+        // branch to open a pull request from.
+        assert_eq!(status.default_branch, status.branch);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&remote).await.ok();
