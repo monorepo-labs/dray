@@ -465,6 +465,20 @@ model: string, inputTokens: number | null, outputTokens: number | null, cachedIn
  */
 contextWindow: number | null, maxOutputTokens: number | null, };
 
+/**
+ * One open pull request, cut down to what a sidebar row can draw.
+ *
+ * Deliberately not a `PullRequest`: the row says "this branch has an open PR,
+ * and whether it is a draft" and nothing else, so carrying checks, comments
+ * and review threads for every session in the list would be payload nobody
+ * reads.
+ */
+export type OpenPr = { number: number, 
+/**
+ * The branch it was opened from — what the caller matches a session by.
+ */
+headRefName: string, isDraft: boolean, };
+
 export type PermissionBehavior = "allow" | "deny";
 
 /**
@@ -916,6 +930,38 @@ reasoningTokens: number | null, totalTokens: number | null, costUsd: number | nu
  * and every event that doesn't report one. See [`ModelUsage`].
  */
 perModel: Array<ModelUsage>, };
+
+/**
+ * What the composer's action row needs to decide which buttons it has, in one
+ * read.
+ *
+ * A superset of [`SyncStatus`] rather than three calls stitched together in
+ * the frontend: every field here answers the same question — "what is there
+ * left to do with this work" — and reading them separately would let the row
+ * draw a Commit button from one snapshot beside a Push count from another.
+ */
+export type WorkStatus = { 
+/**
+ * Uncommitted paths. A count and not a list — the row only asks whether
+ * there is anything, and the changes view is where the files are read.
+ */
+dirty: number, 
+/**
+ * `None` on a detached HEAD and outside a repo, which is how the row hides
+ * itself entirely.
+ */
+branch: string | null, 
+/**
+ * `None` for a branch never pushed — the "publish" case.
+ */
+upstream: string | null, ahead: number, 
+/**
+ * The branch this work would land on, short of its remote (`main`, not
+ * `origin/main`). Stripped here rather than in the row, so "am I on the
+ * default branch" is one comparison and not a parsing rule that can drift.
+ * `None` where there is no remote to ask.
+ */
+defaultBranch: string | null, };
 
 /**
  * What removing this worktree would cost, read once so the dialog and the

@@ -961,6 +961,58 @@ pub struct SyncStatus {
     pub ahead: u32,
 }
 
+/// What the composer's action row needs to decide which buttons it has, in one
+/// read.
+///
+/// A superset of [`SyncStatus`] rather than three calls stitched together in
+/// the frontend: every field here answers the same question — "what is there
+/// left to do with this work" — and reading them separately would let the row
+/// draw a Commit button from one snapshot beside a Push count from another.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct WorkStatus {
+    /// Uncommitted paths. A count and not a list — the row only asks whether
+    /// there is anything, and the changes view is where the files are read.
+    pub dirty: u32,
+    /// `None` on a detached HEAD and outside a repo, which is how the row hides
+    /// itself entirely.
+    pub branch: Option<String>,
+    /// `None` for a branch never pushed — the "publish" case.
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    /// The branch this work would land on, short of its remote (`main`, not
+    /// `origin/main`). Stripped here rather than in the row, so "am I on the
+    /// default branch" is one comparison and not a parsing rule that can drift.
+    /// `None` where there is no remote to ask.
+    pub default_branch: Option<String>,
+}
+
+/// Infallible like [`sync_status`], and for the same reason: a directory that
+/// isn't a repo answers with the default, and the row reads that as nothing to
+/// offer rather than as an error.
+pub async fn work_status(cwd: &str) -> WorkStatus {
+    let sync = sync_status(cwd).await;
+
+    let dirty = git(cwd, &["status", "--porcelain"])
+        .await
+        .map_or(0, |s| count_changes(&s));
+
+    // `default_base` answers `origin/main`; the row compares against a branch
+    // name, so the remote is dropped once, here.
+    let default_branch = default_base(cwd)
+        .await
+        .map(|base| base.rsplit_once('/').map_or(base.clone(), |(_, b)| b.to_string()));
+
+    WorkStatus {
+        dirty,
+        branch: sync.branch,
+        upstream: sync.upstream,
+        ahead: sync.ahead,
+        default_branch,
+    }
+}
+
 /// Infallible by design, like [`list_branches`]: a directory that isn't a repo
 /// answers with the default rather than an error the reader can't act on.
 ///
@@ -2390,5 +2442,65 @@ mod tests {
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&remote).await.ok();
+    }
+
+    /// The composer's action row draws itself off these four facts, and a dirty
+    /// count that ignores untracked files would hide the Commit button for the
+    /// commonest case of all — an agent that just wrote a new file.
+    #[tokio::test]
+    async fn work_status_answers_what_is_left_to_do() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let clean = work_status(at).await;
+        assert_eq!(clean.dirty, 0);
+        assert!(clean.branch.is_some());
+        assert_eq!(clean.upstream, None);
+
+        fs::write(dir.join("new.txt"), "fresh\n").await.unwrap();
+        assert_eq!(work_status(at).await.dirty, 1);
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The default branch is compared against `branch`, so it has to arrive
+    /// without its remote — `origin/main` would never equal `main` and the row
+    /// would offer to open a pull request against the branch it is already on.
+    #[tokio::test]
+    async fn work_status_names_the_default_branch_without_its_remote() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let remote = std::env::temp_dir().join(format!("dray-remote-{}", Uuid::now_v7()));
+
+        fs::create_dir_all(&remote).await.unwrap();
+        run(remote.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+        run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
+            .await
+            .unwrap();
+        push_branch(at).await.unwrap();
+
+        let status = work_status(at).await;
+        let default = status.default_branch.expect("a pushed branch resolves one");
+        assert!(!default.contains('/'), "still carries its remote: {default}");
+        assert_eq!(Some(default), status.branch);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&remote).await.ok();
+    }
+
+    /// Outside a repo every field has to answer "nothing to do" rather than
+    /// error — the row hides on `branch` being `None`.
+    #[tokio::test]
+    async fn work_status_outside_a_repo_offers_nothing() {
+        let dir = std::env::temp_dir().join(format!("dray-plain-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.unwrap();
+
+        let status = work_status(dir.to_str().unwrap()).await;
+        assert_eq!(status.branch, None);
+        assert_eq!(status.dirty, 0);
+
+        fs::remove_dir_all(&dir).await.ok();
     }
 }

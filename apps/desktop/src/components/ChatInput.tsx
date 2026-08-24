@@ -56,6 +56,12 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
+  /// The "hand it back" actions, parked behind the card with a quarter of each
+  /// button standing above it. A node for the toolbar's reason, and placed here
+  /// rather than by the shell so it sits inside the same `max-w-3xl` column and
+  /// against the card's own top edge — the card is what hides it, so nothing can
+  /// come between them. Absent on a new task: there is no session to send into.
+  handoff?: ReactNode;
   busy?: boolean;
   /// Which session's draft is in the box, and what the composer refocuses on
   /// when the user switches. `null` is the new task's own draft, not the
@@ -135,6 +141,7 @@ export default function ChatInput({
   onCancelQueued,
   queuedCount = 0,
   toolbar,
+  handoff,
   busy = false,
   sessionId = null,
   isNewTask = false,
@@ -533,17 +540,31 @@ export default function ChatInput({
             same edge as the text below it. */}
         {isNewTask && <div className="-ml-2.5 pb-1.5">{toolbar}</div>}
 
+        {/* Directly above the card and with no gap: the row runs on past its own
+            reserve and behind the card, which is the opaque thing that hides it.
+            Anything between the two would show the buttons through the gap and
+            leave them floating rather than tucked. */}
+        {!isNewTask && handoff}
+
         {/* The ring lives on the card so the whole composer reads as one control.
             --input bakes in its own alpha, which makes Tailwind's /40-style opacity
             modifiers silently no-op, so both states set an explicit color.
             `relative` anchors the command picker, which opens upward out of the
-            card rather than displacing anything as it filters. */}
+            card rather than displacing anything as it filters.
+
+            `bg-composer`, not `bg-card`, and that is a vibrancy fix rather than
+            a colour change: the two tokens carry the same value, and only
+            `--card` becomes a 5.5% veil on glass. A veil is right for a surface
+            sitting *in* the page and wrong for one that has to hide something —
+            and this card has the handoff row parked behind it, which showed
+            straight through. Its own token rather than a borrowed one, so the
+            reason lives in the palette beside the rule it is an exception to. */}
         <div
           ref={cardRef}
           className={cn(
             "relative rounded-2xl transition-colors",
             !isNewTask &&
-              "border border-[oklch(1_0_0/6%)] bg-card focus-within:border-[oklch(1_0_0/8%)]",
+              "border border-[oklch(1_0_0/6%)] bg-composer focus-within:border-[oklch(1_0_0/8%)]",
           )}
         >
           {/* Two separate consequences of the empty state, passed separately

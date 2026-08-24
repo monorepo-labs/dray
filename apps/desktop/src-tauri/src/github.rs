@@ -171,6 +171,25 @@ query($owner:String!,$repo:String!,$branch:String!){
  }}
 "#;
 
+/// Every open pull request in the repo, by head branch.
+///
+/// One query for the whole sidebar rather than one per row: `gh` costs the
+/// better part of a second, so asking per session would be a spawn per visible
+/// row on every refresh. Open only — the mark says "this branch has somewhere
+/// to land", and a merged PR is a record the row has nothing to do with.
+///
+/// `first:100` is the cap, and it is a real one: a repo with more than a
+/// hundred open pull requests marks the hundred most recently touched, which is
+/// the set any session in this app is plausibly working on.
+const QUERY_OPEN: &str = r#"
+query($owner:String!,$repo:String!){
+ repository(owner:$owner,name:$repo){
+  pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
+   number headRefName isDraft
+  }}
+ }}
+"#;
+
 /// A GraphQL connection. `nodes` is nullable on every one of them, so the
 /// `Option` is load-bearing rather than defensive.
 #[derive(Deserialize)]
@@ -185,13 +204,30 @@ impl<T> Nodes<T> {
     }
 }
 
+/// Generic over the node shape, because both queries here answer with the same
+/// three envelopes around a `pullRequests` connection and only the fields
+/// inside it differ.
 #[derive(Deserialize)]
-struct Response {
-    data: Option<ResponseData>,
+struct Response<T> {
+    data: Option<ResponseData<T>>,
     /// GraphQL reports a failed query with a 200 and an `errors` array, so a
     /// zero exit code proves nothing on its own.
     #[serde(default)]
     errors: Vec<GraphQlError>,
+}
+
+impl<T> Response<T> {
+    /// The connection's nodes, or the first error GitHub reported.
+    fn prs(self) -> Result<Vec<T>, String> {
+        if let Some(first) = self.errors.first() {
+            return Err(first.message.clone());
+        }
+        Ok(self
+            .data
+            .and_then(|d| d.repository)
+            .map(|r| Nodes::take(r.pull_requests))
+            .unwrap_or_default())
+    }
 }
 
 #[derive(Deserialize)]
@@ -201,14 +237,14 @@ struct GraphQlError {
 }
 
 #[derive(Deserialize)]
-struct ResponseData {
-    repository: Option<Repository>,
+struct ResponseData<T> {
+    repository: Option<Repository<T>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Repository {
-    pull_requests: Option<Nodes<RawPr>>,
+struct Repository<T> {
+    pull_requests: Option<Nodes<T>>,
 }
 
 #[derive(Deserialize)]
@@ -795,23 +831,10 @@ async fn prs_for_branch_inner(cwd: &str, branch: &str) -> Result<Vec<PullRequest
 
 /// Splits parsing off the spawn so the fixture can exercise it.
 fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
-    let response: Response =
+    let response: Response<RawPr> =
         serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
 
-    // A failed GraphQL query still exits zero and answers 200, so the error
-    // array is the only place the failure is reported.
-    if let Some(first) = response.errors.first() {
-        return Err(first.message.clone());
-    }
-
-    let mut prs: Vec<PullRequest> = response
-        .data
-        .and_then(|d| d.repository)
-        .map(|r| Nodes::take(r.pull_requests))
-        .unwrap_or_default()
-        .into_iter()
-        .map(RawPr::map)
-        .collect();
+    let mut prs: Vec<PullRequest> = response.prs()?.into_iter().map(RawPr::map).collect();
 
     // An open PR is the one being worked on whatever its age, so it outranks a
     // newer merged one — otherwise reopening an old branch shows the reader the
@@ -822,6 +845,81 @@ fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
     });
 
     Ok(prs)
+}
+
+/// One open pull request, cut down to what a sidebar row can draw.
+///
+/// Deliberately not a `PullRequest`: the row says "this branch has an open PR,
+/// and whether it is a draft" and nothing else, so carrying checks, comments
+/// and review threads for every session in the list would be payload nobody
+/// reads.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPr {
+    pub number: u64,
+    /// The branch it was opened from — what the caller matches a session by.
+    pub head_ref_name: String,
+    pub is_draft: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawOpenPr {
+    number: u64,
+    #[serde(default)]
+    head_ref_name: String,
+    #[serde(default)]
+    is_draft: bool,
+}
+
+/// Every open pull request in the repo `cwd` sits in.
+///
+/// One call for a whole sidebar's worth of rows — see [`QUERY_OPEN`]. The
+/// caller matches a session to its entry by branch, so this answers a list
+/// rather than a map: which branch a session lands on is the frontend's own
+/// rule (a worktree session's is rebuilt from its worktree name), and building
+/// the map here would be a second copy of it.
+#[tauri::command]
+pub async fn open_prs(cwd: String) -> Result<Vec<OpenPr>, PrUnavailable> {
+    open_prs_inner(&cwd).await.map_err(unavailable)
+}
+
+async fn open_prs_inner(cwd: &str) -> Result<Vec<OpenPr>, String> {
+    let (owner, repo) = repo_slug(cwd).await?;
+
+    let out = gh(
+        cwd,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("owner={owner}"),
+            "-f",
+            &format!("repo={repo}"),
+            "-f",
+            &format!("query={QUERY_OPEN}"),
+        ],
+    )
+    .await?;
+
+    read_open_prs(&out)
+}
+
+/// Splits parsing off the spawn, like [`read_prs`].
+fn read_open_prs(out: &str) -> Result<Vec<OpenPr>, String> {
+    let response: Response<RawOpenPr> =
+        serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
+
+    Ok(response
+        .prs()?
+        .into_iter()
+        .map(|pr| OpenPr {
+            number: pr.number,
+            head_ref_name: pr.head_ref_name,
+            is_draft: pr.is_draft,
+        })
+        .collect())
 }
 
 /// Merges the PR. Returns once `gh` has, so the caller can refetch and show
@@ -1143,6 +1241,36 @@ mod tests {
     fn diff_counts_come_through() {
         let pr = parse();
         assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
+    }
+
+    /// The sidebar's query carries the branch and the draft flag, and a draft
+    /// is an open PR — reading it as anything else leaves the row unmarked for
+    /// exactly the PR that has just been opened.
+    #[test]
+    fn open_prs_carry_their_branch_and_draft_flag() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+            {"number":9,"headRefName":"worktree-calm-navy-beacon","isDraft":true},
+            {"number":8,"headRefName":"fix/thing","isDraft":false}]}}}}"#;
+        let prs = read_open_prs(out).expect("open prs parse");
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].head_ref_name, "worktree-calm-navy-beacon");
+        assert!(prs[0].is_draft);
+        assert!(!prs[1].is_draft);
+    }
+
+    /// Same 200-with-errors trap the branch query has: a zero exit code proves
+    /// nothing, and reading it as success marks every row as PR-less.
+    #[test]
+    fn an_open_pr_query_error_is_an_error() {
+        let out = r#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"#;
+        assert!(read_open_prs(out).is_err());
+    }
+
+    /// A repo with no open PRs answers a null connection, not an empty one.
+    #[test]
+    fn no_open_prs_reads_as_empty() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":null}}}}"#;
+        assert!(read_open_prs(out).expect("null connection parses").is_empty());
     }
 
     #[test]

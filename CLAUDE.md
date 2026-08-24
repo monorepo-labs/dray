@@ -205,6 +205,8 @@ Baseline ride on `user_message.baseline` and closing head on `turn_completed.hea
 
 **Right pane = one frame with tabs, not one panel per view.** [RightPanel](apps/desktop/src/components/RightPanel.tsx) own `<aside>`, border, tab row; `ChangesPanel` and `SubagentPanel` = bodies rendering inside it, carry no chrome. `AppShell` have single `panel` slot, so two self-framing panels could only ever be mutually exclusive with two booleans deciding it — third view now tab and component instead. Tab row `h-(--titlebar-h)` and carry drag region itself, in place of empty spacer each panel used to open with. No close button: `PanelToggle` and ⌘E both close it, matching ⌘B for sidebar. That toggle exported from `RightPanel` but rendered by `App`, because pane not exist before session do and button have to outlive it — same split `SidebarToggle` have on far side.
 
+**Changes glyph = plain foreground, not command yellow.** Yellow = app's "this is for you", colour of session standing still behind question. Turn having touched file neither warning nor thing to answer, and yellow read as one every turn — lot of alarm for a fact. PR glyph keep its emerald: that one say state of work, and green = what merge button already is.
+
 **Toggle double as changes indicator**, which whole of quick-access rail that was going to sit beside it. With pane closed and last turn having changed tree, it draw git glyph instead of panel one and its click open _changes_ tab not whichever tab last used — glyph opening something else = lie. ⌘E stay plain toggle: show nothing, so promise nothing. Signal = `turnChangedTree`, cost no git call — both sides of range content-addressed tree ids, so ids that differ _are_ changed tree. Reading panel's own file list instead not work: `useChanges` pause while hidden, exactly when indicator have to be right.
 
 **No row in changes list open by default.** List = answer to "what did this turn touch", and auto-opening one file by position put arbitrary diff above that list and push rest off screen.
@@ -245,7 +247,15 @@ Three exits clear it, all needed: `block_start` that not thinking (text or tool 
 
 **Session's PR = tab in right pane**, beside Changes and Subagents. [PrPanel](apps/desktop/src/components/PrPanel.tsx) render readiness, checks, comments and merge action; frame, tab row and mount-forever bargain all `RightPanel`'s, exactly as that section promise.
 
-**Tab called `PR`, and it lead when PR is open.** Short form what anyone working on one call it, and long one widest label in row of three. `tabOrder` put it first when session have **open** PR — at that point session's work no longer about this turn, it about landing, and first tab where eye go. Merged or closed PR don't promote: it record, not something to act on.
+**Tab called `PR`, and it lead when PR is open.** Short form what anyone working on one call it, and long one widest label in row of three. `tabOrder` put it first when session have **open** PR — at that point session's work no longer about this turn, it about landing, and first tab where eye go. Draft count, being `OPEN` with `isDraft` set. Merged or closed PR don't promote: it record, not something to act on.
+
+**Which tab open = one line, and `null` what make it work.** `ade.panelTab` hold `PanelTab | null` and default **null** = "reader never picked". `activeTab` then = pick where pick still name tab this session draw, else derived default — PR when open one exist, Changes otherwise. Storing `"changes"` as initial value = whole of old bug: fresh install indistinguishable from reader who chose Changes, so open PR could never lead. Not written back either, so switching to PR-less session keep pick for when they switch to one that have it.
+
+Last turn changing tree **don't** enter into it. Changes describe one turn and superseded by next; PR = state of work. Toggle's own click still set tab to match glyph it drew — git icon opening subagents = lie — and that now only thing `handleTogglePanel` do. ⌘E stay plain toggle: draw nothing, promise nothing.
+
+**⌘⇧[ / ⌘⇧] step tab, and legend drawn not hidden.** Browser and editor chord, so it arrive already known. Step over `tabs` (what `tabOrder` return) not `PANEL_TABS`, so session with no PR tab cycle two and never land on undrawn one. Keycaps sit **right after tabs**, no label: next to thing they act on they read as belonging to row without word saying so, and refresh button take `ml-auto` instead. Three cap not four — `[ ]` = one key with two end, and splitting it read as chord wanting both. Deliberate exception to app's tooltip rule: chord for row of two or three tab = one nobody go looking for.
+
+Binding on **`{` / `}`**, not on brackets: shift layout reach `key`, so ⌘⇧[ report as `{`. `useHotkey` grew `code` option (`BracketLeft`/`BracketRight`) for engines that report unshifted one instead — both route, since character alone one engine away from silently never firing and position alone put chord under different glyph on every non-US layout.
 
 **Hook live in `App`, not in panel.** Tab row need to know whether open PR exist *before* that tab ever shown, so ordering can't wait on panel fetching for itself. Follow that first read **not** gated on `active` — only poll is, which half `useChanges` was really guarding. One read per session selection, deduped by freshness window.
 
@@ -271,6 +281,8 @@ Only **tip commit's** rollup asked for (`commits(last:1)`) — check reported ag
 **Badge count leave merged PR out** (`prBadgeCount`). Every other state on panel have something reader can still do — open one merge, draft go ready, **closed one reopen** — and merged one have nothing at all, so counting it inflate badge that exist to say how much still live. It stay in list either way: list = record, badge = workload.
 
 **Single PR not collapsible, and draw no chevron.** Disclosure arrow that can only ever point down = affordance for nothing, and collapsing the only row leave tab showing one line. Header become plain label rather than button, and lose hover fill with it.
+
+**Refresh go entirely on Subagents**, which have nothing to re-read. It reserved its width back when keycaps sat to its right and would slide on that one tab; with them anchored to tabs there nothing left to hold still, and empty box on far edge = slot for button reader not waiting for.
 
 **One refresh button, in tab row, owned by frame.** It mean same thing on every tab, so it sit in same place rather than once per panel; active tab decide what it re-read. Subagents get none — nothing to fetch, and button that do nothing worse than no button. Both panel bodies therefore presentational and **their hooks live in `App`**: `useChanges` moved up beside `usePullRequest` for exactly this, since tab row need what they know before either tab opened.
 
@@ -298,6 +310,12 @@ Thread carry two facts ordinary comment don't. `path:line` say where it hang —
 
 **Poll only while something can still move.** `isSettling` = open PR with pending check or unresolved mergeability; nothing else ever polled, since settled PR not going to change under reader's eyes. 15s while settling, and gated on `active` — hidden tab must not keep spawning `gh`. Pending check spin for this reason: it one row on pane about to change on own, and poll driving it invisible otherwise. Answers cached per `cwd + branch` across mounts and counted fresh for 30s, because switching session change props and `gh` cost better part of second, which read as panel reloading every time it looked at.
 
+`active` read off **pick**, not off `activeTab` — that derive from this hook's own answer, so it not exist yet at call site. Unset pick count, since derived default = PR tab whenever open one exist. Two disagree in exactly one case: session whose only PR merged, where pick unset, default resolve to Changes, and this read true. Harmless — merged PR never settle, and poll gate on that too.
+
+**PR appearing = turn ending, and nothing else could see it.** Poll gate on PR tab being visible **and** active, and `prTabVisible` hide tab exactly while answer "no PR" — so one state needing recheck = only one that could never self-heal, and PR created mid-session stayed invisible until reader switched away and back. Fix = refetch on **falling edge of `busy`** in `App`. Session id ride along in that ref, because `busy` = *selected* session's: switching from running session to idle one drop it with no turn having ended.
+
+**And appearance open pane, once.** `usePullRequest` take `onOpened`, fired from inside `load` — only fetch know what *previous* answer was, and previous answer = whole guard. `before` read off cache ahead of write; callback fire only where it existed, held no open PR, and new one do. First read have no `before`, so opening app onto session that already have PR raise nothing. Key-guarded like every other write there: read landing after session switch must not pull pane open onto branch reader left.
+
 **Every write refetch, and that not deferred optimism.** Merge close PR and move it down list, ready-for-review move it out of draft — each change more than field it name, so panel read new state back rather than guess. Merge itself two-step: button arm confirm that replace it, same shape sidebar's delete use. Method live in button's own menu not in confirm, so confirm read as one sentence naming exactly what about to happen — and menu spell out what each method do to base's history, since this only irreversible choice on pane. Menu `align="end"` and `w-80`: button sit at pane's right edge so start-aligned menu open off window, and at default width each description ran five lines and menu grew taller than panel.
 
 **Merge button green, and it GitHub's green not app's emerald.** `--accent-merge` = only place app use it. Primary fill on this palette near-white, which made **least reversible control on pane also brightest thing on it**; green what same button is on GitHub, so it recognisable before it read. No icon on it either — label already say "merge", and glyph was widest thing in button that only ever name one of three near-identical actions.
@@ -318,7 +336,19 @@ Thread carry two facts ordinary comment don't. `path:line` say where it hang —
 
 **Every comment collapsed, avatar in place of icon.** List where some row open and some closed read as accident not rule, so all start closed and first line of body (heading marks stripped) stand in for rest — row saying only who wrote it make reader open every one to find one that matter. Verdict carried by **coloured word** in closed row — `approved`, `requested changes` — so one thing worth knowing without opening anything already there. Author's picture replace icon that used to sit there: it say *who* in same space, where column of identical speech bubbles said nothing. Comment rows sit in `gap-2` column where check rows don't: checks = dense column of one-line facts, comments = separate things people said. Check row keep state glyph **and** take avatar second — state why anyone look at list, so it keep left edge; avatar read as who saying so. Avatar fall back to initial and cover it on load, so slow or missing image never leave hole at row's left edge.
 
-**Panel toggle draw PR over changes.** Two indicators = same promise ("something here, and this is way to it"), so only one can be drawn and PR win: it tab that open first, it state of *work* rather than of last turn, and it survive next prompt landing where changes mark don't. Glyph = **`text-emerald-500`, not `--accent-merge`**: that token is button *fill*, dark enough to carry white text, and at 1.5px stroke on dark background it all but disappeared beside bright changes yellow. Emerald = same green open-PR glyph use inside panel, so mark and thing it point at match. Toggle's click set tab to match glyph — git icon opening subagents would be lie, same rule changes indicator already follow.
+**Sidebar row carry PR mark, and it one `gh` per repo not per row.** [useOpenPrs](apps/desktop/src/hooks/useOpenPrs.ts) ask `open_prs` once per **distinct repo** among visible sessions — `gh` cost better part of second, so spawn per row make sidebar most expensive thing in app. Backend's `QUERY_OPEN` = states:OPEN, first:100, ordered by update, carrying `number headRefName isDraft` and nothing else: row draw open-or-draft, so shipping checks and review threads for every session = payload nobody read. `Response<T>` gone generic so both query share three envelopes around `pullRequests`.
+
+**Matching live in frontend, deliberately.** Backend answer *list* not map, because which branch session land on = frontend's own rule (`sessionBranch` rebuild worktree session's from its worktree name) and map built in Rust = second copy of it free to disagree.
+
+Glyph sit **beside rail, ahead of title**, and take **no room when absent** — unlike rail next to it, which hold its slot. Two differ because rail come and go on *same* row as agent work, where branch either have PR or don't: row that never get one would otherwise pay for mark forever, and most never do. Rail keep outer edge, since it "over to you" and clear when reader deal with it, where this standing fact about branch. Emerald for open (same green panel glyph and merge button use), muted `GitPullRequestDraft` for draft, since draft = work not asking to land yet. `title` attribute rather than tooltip: decoration on row that itself a control, and tooltip open every time cursor cross list.
+
+**Asked for active list's repos only.** `showArchived` true → empty set, no call. Settled session = work reader already dealt with, so repo appearing nowhere but archived list = one nobody waiting to land. Marks already fetched still draw over there, since cache outlive the ask — what dropped is spending, not answer. `projectFilter` narrow it further for free, since row not on screen need no mark.
+
+Cache module-level per repo, fresh **120s** — longer than panel's 30s, because this feed mark rather than view being read, and glyph arriving minute late cost nothing where stale merge button would. Refreshed on same turn-end edge panel use, so mark and pane land together. Failure silent and total (no `gh`, not GitHub repo, logged out): empty map cached *and stamped* like success, so repo `gh` can't answer for stop being asked until window expire rather than on every render. Undefined therefore mean both "no PR" and "couldn't ask" — mark decoration on list that work without it, so two read same.
+
+**Toggle's PR glyph count draft, and draw draft's own shape.** `hasOpenPr` = any `state === "OPEN"`, which draft satisfy. `draft` prop true only where **every** open PR is one — session carrying draft beside real PR have something asking to land. Glyph keep emerald either way: shape carry distinction, colour carry "there is something here", and muting it would read as dimmed chrome.
+
+**Panel toggle draw PR over changes.** Two indicators = same promise ("something here, and this is way to it"), so only one can be drawn and PR win: it tab that open first, it state of *work* rather than of last turn, and it survive next prompt landing where changes mark don't. Glyph = **`text-emerald-500`, not `--accent-merge`**: that token is button *fill*, dark enough to carry white text, and at 1.5px stroke on dark background it all but disappeared. Emerald = same green open-PR glyph use inside panel, so mark and thing it point at match. Toggle's click set tab to match glyph — git icon opening subagents would be lie, same rule changes indicator already follow.
 
 **Collapsed preview = plain text, so markup come off first.** `firstLine` strip heading marks, emphasis, and link syntax keeping only its text — `(https://…)` half usually longer than words around it and not clickable in truncating span anyway. Vercel comment's opener otherwise read as raw markdown.
 
@@ -373,6 +403,52 @@ If it come back: commit = `add -A -- <paths>` then `commit -m … -- <paths>`, b
 **History drill in, not third column.** Window can't hold commit list, file list *and* split diff without diff becoming narrowest of three. Selecting commit replace list with its files under back-header; selection kept on step back, so long history don't lose reader's place.
 
 **Selected file derived, never stored.** `find(path) ?? files[0]` — file that stop being changed can't leave pane pointing at nothing, and first-by-position right here where turn panel refuse it: diff have own pane, so opening one hide nothing.
+
+## Handing work back
+
+**Composer hide row of end-of-turn action behind itself.** [HandoffRow](apps/desktop/src/components/composer/HandoffRow.tsx) sit above composer card, clipped to sliver, open on hover. Buttons = Commit, Commit & push, Push/Publish branch, Create PR, Draft PR.
+
+**Almost every button send prompt.** Click = reader typing "commit" without typing it, straight through `handleSendMsg`. So no confirm dialog and no error surface — agent write message with context it already have, and whatever go wrong report in transcript like any other tool failure. Same rule repo view already keep: conversation next door = where work get made, so second place to commit = second way to do thing reader already asking agent for. This a shortcut *into* conversation, not around it.
+
+**Prompt = one to three word**, literally `"commit"`, `"commit and push"`, `"create a PR"`, `"create a draft PR"`. Model know how to commit and whether branch have upstream better than sentence written here do — and longer prompt = spec competing with repo's own instruction, which firm about commit message. Pinned by test (≤4 words).
+
+**Push the exception, and run git direct.** Line = whether there a judgement to make. Push have exactly one correct implementation and nothing to decide, so it call `push_branch` — which already both case, `git push` with upstream and `git push -u origin <branch>` without. Spending model turn on that buy nothing and cost reader a wait. Hence no separate **Publish branch** action: one button, count dropped from label when no upstream since "Push 0" answer question nobody asked.
+
+Push own both end of its own feedback, since it report into no transcript: spinner on button while in flight, and error banner above composer — same one every other backend failure reach reader through. It refresh `work_status` on success rather than wait for next turn's edge, because count on button now wrong and it the thing reader looking at.
+
+Cost of that trade worth naming: agent not deterministic. Commit might come back with different message style, or agent might run tests first. Prompt one = **suggestion, not command**. Push is a command.
+
+**Hidden, not contextual-visible, and that the whole shape.** Turn touching file = most turns, so row drawn on "there are changes" = row drawn always — exactly what make every other tool's commit button noise. Reverse hold too: finishing turn ≠ wanting to commit. Peek cost discoverability once and buy quiet every turn after.
+
+**Which button exist = [handoff.ts](apps/desktop/src/lib/handoff.ts), pure and tested.** Dirty tree → Commit + Commit & push. Clean tree with commits ahead → Push (count in label); no upstream at all → Push without count, offered even at zero ahead since branch nobody pushed = one nobody else can see. Push **never** beside Commit: with dirty tree reader want commit first and Commit & push already carry it. Create PR + Draft PR both spelled out, not one behind other's menu — draft = different decision, not variant. Both hidden on default branch (PR against itself), where no remote resolve default branch, and where branch **already have PR** — panel where that acted on, and second button open duplicate. Empty = resting state, and row hide entirely on it.
+
+**`hasPr` come from sidebar's own per-repo read, not fourth git call.** `useOpenPrs.prFor` already answer it for every visible row.
+
+**One backend command, not three stitched.** `work_status` = `dirty` count, `branch`, `upstream`, `ahead`, `default_branch`. Superset of `sync_status` because every field answer same question — "what left to do with this work" — and reading them separately let row draw Commit from one snapshot beside Push count from another. `default_branch` arrive **stripped of remote** (`main`, not `origin/main`), so "am I on default branch" = one comparison and not parsing rule free to drift. Infallible like `sync_status`: non-repo answer default, row read that as nothing to offer.
+
+**Read on falling edge of turn, and on arriving at session. Nothing else.** Those two moment it can change from inside app. Between turns only reader in another window move tree, and polling for that = several `git` spawn a second to catch something rare. Row going one turn stale = the trade.
+
+**Composer = occluder, not a clip.** Buttons sit full height in reserve fraction as tall (`h-1` against their `h-7`), so most of each run past it and **behind card** — card opaque and paint later, coming later in form. Sliver deliberately tiny: enough to say something under there, not enough to read as row of buttons composer happen to be covering. Hover slide whole row clear (`-translate-y-7`). Clip instead leave same picture and different lie: button end where card start rather than continue behind it, so nothing suggest there more of them.
+
+**Hover zone and thing it move = separate element, and have to be.** With one element, box travel with buttons — so cursor that opened row sit on its edge moment it open, row shut under it and reopen, forever. Zone stay put (`-top-7 pt-7`, turning 4px target into 32px one); only inner row translate, and it translate *within* zone, so cursor never outside it. `w-fit` keep that invisible box off rest of transcript's bottom edge, where full-width strip would swallow click and text selection.
+
+**Row order interleave two ladder**: Commit, Create PR, Commit & push, Draft PR. Each ladder run plain-first then variant; reading across give two thing anyone do here, reading down give each one's longer form. Concatenated instead put both PR button at far end, where compound commit action sit between reader and thing they most often want next. `px-3` on reserve match card's own inner padding, so first button's edge land on same line as toolbar button inside it.
+
+**Three fact, each a bug obvious version have:**
+
+- Reserve = **fixed height**, row positioned out of flow inside it. In flow, row push composer down and transcript up every time cursor cross it on way to input — the one path cursor take most.
+- Buttons carry **opaque fill** — `secondary`, never `outline`. Outline = `bg-input/30` in dark palette, so transcript read straight through part meant to be hidden. No `default` variant either: primary fill near-white on this palette, and near-white button poking out of composer = loudest thing on screen. Order carry priority instead.
+- They take **no pointer events until row open**. Visible quarter sit directly above composer, so without this a click aimed at input and landing few px high send a commit.
+
+**Composer card take own token, `--composer`, and that vibrancy fix not colour change.** Start as copy of `--card`, and whole of its job = be the one raised surface staying a **fill** on glass, since handoff row park behind it and veil there show buttons it exist to hide. Own token not borrowed `--popover`: composer not a popover, and next change to floating surface should not have to wonder whether composer wanted it too. Exception live in vibrancy block beside rule it break — that where `--card` get its 5.5% and `--composer` deliberately don't.
+
+Inline variant — same button along toolbar row, ghost and dimmed — built as mockup and **rejected**. Permanent-but-quiet still permanent: it spend width every turn on thing wanted at end of one, which the failure mode being avoided, only softer. Peek keep it.
+
+Icons for `pr`/`draftPr` = same pair sidebar row and panel toggle draw, so mark and thing it lead to match everywhere.
+
+Hover delay symmetric (150ms): keep cursor merely passing through from popping row open, and let one overshooting on way out come back without it having closed.
+
+**Row live in `ChatInput` as `handoff` node**, like `toolbar` — so component keep owning layout and spacing, including that row's cut edge land on card's own top edge. Absent on new task: no session to send into.
 
 ## Deleting a worktree
 
@@ -687,13 +763,15 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 - **Worktree cleanup hang off session lifecycle, not off merge.** `--delete-branch` still deliberately not passed (see above) — merge button say nothing about tree. Cleanup live on settle and on delete instead, see _Deleting a worktree_ below. Merged session whose reader never settle it therefore still leave tree behind; that reader's call, not merge's.
 
+- **Handoff row have no Revert, no Amend, no Stash.** Each destroy or rewrite work, and button that send prompt for one = button whose blast radius decided by model. Reader can still type it.
+
 - **Repo view read, commit and push — no fetch, no pull, no discard.** Ahead count against *last known* upstream, so branch someone else pushed to read as level until push itself fail. Discard-changes and stage-hunk deliberately absent: both destroy work, and neither belong in first pass of surface agent also writing to.
 
 - **No count on Changes view tab.** Working-tree file count would force snapshot on every event even while reader sit on Chat — exactly what `active` gate exist to prevent. Sub-tab carry count, since by then reads already running.
 
 - **Blocked commit name no session either.** Same shape as blocked install: button dim while turn run and say nothing about when it free. Turn end unblock it, but nothing tell reader that.
 
-- **No PR indicator in sidebar.** Row show nothing about whether session's branch have open PR — deliberately parked, since answering it for every visible row need per-repo cache and refresh rule panel's own 30s freshness window don't cover.
+- **Sidebar's PR mark say open or draft, and nothing else.** No number, no check state, no merge readiness — row already carry title, unread rail and timestamp, and mark exist to say "this branch have somewhere to land". Number ride `title` attribute alone.
 
 - **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
 

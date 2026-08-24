@@ -1,4 +1,4 @@
-import { GitCompare, GitPullRequest, RefreshCw } from "lucide-react";
+import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
 
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ export function PanelToggle({
   open,
   changes = false,
   pr = false,
+  draft = false,
 }: {
   onToggle: () => void;
   open: boolean;
@@ -25,14 +26,20 @@ export function PanelToggle({
   /// otherwise going to sit beside it. Nothing to say once the pane is open:
   /// the changes are on screen, and the toggle goes back to being a toggle.
   changes?: boolean;
-  /// This session has an open pull request, which outranks `changes`.
+  /// Every one of this session's open pull requests is a draft. Draws the draft
+  /// glyph rather than the plain one — the mark still appears, because a draft
+  /// is still somewhere for the work to land, and it keeps the emerald so it
+  /// still reads as content rather than as dimmed chrome. Shape carries the
+  /// distinction, colour carries the "there is something here".
+  draft?: boolean;
+  /// This session has an open pull request, which outranks `changes`. A draft
+  /// counts — GitHub reports one as `OPEN` with `isDraft` set.
   ///
   /// The two indicators are the same promise — "there is something here, and
   /// this is the way to it" — so only one can be drawn, and the PR is the one
   /// worth drawing: it is the tab that opens first, it is the state of the
   /// work rather than of the last turn, and it is the one that survives the
-  /// next prompt landing. Green, matching the merge button it leads to; the
-  /// changes yellow stays what it means when there is no PR.
+  /// next prompt landing. Green, matching the merge button it leads to.
   pr?: boolean;
 }) {
   const indicating = (pr || changes) && !open;
@@ -68,9 +75,21 @@ export function PanelToggle({
               // text — and at 1.5px stroke on a dark background it all but
               // disappeared. This is the emerald the open-PR glyph uses in the
               // panel itself, so the mark and the thing it points at match.
-              <GitPullRequest className="size-4 text-emerald-500" strokeWidth={1.5} />
+              draft ? (
+                <GitPullRequestDraft
+                  className="size-4 text-emerald-500"
+                  strokeWidth={1.5}
+                />
+              ) : (
+                <GitPullRequest className="size-4 text-emerald-500" strokeWidth={1.5} />
+              )
             ) : (
-              <GitCompare className="size-4 text-accent-command" strokeWidth={1.5} />
+              // Plain foreground, not the command yellow it started as. Yellow
+              // is the app's "this is for you" — the colour of a session
+              // standing still behind a question — and a turn having touched
+              // files is neither a warning nor a thing to answer. It read as
+              // one, every turn, which is a lot of alarm for a fact.
+              <GitCompare className="size-4 text-foreground" strokeWidth={1.5} />
             )
           ) : (
             <PanelRightIcon className="size-4.5" dim={!open} />
@@ -78,7 +97,13 @@ export function PanelToggle({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="left">
-        {indicating ? (pr ? "Open pull request" : "Last turn's changes") : "Toggle Panel"}
+        {indicating
+          ? pr
+            ? draft
+              ? "Draft pull request"
+              : "Open pull request"
+            : "Last turn's changes"
+          : "Toggle Panel"}
         <KbdGroup>
           <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>E</Kbd>
@@ -104,11 +129,16 @@ const LABELS: Record<PanelTab, string> = {
 
 /// Which tabs exist, and in what order.
 ///
-/// Changes leads by default — it answers "what just happened" and is the tab
-/// that opens by default. An *open* PR takes the lead instead, because at that
-/// point the session's work is no longer about this turn: it is about landing,
-/// and the first tab is where the eye goes. A merged or closed PR does not,
-/// since it is a record rather than something to act on.
+/// Changes leads by default — it answers "what just happened". An *open* PR
+/// takes the lead instead, because at that point the session's work is no
+/// longer about this turn: it is about landing, and the first tab is where the
+/// eye goes. A draft counts, being `OPEN` with `isDraft` set. A merged or
+/// closed PR does not lead, since it is a record rather than something to act
+/// on.
+///
+/// This is also the order ⌘⇧[ / ⌘⇧] steps through, and `App` derives the
+/// default tab from the same two flags — so the tab that leads the row and the
+/// tab the pane opens onto cannot disagree.
 ///
 /// The PR tab is absent entirely for a session that has no PR to show — see
 /// `prTabVisible`. A tab whose only content is "there is nothing here" is one
@@ -206,6 +236,25 @@ export default function RightPanel({
           </button>
         ))}
 
+        {/* Beside the tabs rather than at the far end, and with no label: next
+            to the thing it acts on, the caps read as belonging to the row
+            without a word saying so. Drawn at all — rather than hidden in a
+            tooltip the way the rest of the app's shortcuts are — because a
+            chord for a row of two or three tabs is one nobody goes looking for.
+
+            Three caps, not four: `[ ]` is one key with two ends rather than two
+            alternatives, so splitting it reads as a chord wanting both. */}
+        <KbdGroup className="ml-1.5 shrink-0 opacity-50">
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+          <Kbd>⇧</Kbd>
+          <Kbd>[ ]</Kbd>
+        </KbdGroup>
+
+        {/* Gone entirely on Subagents, which has nothing to re-read. It reserved
+            its width back when the keycaps sat to its right and would have slid
+            on that one tab; with them anchored to the tabs there is nothing left
+            to hold still, and an empty box on the far edge is a slot for a
+            button the reader is not waiting for. */}
         {refresh && (
           <Button
             variant="ghost"

@@ -4,6 +4,8 @@ import {
   CheckCheck,
   ChevronDown,
   GitBranchPlus,
+  GitPullRequest,
+  GitPullRequestDraft,
   Inbox,
   // Pin,
   Plus,
@@ -39,9 +41,11 @@ import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { isToday, relativeTime } from "@/lib/format";
+import { sessionBranch } from "@/lib/pr";
 import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
+  OpenPr,
   Project,
   SessionIndexItem,
   SessionStatus,
@@ -60,6 +64,10 @@ type SidebarProps = {
   // status machine still reads these as `in_progress`, and it is right to —
   // the turn is open, it is only the agent that has stopped.
   askingSessions: Set<string>;
+  /// This session's branch has an open pull request, or nothing. A lookup
+  /// rather than a field on the item, because pull requests are read per repo
+  /// and the index knows nothing about them.
+  prFor: (repoPath: string, branch: string | null) => OpenPr | undefined;
   selectedSessionId: string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -148,6 +156,7 @@ export default function Sidebar({
   items,
   statusBySession,
   askingSessions,
+  prFor,
   selectedSessionId,
   collapsed,
   onToggleCollapsed,
@@ -275,6 +284,7 @@ export default function Sidebar({
               item={item}
               status={statusBySession[item.sessionId] ?? item.status}
               asking={askingSessions.has(item.sessionId)}
+              pr={prFor(item.projectPath, sessionBranch(item))}
               active={item.sessionId === selectedSessionId}
               // The settled list is a history, and the question asked of it is
               // "what did I finish today" — so everything older is held back
@@ -689,6 +699,7 @@ function SessionRow({
   item,
   status,
   asking,
+  pr,
   active,
   faded = false,
   onSelect,
@@ -698,6 +709,10 @@ function SessionRow({
   item: SessionIndexItem;
   status: SessionStatus;
   asking: boolean;
+  /// This session's branch has an open pull request. Undefined covers both "no
+  /// PR" and "we couldn't ask" — the mark is decoration, so the two read the
+  /// same.
+  pr?: OpenPr;
   active: boolean;
   faded?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
@@ -790,6 +805,38 @@ function SessionRow({
             />
           )}
         </span>
+
+        {/* Ahead of the title, and it takes no room when there is none — unlike
+            the rail beside it, which holds its slot. The two differ because the
+            rail comes and goes on the *same* row as its agent works, where a
+            branch either has a pull request or does not: a row that never gets
+            one would otherwise pay for the mark forever, and most never do.
+
+            The rail keeps the outer edge because it is the "over to you" mark
+            and clears when the reader deals with it, where this is a standing
+            fact about the branch.
+
+            Emerald for open — the same green the panel's glyph and the merge
+            button use, so the mark and what it points at match — and a draft
+            takes the muted outline it already has in lucide, since a draft is
+            work that isn't asking to land yet. `title` rather than a tooltip:
+            this is a decoration on a row that is itself a control, and a
+            tooltip on it would open every time the cursor crossed the list. */}
+        {pr && (
+          <span
+            className={cn(
+              "mr-1 flex shrink-0 items-center",
+              pr.isDraft ? "text-muted-foreground" : "text-emerald-500",
+            )}
+            title={pr.isDraft ? `Draft pull request #${pr.number}` : `Pull request #${pr.number}`}
+          >
+            {pr.isDraft ? (
+              <GitPullRequestDraft className="size-3.5" strokeWidth={1.5} />
+            ) : (
+              <GitPullRequest className="size-3.5" strokeWidth={1.5} />
+            )}
+          </span>
+        )}
 
         <span className="min-w-0 flex-1 truncate text-ui">{item.title}</span>
 

@@ -6,6 +6,12 @@ type HotkeyOptions = {
   shift?: boolean;
   /// Option on macOS, Alt elsewhere.
   alt?: boolean;
+  /// A physical key accepted alongside `key`, for a chord whose character moves
+  /// under Shift — ⌘⇧[ arrives as `{`, and which of the two `key` carries is
+  /// the browser's call. Matching the character alone is one engine away from
+  /// silently never firing, and matching position alone would put the chord
+  /// under a different glyph on every non-US layout, so this takes both.
+  code?: string;
 };
 
 /// Binds a document-level shortcut. The handler is held in a ref so passing a
@@ -13,7 +19,7 @@ type HotkeyOptions = {
 export function useHotkey(
   key: string,
   handler: () => void,
-  { meta = true, shift = false, alt = false }: HotkeyOptions = {},
+  { meta = true, shift = false, alt = false, code }: HotkeyOptions = {},
 ) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
@@ -28,7 +34,8 @@ export function useHotkey(
       // broken the character.
       const matches =
         e.key.toLowerCase() === key.toLowerCase() ||
-        (alt && key.length === 1 && e.code === `Key${key.toUpperCase()}`);
+        (alt && key.length === 1 && e.code === `Key${key.toUpperCase()}`) ||
+        (code !== undefined && e.code === code);
       if (!matches) return;
       // Accept either modifier rather than branching on platform: a Mac reports
       // metaKey, everything else ctrlKey, and neither fires the other's chord.
@@ -46,5 +53,5 @@ export function useHotkey(
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [key, meta, shift, alt]);
+  }, [key, meta, shift, alt, code]);
 }

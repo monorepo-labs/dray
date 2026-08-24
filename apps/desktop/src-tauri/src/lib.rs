@@ -246,6 +246,11 @@ async fn sync_status(cwd: String) -> git::SyncStatus {
     git::sync_status(&cwd).await
 }
 
+#[tauri::command]
+async fn work_status(cwd: String) -> git::WorkStatus {
+    git::work_status(&cwd).await
+}
+
 /// Commits the checked files alone. `paths` are this session's own change list,
 /// so a path the reader unchecked is one this never sees.
 #[tauri::command]
@@ -478,6 +483,7 @@ pub fn run() {
             head_tree,
             log_commits,
             sync_status,
+            work_status,
             commit_files,
             push_branch,
             set_session_flags,
@@ -494,6 +500,7 @@ pub fn run() {
             updater::check_update,
             updater::install_update,
             github::prs_for_branch,
+            github::open_prs,
             github::merge_pr,
             github::reopen_pr,
             github::mark_pr_ready,

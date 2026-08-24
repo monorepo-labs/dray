@@ -24,6 +24,8 @@ const fetchedAt = new Map<string, number>();
 
 const keyOf = (cwd: string, branch: string) => `${cwd} ${branch}`;
 
+const isOpen = (pr: PullRequest) => pr.state === "OPEN";
+
 /// What `invoke` rejected with, as the backend meant it.
 ///
 /// Tauri hands the serialized `Err` back, so this is already the right shape —
@@ -79,7 +81,18 @@ type State = {
 ///
 /// Nothing here holds a "current" PR. Something did, and it was the bug: see
 /// `act`.
-export function usePullRequest(cwd: string, branch: string | null, active: boolean) {
+export function usePullRequest(
+  cwd: string,
+  branch: string | null,
+  active: boolean,
+  /// Called the moment a branch that had no open pull request turns out to have
+  /// one. Fired from inside `load` rather than derived by the caller from
+  /// `prs`, because only the fetch knows what the *previous* answer was — and
+  /// the previous answer is the whole guard. A first read has none, so opening
+  /// the app onto a session that already has a PR is not an appearance and
+  /// raises nothing.
+  onOpened?: () => void,
+) {
   const key = branch ? keyOf(cwd, branch) : null;
 
   const [state, setState] = useState<State>(() => ({
@@ -93,6 +106,9 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
   // landing after a session switch can tell it is answering the wrong branch.
   const keyRef = useRef(key);
   keyRef.current = key;
+
+  const onOpenedRef = useRef(onOpened);
+  onOpenedRef.current = onOpened;
 
   /// Every write to `state` goes through this.
   ///
@@ -118,6 +134,10 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
 
       commit(key, (prev) => ({ ...prev, loading: true }));
 
+      // Read before the write below, since that is what makes this an
+      // appearance rather than a first sighting.
+      const before = cache.get(key);
+
       try {
         const prs = await invoke<PullRequest[]>("prs_for_branch", { cwd, branch });
         // The cache is keyed, so it is written whatever the reader switched to
@@ -125,6 +145,13 @@ export function usePullRequest(cwd: string, branch: string | null, active: boole
         cache.set(key, prs);
         fetchedAt.set(key, Date.now());
         commit(key, () => ({ prs, error: null, loading: false }));
+
+        // Guarded on the key for the same reason every other write here is: a
+        // read that lands after a session switch must not pull the panel open
+        // onto a branch the reader has left.
+        if (keyRef.current === key && before && !before.some(isOpen) && prs.some(isOpen)) {
+          onOpenedRef.current?.();
+        }
       } catch (e) {
         // The previous answer stays up: a failed refresh is a refresh that
         // failed, not the PR going away.

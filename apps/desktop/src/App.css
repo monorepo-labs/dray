@@ -24,6 +24,13 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
+  /* The composer card's own fill. Starts life as a copy of `--card` and exists
+     to be the one raised surface that stays a *fill* on glass: the handoff row
+     is parked behind it, so a veil there shows the buttons it is meant to hide.
+     Its own token rather than borrowing `--popover`, because the composer is
+     not a popover and the next change to floating surfaces should not have to
+     wonder whether the composer wanted it too. See the vibrancy block below. */
+  --composer: oklch(0.205 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
   --secondary: oklch(0.269 0 0);
@@ -172,6 +179,7 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-composer: var(--composer);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
   --radius-sm: calc(var(--radius) * 0.6);
@@ -270,6 +278,11 @@
        these nested now stack, so a tile inside the composer card reads a step
        lighter than the card instead of vanishing into it. */
     --card: oklch(1 0 0 / 5.5%);
+    /* `--composer` is deliberately *not* given the same treatment, and this is
+       the one place that rule lives. It is the only raised surface with
+       something parked behind it — the handoff row — so a veil there would show
+       the buttons it exists to hide. It costs the composer its glass and buys
+       the one thing on that edge that has to be opaque. */
     /* Same treatment for the one highlight that lands on the glass rather than
        inside a menu: the sidebar has no fill here, so a selected session row —
        and the panel's active tab, which shares the token — is drawn straight
