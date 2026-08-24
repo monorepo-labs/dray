@@ -5,6 +5,52 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.5.1
+
+### Added
+
+- **A row of end-of-turn actions, parked behind the composer.** Hover the strip
+  above it and Commit, Commit & push, Push and Create PR slide clear. All but
+  push send a short prompt rather than running git themselves, so the agent
+  writes the message with the context it just worked in and anything that goes
+  wrong lands in the transcript like any other tool failure. Push runs
+  directly — it has one correct implementation and nothing to decide. Which
+  buttons exist follows the tree: dirty gets Commit, clean-and-ahead gets Push
+  with a count, and PR buttons stay hidden on the default branch or where the
+  branch already has one.
+- **Sidebar rows mark a branch that has somewhere to land.** Open PRs are
+  emerald, drafts carry the draft glyph, and the whole list costs one `gh` call
+  per repository rather than one per row.
+- **A screenshot the agent takes is one you can see.** A `Read` of an image
+  answers in an image block and no text, so the row used to name a picture and
+  show nothing. It now draws it uncropped at reading size, opens into the
+  lightbox, and leaves its tool group — "Read 3 files" says nothing useful
+  about three screenshots.
+- **⌘↓ scrolls the transcript to the bottom.**
+
+### Changed
+
+- **A PR now appears the moment the turn that opened it ends.** The panel used
+  to poll only while the PR tab was visible, and that tab hides when there is
+  no PR — so the one state that needed a recheck could never recover on its
+  own, and a PR stayed invisible until you switched sessions and came back.
+- **The delete-worktree dialog stays open while git works.** Unlocking,
+  removing and deleting the branch take seconds on a large tree, and a dialog
+  that closed on the click left the app looking idle.
+
+### Fixed
+
+- **Links in the transcript opened nothing.** The link-safety modal confirmed
+  through `window.open`, which a Tauri webview ignores without a word — Copy
+  link worked, Open did not.
+- **A session that read images carried them twice.** The CLI repeats the bytes
+  on a sidecar field that was being persisted verbatim: 12MB of base64 in one
+  14MB log, read whole on every open, drawing nothing.
+- **A default branch with a slash in it broke the handoff row.** `release/current`
+  was cut to `current`, which matches no branch, so the row read the default
+  branch as a feature branch and offered a PR against the branch already
+  checked out.
+
 ## 0.5.0
 
 ### Added

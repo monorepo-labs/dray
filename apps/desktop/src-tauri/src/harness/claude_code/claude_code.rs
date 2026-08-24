@@ -264,6 +264,13 @@ async fn read_stdout(
             *head = crate::git::snapshot_tree(session_cwd).await;
         }
 
+        // Here for the same reason: only the session layer knows which session's
+        // directory the bytes belong in. Before the emit below, so the live
+        // transcript and the replayed one load the same file.
+        if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
+            crate::attachments::archive_result_images(session_id, &mut result.images).await;
+        }
+
         // Read before the event is moved into the log below. These three are
         // the turn's boundaries in the sense that matters here: each is a point
         // where handing the CLI a held prompt costs nothing. A tool starting or
@@ -335,6 +342,18 @@ async fn read_stdout(
                 | AgentEventPayload::QuestionsAsked { .. }
         ) {
             continue;
+        }
+
+        // The data: URL a failed archive leaves behind must not reach the
+        // retained copies: it is the whole image as base64, in a log read whole
+        // on every open — the exact cost archiving exists to avoid. Stripped
+        // here rather than in the archiver because the emit above must keep it:
+        // the live transcript draws the picture either way, and only a reload
+        // pays for the failure by showing the row without it.
+        if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
+            for image in &mut result.images {
+                image.url = None;
+            }
         }
 
         events.lock().await.push(agent_event.clone());

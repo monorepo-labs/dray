@@ -6,7 +6,8 @@
 use crate::{
     events::{
         now_rfc3339, rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef,
-        BlockType, ContextWindow, DeltaEvent, ModelUsage, Question, QuestionOption, SessionInfo,
+        BlockType, ContextWindow, DeltaEvent, ImageRef, ModelUsage, Question, QuestionOption,
+        SessionInfo,
         Settings, Subagent, ToolResult, ToolType, TurnStatus, Usage,
     },
     harness::{
@@ -625,13 +626,30 @@ impl Mapper {
                     // The sidecar `tool_use_result` field, whose shape is
                     // per-tool: a Read carries its file contents, a Task its
                     // agent id.
-                    structured: tool_use_result,
+                    structured: tool_use_result.map(strip_image_bytes),
                     exit_code: None,
                     duration_ms: None,
+                    // A `data:` URL, not a path: this is where the bytes are,
+                    // and the session layer is where they can be written to
+                    // disk. The URL never survives past the emit — the session
+                    // layer strips it before the retained copies — so a failed
+                    // archive still draws live and costs only the reloaded view.
+                    images: content
+                        .images()
+                        .into_iter()
+                        .map(|(mime, data)| ImageRef {
+                            path: None,
+                            url: Some(format!("data:{mime};base64,{data}")),
+                            mime_type: Some(mime),
+                        })
+                        .collect(),
                 },
             }),
 
-            UserContentBlock::Unrecognized => None,
+            // An image block arriving as a message's own content rather than
+            // inside a tool result: no capture holds one, and there is no tool
+            // call to hang it off.
+            UserContentBlock::Image { .. } | UserContentBlock::Unrecognized => None,
         }
     }
 
@@ -777,6 +795,26 @@ fn strip_tool_use_error(text: String) -> String {
         Some(inner) => inner.trim().to_string(),
         None => text,
     }
+}
+
+/// Drops the copy of an image's bytes the `tool_use_result` sidecar carries.
+///
+/// A `Read` of a screenshot sends the same base64 twice on one line — once as
+/// the tool result's `image` block, once here as `file.base64` — and this half
+/// was being persisted verbatim: 48 screenshots came to 12MB of a 14MB session
+/// log, read whole every time the session is opened. The picture survives as an
+/// archived file on [`ToolResult::images`]; what is left here is the shape
+/// around it (dimensions, original size), which is small and describes it.
+fn strip_image_bytes(mut structured: Value) -> Value {
+    if structured.get("type").and_then(Value::as_str) != Some("image") {
+        return structured;
+    }
+
+    if let Some(file) = structured.get_mut("file").and_then(Value::as_object_mut) {
+        file.remove("base64");
+    }
+
+    structured
 }
 
 fn user_message(text: String) -> AgentEventPayload {
@@ -1161,6 +1199,42 @@ mod tests {
         );
         // The per-tool sidecar rides along on the results that carry one.
         assert!(completions.iter().any(|(_, r)| r.structured.is_some()));
+    }
+
+    /// A `Read` of a `.png` answers in pictures, not in text: the result's only
+    /// block is an `image`, so `text` is empty and the row has nothing to draw
+    /// unless the image reaches it. The same bytes arrive twice on that line,
+    /// and only one copy may survive into the log.
+    #[test]
+    fn maps_an_image_result_to_an_image_ref() {
+        let mut mapper = Mapper::default();
+        let results: Vec<ToolResult> = include_str!("fixtures/image_read.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| mapper.map(parser::parse_line(line).unwrap()).unwrap())
+            .filter_map(|event| match event.payload {
+                AgentEventPayload::ToolCallCompleted { result, .. } => Some(result),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert!(result.text.is_empty(), "an image result carries no text");
+        assert_eq!(result.images.len(), 1);
+
+        let image = &result.images[0];
+        assert_eq!(image.mime_type.as_deref(), Some("image/png"));
+        assert!(image.path.is_none(), "the session layer archives it, not us");
+        assert!(image
+            .url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,iVBOR")));
+
+        // The sidecar's copy of the same bytes is what used to be persisted.
+        let file = result.structured.as_ref().unwrap().get("file").unwrap();
+        assert!(file.get("base64").is_none(), "the second copy survived");
+        assert!(file.get("dimensions").is_some(), "the shape came off with it");
     }
 
     /// A prompt reaches the mapper two ways — bare string, or wrapped in a lone

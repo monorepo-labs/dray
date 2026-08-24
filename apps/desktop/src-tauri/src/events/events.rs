@@ -604,6 +604,13 @@ pub struct ToolResult {
     pub structured: Option<Value>,
     pub exit_code: Option<i32>,
     pub duration_ms: Option<u64>,
+    /// Pictures the tool handed back — a `Read` of a screenshot, an MCP tool
+    /// that answers in images. Archived under `~/.dray/attachments` before the
+    /// event is written, so this carries a path and never the bytes: the CLI
+    /// sends the same image twice on one line and a session of screenshots was
+    /// 12MB of base64 in a 14MB log.
+    #[serde(default)]
+    pub images: Vec<ImageRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

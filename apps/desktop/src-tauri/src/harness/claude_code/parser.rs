@@ -658,10 +658,25 @@ pub enum UserContentBlock {
         #[serde(default)]
         is_error: Option<bool>,
     },
-    /// Images are documented but appear in no capture, so they'd land here
-    /// alongside genuinely unknown blocks.
+    /// What a `Read` of a screenshot comes back as. The same bytes also arrive
+    /// on the line's `tool_use_result` sidecar; this side is read instead
+    /// because it is the API's own shape and names its type `media_type`.
+    Image {
+        source: ImageSource,
+    },
     #[serde(other)]
     Unrecognized,
+}
+
+/// An image block's payload. Only `base64` is ever sent here — a `url` source
+/// exists in the API and would arrive with an empty `data`, which
+/// [`ToolResultContent::images`] drops rather than emit an empty picture.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSource {
+    #[serde(default)]
+    pub data: String,
+    #[serde(default)]
+    pub media_type: Option<String>,
 }
 
 /// A tool result's payload: usually one flat string, but tools that return
@@ -676,6 +691,27 @@ pub enum ToolResultContent {
 }
 
 impl ToolResultContent {
+    /// Every image the result carried, as `(media_type, base64)`.
+    pub fn images(&self) -> Vec<(String, String)> {
+        let Self::Blocks(blocks) = self else {
+            return Vec::new();
+        };
+
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                UserContentBlock::Image { source } if !source.data.is_empty() => Some((
+                    source
+                        .media_type
+                        .clone()
+                        .unwrap_or_else(|| "image/png".to_string()),
+                    source.data.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Flattens either shape to displayable text, dropping non-text blocks.
     pub fn as_text(&self) -> String {
         match self {
@@ -1667,11 +1703,11 @@ mod tests {
         assert!(matches!(message.content, UserContent::Text(text) if text == "hey"));
     }
 
-    /// An image block would be the realistic unknown here; it must not cost the
-    /// sibling text block on the same message.
+    /// A block of a type this build has never seen must not cost the sibling
+    /// text block on the same message.
     #[test]
     fn unknown_user_blocks_degrade() {
-        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}},{"type":"text","text":"what is this"}]},"parent_tool_use_id":null,"session_id":"s","uuid":"u"}"#;
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"whatever_comes_next","payload":{}},{"type":"text","text":"what is this"}]},"parent_tool_use_id":null,"session_id":"s","uuid":"u"}"#;
         let ClaudeCodeEvent::User { message, .. } = parse_line(line).unwrap() else {
             panic!("expected a user event");
         };
@@ -1681,6 +1717,36 @@ mod tests {
         assert!(matches!(blocks[0], UserContentBlock::Unrecognized));
         assert!(matches!(&blocks[1], UserContentBlock::Text { text } if text == "what is this"));
     }
+
+    /// The whole of what a `Read` of a `.png` answers with. `as_text` sees
+    /// nothing in it, so the image is the only thing the row can draw.
+    #[test]
+    fn parses_an_image_tool_result() {
+        let results: Vec<ToolResultContent> = parse_fixture(include_str!("fixtures/image_read.jsonl"))
+            .into_iter()
+            .filter_map(|event| match event {
+                ClaudeCodeEvent::User { message, .. } => Some(message),
+                _ => None,
+            })
+            .filter_map(|message| match message.content {
+                UserContent::Blocks(blocks) => blocks.into_iter().find_map(|block| match block {
+                    UserContentBlock::ToolResult { content, .. } => Some(content),
+                    _ => None,
+                }),
+                UserContent::Text(_) => None,
+            })
+            .collect();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].as_text().is_empty());
+        assert_eq!(
+            results[0].images(),
+            vec![("image/png".to_string(), IMAGE_BASE64.to_string())]
+        );
+    }
+
+    /// The 8×8 PNG the fixture was captured against, as the CLI re-encoded it.
+    const IMAGE_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4nA3JQQEAMAgDMZzUCU7qpE6wcS+c4GbLN1WFii5cpJhiiyuqhEQLi4gRK04/GjXduEkzzTbXP4xMG5uYMWvOP4JCB4eECRsuPwYNPXjIMMMONz8WLb14yTLLLrc/Dh19+Mgxxx53PEKmY0EVp/9TAAAAAElFTkSuQmCC";
 
     #[test]
     fn parses_object_and_string_tool_results() {

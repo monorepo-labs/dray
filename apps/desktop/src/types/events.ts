@@ -887,7 +887,15 @@ isError: boolean,
 /**
  * The full result payload when the harness supplies a structured one.
  */
-structured: JsonValue | null, exitCode: number | null, durationMs: number | null, };
+structured: JsonValue | null, exitCode: number | null, durationMs: number | null, 
+/**
+ * Pictures the tool handed back — a `Read` of a screenshot, an MCP tool
+ * that answers in images. Archived under `~/.dray/attachments` before the
+ * event is written, so this carries a path and never the bytes: the CLI
+ * sends the same image twice on one line and a session of screenshots was
+ * 12MB of base64 in a 14MB log.
+ */
+images: Array<ImageRef>, };
 
 /**
  * A rendering hint — which icon and component to use. Nothing depends on this

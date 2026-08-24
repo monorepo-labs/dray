@@ -695,6 +695,7 @@ function App() {
         queuedMessages={queuedMessages}
         working={working}
         crowded={!collapsed && panelOpen}
+        active={viewTab === "chat"}
       />
       </TabBody>
 
@@ -721,10 +722,7 @@ function App() {
     <QuitDialog />
     <WorktreeDialog
       prompt={worktreePrompt}
-      onConfirm={(sessionId) => {
-        setWorktreePrompt(null);
-        void removeWorktree(sessionId);
-      }}
+      onConfirm={(sessionId) => removeWorktree(sessionId)}
       onClose={() => setWorktreePrompt(null)}
     />
     </DiffWorkerPool>

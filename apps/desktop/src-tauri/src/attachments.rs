@@ -16,7 +16,7 @@ use tokio::fs;
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::store::get_home_app_dir;
+use crate::{events::ImageRef, store::get_home_app_dir};
 
 /// The four the Anthropic API accepts as an `image` block. An extension outside
 /// this set is a file, whatever it depicts — an SVG or a HEIC screenshot is
@@ -163,6 +163,67 @@ pub async fn delete_session_attachments(session_id: &str) -> Result<()> {
     }
 }
 
+/// Writes the pictures a tool handed back to disk, swapping each `data:` URL
+/// for the path it landed at.
+///
+/// Same bargain the composer's own images make and for the same reason: the
+/// session log is append-only and read whole on open, so bytes on the event are
+/// paid again on every visit. The original is no substitute — a screenshot the
+/// agent took lives in `/tmp` and is gone by the next boot — so this copies
+/// rather than pointing at it.
+///
+/// Best-effort per image: one that cannot be decoded or written keeps its
+/// `data:` URL, which still draws in the live transcript and costs the log entry
+/// rather than the picture.
+pub async fn archive_result_images(session_id: &str, images: &mut [ImageRef]) {
+    if images.is_empty() {
+        return;
+    }
+
+    for image in images.iter_mut() {
+        let Some(url) = image.url.as_deref() else {
+            continue;
+        };
+        let Some((mime, data)) = parse_data_url(url) else {
+            continue;
+        };
+        let Ok(bytes) = STANDARD.decode(data) else {
+            continue;
+        };
+
+        // Anything the API accepts is in this table; an unknown mime keeps the
+        // bytes but not a claim about what they are.
+        let ext = IMAGE_TYPES
+            .iter()
+            .find(|(_, m)| *m == mime)
+            .map(|(e, _)| *e)
+            .unwrap_or("png");
+
+        let stored = match attachments_dir(session_id).await {
+            Ok(dir) => dir.join(format!("{}.{ext}", Uuid::now_v7())),
+            Err(e) => {
+                eprintln!("tool image not archived: {e}");
+                continue;
+            }
+        };
+
+        match fs::write(&stored, &bytes).await {
+            Ok(()) => {
+                image.path = Some(stored.to_string_lossy().into_owned());
+                image.url = None;
+            }
+            Err(e) => eprintln!("tool image not archived: {e}"),
+        }
+    }
+}
+
+/// Splits `data:<mime>;base64,<payload>`. Anything else is not ours to decode.
+fn parse_data_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("data:")?;
+    let (mime, payload) = rest.split_once(",")?;
+    Some((mime.strip_suffix(";base64")?, payload))
+}
+
 /// Folds the attached paths into the prompt: images encoded and archived, files
 /// appended as mentions.
 ///
@@ -225,4 +286,57 @@ pub async fn prepare(session_id: &str, prompt: &str, paths: &[String]) -> Result
     };
 
     Ok(Prepared { text, images })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mapper writes these and this reads them back, so the two halves of
+    /// one round trip are pinned together. A `url` source — an API shape the CLI
+    /// has never sent — must not be mistaken for one of ours and decoded.
+    #[test]
+    fn reads_back_the_data_urls_the_mapper_writes() {
+        assert_eq!(
+            parse_data_url("data:image/png;base64,iVBOR"),
+            Some(("image/png", "iVBOR"))
+        );
+        assert_eq!(parse_data_url("data:image/png,iVBOR"), None);
+        assert_eq!(parse_data_url("https://example.com/a.png"), None);
+        assert_eq!(parse_data_url("data:image/png;base64"), None);
+    }
+}
+
+/// Writes into the real `~/.dray/attachments`, so it's `#[ignore]`d:
+/// `cargo test -- --ignored archives_an_image_result` when changing the archive
+/// path or the `data:` URL the mapper mints.
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn archives_an_image_result() {
+        // A 1x1 GIF, so the extension picked from the mime is visible in the
+        // filename rather than defaulting to the same `png` either path gives.
+        const GIF: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        let session = format!("test-{}", Uuid::now_v7());
+
+        let mut images = vec![ImageRef {
+            path: None,
+            url: Some(format!("data:image/gif;base64,{GIF}")),
+            mime_type: Some("image/gif".to_string()),
+        }];
+        archive_result_images(&session, &mut images).await;
+
+        let stored = images[0].path.as_deref().expect("not archived");
+        assert!(stored.ends_with(".gif"), "{stored} took the wrong extension");
+        assert!(images[0].url.is_none(), "the bytes outlived the archive");
+        assert_eq!(
+            fs::read(stored).await.unwrap(),
+            STANDARD.decode(GIF).unwrap()
+        );
+
+        delete_session_attachments(&session).await.unwrap();
+    }
 }

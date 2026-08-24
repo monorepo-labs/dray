@@ -235,11 +235,22 @@ type OpenTurn = Omit<Turn, "work" | "rows"> & {
 /// The grouping key: same tool name, and only for calls that render as a
 /// `ToolCall` row. A subagent spawn draws a `SubagentRow` instead, so folding
 /// several into a "Task 4 calls" row would hide the panel links they exist for.
-function groupKey(event: AgentEvent, subagentIds: Set<string>): string | null {
+///
+/// A call that came back with pictures is left out for the same reason. "Read 3
+/// files" is an honest summary of three files and no summary at all of three
+/// screenshots — the row draws them without being opened precisely because they
+/// are the whole of what the call returned, and grouping puts them back behind a
+/// click.
+function groupKey(
+  event: AgentEvent,
+  subagentIds: Set<string>,
+  withImages: Set<string>,
+): string | null {
   const { payload } = event;
   if (payload.type !== "tool_call_started") return null;
   if (payload.toolType === "subagent_spawn") return null;
   if (subagentIds.has(payload.callId)) return null;
+  if (withImages.has(payload.callId)) return null;
   return payload.name;
 }
 
@@ -274,6 +285,16 @@ function countTargets(run: AgentEvent[]): { count: number; only: string | null }
 /// exact position among the calls carries no meaning, and keeping `calls` pure
 /// means the row can count it directly.
 function groupTools(work: AgentEvent[], subagentIds: Set<string>): WorkItem[] {
+  // Read off the results in the same array: a call's images arrive on the event
+  // that answers it, and those sit here unrendered between the calls.
+  const withImages = new Set(
+    work.flatMap((event) =>
+      event.payload.type === "tool_call_completed" && event.payload.result.images.length > 0
+        ? [event.payload.callId]
+        : [],
+    ),
+  );
+
   const items: WorkItem[] = [];
   let run: AgentEvent[] = [];
   let runKey: string | null = null;
@@ -316,7 +337,7 @@ function groupTools(work: AgentEvent[], subagentIds: Set<string>): WorkItem[] {
       continue;
     }
 
-    const key = groupKey(event, subagentIds);
+    const key = groupKey(event, subagentIds, withImages);
     if (key !== null && key === runKey) {
       run.push(event);
       passthrough.push(...held);
@@ -463,6 +484,7 @@ const ABANDONED: ToolResult = {
   structured: null,
   exitCode: null,
   durationMs: null,
+  images: [],
 };
 
 export function buildTranscript(

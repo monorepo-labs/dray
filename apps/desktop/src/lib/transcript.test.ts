@@ -327,3 +327,83 @@ describe("subagent runs", () => {
     expect(subagents[0].taskId).toBeNull();
   });
 });
+
+describe("a tool call that came back with pictures", () => {
+  function readStarted(seq: number, callId: string, path: string): AgentEvent {
+    return event(seq, {
+      type: "tool_call_started",
+      callId,
+      name: "Read",
+      toolType: "file_read",
+      input: { file_path: path },
+      rawInput: null,
+      title: null,
+    } as AgentEventPayload);
+  }
+
+  function readCompleted(seq: number, callId: string, images: number): AgentEvent {
+    return event(seq, {
+      type: "tool_call_completed",
+      callId,
+      result: {
+        text: "",
+        isError: false,
+        structured: null,
+        exitCode: null,
+        durationMs: null,
+        images: Array.from({ length: images }, (_, i) => ({
+          path: `/archived/${i}.png`,
+          url: null,
+          mimeType: "image/png",
+        })),
+      },
+    } as AgentEventPayload);
+  }
+
+  /// "Read 2 files" is an honest summary of two files and no summary at all of
+  /// two screenshots — the row draws them unopened because they are the whole of
+  /// what the call returned, and a group puts them back behind a click.
+  it("stays its own row instead of joining the run", () => {
+    const { turns } = buildTranscript(
+      [
+        prompt(0, "look", false),
+        readStarted(1, "c1", "/tmp/shot.png"),
+        readCompleted(2, "c1", 1),
+        readStarted(3, "c2", "/src/a.ts"),
+        readCompleted(4, "c2", 0),
+        readStarted(5, "c3", "/src/b.ts"),
+        readCompleted(6, "c3", 0),
+        completed(7, "done"),
+      ],
+      false,
+    );
+
+    const work = turns[0].work;
+    expect(work.filter((item) => "kind" in item && item.kind === "tool_group")).toHaveLength(1);
+    expect(
+      work.some(
+        (item) => !("kind" in item) && item.payload.type === "tool_call_started" && item.payload.callId === "c1",
+      ),
+    ).toBe(true);
+  });
+
+  /// The rule it bends has to keep working, or every run of reads would come
+  /// apart on a result nobody looked at.
+  it("leaves an ordinary run grouped", () => {
+    const { turns } = buildTranscript(
+      [
+        prompt(0, "look", false),
+        readStarted(1, "c1", "/src/a.ts"),
+        readCompleted(2, "c1", 0),
+        readStarted(3, "c2", "/src/b.ts"),
+        readCompleted(4, "c2", 0),
+        completed(5, "done"),
+      ],
+      false,
+    );
+
+    expect(
+      turns[0].work.filter((item) => "kind" in item && item.kind === "tool_group"),
+    ).toHaveLength(1);
+  });
+});

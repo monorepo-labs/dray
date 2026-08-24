@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { Dialog } from "radix-ui";
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, X } from "lucide-react";
 
@@ -53,6 +53,18 @@ export default function ImageLightbox({
   const step = (delta: number) => onIndex((at + delta + images.length) % images.length);
   const many = images.length > 1;
 
+  // `Content` covers the viewport, so Radix's own outside-press never fires —
+  // every click is inside it. Closing on the target being the element itself is
+  // what tells the dark surround from the things drawn on it: a click that
+  // reached the picture, a chevron or the filmstrip is reported against *that*,
+  // and only one that landed on bare backdrop is reported against the box it
+  // fell through to. Two boxes qualify, so both carry this: the padded frame,
+  // and the column the picture is centred in — the space beside a portrait
+  // screenshot is the most obvious place to click to get out.
+  const closeOnBackdrop = (e: MouseEvent<HTMLElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
   return (
     <Dialog.Root open={index !== null} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
@@ -72,6 +84,7 @@ export default function ImageLightbox({
               step(1);
             }
           }}
+          onClick={closeOnBackdrop}
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 p-10 focus:outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
         >
           {/* The filename, which the frame otherwise doesn't say. Visually
@@ -84,7 +97,10 @@ export default function ImageLightbox({
               hands back whatever is left and the percentage applies to that.
               `object-contain` because this is the view where the whole picture
               is the point; cropping is the thumbnail's job. */}
-          <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+          <div
+            onClick={closeOnBackdrop}
+            className="flex min-h-0 w-full flex-1 items-center justify-center"
+          >
             <img
               src={current.src}
               alt={current.name}

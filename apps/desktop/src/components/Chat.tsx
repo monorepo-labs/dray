@@ -13,7 +13,15 @@ import WorkingIndicator from "@/components/chat/WorkingIndicator";
 import StreamingToolCall from "@/components/chat/StreamingToolCall";
 import TurnBlock from "@/components/chat/TurnBlock";
 import { Button } from "@/components/ui/button";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useHotkey } from "@/hooks/useHotkey";
 import type { StreamingBlock, Working } from "@/hooks/useSessions";
+import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import type { QueuedMessage, SessionSnapshot } from "@/types/events";
@@ -55,6 +63,10 @@ type ChatProps = {
   /// two toggles, and the rail overlays the transcript at every width anyway — so
   /// this is about how crowded the pane *is*, not whether the rail fits.
   crowded?: boolean;
+  /// Whether the chat tab is the one on screen. The transcript is hidden rather
+  /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
+  /// stop listening — otherwise it scrolls a pane nobody can see.
+  active?: boolean;
 };
 
 /// How long an answered permission card holds its place before going.
@@ -129,6 +141,7 @@ export default function Chat({
   compacting = false,
   queuedMessages = [],
   crowded = false,
+  active = true,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -402,6 +415,13 @@ export default function Chat({
     el.scrollTo({ top: el.scrollHeight, behavior: busy ? "auto" : "smooth" });
   };
 
+  // Bound whether or not the button is drawn: the button is the affordance for
+  // this, not its gate, and pressing it while already at the bottom re-arms the
+  // pin — which is the useful half when a turn has scrolled you off it.
+  useHotkey("ArrowDown", () => {
+    if (active && session) scrollToBottom();
+  });
+
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely.
   if (!session) return null;
@@ -497,20 +517,31 @@ export default function Chat({
           low enough to read as belonging to the composer's edge rather than
           floating over the last message. */}
       {!atBottom && (
-        <Button
-          // `secondary` for its fill, not its emphasis: this floats over moving
-          // text, so it needs an opaque surface the way a menu does. `outline`'s
-          // is `--input` at 30% — 4.5% white — which the transcript scrolls
-          // straight through, and the vibrancy block veils `--card` and
-          // `--muted` but deliberately leaves `--secondary` alone.
-          variant="secondary"
-          size="icon-sm"
-          aria-label="Scroll to bottom"
-          onClick={scrollToBottom}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border-border shadow-sm"
-        >
-          <ArrowDown />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              // `secondary` for its fill, not its emphasis: this floats over moving
+              // text, so it needs an opaque surface the way a menu does. `outline`'s
+              // is `--input` at 30% — 4.5% white — which the transcript scrolls
+              // straight through, and the vibrancy block veils `--card` and
+              // `--muted` but deliberately leaves `--secondary` alone.
+              variant="secondary"
+              size="icon-sm"
+              aria-label="Scroll to bottom"
+              onClick={scrollToBottom}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border-border shadow-sm"
+            >
+              <ArrowDown />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+            Scroll to bottom
+            <KbdGroup>
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>↓</Kbd>
+            </KbdGroup>
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {showRail && (

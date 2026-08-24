@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
-import { Streamdown, type ThemeInput } from "streamdown";
+import { Streamdown, type LinkSafetyConfig, type ThemeInput } from "streamdown";
 
+import LinkDialog from "@/components/chat/LinkDialog";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
@@ -34,6 +35,14 @@ function codePlugin(pair: CodeThemePair) {
 // off entirely rather than hidden with CSS, so they can't be tabbed to either.
 const CONTROLS = { table: false, code: { copy: true, download: false } };
 
+// Streamdown's own confirm is kept on — a link in agent output is worth a
+// second look — but its Open button calls `window.open`, which does nothing in
+// a Tauri webview, so the dialog is ours.
+const LINK_SAFETY: LinkSafetyConfig = {
+  enabled: true,
+  renderModal: (props) => <LinkDialog {...props} />,
+};
+
 /// Streamdown is built on the same shadcn tokens as the rest of the app, so it
 /// inherits the palette; only typography scale is ours to set.
 function MarkdownImpl({ children, streaming = false, className }: MarkdownProps) {
@@ -52,6 +61,7 @@ function MarkdownImpl({ children, streaming = false, className }: MarkdownProps)
       isAnimating={streaming}
       plugins={plugins}
       controls={CONTROLS}
+      linkSafety={LINK_SAFETY}
       shikiTheme={shikiTheme}
       lineNumbers={false}
       className={cn(

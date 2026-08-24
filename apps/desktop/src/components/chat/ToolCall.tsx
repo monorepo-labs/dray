@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 
 import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
+import ImageRow from "@/components/chat/ImageRow";
 import { cn } from "@/lib/utils";
 import { countChanges, editSides, readRange } from "@/lib/diff";
 import { formatToolInput, toolLabel, toolSummary } from "@/lib/tools";
@@ -103,6 +104,15 @@ export default function ToolCall({
   );
 
   const output = result?.text.trim() ?? "";
+
+  // A `Read` of a `.png` answers in pictures and in nothing else — no text, no
+  // range, nothing the expander could hold — so the row would otherwise say only
+  // that a file was read and give no way to see it. Drawn outside the button and
+  // without waiting to be opened: this is the whole of what the call returned,
+  // and a screenshot the agent just took is usually the most informative thing
+  // in the turn. Uncropped and at reading size, unlike the reader's own
+  // attachments — see `ImageRow`.
+  const images = result?.images ?? [];
 
   // A *ranged* read renders its slice as highlighted code. A whole-file read
   // does not: that is the agent loading context, and hundreds of lines mid-
@@ -211,6 +221,8 @@ export default function ToolCall({
           <span className="ml-auto shrink-0 text-destructive">exit {result.exitCode}</span>
         )}
       </button>
+
+      <ImageRow images={images} />
 
       {open && sides && <DiffView sides={sides} />}
 
