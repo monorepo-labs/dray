@@ -961,7 +961,22 @@ upstream: string | null, ahead: number,
  * default branch" is one comparison and not a parsing rule that can drift.
  * `None` where there is no remote to ask.
  */
-defaultBranch: string | null, };
+defaultBranch: string | null, 
+/**
+ * Commits this branch holds that the default branch doesn't — what a pull
+ * request would actually contain.
+ *
+ * A different question from [`ahead`], which counts against the *upstream*:
+ * a branch pushed in full is `ahead: 0` and still the one case where a pull
+ * request is most wanted. Reading `ahead` for this hides the button exactly
+ * when it is needed.
+ *
+ * `None` is "couldn't tell", not zero — `origin/HEAD` can be a symref onto
+ * a ref that was never fetched, and `symbolic-ref` resolves it without
+ * checking. The row treats unknown as "there may be something", since
+ * over-offering costs a wasted click and under-offering hides the action.
+ */
+aheadOfBase: number | null, };
 
 /**
  * What removing this worktree would cost, read once so the dialog and the

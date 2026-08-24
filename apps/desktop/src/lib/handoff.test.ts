@@ -9,6 +9,7 @@ const status = (over: Partial<WorkStatus> = {}): WorkStatus => ({
   upstream: "origin/feature",
   ahead: 0,
   defaultBranch: "main",
+  aheadOfBase: 2,
   ...over,
 });
 
@@ -53,6 +54,35 @@ describe("handoffActions", () => {
       "commit",
       "commitPush",
     ]);
+  });
+
+  // A branch level with its base and a clean tree has nothing to propose, and
+  // the button there opens a pull request with no diff in it.
+  it("offers no pull request from a branch holding nothing new", () => {
+    expect(ids(status({ aheadOfBase: 0 }), false)).toEqual([]);
+  });
+
+  // The trap: `ahead` counts against the *upstream*, so a branch pushed in full
+  // reads zero — and that is exactly when the pull request is most wanted.
+  it("offers a pull request for a fully pushed branch", () => {
+    expect(ids(status({ ahead: 0, aheadOfBase: 3 }), false)).toEqual(["pr", "draftPr"]);
+  });
+
+  // Uncommitted work is still work to propose: "create a PR" has the agent
+  // commit on the way.
+  it("offers a pull request for uncommitted work on an empty branch", () => {
+    expect(ids(status({ aheadOfBase: 0, dirty: 2 }), false)).toEqual([
+      "commit",
+      "pr",
+      "commitPush",
+      "draftPr",
+    ]);
+  });
+
+  // `origin/HEAD` can be a symref onto a ref that was never fetched, so the
+  // count is unknowable. Over-offering costs a click; under-offering hides it.
+  it("offers a pull request when the base count is unknown", () => {
+    expect(ids(status({ aheadOfBase: null }), false)).toEqual(["pr", "draftPr"]);
   });
 
   // The panel is where an existing PR is acted on; a second button here would

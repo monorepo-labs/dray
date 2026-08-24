@@ -35,17 +35,23 @@ export type HandoffAction = {
     }
 );
 
-/// Whether this checkout could carry a pull request at all.
+/// Whether a pull request from this checkout would contain anything.
 ///
-/// The default branch is where work lands, so opening a pull request from it is
-/// a request against itself. A repo with no remote resolves no default branch
-/// and gets no button either — there is nowhere to push it.
+/// Two separate refusals. The default branch is where work lands, so opening a
+/// pull request from it is a request against itself, and a repo with no remote
+/// resolves no default branch and has nowhere to push one.
+///
+/// Then: an empty branch. A branch level with its base and a clean tree has
+/// nothing to propose, and the button there opens a pull request with no diff
+/// in it. `aheadOfBase` and not `ahead` — the second counts against the
+/// *upstream*, so a branch pushed in full reads as zero and that is exactly
+/// when a pull request is most wanted. `null` is "couldn't tell" and counts as
+/// something, since over-offering costs a wasted click where under-offering
+/// hides the action.
 function canOpenPr(status: WorkStatus): boolean {
-  return (
-    status.branch !== null &&
-    status.defaultBranch !== null &&
-    status.branch !== status.defaultBranch
-  );
+  if (status.branch === null || status.defaultBranch === null) return false;
+  if (status.branch === status.defaultBranch) return false;
+  return status.dirty > 0 || status.aheadOfBase === null || status.aheadOfBase > 0;
 }
 
 /// Which buttons the composer's action row draws, in the order they are drawn.

@@ -986,6 +986,19 @@ pub struct WorkStatus {
     /// default branch" is one comparison and not a parsing rule that can drift.
     /// `None` where there is no remote to ask.
     pub default_branch: Option<String>,
+    /// Commits this branch holds that the default branch doesn't — what a pull
+    /// request would actually contain.
+    ///
+    /// A different question from [`ahead`], which counts against the *upstream*:
+    /// a branch pushed in full is `ahead: 0` and still the one case where a pull
+    /// request is most wanted. Reading `ahead` for this hides the button exactly
+    /// when it is needed.
+    ///
+    /// `None` is "couldn't tell", not zero — `origin/HEAD` can be a symref onto
+    /// a ref that was never fetched, and `symbolic-ref` resolves it without
+    /// checking. The row treats unknown as "there may be something", since
+    /// over-offering costs a wasted click and under-offering hides the action.
+    pub ahead_of_base: Option<u32>,
 }
 
 /// Infallible like [`sync_status`], and for the same reason: a directory that
@@ -998,14 +1011,24 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
         .await
         .map_or(0, |s| count_changes(&s));
 
+    let base = default_base(cwd).await;
+
+    // Counted against the remote-tracking ref, not the local branch of the same
+    // name: a local `main` can be stale or absent entirely in a worktree, and
+    // either way it is not what the pull request would be opened against.
+    let ahead_of_base = match &base {
+        Some(base_ref) => git(cwd, &["rev-list", "--count", &format!("{base_ref}..HEAD")])
+            .await
+            .and_then(|s| s.trim().parse().ok()),
+        None => None,
+    };
+
     // `default_base` answers `origin/<branch>` — the remote is hardcoded there —
     // so the prefix comes off rather than everything up to the last slash. A
     // branch name may hold slashes of its own, and `release/current` cut down to
     // `current` matches nothing, which reads to the handoff row as "you are on a
     // feature branch" and offers a pull request against the branch itself.
-    let default_branch = default_base(cwd)
-        .await
-        .map(|base| base.strip_prefix("origin/").unwrap_or(&base).to_string());
+    let default_branch = base.map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string());
 
     WorkStatus {
         dirty,
@@ -1013,6 +1036,7 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
         upstream: sync.upstream,
         ahead: sync.ahead,
         default_branch,
+        ahead_of_base,
     }
 }
 
@@ -2488,6 +2512,49 @@ mod tests {
         let default = status.default_branch.expect("a pushed branch resolves one");
         assert!(!default.starts_with("origin/"), "still carries its remote: {default}");
         assert_eq!(Some(default), status.branch);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&remote).await.ok();
+    }
+
+    /// What a pull request would contain, which is not what [`SyncStatus::ahead`]
+    /// counts. A branch pushed in full is level with its upstream and still ahead
+    /// of the base — the case where the button is most wanted, and the one
+    /// reading `ahead` would hide.
+    #[tokio::test]
+    async fn work_status_counts_commits_against_the_base_not_the_upstream() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let remote = std::env::temp_dir().join(format!("dray-remote-{}", Uuid::now_v7()));
+
+        fs::create_dir_all(&remote).await.unwrap();
+        run(remote.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+        run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
+            .await
+            .unwrap();
+        push_branch(at).await.unwrap();
+
+        // On the base itself, with everything pushed: nothing to propose.
+        let on_base = work_status(at).await;
+        assert_eq!(on_base.ahead_of_base, Some(0));
+
+        run(at, &["checkout", "-q", "-b", "feature"]).await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nchanged\n").await.unwrap();
+        commit_files(at, "work", None, &["keep.txt".into()]).await.unwrap();
+
+        // Committed but unpushed: ahead of both.
+        let unpushed = work_status(at).await;
+        assert_eq!(unpushed.ahead_of_base, Some(1));
+
+        push_branch(at).await.unwrap();
+
+        // Pushed in full. `ahead` falls back to zero and `ahead_of_base` must
+        // not — this is the exact state a branch is in when its PR is opened.
+        let pushed = work_status(at).await;
+        assert_eq!(pushed.ahead, 0);
+        assert_eq!(pushed.ahead_of_base, Some(1));
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&remote).await.ok();
