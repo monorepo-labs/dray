@@ -721,10 +721,7 @@ function App() {
     <QuitDialog />
     <WorktreeDialog
       prompt={worktreePrompt}
-      onConfirm={(sessionId) => {
-        setWorktreePrompt(null);
-        void removeWorktree(sessionId);
-      }}
+      onConfirm={(sessionId) => removeWorktree(sessionId)}
       onClose={() => setWorktreePrompt(null)}
     />
     </DiffWorkerPool>
