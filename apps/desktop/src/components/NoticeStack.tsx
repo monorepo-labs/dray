@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Check } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -251,6 +251,10 @@ function NoticeCard({
             // card the reader did not ask for, it is the difference between a
             // button they read and one they click past.
             worktree && "bg-destructive text-white hover:bg-destructive/90",
+            // Full strength while the git work runs: the spinner and the verb
+            // are the state, and dimming them makes the one live thing on the
+            // card the hardest part of it to read.
+            "disabled:opacity-100",
             // Done is a statement, not a control. It keeps the fill so the card
             // doesn't reflow into a different shape at the moment the eye is on
             // it, and drops the pointer so nothing invites a second press.
@@ -263,6 +267,11 @@ function NoticeCard({
             <>
               <Check className="size-3.5" />
               Deleted
+            </>
+          ) : phase === "working" ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              Deleting…
             </>
           ) : (
             ACTION[notice.kind]
