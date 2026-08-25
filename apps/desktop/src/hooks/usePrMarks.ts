@@ -37,6 +37,37 @@ const inFlight = new Map<string, Promise<void>>();
 
 const EMPTY: Map<string, PrMark> = new Map();
 
+/// Bumped by every write against a pull request — see `refreshAfterWrite`.
+///
+/// A read captures this when it starts and checks it before writing what it
+/// got. A `gh` call issued *before* a merge cannot answer for that merge, and
+/// the damaging half is not the stale rows: it is the freshness stamp, which
+/// would tell every later reader the pre-merge answer is current and suppress
+/// the read that would have corrected it.
+let generation = 0;
+
+/// One repo's answer, narrowed to the one mark each branch draws.
+///
+/// Grouped and then picked, rather than a last-one-wins map build: a branch can
+/// carry several pull requests and the row has one glyph, so which one it is has
+/// to be a rule — see `pickPrMark` — and not whichever of the two connections
+/// happened to concatenate last.
+function marksByBranch(prs: PrMark[]): Map<string, PrMark> {
+  const byBranch = new Map<string, PrMark[]>();
+  for (const pr of prs) {
+    const list = byBranch.get(pr.headRefName);
+    if (list) list.push(pr);
+    else byBranch.set(pr.headRefName, [pr]);
+  }
+
+  return new Map(
+    [...byBranch].flatMap(([branch, list]) => {
+      const pick = pickPrMark(list);
+      return pick ? [[branch, pick] as const] : [];
+    }),
+  );
+}
+
 /// The pull request each branch is marked with, per repo the sidebar is showing
 /// sessions from.
 ///
@@ -91,35 +122,27 @@ export function usePrMarks(repoPaths: string[]) {
       if (running) await running;
 
       const attempt = (async () => {
+        const startedAt = generation;
+
+        let answer: Map<string, PrMark>;
         try {
-          const prs = await invoke<PrMark[]>("pr_marks", { cwd: path });
-          // Grouped and then picked, rather than a last-one-wins map build: one
-          // branch can carry several pull requests and the row draws one glyph,
-          // so which one it is has to be a rule — see `pickPrMark` — and not
-          // whichever the two connections happened to concatenate last.
-          const byBranch = new Map<string, PrMark[]>();
-          for (const pr of prs) {
-            const list = byBranch.get(pr.headRefName);
-            if (list) list.push(pr);
-            else byBranch.set(pr.headRefName, [pr]);
-          }
-          cache.set(
-            path,
-            new Map(
-              [...byBranch].flatMap(([branch, list]) => {
-                const pick = pickPrMark(list);
-                return pick ? [[branch, pick] as const] : [];
-              }),
-            ),
-          );
+          answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
         } catch {
-          // An empty map, not an absent one, and stamped like a success: a repo
-          // `gh` can't answer for should stop being asked until the window
+          // An empty map, not an absent one, and stamped like a success below: a
+          // repo `gh` can't answer for should stop being asked until the window
           // expires rather than on every render.
-          cache.set(path, new Map());
-        } finally {
-          fetchedAt.set(path, Date.now());
+          answer = new Map();
         }
+
+        // Dropped whole if a write landed while this was out. The `gh` call was
+        // issued before the merge, so it cannot describe it — and writing it
+        // would not just paint one stale row, it would re-stamp the entry as
+        // fresh and suppress the read that corrects it. Leaving the entry
+        // unstamped is what makes the next visit refetch.
+        if (generation !== startedAt) return;
+
+        cache.set(path, answer);
+        fetchedAt.set(path, Date.now());
       })();
 
       inFlight.set(path, attempt);
@@ -195,7 +218,13 @@ export function usePrMarks(repoPaths: string[]) {
     /// caller holds a session cwd where this is keyed by repo root — the two
     /// differ for a worktree session — and a write is rare enough that the
     /// worst case is one extra `gh` on the next project switch.
+    ///
+    /// The bump is what makes the clear stick. Without it a read already in
+    /// flight — one issued before the merge, for a repo now off screen — lands
+    /// afterwards and stamps its pre-merge answer fresh again, putting the
+    /// entry back exactly where clearing it had just taken it from.
     refreshAfterWrite: useCallback(() => {
+      generation += 1;
       fetchedAt.clear();
       void load(true);
     }, [load]),
