@@ -1,11 +1,15 @@
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { basename } from "@/lib/format";
-import { sessionBranch } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { SessionSnapshot } from "@/types/events";
 
 type SessionHeaderProps = {
   session: SessionSnapshot | null;
+  /// What `sessionBranch` made of this session, handed in rather than worked
+  /// out again here: `App` has git's own reading of HEAD to give it, and a
+  /// header naming one branch while the PR tab looks up another is the whole
+  /// of the bug that rule exists to stop.
+  branch: string | null;
   className?: string;
 };
 
@@ -16,7 +20,7 @@ type SessionHeaderProps = {
 /// No tooltip on it. It fired on every hover of a title that was not clipped,
 /// which is most of them, and repeated back text already on screen — the one
 /// thing the app's tooltip rule says a tooltip must not do.
-export default function SessionHeader({ session, className }: SessionHeaderProps) {
+export default function SessionHeader({ session, branch, className }: SessionHeaderProps) {
   if (!session) {
     return (
       <div className={cn("min-w-0", className)}>
@@ -28,7 +32,6 @@ export default function SessionHeader({ session, className }: SessionHeaderProps
   // A worktree session's `cwd` is the tree, not the repo, so the project name
   // has to come off `projectPath` or every worktree reads as its own project.
   const project = basename(session.projectPath);
-  const branch = sessionBranch(session);
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>

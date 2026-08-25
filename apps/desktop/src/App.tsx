@@ -207,10 +207,24 @@ function App() {
     [selectedSession?.events, busy],
   );
 
+  // What the composer's handoff row draws itself from, and — one line down —
+  // which branch the pull requests are looked up by. Read on the same falling
+  // edge as those, since a turn is what moves all of it.
+  const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
+    selectedSession?.cwd ?? "",
+    busy,
+  );
+
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
   // first can't wait on the panel fetching for itself.
-  const prBranch = selectedSession ? sessionBranch(selectedSession) : null;
+  //
+  // `workStatus.branch` is git's own reading of HEAD and outranks the name the
+  // index carries, which is only ever a guess made at creation — see
+  // `sessionBranch`. It lands a frame late and the fallback covers that frame.
+  const prBranch = selectedSession
+    ? sessionBranch(selectedSession, workStatus?.branch)
+    : null;
   // "The PR tab is on screen", read off the *pick* rather than off `activeTab`,
   // which cannot exist yet — it is derived from this hook's own answer. An
   // unset pick counts, since the derived default is the PR tab whenever there
@@ -331,12 +345,6 @@ function App() {
     openPrs.refresh();
   }, [selectedSessionId, busy, pullRequests.refresh, openPrs.refresh]);
 
-  // What the composer's handoff row draws itself from. Read on the same falling
-  // edge as the pull requests above, since a turn is what moves all of it.
-  const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
-    selectedSession?.cwd ?? "",
-    busy,
-  );
   // From the sidebar's own per-repo read, not a fourth git call: once a pull
   // request exists the panel is where it is acted on, and a Create PR button
   // beside it would open a duplicate.
@@ -551,7 +559,11 @@ function App() {
             </div>
           )}
 
-          <SessionHeader session={selectedSession} className="flex-1" />
+          <SessionHeader
+            session={selectedSession}
+            branch={prBranch}
+            className="flex-1"
+          />
 
           {selectedSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
 

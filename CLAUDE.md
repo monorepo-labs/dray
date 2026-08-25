@@ -271,7 +271,13 @@ Thread carry two facts ordinary comment don't. `path:line` say where it hang —
 
 **No Close, and no `--delete-branch`.** Panel exist to get work landed; abandoning PR = decision with discussion attached, which happen on GitHub. Reopen stay, because PR closed there = one reader may well want back here. Delete-branch dropped for own reason: worktree session have its branch checked out, so `git branch -D` refuse it and cleanup fail after merge already landed.
 
-**Branch name rebuilt, not stored.** Worktree session's branch = `worktree-<name>`, minted by CLI and never written to index. `sessionBranch` in [pr.ts](apps/desktop/src/lib/pr.ts) serve both `SessionHeader` and PR lookup, because two rebuilding it separately can disagree about which PR session have.
+**Branch name read first, rebuilt only as fallback.** `sessionBranch` in [pr.ts](apps/desktop/src/lib/pr.ts) take `observed` — `work_status.branch`, git's own reading of HEAD — and it win outright. Everything else there = **guess made at creation**: worktree session's `worktree-<name>` minted by CLI, plain session's `branch` = whatever checked out on first send. Neither re-read, so `git checkout` inside tree leave both naming branch session no longer on, and PR tab fail **closed** on it: ask GitHub about branch holding no PR, get empty answer, hide itself. Silent, and looked exactly like PR detection being broken.
+
+`observed` null = resting state not error — read per-session and land frame late, non-repo have no branch at all — so guess still cover that frame and every session leaving HEAD where CLI put it.
+
+One function, and `SessionHeader` take result as **prop** rather than compute own: header naming one branch while tab look up another = same disagreement in two places instead of one.
+
+**Sidebar row still read guess**, deliberately. `useOpenPrs` = one `gh` per repo, and per-row branch read = one `git` spawn per row, exactly what that design exist to avoid. So session whose tree checked out elsewhere lose its sidebar mark while panel keep working. `git worktree list` answer whole repo in one spawn if this ever want fixing.
 
 **Sidebar row carry PR mark, and it one `gh` per repo not per row.** [useOpenPrs](apps/desktop/src/hooks/useOpenPrs.ts) ask `open_prs` once per **distinct repo** among visible sessions — `gh` cost better part of second, so spawn per row make sidebar most expensive thing in app. Backend's `QUERY_OPEN` = states:OPEN, first:100, ordered by update, carrying `number headRefName isDraft` and nothing else: row draw open-or-draft, so shipping checks and review threads for every session = payload nobody read. `Response<T>` gone generic so both query share three envelopes around `pullRequests`.
 
