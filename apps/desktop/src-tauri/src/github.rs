@@ -203,7 +203,7 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number headRefName isDraft
+   number headRefName isDraft mergeable mergeStateStatus
    commits(last:1){nodes{commit{statusCheckRollup{state}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
@@ -905,6 +905,16 @@ pub struct PrMark {
     pub is_draft: bool,
     pub state: PrMarkState,
     pub checks_state: PrChecksState,
+    /// Enough of the panel's merge fields to answer "can this land now", which
+    /// the sidebar itself draws nothing from — the notice for a pull request
+    /// turning ready does, and this is the only read that runs for a session
+    /// nobody is looking at. The panel's query is gated on its own tab being
+    /// on screen, which is precisely when there is nothing to announce.
+    ///
+    /// `None` on the merged half, where they are not asked for. The frontend
+    /// reads that as *unknown* rather than as ready — see `mergeVerdict`.
+    pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
 }
 
 /// What CI on the tip commit has to say, cut to the two things a row can show.
@@ -964,6 +974,15 @@ struct RawPrMark {
     /// one. Same nesting the panel's query walks, so the same structs read it.
     #[serde(default)]
     commits: Option<Nodes<RawCommitNode>>,
+    /// Asked for on the open half alone, for the same reason `commits` is: a
+    /// merged pull request cannot become ready to merge, and `mergeStateStatus`
+    /// is the one field here GitHub computes *on being asked* — so putting it
+    /// on the merged connection would spend that work a hundred times over to
+    /// answer a question nobody asks.
+    #[serde(default)]
+    mergeable: Option<String>,
+    #[serde(default)]
+    merge_state_status: Option<String>,
 }
 
 /// The tip commit's rollup, read into what the row draws.
@@ -1067,6 +1086,8 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
             head_ref_name: pr.head_ref_name,
             is_draft: pr.is_draft,
             state,
+            mergeable: pr.mergeable,
+            merge_state_status: pr.merge_state_status,
         })
         .collect())
 }
@@ -1407,6 +1428,24 @@ mod tests {
         assert_eq!(prs[0].head_ref_name, "worktree-calm-navy-beacon");
         assert!(prs[0].is_draft);
         assert!(!prs[1].is_draft);
+    }
+
+    /// The merge fields ride the open half alone, so the merged half answers
+    /// `None` for them. The frontend has to read that as *not knowing* rather
+    /// than as nothing standing in the way — a merged mark reporting itself
+    /// ready to merge would raise a card for work that already landed.
+    #[test]
+    fn pr_marks_carry_merge_state_on_the_open_half_only() {
+        let out = r#"{"data":{"repository":{
+            "open":{"nodes":[
+              {"number":9,"headRefName":"fix/live","isDraft":false,
+               "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}]},
+            "merged":{"nodes":[{"number":4,"headRefName":"fix/landed","isDraft":false}]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+        assert_eq!(prs[0].mergeable.as_deref(), Some("MERGEABLE"));
+        assert_eq!(prs[0].merge_state_status.as_deref(), Some("CLEAN"));
+        assert_eq!(prs[1].mergeable, None);
+        assert_eq!(prs[1].merge_state_status, None);
     }
 
     /// State comes from which connection answered, not from a field — see

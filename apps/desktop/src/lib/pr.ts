@@ -89,7 +89,18 @@ export type Readiness = {
   detail?: string;
 };
 
-/// Whether the PR can land, in the words the reader needs.
+/// The fields the verdict below turns on, and no more — so a sidebar mark can
+/// be judged by the same rule the panel is, without carrying a panel's worth of
+/// pull request to do it. Nullable because the marks query asks for them on its
+/// open half alone.
+export type MergeState = {
+  state: string;
+  isDraft: boolean;
+  mergeable: string | null;
+  mergeStateStatus: string | null;
+};
+
+/// Why a pull request can or cannot land, as one word.
 ///
 /// GitHub answers this across three fields that overlap — `state`, `mergeable`,
 /// `mergeStateStatus` — and the order they're read in is the whole of the
@@ -97,36 +108,114 @@ export type Readiness = {
 /// check, and `UNKNOWN` means GitHub hasn't worked it out rather than that the
 /// answer is no. Reading them in any other order puts "Ready to merge" above a
 /// conflict.
-export function mergeReadiness(pr: PullRequest): Readiness {
-  if (pr.state === "MERGED") return { tone: "neutral", label: "Merged" };
-  if (pr.state === "CLOSED") return { tone: "neutral", label: "Closed without merging" };
+///
+/// Split from the words it is said in because two surfaces need the verdict and
+/// only one of them needs a sentence: [mergeReadiness] writes the panel's line,
+/// and [isReadyToMerge] asks the one question a notice turns on. A predicate
+/// written beside this rather than out of it would be a second copy of an order
+/// that took a while to get right.
+export type MergeVerdict =
+  | "merged"
+  | "closed"
+  | "conflict"
+  | "unknown"
+  | "draft"
+  | "behind"
+  | "blocked"
+  | "unstable"
+  | "ready";
 
-  if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
-    return {
-      tone: "conflict",
-      label: "Conflicts with base",
-      detail: `Resolve against ${pr.baseRefName} before merging.`,
-    };
+export function mergeVerdict(pr: MergeState): MergeVerdict {
+  if (pr.state === "MERGED") return "merged";
+  if (pr.state === "CLOSED") return "closed";
+
+  if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") return "conflict";
+
+  // `UNKNOWN` is asked lazily by GitHub, so the first read of a fresh PR lands
+  // here and the next poll settles it. A *null* is the other way of not
+  // knowing — the sidebar's marks carry these for open pull requests only — and
+  // it has to land in the same place: not having asked is not an answer, and
+  // reading it as one would announce a merged PR as ready to merge.
+  if (pr.mergeable === "UNKNOWN" || pr.mergeable === null || pr.mergeStateStatus === null) {
+    return "unknown";
   }
 
-  // Asked lazily by GitHub, so the first read of a fresh PR lands here and the
-  // next poll settles it. Saying so beats showing a merge button that fails.
-  if (pr.mergeable === "UNKNOWN") {
-    return { tone: "pending", label: "Checking mergeability…" };
-  }
-
-  if (pr.isDraft) {
-    return { tone: "neutral", label: "Draft", detail: "Mark ready to request review and merge." };
-  }
+  if (pr.isDraft) return "draft";
 
   switch (pr.mergeStateStatus) {
     case "BEHIND":
+      return "behind";
+    case "BLOCKED":
+      return "blocked";
+    case "UNSTABLE":
+      return "unstable";
+    default:
+      return "ready";
+  }
+}
+
+/// Whether it can land right now — nothing in the way, nothing left to wait
+/// for. What the "Ready to merge" notice fires on.
+export function isReadyToMerge(pr: MergeState): boolean {
+  return mergeVerdict(pr) === "ready";
+}
+
+/// One step of "which pull requests have just become ready", against what they
+/// last said. `observed` is every session being watched paired with its answer
+/// now; the result is what to remember and which sessions changed.
+///
+/// **A session seen for the first time changes nothing.** Its answer is
+/// recorded and no more, because the app cannot tell a pull request that turned
+/// green a moment ago from one that has been green for a week — so announcing
+/// on a first sighting would open a card for every landed branch in the list
+/// each time the app starts, or a project is switched back to.
+///
+/// **Pruning falls out of building the map from `observed` alone.** A session
+/// that stops being watched — archived, filtered away, its repo's read not
+/// landed — is forgotten rather than carried, so it comes back as a first
+/// sighting. That is the safe direction: re-seeding costs one announcement that
+/// was never made, where remembering a `false` across an absence would raise
+/// one for a pull request that was ready the whole time the row was gone.
+export function readyTransitions(
+  prev: Map<string, boolean>,
+  observed: Iterable<readonly [string, boolean]>,
+): { next: Map<string, boolean>; became: string[] } {
+  const next = new Map<string, boolean>();
+  const became: string[] = [];
+
+  for (const [sessionId, ready] of observed) {
+    next.set(sessionId, ready);
+    if (ready && prev.get(sessionId) === false) became.push(sessionId);
+  }
+
+  return { next, became };
+}
+
+/// Whether the PR can land, in the words the reader needs.
+export function mergeReadiness(pr: PullRequest): Readiness {
+  switch (mergeVerdict(pr)) {
+    case "merged":
+      return { tone: "neutral", label: "Merged" };
+    case "closed":
+      return { tone: "neutral", label: "Closed without merging" };
+    case "conflict":
+      return {
+        tone: "conflict",
+        label: "Conflicts with base",
+        detail: `Resolve against ${pr.baseRefName} before merging.`,
+      };
+    // Saying so beats showing a merge button that fails.
+    case "unknown":
+      return { tone: "pending", label: "Checking mergeability…" };
+    case "draft":
+      return { tone: "neutral", label: "Draft", detail: "Mark ready to request review and merge." };
+    case "behind":
       return {
         tone: "blocked",
         label: `Behind ${pr.baseRefName}`,
         detail: "Update the branch before merging.",
       };
-    case "BLOCKED":
+    case "blocked":
       return {
         tone: "blocked",
         label: "Blocked",
@@ -137,13 +226,13 @@ export function mergeReadiness(pr: PullRequest): Readiness {
               ? "A review is required."
               : "A required check or rule is not satisfied.",
       };
-    case "UNSTABLE":
+    case "unstable":
       return {
         tone: "pending",
         label: "Checks not passing",
         detail: "Merging is allowed, but something is red.",
       };
-    default:
+    case "ready":
       return { tone: "ready", label: "Ready to merge" };
   }
 }

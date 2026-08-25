@@ -4,7 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
-import { dismissNotice, pushNotice, type NoticeKind } from "@/hooks/useNotices";
+import {
+  ANSWERED_BY_OPENING,
+  dismissNotice,
+  pushNotice,
+  type NoticeKind,
+} from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
@@ -440,9 +445,11 @@ const handleNewSession = () => {
 const handleSelectSessionIndexItem = async (sessionId: string) => {
   setSelectedSessionId(sessionId);
 
-  // Opening the session is answering the notice about it, whatever it said —
-  // an unread completion is read, and a pending request is now on screen.
-  dismissNotice(sessionId);
+  // Opening the session is answering the notice about it — an unread completion
+  // is read, and a pending request is now on screen. Not the ready-to-merge
+  // card, which asks the reader to look at something a session's transcript
+  // does not show; see `ANSWERED_BY_OPENING`.
+  dismissNotice(sessionId, ANSWERED_BY_OPENING);
 
   // Opening a finished session is reading it.
   const clicked = sessionIndexItems.find((i) => i.sessionId === sessionId);
@@ -796,7 +803,7 @@ useEffect(() => {
                   [agentEvent.sessionId]: cur.filter((id) => id !== requestId),
                 };
               });
-              dismissNotice(agentEvent.sessionId);
+              dismissNotice(agentEvent.sessionId, "asking");
             }
 
             // Busy is no longer inferred from `turn_completed` here: a result
@@ -904,7 +911,7 @@ const markSessionRead = (sessionId: string) => {
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
   // The notice and the unread dot report the same thing, so the read that
   // retires one retires the other.
-  dismissNotice(sessionId);
+  dismissNotice(sessionId, ANSWERED_BY_OPENING);
   // Cleared locally first — the click must feel instant. Losing the write
   // costs one stale unread dot after a restart, so a failure isn't surfaced.
   void invoke("mark_session_idle", { sessionId }).catch(() => {});

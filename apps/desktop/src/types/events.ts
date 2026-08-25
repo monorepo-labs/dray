@@ -567,7 +567,18 @@ export type PrMark = { number: number,
 /**
  * The branch it was opened from — what the caller matches a session by.
  */
-headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, };
+headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+/**
+ * Enough of the panel's merge fields to answer "can this land now", which
+ * the sidebar itself draws nothing from — the notice for a pull request
+ * turning ready does, and this is the only read that runs for a session
+ * nobody is looking at. The panel's query is gated on its own tab being
+ * on screen, which is precisely when there is nothing to announce.
+ *
+ * `None` on the merged half, where they are not asked for. The frontend
+ * reads that as *unknown* rather than as ready — see `mergeVerdict`.
+ */
+mergeable: string | null, mergeStateStatus: string | null, };
 
 /**
  * Which of the two connections a mark came from.

@@ -14,6 +14,7 @@ import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog
 import PrPanel from "@/components/PrPanel";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
+import { usePrReady } from "@/hooks/usePrReady";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { handoffActions } from "@/lib/handoff";
@@ -215,6 +216,35 @@ function App() {
     busy,
   );
 
+  // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
+  // read one array. `projectPath` on the item is the repo root, so a worktree
+  // session stays under the project it forked from.
+  const visibleSessions = useMemo(
+    () =>
+      projectFilter
+        ? sessionIndexItems.filter((i) => i.projectPath === projectFilter)
+        : sessionIndexItems,
+    [sessionIndexItems, projectFilter],
+  );
+
+  // The sidebar's marks: one `gh` per repo on screen rather than one per row —
+  // see `usePrMarks`. Distinct paths, and the *active* list's only: a settled
+  // session is work the reader has already dealt with, so a repo that appears
+  // nowhere but the archived list is one nobody is waiting to land. Marks
+  // already fetched still draw over there, since the cache outlives this — what
+  // is dropped is the spending, not the answer.
+  const repoPaths = useMemo(
+    () => (showArchived ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
+    [showArchived, visibleSessions],
+  );
+  const prMarks = usePrMarks(repoPaths);
+
+  // "This can land now" — raised off the sidebar's marks rather than the
+  // panel's own read, which is the only way it can be noticed at all: the
+  // panel's poll is gated on its tab being on screen, and a tab on screen is
+  // exactly the case with nothing to announce.
+  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
+
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
   // first can't wait on the panel fetching for itself.
@@ -225,10 +255,6 @@ function App() {
   const prBranch = selectedSession
     ? sessionBranch(selectedSession, workStatus?.branch)
     : null;
-  // The sidebar's own read is set up further down — it depends on the visible
-  // session list — so the panel reaches it through a ref rather than the two
-  // being reordered around each other.
-  const prMarksRef = useRef<(() => void) | null>(null);
   // "The PR tab is on screen", read off the *pick* rather than off `activeTab`,
   // which cannot exist yet — it is derived from this hook's own answer. An
   // unset pick counts, since the derived default is the PR tab whenever there
@@ -262,7 +288,7 @@ function App() {
     // `refreshAfterWrite`, not `refresh`: the write can land after the reader
     // has filtered the mutated repo off screen, and a plain refresh only reads
     // what is visible then. See the hook.
-    () => prMarksRef.current?.(),
+    () => prMarks.refreshAfterWrite(),
   );
   // A draft counts: GitHub reports one as `OPEN` with `isDraft` set, and a
   // draft is still the point at which the work stops being about this turn.
@@ -271,7 +297,17 @@ function App() {
   // Only where *every* open one is a draft. A session carrying a draft beside a
   // real PR has something asking to land, and the mark should say so.
   const allDrafts = hasOpenPr && openPrsHere.every((pr) => pr.isDraft);
-  const hasPrTab = prTabVisible(pullRequests.prs, pullRequests.error);
+  // The sidebar already knows whether this branch has a pull request, and the
+  // panel's own read takes the better part of a second to agree — during which
+  // `prs` is empty, the tab is not in the row, and a pane opened onto the PR tab
+  // lands on Changes and jumps a beat later. So the mark stands in, but *only*
+  // while that read is out: once it answers, the panel's own answer governs, so
+  // this can never leave a tab drawn for a branch it found no PR on. The two
+  // can disagree — the mark is looked up by the branch the index remembers and
+  // the panel by the one git reports — and the window closes either way.
+  const markHere = prMarks.prFor(selectedSession?.projectPath ?? "", prBranch);
+  const hasPrTab =
+    prTabVisible(pullRequests.prs, pullRequests.error) || (pullRequests.loading && !!markHere);
 
   // Where the pane lands with nothing picked. An open pull request wins over
   // anything the last turn did: changes describe one turn and are superseded by
@@ -322,30 +358,6 @@ function App() {
     [selectedSession?.events],
   );
 
-  // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
-  // read one array. `projectPath` on the item is the repo root, so a worktree
-  // session stays under the project it forked from.
-  const visibleSessions = useMemo(
-    () =>
-      projectFilter
-        ? sessionIndexItems.filter((i) => i.projectPath === projectFilter)
-        : sessionIndexItems,
-    [sessionIndexItems, projectFilter],
-  );
-
-  // The sidebar's marks: one `gh` per repo on screen rather than one per row —
-  // see `usePrMarks`. Distinct paths, and the *active* list's only: a settled
-  // session is work the reader has already dealt with, so a repo that appears
-  // nowhere but the archived list is one nobody is waiting to land. Marks
-  // already fetched still draw over there, since the cache outlives this — what
-  // is dropped is the spending, not the answer.
-  const repoPaths = useMemo(
-    () => (showArchived ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
-    [showArchived, visibleSessions],
-  );
-  const prMarks = usePrMarks(repoPaths);
-  prMarksRef.current = prMarks.refreshAfterWrite;
-
   // A pull request appears because something happened, and the thing that
   // happens is a turn — the agent running `gh pr create`, or the reader opening
   // one in a browser while a turn was in flight. Nothing else re-reads: the
@@ -376,9 +388,7 @@ function App() {
   // level with its base, which `handoff` reads as nothing to open — but the two
   // answer different questions and folding them cost the button in the one case
   // it was wanted.
-  const sessionHasPr =
-    !!selectedSession &&
-    prMarks.prFor(selectedSession.projectPath, prBranch)?.state === "OPEN";
+  const sessionHasPr = markHere?.state === "OPEN";
 
   // The one handoff action that runs rather than asks. It reports into no
   // transcript, so both ends are its own: the flag the button spins on, and the
@@ -770,6 +780,15 @@ function App() {
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
       onSelect={(id) => void handleSelectSessionIndexItem(id)}
+      // The session and the pane both, since the card is about something the
+      // transcript does not show. The pick is written the same way
+      // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a
+      // standing pick, and opening the pane stores "changes" on its own.
+      onOpenPr={(id) => {
+        void handleSelectSessionIndexItem(id);
+        setPanelTab("pr");
+        setPanelOpen(true);
+      }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
     <QuitDialog />

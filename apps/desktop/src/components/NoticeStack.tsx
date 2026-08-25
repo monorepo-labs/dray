@@ -8,6 +8,7 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useHotkey } from "@/hooks/useHotkey";
 import {
   dismissNotice,
+  noticeKey,
   useNotices,
   NOTICE_TTL_MS,
   type Notice,
@@ -23,6 +24,10 @@ import { cn } from "@/lib/utils";
 
 type NoticeStackProps = {
   onSelect: (sessionId: string) => void;
+  /// Where the ready-to-merge card goes: the session *and* the pane, open on
+  /// its PR tab. Selecting alone would land the reader on a transcript that
+  /// says nothing about the pull request the card is about.
+  onOpenPr: (sessionId: string) => void;
   onDeleteWorktree: (sessionId: string) => Promise<boolean>;
 };
 
@@ -33,6 +38,12 @@ const ACTION: Record<NoticeKind, string> = {
   completed: "View",
   asking: "Answer",
   worktree: "Delete",
+  // Not "Merge". What the reader does there is merge it, which is what this
+  // label rule asks for — but the app's own merge button arms a confirm before
+  // it lands one, and a card button that skipped straight past that would be
+  // the one irreversible thing in the app reachable by a stray click on a
+  // notice nobody asked for.
+  pr: "Review",
 };
 
 /// The bar's colour, matching the rail mark the row will be wearing when the
@@ -45,6 +56,13 @@ const BAR: Record<NoticeKind, string> = {
   completed: "bg-emerald-500/70",
   asking: "bg-accent-command/70",
   worktree: "bg-destructive/70",
+  // The colour of the glyph the row is wearing, which is the rule the other
+  // bars follow — GitHub's emerald for an open pull request. It shares that
+  // with `completed`, and the two are told apart by what the card says rather
+  // than by hue: both are good news about a session, and inventing a fourth
+  // colour to separate them would spend the palette on a distinction the label
+  // already makes.
+  pr: "bg-emerald-500/70",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to
@@ -132,7 +150,7 @@ function NoticeCard({
       [{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }],
       { duration, easing: "linear", fill: "forwards" },
     );
-    countdown.onfinish = () => dismissNotice(notice.sessionId);
+    countdown.onfinish = () => dismissNotice(notice.sessionId, notice.kind);
     timer.current = countdown;
 
     return () => {
@@ -160,7 +178,7 @@ function NoticeCard({
     }
     // The error banner already carries the reason, so the card leaves rather
     // than sitting there implying the deletion is still going to happen.
-    dismissNotice(notice.sessionId);
+    dismissNotice(notice.sessionId, notice.kind);
   };
 
   // ⌘D deletes without the trip to a 40px button, which is the whole point of
@@ -230,7 +248,7 @@ function NoticeCard({
               size="xs"
               className="text-muted-foreground"
               disabled={phase === "working"}
-              onClick={() => dismissNotice(notice.sessionId)}
+              onClick={() => dismissNotice(notice.sessionId, notice.kind)}
             >
               Skip
             </Button>
@@ -310,7 +328,11 @@ function NoticeCard({
 /// slightly sooner is a second target competing with the one that matters. The
 /// worktree card earns its Skip by being a *question*: leaving is a real answer
 /// there, and an answer you can only give by waiting is one you cannot give.
-export default function NoticeStack({ onSelect, onDeleteWorktree }: NoticeStackProps) {
+export default function NoticeStack({
+  onSelect,
+  onOpenPr,
+  onDeleteWorktree,
+}: NoticeStackProps) {
   const notices = useNotices();
 
   // The oldest card, which is the top one and the next to expire. Acting on it
@@ -319,17 +341,26 @@ export default function NoticeStack({ onSelect, onDeleteWorktree }: NoticeStackP
   // reshuffle what the key means every time one lands.
   const next = notices[0] ?? null;
 
-  // ⌘G takes the navigating kinds and *skips* a worktree card, so the key never
-  // destroys anything. That is the whole reason the worktree card has a Skip
-  // button to hang it on: a shortcut that usually navigates but sometimes
-  // deletes a directory is the shape that burns someone exactly once.
+  // Where a card leads, which is the same for the key and for the button. The
+  // navigating kinds go somewhere and a worktree card only leaves: its Skip is
+  // what this lands on, which is what keeps the key below non-destructive.
+  const take = (notice: Notice) => {
+    dismissNotice(notice.sessionId, notice.kind);
+    if (notice.kind === "pr") onOpenPr(notice.sessionId);
+    else if (notice.kind !== "worktree") onSelect(notice.sessionId);
+  };
+
+  // ⌘G takes the navigating kinds — a session, or a session and its PR tab —
+  // and *skips* a worktree card, so the key never destroys anything. That is
+  // the whole reason the worktree card has a Skip button to hang it on: a
+  // shortcut that usually navigates but sometimes deletes a directory is the
+  // shape that burns someone exactly once.
   //
   // Registered here rather than in `App` so it exists only while a card does —
   // ⌘G with nothing raised should stay free for whatever wants it later.
   useHotkey("g", () => {
     if (!next) return;
-    dismissNotice(next.sessionId);
-    if (next.kind !== "worktree") onSelect(next.sessionId);
+    take(next);
   });
 
   if (notices.length === 0) return null;
@@ -341,13 +372,10 @@ export default function NoticeStack({ onSelect, onDeleteWorktree }: NoticeStackP
     <div className="pointer-events-none fixed top-(--titlebar-h) left-3 z-50 flex flex-col items-start gap-2">
       {notices.map((notice) => (
         <NoticeCard
-          key={notice.sessionId}
+          key={noticeKey(notice)}
           notice={notice}
           isNext={notice === next}
-          onTake={() => {
-            dismissNotice(notice.sessionId);
-            onSelect(notice.sessionId);
-          }}
+          onTake={() => take(notice)}
           onDeleteWorktree={() => onDeleteWorktree(notice.sessionId)}
         />
       ))}

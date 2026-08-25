@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   firstLine,
+  isReadyToMerge,
   isSettling,
+  readyTransitions,
   mergeReadiness,
   pickPrMark,
   prBadgeCount,
@@ -135,6 +137,93 @@ describe("mergeReadiness", () => {
   });
 });
 
+describe("isReadyToMerge", () => {
+  const mark = (over: Partial<PrMark> = {}): PrMark => ({
+    number: 1,
+    headRefName: "feat/x",
+    isDraft: false,
+    state: "OPEN",
+    checksState: "CLEAR",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    ...over,
+  });
+
+  // The whole point of the split: a sidebar mark carries four of the panel's
+  // fields and is judged by the same ordered rule, so the notice and the
+  // panel's own line can never disagree about whether something can land.
+  it("answers for a sidebar mark and for a full pull request alike", () => {
+    expect(isReadyToMerge(mark())).toBe(true);
+    expect(isReadyToMerge(pr())).toBe(true);
+    expect(mergeReadiness(pr()).tone).toBe("ready");
+  });
+
+  it("is false for everything standing in the way", () => {
+    expect(isReadyToMerge(mark({ isDraft: true }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeable: "CONFLICTING" }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeStateStatus: "BLOCKED" }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeStateStatus: "BEHIND" }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeStateStatus: "UNSTABLE" }))).toBe(false);
+  });
+
+  // The marks query asks for these on its open half alone, so a merged mark
+  // carries nulls. Reading a null as "nothing in the way" would announce work
+  // that has already landed as ready to land.
+  it("reads unasked fields as not knowing, never as ready", () => {
+    expect(isReadyToMerge(mark({ state: "MERGED", mergeable: null, mergeStateStatus: null }))).toBe(
+      false,
+    );
+    expect(isReadyToMerge(mark({ mergeable: null }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeStateStatus: null }))).toBe(false);
+    // Same answer for GitHub's own way of not knowing, which the first read of
+    // a fresh PR always lands on.
+    expect(isReadyToMerge(mark({ mergeable: "UNKNOWN" }))).toBe(false);
+  });
+});
+
+describe("readyTransitions", () => {
+  // Launching onto a sidebar of work that landed last week must not open a card
+  // for every row of it. The app cannot tell that from a PR that turned green a
+  // second ago, so the first sighting is only ever recorded.
+  it("records a first sighting without announcing it", () => {
+    const { next, became } = readyTransitions(new Map(), [
+      ["a", true],
+      ["b", false],
+    ]);
+    expect(became).toEqual([]);
+    expect(next.get("a")).toBe(true);
+    expect(next.get("b")).toBe(false);
+  });
+
+  it("announces the change out of not-ready, once", () => {
+    const first = readyTransitions(new Map([["a", false]]), [["a", true]]);
+    expect(first.became).toEqual(["a"]);
+
+    // The same answer again is not news.
+    expect(readyTransitions(first.next, [["a", true]]).became).toEqual([]);
+  });
+
+  // A check re-runs, goes red and comes back green: that is a pull request
+  // becoming ready again, and saying so is right.
+  it("announces again after it stops being ready", () => {
+    const ready = readyTransitions(new Map([["a", false]]), [["a", true]]);
+    const broke = readyTransitions(ready.next, [["a", false]]);
+    expect(broke.became).toEqual([]);
+    expect(readyTransitions(broke.next, [["a", true]]).became).toEqual(["a"]);
+  });
+
+  // Archived, filtered away, or its repo's read simply not landed. Forgetting
+  // is the safe direction: it costs an announcement that was never made, where
+  // remembering the `false` would raise one for a PR that had been ready the
+  // whole time the row was off screen.
+  it("forgets a session it stops being told about", () => {
+    const seeded = readyTransitions(new Map([["a", false]]), [["a", false]]);
+    const away = readyTransitions(seeded.next, []);
+    expect(away.next.size).toBe(0);
+    expect(readyTransitions(away.next, [["a", true]]).became).toEqual([]);
+  });
+});
+
 describe("summarizeChecks", () => {
   it("counts each terminal state apart from the rest", () => {
     const summary = summarizeChecks([
@@ -238,6 +327,8 @@ describe("pickPrMark", () => {
     isDraft: false,
     state: "OPEN",
     checksState: "CLEAR",
+    mergeable: null,
+    mergeStateStatus: null,
     ...over,
   });
 
