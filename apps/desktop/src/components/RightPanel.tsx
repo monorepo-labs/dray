@@ -129,23 +129,23 @@ const LABELS: Record<PanelTab, string> = {
 
 /// Which tabs exist, and in what order.
 ///
-/// Changes leads by default — it answers "what just happened". An *open* PR
-/// takes the lead instead, because at that point the session's work is no
-/// longer about this turn: it is about landing, and the first tab is where the
-/// eye goes. A draft counts, being `OPEN` with `isDraft` set. A merged or
-/// closed PR does not lead, since it is a record rather than something to act
-/// on.
+/// The PR tab leads wherever it is drawn, and its place does not move with the
+/// pull request's state. It used to: merging one sent the tab to the end, so
+/// the row reshuffled under the cursor at the exact moment the reader was
+/// looking at what they had just done, and ⌘⇧[ / ⌘⇧] then stepped a different
+/// order than the one they had learned. A tab's position is where it is found,
+/// not a ranking.
 ///
-/// This is also the order ⌘⇧[ / ⌘⇧] steps through, and `App` derives the
-/// default tab from the same two flags — so the tab that leads the row and the
-/// tab the pane opens onto cannot disagree.
+/// Which tab the pane *opens* onto still follows the PR's state — see `App`'s
+/// `defaultTab`. That one can change freely, because it decides a first look
+/// rather than where the eye goes back to.
 ///
 /// The PR tab is absent entirely for a session that has no PR to show — see
 /// `prTabVisible`. A tab whose only content is "there is nothing here" is one
 /// the eye has to skip past on every session that will never have one.
-export function tabOrder({ pr, prFirst }: { pr: boolean; prFirst: boolean }): readonly PanelTab[] {
+export function tabOrder({ pr }: { pr: boolean }): readonly PanelTab[] {
   if (!pr) return ["changes", "subagents"];
-  return prFirst ? (["pr", "changes", "subagents"] as const) : PANEL_TABS;
+  return ["pr", "changes", "subagents"] as const;
 }
 
 type RightPanelProps = {
@@ -158,8 +158,6 @@ type RightPanelProps = {
   /// Rendered beside its tab's label. Only shown above zero — a tab reading
   /// "Subagents 0" says the same thing as the empty state one click away.
   counts?: Partial<Record<PanelTab, number>>;
-  /// This session has an open pull request, so its tab leads — see [tabOrder].
-  prFirst?: boolean;
   /// There is a pull request tab to draw at all — see `prTabVisible`.
   pr?: boolean;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
@@ -199,7 +197,6 @@ export default function RightPanel({
   tab,
   onTabChange,
   counts,
-  prFirst = false,
   pr = false,
   refresh,
   children,
@@ -217,7 +214,7 @@ export default function RightPanel({
         className="flex h-(--titlebar-h) shrink-0 items-center gap-0.5 border-b border-border px-2"
         data-tauri-drag-region="deep"
       >
-        {tabOrder({ pr, prFirst }).map((value) => (
+        {tabOrder({ pr }).map((value) => (
           <button
             key={value}
             type="button"

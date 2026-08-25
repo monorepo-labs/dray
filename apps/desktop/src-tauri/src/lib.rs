@@ -500,7 +500,7 @@ pub fn run() {
             updater::check_update,
             updater::install_update,
             github::prs_for_branch,
-            github::open_prs,
+            github::pr_marks,
             github::merge_pr,
             github::reopen_pr,
             github::mark_pr_ready,

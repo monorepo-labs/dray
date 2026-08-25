@@ -171,20 +171,42 @@ query($owner:String!,$repo:String!,$branch:String!){
  }}
 "#;
 
-/// Every open pull request in the repo, by head branch.
+/// Every pull request the sidebar can mark a row with, by head branch.
 ///
 /// One query for the whole sidebar rather than one per row: `gh` costs the
 /// better part of a second, so asking per session would be a spawn per visible
-/// row on every refresh. Open only — the mark says "this branch has somewhere
-/// to land", and a merged PR is a record the row has nothing to do with.
+/// row on every refresh.
 ///
-/// `first:100` is the cap, and it is a real one: a repo with more than a
-/// hundred open pull requests marks the hundred most recently touched, which is
-/// the set any session in this app is plausibly working on.
-const QUERY_OPEN: &str = r#"
+/// **Two aliased connections, not `states:[OPEN,MERGED]` in one.** A single
+/// connection spends one `first:100` budget across both, ordered by update — so
+/// a repo that merges briskly buries an open pull request nobody has touched
+/// this week under a hundred recent merges, and the row loses the mark that
+/// already worked. Separate budgets cost nothing extra: it is still one query
+/// and one spawn.
+///
+/// Merged is here because a settled branch is what tells the reader the session
+/// is done and can be archived. Closed-without-merging is deliberately not:
+/// that is work abandoned rather than landed, and it says nothing the row's own
+/// timestamp doesn't.
+///
+/// The open half also carries its tip commit's check rollup — one field, the
+/// rollup's own verdict rather than the fifty contexts the panel's query asks
+/// for. Only the tip's, for the panel's reason: a check reported against a
+/// commit that has since been pushed over describes code nobody is waiting on.
+/// The merged half asks for none — its checks are over, and the row says merged.
+///
+/// `first:100` is a real cap on both halves. A repo with more than a hundred
+/// open pull requests marks the hundred most recently touched; a branch merged
+/// long enough ago to fall past the hundredth loses its mark, which is the
+/// right way round — those are the sessions already dealt with.
+const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
-  pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
+  open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
+   number headRefName isDraft
+   commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+  }}
+  merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
    number headRefName isDraft
   }}
  }}
@@ -391,9 +413,16 @@ struct RawCommit {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RawRollup {
     #[serde(default)]
     contexts: Option<Nodes<RawCheck>>,
+    /// The rollup's own verdict over every context, which is all the sidebar's
+    /// mark needs. Absent from the panel's query, which reads the contexts and
+    /// counts them itself; absent from the sidebar's, which asks only for this.
+    /// Both fields optional so one shape serves both.
+    #[serde(default)]
+    state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -847,45 +876,148 @@ fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
     Ok(prs)
 }
 
-/// One open pull request, cut down to what a sidebar row can draw.
+/// Which of the two connections a mark came from.
 ///
-/// Deliberately not a `PullRequest`: the row says "this branch has an open PR,
-/// and whether it is a draft" and nothing else, so carrying checks, comments
-/// and review threads for every session in the list would be payload nobody
-/// reads.
+/// Not parsed off the wire: [`QUERY_MARKS`] asks each state in its own aliased
+/// connection, so the connection *is* the answer and a `state` field would be a
+/// second copy of it free to disagree. Only the two states the sidebar draws —
+/// closed-without-merging is not asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PrMarkState {
+    Open,
+    Merged,
+}
+
+/// One pull request, cut down to what a sidebar row can draw.
+///
+/// Deliberately not a `PullRequest`: the row says "this branch has a PR, and
+/// what became of it" and nothing else, so carrying checks, comments and review
+/// threads for every session in the list would be payload nobody reads.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
-pub struct OpenPr {
+pub struct PrMark {
     pub number: u64,
     /// The branch it was opened from — what the caller matches a session by.
     pub head_ref_name: String,
     pub is_draft: bool,
+    pub state: PrMarkState,
+    pub checks_state: PrChecksState,
+}
+
+/// What CI on the tip commit has to say, cut to the two things a row can show.
+///
+/// Passing is folded in with "no checks at all" on purpose: a row that says
+/// nothing is a row with nothing to do, and marking every green branch green a
+/// second time makes the mark that *does* need reading harder to find. So this
+/// is a three-way, not the rollup's five-way — `SUCCESS` and an absent rollup
+/// both reach the reader as [`PrChecksState::Clear`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PrChecksState {
+    /// Still going, and going to finish on its own — the one state here worth
+    /// an indicator the reader can watch.
+    Running,
+    /// Settled badly. Drawn by recolouring the pull request's own glyph rather
+    /// than by adding a second mark: it is a fact *about* the PR, not another
+    /// thing on the row.
+    Failing,
+    /// Passing, or no CI configured at all. Nothing to say either way.
+    Clear,
+}
+
+impl PrChecksState {
+    /// Reads GitHub's `StatusState` into the three the row draws.
+    ///
+    /// `EXPECTED` is running, not failing: it means a required check has not
+    /// reported yet, which is a wait rather than a verdict. `ERROR` sits with
+    /// `FAILURE` — a check that could not run is one that has not passed, and
+    /// telling them apart is the panel's job, not a row's.
+    ///
+    /// Anything unrecognised reads as [`PrChecksState::Clear`], which is the safe
+    /// way round: a vocabulary GitHub adds later shows nothing rather than
+    /// painting every row red.
+    fn from_rollup(state: &str) -> Self {
+        match state {
+            "PENDING" | "EXPECTED" => Self::Running,
+            "FAILURE" | "ERROR" => Self::Failing,
+            _ => Self::Clear,
+        }
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RawOpenPr {
+struct RawPrMark {
     number: u64,
     #[serde(default)]
     head_ref_name: String,
+    /// Always false on a merged one — GitHub clears the flag on merge — so this
+    /// is only ever read for the open half. One node shape for both keeps the
+    /// query symmetrical.
     #[serde(default)]
     is_draft: bool,
+    /// Only asked for on the open half, so absent — not empty — on the merged
+    /// one. Same nesting the panel's query walks, so the same structs read it.
+    #[serde(default)]
+    commits: Option<Nodes<RawCommitNode>>,
 }
 
-/// Every open pull request in the repo `cwd` sits in.
+/// The tip commit's rollup, read into what the row draws.
 ///
-/// One call for a whole sidebar's worth of rows — see [`QUERY_OPEN`]. The
+/// `commits(last:1)` asks for one, so anything else — no commits, no rollup, no
+/// CI — is [`PrChecksState::Clear`] rather than an error: a repo without checks is
+/// the ordinary case, not a failure to read one.
+fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> PrChecksState {
+    Nodes::take(commits)
+        .into_iter()
+        .filter_map(|node| node.commit)
+        .filter_map(|commit| commit.status_check_rollup)
+        .filter_map(|rollup| rollup.state)
+        .map(|state| PrChecksState::from_rollup(&state))
+        .next()
+        .unwrap_or(PrChecksState::Clear)
+}
+
+/// The two-connection answer. `Response<T>` next door can't serve it: it is
+/// generic over the *node* shape around one field named `pullRequests`, and
+/// this asks the same field twice under two aliases.
+#[derive(Deserialize)]
+struct MarksResponse {
+    data: Option<MarksData>,
+    #[serde(default)]
+    errors: Vec<GraphQlError>,
+}
+
+#[derive(Deserialize)]
+struct MarksData {
+    repository: Option<MarksRepository>,
+}
+
+#[derive(Deserialize)]
+struct MarksRepository {
+    open: Option<Nodes<RawPrMark>>,
+    merged: Option<Nodes<RawPrMark>>,
+}
+
+/// Every pull request in the repo `cwd` sits in that a sidebar row can be
+/// marked with — open ones and merged ones.
+///
+/// One call for a whole sidebar's worth of rows — see [`QUERY_MARKS`]. The
 /// caller matches a session to its entry by branch, so this answers a list
 /// rather than a map: which branch a session lands on is the frontend's own
 /// rule (a worktree session's is rebuilt from its worktree name), and building
-/// the map here would be a second copy of it.
+/// the map here would be a second copy of it. One branch can carry several, so
+/// picking which one a row draws is the caller's too.
 #[tauri::command]
-pub async fn open_prs(cwd: String) -> Result<Vec<OpenPr>, PrUnavailable> {
-    open_prs_inner(&cwd).await.map_err(unavailable)
+pub async fn pr_marks(cwd: String) -> Result<Vec<PrMark>, PrUnavailable> {
+    pr_marks_inner(&cwd).await.map_err(unavailable)
 }
 
-async fn open_prs_inner(cwd: &str) -> Result<Vec<OpenPr>, String> {
+async fn pr_marks_inner(cwd: &str) -> Result<Vec<PrMark>, String> {
     let (owner, repo) = repo_slug(cwd).await?;
 
     let out = gh(
@@ -898,26 +1030,43 @@ async fn open_prs_inner(cwd: &str) -> Result<Vec<OpenPr>, String> {
             "-f",
             &format!("repo={repo}"),
             "-f",
-            &format!("query={QUERY_OPEN}"),
+            &format!("query={QUERY_MARKS}"),
         ],
     )
     .await?;
 
-    read_open_prs(&out)
+    read_pr_marks(&out)
 }
 
 /// Splits parsing off the spawn, like [`read_prs`].
-fn read_open_prs(out: &str) -> Result<Vec<OpenPr>, String> {
-    let response: Response<RawOpenPr> =
+fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
+    let response: MarksResponse =
         serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
 
-    Ok(response
-        .prs()?
+    // Checked before the data, for [`Response::prs`]'s reason: a failed query
+    // answers with a 200 and a null `data`, so reading the connections first
+    // turns "could not resolve repository" into "this repo has no pull
+    // requests".
+    if let Some(first) = response.errors.first() {
+        return Err(first.message.clone());
+    }
+
+    let repository = response.data.and_then(|d| d.repository);
+    let (open, merged) = match repository {
+        Some(r) => (Nodes::take(r.open), Nodes::take(r.merged)),
+        None => (Vec::new(), Vec::new()),
+    };
+
+    Ok(open
         .into_iter()
-        .map(|pr| OpenPr {
+        .map(|pr| (PrMarkState::Open, pr))
+        .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
+        .map(|(state, mut pr)| PrMark {
             number: pr.number,
+            checks_state: read_checks(pr.commits.take()),
             head_ref_name: pr.head_ref_name,
             is_draft: pr.is_draft,
+            state,
         })
         .collect())
 }
@@ -1247,30 +1396,87 @@ mod tests {
     /// is an open PR — reading it as anything else leaves the row unmarked for
     /// exactly the PR that has just been opened.
     #[test]
-    fn open_prs_carry_their_branch_and_draft_flag() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
-            {"number":9,"headRefName":"worktree-calm-navy-beacon","isDraft":true},
-            {"number":8,"headRefName":"fix/thing","isDraft":false}]}}}}"#;
-        let prs = read_open_prs(out).expect("open prs parse");
+    fn pr_marks_carry_their_branch_and_draft_flag() {
+        let out = r#"{"data":{"repository":{
+            "open":{"nodes":[
+              {"number":9,"headRefName":"worktree-calm-navy-beacon","isDraft":true},
+              {"number":8,"headRefName":"fix/thing","isDraft":false}]},
+            "merged":{"nodes":[]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
         assert_eq!(prs.len(), 2);
         assert_eq!(prs[0].head_ref_name, "worktree-calm-navy-beacon");
         assert!(prs[0].is_draft);
         assert!(!prs[1].is_draft);
     }
 
+    /// State comes from which connection answered, not from a field — see
+    /// [`PrMarkState`]. Both halves reach the caller in one list.
+    #[test]
+    fn pr_marks_state_comes_from_the_connection() {
+        let out = r#"{"data":{"repository":{
+            "open":{"nodes":[{"number":9,"headRefName":"fix/live","isDraft":false}]},
+            "merged":{"nodes":[{"number":4,"headRefName":"fix/landed","isDraft":false}]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].state, PrMarkState::Open);
+        assert_eq!(prs[1].state, PrMarkState::Merged);
+        assert_eq!(prs[1].head_ref_name, "fix/landed");
+    }
+
+    /// The row draws three things off five wire values, and each fold is one
+    /// somebody could reasonably get backwards: a settled rollup read as
+    /// running leaves the row spinning forever, and a running one read as
+    /// failing paints it red before CI has said anything.
+    #[test]
+    fn the_rollup_folds_into_the_three_states_a_row_draws() {
+        let mark = |rollup: &str| {
+            let out = format!(
+                r#"{{"data":{{"repository":{{"open":{{"nodes":[
+                  {{"number":9,"headRefName":"b","isDraft":false,
+                    "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}]}},
+                  "merged":{{"nodes":[]}}}}}}}}"#
+            );
+            read_pr_marks(&out).expect("pr marks parse").remove(0).checks_state
+        };
+
+        assert_eq!(mark(r#"{"state":"PENDING"}"#), PrChecksState::Running);
+        // A required check that has not reported yet is a wait, not a verdict.
+        assert_eq!(mark(r#"{"state":"EXPECTED"}"#), PrChecksState::Running);
+        assert_eq!(mark(r#"{"state":"FAILURE"}"#), PrChecksState::Failing);
+        // A check that could not run is one that has not passed.
+        assert_eq!(mark(r#"{"state":"ERROR"}"#), PrChecksState::Failing);
+        // Passing says nothing, and neither does no CI at all — most repos.
+        assert_eq!(mark(r#"{"state":"SUCCESS"}"#), PrChecksState::Clear);
+        assert_eq!(mark("null"), PrChecksState::Clear);
+        // A word GitHub adds later must show nothing, not paint the row red.
+        assert_eq!(mark(r#"{"state":"SOMETHING_NEW"}"#), PrChecksState::Clear);
+    }
+
+    /// The merged half is asked for no commits, so the field is absent rather
+    /// than empty — and absent must not fail the line the open half rode in on.
+    #[test]
+    fn a_mark_with_no_commits_asked_for_still_parses() {
+        let out = r#"{"data":{"repository":{
+            "open":{"nodes":[]},
+            "merged":{"nodes":[{"number":4,"headRefName":"b","isDraft":false}]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+        assert_eq!(prs[0].checks_state, PrChecksState::Clear);
+    }
+
     /// Same 200-with-errors trap the branch query has: a zero exit code proves
     /// nothing, and reading it as success marks every row as PR-less.
     #[test]
-    fn an_open_pr_query_error_is_an_error() {
+    fn a_pr_mark_query_error_is_an_error() {
         let out = r#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"#;
-        assert!(read_open_prs(out).is_err());
+        assert!(read_pr_marks(out).is_err());
     }
 
-    /// A repo with no open PRs answers a null connection, not an empty one.
+    /// A repo with nothing on one side answers a null connection, not an empty
+    /// one — on each half independently.
     #[test]
-    fn no_open_prs_reads_as_empty() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":null}}}}"#;
-        assert!(read_open_prs(out).expect("null connection parses").is_empty());
+    fn no_pr_marks_reads_as_empty() {
+        let out = r#"{"data":{"repository":{"open":{"nodes":null},"merged":{"nodes":null}}}}"#;
+        assert!(read_pr_marks(out).expect("null connections parse").is_empty());
     }
 
     #[test]

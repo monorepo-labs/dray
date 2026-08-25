@@ -226,6 +226,10 @@ Three exits clear it, all needed: `block_start` that not thinking (text or tool 
 
 **Which tab open = one line, and `null` what make it work.** `ade.panelTab` hold `PanelTab | null` and default **null** = "reader never picked". `activeTab` then = pick where pick still name tab this session draw, else derived default — PR when open one exist, Changes otherwise. Storing `"changes"` as initial value = whole of old bug: fresh install indistinguishable from reader who chose Changes, so open PR could never lead. Not written back either, so switching to PR-less session keep pick.
 
+**Tab's place fixed, tab pane open onto not.** `tabOrder` put PR first wherever it drawn at all — merged, closed, draft, open, same slot. It once moved to end when PR stop being open, and that cost more than leading order buy: row reshuffle under cursor at moment reader look at what they just did, and ⌘⇧[ / ⌘⇧] step order they never learned. `defaultTab` still follow state (PR when open one exist, Changes otherwise), because that decide first look not where eye go back to.
+
+**Pane opening itself pick tab too.** `usePullRequest`'s `onOpened` set `panelTab` to `"pr"` beside opening pane, and have to: `activeTab` honour standing pick over derived default, and pick written by **app**, not only by reader — `handleTogglePanel` store `"changes"` every time pane open onto turn that touch files. So opening alone land on Changes for anyone who ever press ⌘E, which everyone.
+
 Binding on **`{` / `}`**, not on brackets: shift layout reach `key`, so ⌘⇧[ report as `{`. `useHotkey` grew `code` option (`BracketLeft`/`BracketRight`) for engines that report unshifted one instead — both route, since character alone one engine away from silently never firing and position alone put chord under different glyph on every non-US layout.
 
 **Hook live in `App`, not in panel.** Tab row need to know whether open PR exist *before* that tab ever shown, so ordering can't wait on panel fetching for itself. Follow that first read **not** gated on `active` — only poll is. One read per session selection, deduped by freshness window.
@@ -267,13 +271,35 @@ Thread carry two facts ordinary comment don't. `path:line` say where it hang —
 
 **Every write refetch, and that not deferred optimism.** Merge close PR and move it down list, ready-for-review move it out of draft — each change more than field it name. Merge itself two-step: button arm confirm that replace it, same shape sidebar's delete use. Method live in button's own menu not in confirm, so confirm read as one sentence naming exactly what about to happen — and menu spell out what each method do to base's history, since this only irreversible choice on pane. Menu `align="end"` and `w-80`: button sit at pane's right edge so start-aligned menu open off window, and at default width each description ran five lines.
 
+**And refetch reach past pane.** Panel's own list not only view of that branch — sidebar mark come from `usePrMarks`, separate read with **120s** window, so merged PR keep its green glyph for two minutes. `usePullRequest` take `onChanged`, fired after any successful write, and `App` hang `prMarks.refresh` off it. Unlike every other write in that hook it **not** key-guarded: repo-wide answer true of branch whether or not reader still looking at it. Callback rather than second `useEffect` on `prs`, since only write know it was write.
+
 **Merge that fail checked against PR before being reported.** `gh pr merge` can fail with merge already through — post-merge step, lost connection — and reporting exit code alone tell reader their merge failed when it on `main`. `merge_pr` re-read `state` on any failure and answer `Ok` only where it come back `MERGED`; unverifiable merge stay failure it was reported as.
 
 **No Close, and no `--delete-branch`.** Panel exist to get work landed; abandoning PR = decision with discussion attached, which happen on GitHub. Reopen stay, because PR closed there = one reader may well want back here. Delete-branch dropped for own reason: worktree session have its branch checked out, so `git branch -D` refuse it and cleanup fail after merge already landed.
 
 **Branch name rebuilt, not stored.** Worktree session's branch = `worktree-<name>`, minted by CLI and never written to index. `sessionBranch` in [pr.ts](apps/desktop/src/lib/pr.ts) serve both `SessionHeader` and PR lookup, because two rebuilding it separately can disagree about which PR session have.
 
-**Sidebar row carry PR mark, and it one `gh` per repo not per row.** [useOpenPrs](apps/desktop/src/hooks/useOpenPrs.ts) ask `open_prs` once per **distinct repo** among visible sessions — `gh` cost better part of second, so spawn per row make sidebar most expensive thing in app. Backend's `QUERY_OPEN` = states:OPEN, first:100, ordered by update, carrying `number headRefName isDraft` and nothing else: row draw open-or-draft, so shipping checks and review threads for every session = payload nobody read. `Response<T>` gone generic so both query share three envelopes around `pullRequests`.
+**Sidebar row carry PR mark, and it one `gh` per repo not per row.** [usePrMarks](apps/desktop/src/hooks/usePrMarks.ts) ask `pr_marks` once per **distinct repo** among visible sessions — `gh` cost better part of second, so spawn per row make sidebar most expensive thing in app. Backend's `QUERY_MARKS` carry `number headRefName isDraft` plus tip commit's rollup **state** and nothing else: row draw one glyph, so shipping fifty check contexts and review threads for every session = payload nobody read.
+
+**Two aliased connection, not `states:[OPEN,MERGED]` in one.** Single connection spend one `first:100` budget across both, ordered by update — so repo merging briskly bury open PR nobody touched this week under hundred recent merge, and row lose mark that already work. Separate budget cost nothing: still one query, one spawn. Merged asked for because **settled branch = what tell reader session done and can be archived**; closed-without-merging deliberately not, that work abandoned not landed and row's own timestamp already say it. Both half capped at 100 — merged one falling past hundredth = session already dealt with, right way round. `Response<T>` too narrow for this (generic over *node* shape around one `pullRequests` field), so marks get own `MarksResponse`; errors checked before data there for same 200-with-errors reason.
+
+**`PrMarkState` come from which connection answer, not from field on wire.** Connection *is* answer, and `state` field beside it = second copy free to disagree.
+
+**One branch carry several PR, row draw one glyph — so pick = rule.** `pickPrMark` ([pr.ts](apps/desktop/src/lib/pr.ts)) rank open > draft > merged and take first within rank (each half arrive newest-updated first). Live work outrank record: branch whose first PR landed and whose follow-up open read as live, and only where **nothing** open do row say merged — precisely when "this landed, settle it" = useful thing to say. Grouped then picked in `usePrMarks`, not last-one-wins map build, or which glyph draw = whichever the two connections happen to concatenate last.
+
+**Glyph table shared with panel** ([PrStateIcon](apps/desktop/src/components/PrStateIcon.tsx)) for `Avatar`'s reason — two copies of four-way table drift on exactly state nobody watching. GitHub's colour: purple merged, red closed, muted draft, emerald open. Panel draw all four, sidebar only two it ask for.
+
+**Checks say two things and they land in two different places.** `PrChecksState` fold GitHub's five-way `StatusState` into three: `PENDING`/`EXPECTED` → `Running`, `FAILURE`/`ERROR` → `Failing`, everything else → `Clear`. Unrecognised word read as `Clear` — safe way round, since vocabulary GitHub add later show nothing rather than paint every row red. `EXPECTED` = required check not reported yet, so it wait not verdict. `ERROR` sit with `FAILURE`: check that couldn't run = one that hasn't passed, and telling them apart = panel's job not row's.
+
+**Running take timestamp's slot; failing recolour PR glyph instead.** Two different questions, so two different marks. Running = dashed spinner in right slot, behind orb — order load-bearing: agent working = this app's own session doing something *now*, CI = machine elsewhere, timestamp = least useful thing to say about row with anything in flight. Failing = existing glyph go red, because broken build = fact *about* that PR not another thing on row, and row have one slot for what state work in. Passing draw **nothing at all** — marking every green branch green second time make mark that *does* need reading harder to find, so `SUCCESS` and no-CI-at-all both reach reader as `Clear`.
+
+Red only while PR still open or draft — merged one's checks = history and purple = what reader need from that row. Failing draft still go red: draft not asking to land, but broken one still have to be fixed before it can. And label carry it too (`prStateLabel` append "checks failing"), because red-green difference = one this palette can least afford to make load-bearing.
+
+Field named `checks_state`, not `checks`: `PullRequest.checks` already = list of individual `PrCheck`, and `PrStateIcon` take both shape structurally.
+
+**Poll gate on any open PR being on screen, not on any check running.** Tighter read is wrong one: check *start* few seconds after turn end, so at turn-end refresh nothing running to poll for and indicator never appear at all. 30s, looser than panel's 15s for same reason 120s window is. Sidebar of merged and PR-less session spawn nothing, and poll stop entirely once last PR land.
+
+**`sessionHasPr` check `state === "OPEN"` explicitly** now marks carry merged too — branch whose PR landed and being worked again want Create PR back. `ahead_of_base` usually hide it there anyway, but two answer different question and folding them cost button in one case it wanted.
 
 **Matching live in frontend, deliberately.** Backend answer *list* not map, because which branch session land on = frontend's own rule (`sessionBranch` rebuild worktree session's from its worktree name) and map built in Rust = second copy of it free to disagree.
 
@@ -335,7 +361,7 @@ Cost of that trade worth naming: agent not deterministic. Commit might come back
 
 That last check read `ahead_of_base`, **not** `ahead`. Second one count against *upstream*, so branch pushed in full read zero — exact state branch in when its PR get opened. `ahead_of_base` count against remote-tracking base ref (`origin/<default>..HEAD`), since local `main` can be stale or absent in worktree. `None` = "couldn't tell" and count as something: `origin/HEAD` can be symref onto ref never fetched and `symbolic-ref` resolve it without checking, so over-offer (one wasted click) beat under-offer (action gone). Empty = resting state, and row hide entirely on it.
 
-**`hasPr` come from sidebar's own per-repo read, not fourth git call.** `useOpenPrs.prFor` already answer it for every visible row.
+**`hasPr` come from sidebar's own per-repo read, not fourth git call.** `usePrMarks.prFor` already answer it for every visible row.
 
 **One backend command, not three stitched.** `work_status` = `dirty` count, `branch`, `upstream`, `ahead`, `default_branch`, `ahead_of_base`. Superset of `sync_status` because every field answer same question — "what left to do with this work" — and reading them separately let row draw Commit from one snapshot beside Push count from another. `default_branch` arrive **stripped of remote** (`main`, not `origin/main`), so "am I on default branch" = one comparison and not parsing rule free to drift. Infallible like `sync_status`: non-repo answer default, row read that as nothing to offer.
 
@@ -625,7 +651,7 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 - **Blocked commit name no session either.** Same shape as blocked install: button dim while turn run and say nothing about when it free.
 
-- **Sidebar's PR mark say open or draft, and nothing else.** No number, no check state, no merge readiness — row already carry title, unread rail and timestamp. Number ride `title` attribute alone.
+- **Sidebar PR mark say open, draft or merged, and checks say running or failing.** No number, no per-check detail, no merge readiness, and nothing at all for passing — row already carry title, unread rail and timestamp. Number ride `title` attribute alone. Closed-without-merging not asked for at all.
 
 - **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
 

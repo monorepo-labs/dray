@@ -8,16 +8,13 @@ import {
   CircleDashed,
   CircleSlash,
   ExternalLink,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
   Loader2,
   MinusCircle,
   X,
 } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import PrStateIcon from "@/components/PrStateIcon";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import {
@@ -195,7 +192,7 @@ function PrRow({
             )}
           />
         )}
-        <StateIcon pr={pr} />
+        <PrStateIcon pr={pr} />
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
         <span className="min-w-0 flex-1 truncate text-sidebar-foreground">{pr.title}</span>
         <Counts added={pr.additions} removed={pr.deletions} />
@@ -282,19 +279,6 @@ function Counts({ added, removed }: { added: number; removed: number }) {
       {removed > 0 && <span className="text-destructive">−{removed}</span>}
     </span>
   );
-}
-
-function StateIcon({ pr }: { pr: PullRequest }) {
-  const [Icon, tone, label] =
-    pr.state === "MERGED"
-      ? ([GitMerge, "text-purple-500", "Merged"] as const)
-      : pr.state === "CLOSED"
-        ? ([GitPullRequestClosed, "text-destructive", "Closed"] as const)
-        : pr.isDraft
-          ? ([GitPullRequestDraft, "text-muted-foreground", "Draft"] as const)
-          : ([GitPullRequest, "text-emerald-500", "Open"] as const);
-
-  return <Icon className={cn("size-3.5 shrink-0", tone)} aria-label={label} />;
 }
 
 /// GitHub's green, on both halves of the split button.

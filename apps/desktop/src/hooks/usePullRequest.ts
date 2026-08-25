@@ -92,6 +92,12 @@ export function usePullRequest(
   /// the app onto a session that already has a PR is not an appearance and
   /// raises nothing.
   onOpened?: () => void,
+  /// Called after a write here succeeds. A merge, a reopen or a ready-for-review
+  /// changes what every *other* view of this branch should say, and the sidebar
+  /// mark is the one that would otherwise sit wrong the longest — it reads from
+  /// its own per-repo cache with a two-minute window. This hook refetches its
+  /// own list either way; the callback is for the readers it doesn't own.
+  onChanged?: () => void,
 ) {
   const key = branch ? keyOf(cwd, branch) : null;
 
@@ -109,6 +115,9 @@ export function usePullRequest(
 
   const onOpenedRef = useRef(onOpened);
   onOpenedRef.current = onOpened;
+
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
 
   /// Every write to `state` goes through this.
   ///
@@ -216,6 +225,10 @@ export function usePullRequest(
           await invoke(command, { cwd, number });
         }
         commit(k, (prev) => ({ ...prev, error: null }));
+        // Not key-guarded, and that is the difference from every other write
+        // here: this one refreshes a *repo-wide* read that is true of the
+        // branch whether or not the reader is still looking at it.
+        onChangedRef.current?.();
       } catch (e) {
         commit(k, (prev) => ({ ...prev, error: asUnavailable(e) }));
       } finally {

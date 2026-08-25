@@ -465,20 +465,6 @@ model: string, inputTokens: number | null, outputTokens: number | null, cachedIn
  */
 contextWindow: number | null, maxOutputTokens: number | null, };
 
-/**
- * One open pull request, cut down to what a sidebar row can draw.
- *
- * Deliberately not a `PullRequest`: the row says "this branch has an open PR,
- * and whether it is a draft" and nothing else, so carrying checks, comments
- * and review threads for every session in the list would be payload nobody
- * reads.
- */
-export type OpenPr = { number: number, 
-/**
- * The branch it was opened from — what the caller matches a session by.
- */
-headRefName: string, isDraft: boolean, };
-
 export type PermissionBehavior = "allow" | "deny";
 
 /**
@@ -535,6 +521,17 @@ workflow: string | null,
  */
 avatar: string | null, };
 
+/**
+ * What CI on the tip commit has to say, cut to the two things a row can show.
+ *
+ * Passing is folded in with "no checks at all" on purpose: a row that says
+ * nothing is a row with nothing to do, and marking every green branch green a
+ * second time makes the mark that *does* need reading harder to find. So this
+ * is a three-way, not the rollup's five-way — `SUCCESS` and an absent rollup
+ * both reach the reader as [`PrChecksState::Clear`].
+ */
+export type PrChecksState = "RUNNING" | "FAILING" | "CLEAR";
+
 export type PrComment = { author: string, 
 /**
  * The commenter's picture. `None` for an account that has none, which the
@@ -558,6 +555,29 @@ resolved: boolean,
  * review thread or it is a new comment.
  */
 replies: Array<PrComment>, };
+
+/**
+ * One pull request, cut down to what a sidebar row can draw.
+ *
+ * Deliberately not a `PullRequest`: the row says "this branch has a PR, and
+ * what became of it" and nothing else, so carrying checks, comments and review
+ * threads for every session in the list would be payload nobody reads.
+ */
+export type PrMark = { number: number, 
+/**
+ * The branch it was opened from — what the caller matches a session by.
+ */
+headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, };
+
+/**
+ * Which of the two connections a mark came from.
+ *
+ * Not parsed off the wire: [`QUERY_MARKS`] asks each state in its own aliased
+ * connection, so the connection *is* the answer and a `state` field would be a
+ * second copy of it free to disagree. Only the two states the sidebar draws —
+ * closed-without-merging is not asked for.
+ */
+export type PrMarkState = "OPEN" | "MERGED";
 
 /**
  * Why there is nothing to show, when the reason is not "this branch has no PR".

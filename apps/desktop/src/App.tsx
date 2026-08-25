@@ -13,7 +13,7 @@ import QuitDialog from "@/components/QuitDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import PrPanel from "@/components/PrPanel";
 import { useChanges } from "@/hooks/useChanges";
-import { useOpenPrs } from "@/hooks/useOpenPrs";
+import { usePrMarks } from "@/hooks/usePrMarks";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { handoffActions } from "@/lib/handoff";
@@ -211,6 +211,10 @@ function App() {
   // there is an open PR before that tab has ever been shown, so ordering it
   // first can't wait on the panel fetching for itself.
   const prBranch = selectedSession ? sessionBranch(selectedSession) : null;
+  // The sidebar's own read is set up further down — it depends on the visible
+  // session list — so the panel reaches it through a ref rather than the two
+  // being reordered around each other.
+  const prMarksRef = useRef<(() => void) | null>(null);
   // "The PR tab is on screen", read off the *pick* rather than off `activeTab`,
   // which cannot exist yet — it is derived from this hook's own answer. An
   // unset pick counts, since the derived default is the PR tab whenever there
@@ -224,11 +228,23 @@ function App() {
     panelOpen && (panelTab === "pr" || panelTab === null),
     // A pull request appearing is the moment the session stops being about the
     // turn and starts being about landing, so the pane opens onto it rather
-    // than waiting to be asked. Fires at most once per PR — see `onOpened` —
-    // and a reader who has picked a tab keeps it, same rule `activeTab` reads
-    // by, so this can never take a pane back off whatever they chose.
+    // than waiting to be asked. Fires at most once per PR — see `onOpened`.
+    //
+    // It moves the pick as well as opening the pane, and has to: `activeTab`
+    // honours a standing pick over the derived default, and the pick is written
+    // by the app itself — `handleTogglePanel` stores "changes" every time the
+    // pane is opened onto a turn that touched files. So opening alone landed on
+    // Changes for anyone who had ever used ⌘E, which is everyone.
     // A fresh closure each render is fine: the hook holds it in a ref.
-    () => setPanelOpen(true),
+    () => {
+      setPanelTab("pr");
+      setPanelOpen(true);
+    },
+    // A merge or a reopen changes what the sidebar's mark should say, and that
+    // mark comes from a different read with a two-minute freshness window — so
+    // without this the row keeps its open-PR glyph until the window expires or
+    // a turn ends.
+    () => prMarksRef.current?.(),
   );
   // A draft counts: GitHub reports one as `OPEN` with `isDraft` set, and a
   // draft is still the point at which the work stops being about this turn.
@@ -244,7 +260,7 @@ function App() {
   // the next, where a PR is the state of the work.
   const defaultTab: PanelTab = hasOpenPr && hasPrTab ? "pr" : "changes";
 
-  const tabs = tabOrder({ pr: hasPrTab, prFirst: hasOpenPr });
+  const tabs = tabOrder({ pr: hasPrTab });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
   // still names a tab this session draws, and otherwise the derived default
@@ -300,7 +316,7 @@ function App() {
   );
 
   // The sidebar's marks: one `gh` per repo on screen rather than one per row —
-  // see `useOpenPrs`. Distinct paths, and the *active* list's only: a settled
+  // see `usePrMarks`. Distinct paths, and the *active* list's only: a settled
   // session is work the reader has already dealt with, so a repo that appears
   // nowhere but the archived list is one nobody is waiting to land. Marks
   // already fetched still draw over there, since the cache outlives this — what
@@ -309,7 +325,8 @@ function App() {
     () => (showArchived ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
     [showArchived, visibleSessions],
   );
-  const openPrs = useOpenPrs(repoPaths);
+  const prMarks = usePrMarks(repoPaths);
+  prMarksRef.current = prMarks.refresh;
 
   // A pull request appears because something happened, and the thing that
   // happens is a turn — the agent running `gh pr create`, or the reader opening
@@ -328,8 +345,8 @@ function App() {
     lastTurn.current = { sessionId: selectedSessionId, busy };
     if (prev.sessionId !== selectedSessionId || !prev.busy || busy) return;
     pullRequests.refresh();
-    openPrs.refresh();
-  }, [selectedSessionId, busy, pullRequests.refresh, openPrs.refresh]);
+    prMarks.refresh();
+  }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
 
   // What the composer's handoff row draws itself from. Read on the same falling
   // edge as the pull requests above, since a turn is what moves all of it.
@@ -340,8 +357,16 @@ function App() {
   // From the sidebar's own per-repo read, not a fourth git call: once a pull
   // request exists the panel is where it is acted on, and a Create PR button
   // beside it would open a duplicate.
+  //
+  // An *open* one, and the check is explicit now that the marks carry merged
+  // ones too: a branch whose PR has landed and is being worked on again wants
+  // Create PR back. Nothing else usually offers it there — a merged branch is
+  // level with its base, which `handoff` reads as nothing to open — but the two
+  // answer different questions and folding them cost the button in the one case
+  // it was wanted.
   const sessionHasPr =
-    !!selectedSession && !!openPrs.prFor(selectedSession.projectPath, prBranch);
+    !!selectedSession &&
+    prMarks.prFor(selectedSession.projectPath, prBranch)?.state === "OPEN";
 
   // The one handoff action that runs rather than asks. It reports into no
   // transcript, so both ends are its own: the flag the button spins on, and the
@@ -484,7 +509,7 @@ function App() {
           onProjectFilterChange={setProjectFilter}
           statusBySession={statusBySession}
           askingSessions={askingSessions}
-          prFor={openPrs.prFor}
+          prFor={prMarks.prFor}
           selectedSessionId={selectedSessionId}
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
@@ -577,7 +602,6 @@ function App() {
             tab={activeTab}
             onTabChange={setPanelTab}
             counts={{ subagents: subagents.length, pr: prBadgeCount(pullRequests.prs) }}
-            prFirst={hasOpenPr}
             pr={hasPrTab}
             refresh={panelRefresh}
           >

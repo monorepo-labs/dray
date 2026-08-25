@@ -1,4 +1,4 @@
-import type { PrCheck, PullRequest } from "@/types/events";
+import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on. A worktree session's branch is named
 /// by the CLI from the worktree name and never recorded on the index, so it has
@@ -9,6 +9,30 @@ export function sessionBranch(session: {
   worktreeName: string | null;
 }): string | null {
   return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
+}
+
+/// Which pull request a sidebar row draws, out of every one on its branch.
+///
+/// One branch can carry several — the same fix opened against `main` and a
+/// release branch, or a follow-up opened after the first one landed — and the
+/// row has space for exactly one glyph. Live work outranks a record: an open PR
+/// wins over a merged one however recently that merged, because the mark's job
+/// is "what is there to do here", and a draft beats a merged one for the same
+/// reason. Only where *nothing* is open does the row say merged, which is
+/// precisely when that is the useful thing to say: the work landed and the
+/// session can be settled.
+///
+/// Ties inside a rank go to the first, and the backend hands both halves back
+/// ordered by most recently updated — so a branch with two open PRs marks
+/// itself from the one being worked on.
+export function pickPrMark(prs: PrMark[]): PrMark | undefined {
+  const rank = (pr: PrMark) => (pr.state !== "OPEN" ? 2 : pr.isDraft ? 1 : 0);
+
+  let best: PrMark | undefined;
+  for (const pr of prs) {
+    if (!best || rank(pr) < rank(best)) best = pr;
+  }
+  return best;
 }
 
 /// What the tab's badge says, or nothing.

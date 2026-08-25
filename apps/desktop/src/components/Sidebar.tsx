@@ -3,9 +3,8 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  CircleDashed,
   GitBranchPlus,
-  GitPullRequest,
-  GitPullRequestDraft,
   Inbox,
   // Pin,
   Plus,
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
 
+import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,7 @@ import { sessionBranch } from "@/lib/pr";
 import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
-  OpenPr,
+  PrMark,
   Project,
   SessionIndexItem,
   SessionStatus,
@@ -64,10 +64,10 @@ type SidebarProps = {
   // status machine still reads these as `in_progress`, and it is right to —
   // the turn is open, it is only the agent that has stopped.
   askingSessions: Set<string>;
-  /// This session's branch has an open pull request, or nothing. A lookup
-  /// rather than a field on the item, because pull requests are read per repo
-  /// and the index knows nothing about them.
-  prFor: (repoPath: string, branch: string | null) => OpenPr | undefined;
+  /// The pull request this session's branch is marked with — open, draft or
+  /// merged — or nothing. A lookup rather than a field on the item, because
+  /// pull requests are read per repo and the index knows nothing about them.
+  prFor: (repoPath: string, branch: string | null) => PrMark | undefined;
   selectedSessionId: string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -709,10 +709,10 @@ function SessionRow({
   item: SessionIndexItem;
   status: SessionStatus;
   asking: boolean;
-  /// This session's branch has an open pull request. Undefined covers both "no
-  /// PR" and "we couldn't ask" — the mark is decoration, so the two read the
-  /// same.
-  pr?: OpenPr;
+  /// The pull request this row is marked with, already narrowed to one where
+  /// the branch carries several. Undefined covers both "no PR" and "we couldn't
+  /// ask" — the mark is decoration, so the two read the same.
+  pr?: PrMark;
   active: boolean;
   faded?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
@@ -816,25 +816,28 @@ function SessionRow({
             and clears when the reader deals with it, where this is a standing
             fact about the branch.
 
-            Emerald for open — the same green the panel's glyph and the merge
-            button use, so the mark and what it points at match — and a draft
-            takes the muted outline it already has in lucide, since a draft is
-            work that isn't asking to land yet. `title` rather than a tooltip:
-            this is a decoration on a row that is itself a control, and a
-            tooltip on it would open every time the cursor crossed the list. */}
+            Glyph and colour are [PrStateIcon]'s, shared with the panel's own
+            header — the mark and the thing it points at have to match, and two
+            copies of that table drift on exactly the state nobody was looking
+            at. Emerald open, muted draft, purple merged, and red wherever CI
+            has failed on one still open.
+
+            Merged earns a mark for a different reason than the other two do.
+            They say "this branch has somewhere to land"; it says the work
+            landed, so the row is one to archive — which is the question asked
+            of this list at the end of a day, and until now had to be answered
+            by opening every session in turn.
+
+            `title` rather than a tooltip: this is a decoration on a row that is
+            itself a control, and a tooltip on it would open every time the
+            cursor crossed the list. Number first and the state after it, since
+            the state is a clause now that a failure can extend it. */}
         {pr && (
           <span
-            className={cn(
-              "mr-1 flex shrink-0 items-center",
-              pr.isDraft ? "text-muted-foreground" : "text-emerald-500",
-            )}
-            title={pr.isDraft ? `Draft pull request #${pr.number}` : `Pull request #${pr.number}`}
+            className="mr-1 flex shrink-0 items-center"
+            title={`Pull request #${pr.number} · ${prStateLabel(pr).toLowerCase()}`}
           >
-            {pr.isDraft ? (
-              <GitPullRequestDraft className="size-3.5" strokeWidth={1.5} />
-            ) : (
-              <GitPullRequest className="size-3.5" strokeWidth={1.5} />
-            )}
+            <PrStateIcon pr={pr} strokeWidth={1.5} />
           </span>
         )}
 
@@ -860,12 +863,31 @@ function SessionRow({
                 `theme` is pinned for the same reason as everywhere else — the
                 orb's `auto` looks for `data-theme="dark|light"` and this app
                 stamps a palette name there. */}
+            {/* Three things want this one slot, and the order is the whole of
+                the rule. The agent working wins: it is this app's own session
+                doing something now, where CI is a machine elsewhere. Checks
+                come next, for the same reason the orb beats the timestamp —
+                "last activity" is the least useful thing to say about a row
+                that has something in flight.
+
+                Same dashed spinner and same command yellow the PR panel's own
+                pending check row uses, at the same 3s turn: one glyph for one
+                fact, so a reader who has seen it in the pane knows it here. It
+                is deliberately not a *verdict* — a check that passed or failed
+                is settled, and the row goes back to its timestamp rather than
+                growing a second colour to decode. */}
             {status === "in_progress" ? (
               <ThinkingOrb
                 state="listening"
                 size={20}
                 theme="dark"
                 aria-label="Working"
+              />
+            ) : pr?.checksState === "RUNNING" ? (
+              <CircleDashed
+                className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
+                strokeWidth={1.5}
+                aria-label="Checks running"
               />
             ) : (
               relativeTime(item.modified)

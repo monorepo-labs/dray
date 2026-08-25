@@ -4,13 +4,14 @@ import {
   firstLine,
   isSettling,
   mergeReadiness,
+  pickPrMark,
   prBadgeCount,
   sessionBranch,
   stripBotMarkers,
   summarizeChecks,
   threadLabel,
 } from "./pr";
-import type { PrCheck, PullRequest } from "@/types/events";
+import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 
 function pr(over: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -183,5 +184,56 @@ describe("threadLabel", () => {
   it("reads a path with no line", () => {
     expect(threadLabel("apps/desktop/src/lib/pr.ts")).toBe("pr.ts");
     expect(threadLabel("README.md")).toBe("README.md");
+  });
+});
+
+describe("pickPrMark", () => {
+  const mark = (over: Partial<PrMark> = {}): PrMark => ({
+    number: 1,
+    headRefName: "feat/x",
+    isDraft: false,
+    state: "OPEN",
+    checksState: "CLEAR",
+    ...over,
+  });
+
+  it("has nothing to pick from an empty list", () => {
+    expect(pickPrMark([])).toBeUndefined();
+  });
+
+  // A branch whose first PR landed and whose follow-up is still open reads as
+  // live work, not as done.
+  it("takes an open one over a merged one whichever order they arrive in", () => {
+    const open = mark({ number: 9 });
+    const merged = mark({ number: 4, state: "MERGED" });
+    expect(pickPrMark([merged, open])).toBe(open);
+    expect(pickPrMark([open, merged])).toBe(open);
+  });
+
+  it("takes a draft over a merged one, for the same reason", () => {
+    const draft = mark({ number: 9, isDraft: true });
+    const merged = mark({ number: 4, state: "MERGED" });
+    expect(pickPrMark([merged, draft])).toBe(draft);
+  });
+
+  it("takes a real open one over a draft", () => {
+    const draft = mark({ number: 9, isDraft: true });
+    const open = mark({ number: 8 });
+    expect(pickPrMark([draft, open])).toBe(open);
+  });
+
+  // Only where nothing is live, which is exactly when "this landed, settle it"
+  // is the useful thing for the row to say.
+  it("says merged when that is all there is", () => {
+    const merged = mark({ number: 4, state: "MERGED" });
+    expect(pickPrMark([merged])).toBe(merged);
+  });
+
+  // Each half arrives most-recently-updated first, so the first of a rank is
+  // the one being worked on.
+  it("keeps the first within a rank", () => {
+    const newer = mark({ number: 9 });
+    const older = mark({ number: 2 });
+    expect(pickPrMark([newer, older])).toBe(newer);
   });
 });

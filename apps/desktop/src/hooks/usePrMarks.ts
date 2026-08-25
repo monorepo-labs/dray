@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
-import type { OpenPr } from "@/types/events";
+import { pickPrMark } from "@/lib/pr";
+import type { PrMark } from "@/types/events";
 
 /// How long a repo's answer counts as fresh. Longer than the panel's own 30s,
 /// because this feeds a mark rather than a view being read: the sidebar is on
@@ -10,10 +11,22 @@ import type { OpenPr } from "@/types/events";
 /// nothing where a stale merge button would.
 const FRESH_MS = 120_000;
 
+/// How often to re-ask while an open pull request is on screen.
+///
+/// Gated on there being one, so a sidebar of merged and PR-less sessions spawns
+/// nothing at all and the poll stops entirely once the last one lands. This is
+/// the only reason it exists: a check starts and finishes on CI's schedule, not
+/// on a turn's, and a spinning indicator that no read ever clears is worse than
+/// no indicator.
+///
+/// Looser than the panel's 15s for [FRESH_MS]'s reason — a mark arriving half a
+/// minute late costs nothing, where a merge button showing stale checks does.
+const OPEN_POLL_MS = 30_000;
+
 /// Last answer per repo, kept across mounts for [usePullRequest]'s reason —
 /// switching projects changes the argument, and a project flipped away from and
 /// back to should draw its marks immediately rather than blank and refill.
-const cache = new Map<string, Map<string, OpenPr>>();
+const cache = new Map<string, Map<string, PrMark>>();
 const fetchedAt = new Map<string, number>();
 
 /// The read currently running for a repo, so two effects landing in the same
@@ -22,10 +35,14 @@ const fetchedAt = new Map<string, number>();
 /// collides has to queue behind it rather than be dropped; see `load`.
 const inFlight = new Map<string, Promise<void>>();
 
-const EMPTY: Map<string, OpenPr> = new Map();
+const EMPTY: Map<string, PrMark> = new Map();
 
-/// Open pull requests for every repo the sidebar is showing sessions from,
-/// keyed by head branch.
+/// The pull request each branch is marked with, per repo the sidebar is showing
+/// sessions from.
+///
+/// Open ones and merged ones both: an open PR says the work has somewhere to
+/// land, and a merged one says it landed and the session can be settled — which
+/// is what the reader scans this list for at the end of a day.
 ///
 /// One query per repo rather than one per session: `gh` costs the better part
 /// of a second, so a spawn per visible row would make the sidebar the most
@@ -37,7 +54,7 @@ const EMPTY: Map<string, OpenPr> = new Map();
 /// Failure is silent and total: no `gh`, not a GitHub repo, logged out. The
 /// mark is decoration on a list that works without it, so there is nothing here
 /// to report and nothing for the reader to do.
-export function useOpenPrs(repoPaths: string[]) {
+export function usePrMarks(repoPaths: string[]) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
   // of this string, since a repo path can hold whatever separator we picked.
@@ -45,7 +62,7 @@ export function useOpenPrs(repoPaths: string[]) {
   const pathsRef = useRef(repoPaths);
   pathsRef.current = repoPaths;
 
-  const [byRepo, setByRepo] = useState<Map<string, Map<string, OpenPr>>>(() => new Map(cache));
+  const [byRepo, setByRepo] = useState<Map<string, Map<string, PrMark>>>(() => new Map(cache));
 
   const load = useCallback(async (force: boolean) => {
     // Deferred rather than dropped, and that distinction is the whole of this
@@ -75,8 +92,26 @@ export function useOpenPrs(repoPaths: string[]) {
 
       const attempt = (async () => {
         try {
-          const prs = await invoke<OpenPr[]>("open_prs", { cwd: path });
-          cache.set(path, new Map(prs.map((pr) => [pr.headRefName, pr])));
+          const prs = await invoke<PrMark[]>("pr_marks", { cwd: path });
+          // Grouped and then picked, rather than a last-one-wins map build: one
+          // branch can carry several pull requests and the row draws one glyph,
+          // so which one it is has to be a rule — see `pickPrMark` — and not
+          // whichever the two connections happened to concatenate last.
+          const byBranch = new Map<string, PrMark[]>();
+          for (const pr of prs) {
+            const list = byBranch.get(pr.headRefName);
+            if (list) list.push(pr);
+            else byBranch.set(pr.headRefName, [pr]);
+          }
+          cache.set(
+            path,
+            new Map(
+              [...byBranch].flatMap(([branch, list]) => {
+                const pick = pickPrMark(list);
+                return pick ? [[branch, pick] as const] : [];
+              }),
+            ),
+          );
         } catch {
           // An empty map, not an absent one, and stamped like a success: a repo
           // `gh` can't answer for should stop being asked until the window
@@ -103,11 +138,33 @@ export function useOpenPrs(repoPaths: string[]) {
     void load(false);
   }, [key, load]);
 
+  // Whether anything on screen can still change on its own. An open pull
+  // request can — its checks report, someone merges it — and nothing else here
+  // can: a merged mark is final, and a repo with no PR at all grows one only
+  // when a turn ends, which already refreshes.
+  //
+  // Deliberately not gated on `checksRunning` alone, which would be the tighter
+  // read and the wrong one: checks *start* a few seconds after a turn ends, so
+  // at the moment of the turn-end refresh there is nothing running to poll for
+  // and the indicator would never appear at all.
+  const anyOpen = [...byRepo.values()].some((branches) =>
+    [...branches.values()].some((pr) => pr.state === "OPEN"),
+  );
+
+  useEffect(() => {
+    if (!anyOpen) return;
+
+    const id = setInterval(() => void load(true), OPEN_POLL_MS);
+    return () => clearInterval(id);
+  }, [anyOpen, load]);
+
   return {
-    /// A session's pull request, or nothing. Takes the repo *and* the branch,
-    /// since a branch name says nothing about which checkout it belongs to.
+    /// The pull request a session's row is marked with, or nothing. Takes the
+    /// repo *and* the branch, since a branch name says nothing about which
+    /// checkout it belongs to. Already narrowed to one per branch — see
+    /// `pickPrMark`.
     prFor: useCallback(
-      (repoPath: string, branch: string | null): OpenPr | undefined =>
+      (repoPath: string, branch: string | null): PrMark | undefined =>
         branch ? (byRepo.get(repoPath) ?? EMPTY).get(branch) : undefined,
       [byRepo],
     ),
