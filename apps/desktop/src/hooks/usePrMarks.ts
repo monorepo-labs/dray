@@ -84,9 +84,9 @@ function marksByBranch(prs: PrMark[]): Map<string, PrMark> {
 ///
 /// Failure is silent — no `gh`, not a GitHub repo, logged out. The mark is
 /// decoration on a list that works without it, so there is nothing here to
-/// report and nothing for the reader to do. It is not *destructive*, though:
-/// a read that fails leaves the last good answer standing rather than blanking
-/// the repo. See the catch in `load`.
+/// report and nothing for the reader to do. It also changes nothing: a read
+/// that fails leaves the entry exactly as it was, neither blanking the repo nor
+/// claiming its old answer is current. See the catch in `load`.
 export function usePrMarks(repoPaths: string[]) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
@@ -130,18 +130,28 @@ export function usePrMarks(repoPaths: string[]) {
         try {
           answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
         } catch {
-          // Whatever was cached stays. A failed read is a read that failed, not
-          // a repo that lost its pull requests — the rule [usePullRequest] keeps
-          // its own list by, and this one was blanking rows a transient `gh`
-          // hiccup happened to catch. It is stamped either way, which is the
-          // half that matters: the stamp is what stops a repo `gh` genuinely
-          // can't answer for — not installed, not GitHub, logged out — from
-          // being asked again on every render.
+          // A failed read changes nothing at all — it neither writes rows nor
+          // stamps, and both halves of that are load-bearing.
           //
-          // An empty map only where there is no previous answer to keep, so a
-          // first read that fails still reads as "no marks" rather than leaving
-          // the repo unstamped and re-asked forever.
-          answer = cache.get(path) ?? new Map();
+          // Not writing keeps the last good marks on screen, the rule
+          // [usePullRequest] holds its own list by. Blanking them was a bug: a
+          // transient `gh` hiccup emptied a repo the reader could see.
+          //
+          // Not stamping is what this used to get wrong in the other direction.
+          // Reusing the cached answer and stamping it fresh looked harmless and
+          // was not, because `refreshAfterWrite` clears the stamps and bumps the
+          // generation *before* its forced read: that read carries the new
+          // generation, so a failure sails past the guard below and re-certifies
+          // the pre-merge answer the write had just invalidated. The sidebar
+          // then holds the old glyph for the full window — and a stale merged
+          // mark keeps `anyOpen` false, so the poll that would fix it never
+          // starts.
+          //
+          // Leaving it unstamped is not a cost worth buying back. Stamps only
+          // gate `load(false)`, which runs when the visible repo set changes —
+          // a project switch, not a render — and a repo `gh` cannot answer for
+          // caches no open PR, so it is never polled either.
+          return;
         }
 
         // Dropped whole if a write landed while this was out. The `gh` call was
