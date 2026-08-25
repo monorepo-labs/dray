@@ -24,6 +24,7 @@ pub mod harness;
 #[path = "models/models.rs"]
 pub mod models;
 pub mod notifications;
+pub mod orchestration;
 pub mod projects;
 pub mod quit;
 pub mod session;
@@ -68,6 +69,9 @@ async fn send_msg(
             use_worktree,
             worktree_name,
             is_new_session,
+            // The composer never has a parent; only the orchestration socket
+            // sets one.
+            None,
             &app,
         )
         .await
@@ -451,7 +455,7 @@ pub fn run() {
                 quit::request(window.app_handle());
             }
         })
-        .setup(|_app| {
+        .setup(|app| {
             // A persisted `in_progress` can't be true anymore — no child
             // survived the restart. Spawned, not awaited: the reset needs no
             // window, and the frontend's first fetch lands well after it.
@@ -466,6 +470,17 @@ pub fn run() {
                     eprintln!("[worktree backfill err] {e}");
                 }
             });
+
+            // Orchestration is a side channel: a socket that won't bind must
+            // cost the feature, never the app. Logged and dropped for that
+            // reason — there is nothing the reader could act on either.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = orchestration::serve(handle).await {
+                    eprintln!("[orchestration err] {e:#}");
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

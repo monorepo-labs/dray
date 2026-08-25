@@ -65,6 +65,32 @@ impl ModelId {
             ModelId::Unknown => None,
         }
     }
+
+    /// The inverse of [`as_arg`](Self::as_arg), for an alias arriving from
+    /// outside the app — the `dray` CLI's `--model`. Deliberately not
+    /// `#[serde(other)]`-style forgiving: an unrecognized alias is a typo worth
+    /// reporting, where silently running a different model is not.
+    pub fn from_arg(alias: &str) -> Option<Self> {
+        match alias {
+            "opus" => Some(ModelId::Opus),
+            "sonnet" => Some(ModelId::Sonnet),
+            "fable" => Some(ModelId::Fable),
+            "haiku" => Some(ModelId::Haiku),
+            _ => None,
+        }
+    }
+}
+
+/// What a session runs when nobody said. [`ModelId::default`] cannot serve
+/// here — it is `Unknown`, which exists so an old index entry still
+/// deserializes and which has no CLI alias at all.
+///
+/// Mirrors the composer's own seed in `useComposerPrefs`, so a session created
+/// from a terminal and one created by pressing Enter agree. The two are
+/// separate constants because the composer's lives in frontend storage; if one
+/// moves, move both.
+pub fn default_model() -> ModelId {
+    ModelId::Haiku
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -1,0 +1,93 @@
+# Builds and publishes the `dray` CLI.
+#
+# Separate from the app's release for a reason, not just tidiness: the two ship
+# on their own schedules and the CLI has to run on linux, where there is no Dray
+# app at all. `cli-v*` tags keep them from colliding — the app's pipeline reads
+# `v*` and writes the updater manifests on the `updates` branch, none of which
+# this touches.
+name: release-cli
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  # So the matrix can be proved without minting a tag; publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Keyed on the CLI's own lockfile: it and the app are separate cargo
+      # projects, so a change to the app's dependencies must not evict this.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/cli
+          key: ${{ matrix.target }}
+
+      - name: Test
+        working-directory: apps/cli
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build
+        working-directory: apps/cli
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Named after the target triple because that is what install.sh derives
+      # from `uname`. Rename either and the installer 404s.
+      - name: Package
+        working-directory: apps/cli
+        run: |
+          tar -czf "dray-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" dray
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dray-${{ matrix.target }}
+          path: apps/cli/dray-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # A dispatch run proves the matrix and stops here; only a tag publishes.
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          # install.sh's default URL is `/releases/latest/download/`, which skips
+          # prereleases — so a CLI marked prerelease would be built, published,
+          # and unreachable by the one command that installs it.
+          prerelease: false
+          generate_release_notes: true

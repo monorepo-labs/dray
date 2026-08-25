@@ -82,20 +82,34 @@ fn search_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
-/// The directories `claude` actually installs to, checked directly so the
-/// common bundle launch never pays for a shell spawn. Not exhaustive by design
-/// — [`login_shell_which`] is the general answer, this is the fast path.
-fn search_known_dirs(bin: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+/// Where a user-installed CLI tends to land.
+///
+/// Public because the spawn needs them for the *other* direction: a child
+/// inherits this process's `PATH`, and a bundled `.app` launched from Finder
+/// inherits launchd's, which holds none of these. So a `dray` the user has
+/// installed is invisible to the agent unless these are put back — the same
+/// failure this module exists to solve for `claude`, one layer out.
+pub fn known_dirs() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
 
-    let candidates = [
+    vec![
         home.join(".local/bin"),
         home.join(".claude/local"),
         home.join(".bun/bin"),
         home.join(".npm-global/bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
-    ];
+    ]
+}
+
+/// The directories `claude` actually installs to, checked directly so the
+/// common bundle launch never pays for a shell spawn. Not exhaustive by design
+/// — [`login_shell_which`] is the general answer, this is the fast path.
+fn search_known_dirs(bin: &str) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let candidates = known_dirs();
 
     if let Some(found) = candidates
         .iter()

@@ -774,7 +774,14 @@ permissionMode: ApprovalPolicy,
 /**
  * Defaulted so index entries written before this field parse as `Idle`.
  */
-status: SessionStatus, created: string, modified: string, archived: boolean, pinned: boolean, };
+status: SessionStatus, 
+/**
+ * The session whose agent created this one, for a session created over the
+ * orchestration socket rather than by a person in the composer. `Some` is
+ * also what the depth guard reads: a session that was itself spawned may
+ * not spawn more.
+ */
+parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, };
 
 /**
  * Session-level facts, known at startup.
@@ -826,7 +833,14 @@ permissionMode: ApprovalPolicy,
 /**
  * Defaulted so index entries written before this field parse as `Idle`.
  */
-status: SessionStatus, created: string, modified: string, archived: boolean, pinned: boolean, };
+status: SessionStatus, 
+/**
+ * The session whose agent created this one, for a session created over the
+ * orchestration socket rather than by a person in the composer. `Some` is
+ * also what the depth guard reads: a session that was itself spawned may
+ * not spawn more.
+ */
+parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

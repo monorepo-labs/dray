@@ -435,6 +435,44 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **Delete take tree with it, no second question.** Folded into `SessionManager::delete`, best-effort beside attachments, with one cost worth naming: failed removal there orphan tree with no UI left to retry from. `git worktree remove` by hand = recovery. Failing whole delete instead worse — session reader asked to be rid of would still be there.
 
+## Orchestration
+
+**One agent can fan work out into several sessions.** "Work through these 3 Linear issues" become three Dray sessions, each own worktree, each row in sidebar user can open, interrupt, delete like any other. v1 = create and list. No sending into existing session, no child reporting back to parent.
+
+**First inbound channel into app.** Every other command travel frontend → Rust; this one travel agent → Rust → frontend, so frontend learn about session from *event* rather than from return value of thing it called. That inversion = whole of what [orchestration.rs](apps/desktop/src-tauri/src/orchestration.rs) add. Work itself go through `SessionManager::send_msg` — same function composer reach, not parallel path — so session created this way not second kind of session.
+
+**Three shipped pieces, one line of glue.** App serve unix socket; `dray` = standalone CLI in own crate; skill document it; and one line in [system_prompt.md](apps/desktop/src-tauri/src/harness/claude_code/system_prompt.md) name capability plus install command. Agent check for `dray`, install if missing, read skill, get on with it. **App install nothing** — it inform, agent do.
+
+**CLI deliberately not part of app.** It have to run on linux later, where no Dray app exist at all. So `apps/cli` = own crate (package `dray`, reserved name), own `cli-v*` release tag, `curl -fsSL https://drayhq.com/install.sh | sh`. Links neither app nor tokio: one connect, one write, one read, exit — startup instant, which matter when caller = agent shelling out.
+
+**Wire types live in third crate, and that the point of split.** `crates/dray-proto` compiled into both side, so request shape cannot drift. Drifted shape here fail way [control.rs](apps/desktop/src-tauri/src/harness/claude_code/control.rs) warn about — no error, command simply stop working. No root Cargo workspace and this add none: `src-tauri` have own `.cargo/config.toml` carrying ts-rs export path, and workspace move target dir out from under it. Path dep work fine between separate cargo project.
+
+**Unix socket, not HTTP port.** `~/.dray/dray.sock` at `0600` — access control = filesystem permission, so nothing outside user's own account connect and nothing on network reach it at all. No port to pick, collide on, or accidentally expose. Stale socket unlinked at bind: socket file outlive process that made it, so crash leave one behind and bind fail "address in use".
+
+**Address = one value, and that what let app move to server.** `DRAY_ENDPOINT` read from env child already get injected: `.sock` path today, HTTPS URL and token in cloud build. Types, subcommands and skill all unchanged by that swap — only ~30 lines that open connection. Socket = same-machine only, which hold if manager and its agent children move to server *together* and break if agent ever run where manager isn't.
+
+**Protocol version checked before request even looked at.** Two release pipeline mean old CLI can meet new app; `v` field refuse mismatch with readable line rather than guess what it meant.
+
+**`session_created` carry index item, never `SessionSnapshot`.** Frontend's `agent_event` listener write into sessions it already hold and *drop* events for id it don't — so snapshot would start transcript in memory that later event could miss. Index item leave transcript unread until row clicked, and `handleSelectSessionIndexItem` already load it whole from disk at that point. That close window rather than live with it. `session_status` and `session_title` still land: both write by id into maps sidebar read, not into `sessions`.
+
+**Row appear, and deliberately not selected.** User mid-conversation in session that spawned this one; yanking them out = opposite of what fanning out for. Listener sit in `[]` effect so it need `showArchivedRef`, same reason `selectedSessionIdRef` next to it exist.
+
+**Spawned session take worktree by default.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart. `--no-worktree` opt out. Cost already documented above: `-w` fork from `origin/<default>`, not from branch parent sit on, so fanning out from unpushed feature branch give children without parent's work.
+
+**Depth cap = 2, walked not stored.** Spawned session may spawn; its children may not. Walk `parent_session_id` up index at create time with cycle guard, rather than storing `depth` number free to disagree with chain it describe. Chains three long, so walk cost nothing. Refusal = readable sentence, since agent read it as tool output.
+
+**Model, effort and permission mode inherit from parent.** So fanned-out session run way one that spawned it do. No parent (call from user's own terminal) = Rust's own default, because composer's remembered pick live in frontend localStorage where Rust cannot read it. `ModelId::default()` cannot serve — it `Unknown`, which exist so old index entry still deserialize and which have no CLI alias — hence `default_model()`, mirroring `useComposerPrefs`' seed. Two separate constant; move one, move both.
+
+**Project deliberately not attached.** Sidebar's `projectFilter` default null and list every session whatever its project, so session under unattached repo already reachable — while `add_project` bump `last_selected` and resort list, which would let agent's call quietly reorder user's project picker.
+
+**`dray` raise no consent card, and that one flag.** `--allowedTools "Bash(dray:*)"` on spawn — additive allow rule, everything else still route through `can_use_tool` exactly as before. Verified against v2.1.241, not assumed: pattern that fail to match fail *silently*, as unexpected card rather than error. Measured with `mkdir` under `manual` — `Bash(mkdir:*)` and `Bash(mkdir *)` both ran, `Bash(git *)` reported `permission_denied`. **Test with command that mutate**: read-only one like `echo` auto-allowed whatever rule say, so it report success for pattern matching nothing.
+
+**Child get `PATH` put back, and that load-bearing.** Bundled `.app` launched from Finder inherit launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so `dray` installed to `~/.local/bin` simply not there for agent — same trap [binpath.rs](apps/desktop/src-tauri/src/binpath.rs) exist to solve for `claude`, one layer out. `known_dirs()` now `pub` for this. Appended not prepended: user's own `PATH` should still win where two name same binary.
+
+**Skill embedded in binary, written by `dray skill install`.** Downloaded separately = exactly how skill end up describing different version of CLI than one installed. Global at `~/.claude/skills/dray/`, not scoped with `--plugin-dir`, because CLI meant to work from any Claude session, terminal one included.
+
+**Socket failure cost feature, never app.** `serve` error logged and dropped in `setup()` — app refusing to start because socket in use would trade whole product for side channel, and reader could act on it either way.
+
 ## Persistence
 
 Everything live under `~/.dray/` ([store.rs](apps/desktop/src-tauri/src/store.rs), [projects.rs](apps/desktop/src-tauri/src/projects.rs)) .
@@ -701,6 +739,8 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 - **Sidebar PR mark say open, draft or merged, and checks say running or failing.** No number, no per-check detail, no merge readiness, and nothing at all for passing — row already carry title, unread rail and timestamp. Number ride `title` attribute alone. Closed-without-merging not asked for at all.
 
+- **Spawned session inherit permission mode, so most block immediately.** Default stance = `auto`, which prompt per action — so session fanned out from ordinary session stop at its first `Write` waiting for card nobody is next to. Notification path do surface it (yellow rail, notice card, dock badge), so it not silent, but "create 3 sessions" currently mean three sessions to go and approve rather than three running. `dray new` take no `--permission-mode`, and adding one raise real question: agent in `plan` session spawning `bypassPermissions` child = escalation past stance user set. Clamping child to be no more autonomous than parent = likely shape of fix. Unresolved on purpose.
+- **Orchestration read and create, never drive.** No sending into existing session, no reading transcript back, no stopping one. Parent cannot learn child finished — `dray ls` report status so agent can poll, but nothing push.
 - **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
 
 - **TS event types generated, not written.** `ts-rs` derive them from Rust model into `src/types/events.ts`, checked in so frontend build need no Rust toolchain. `cargo test` regenerate; never edit output. Two settings live in `src-tauri/.cargo/config.toml`: export path, and `TS_RS_LARGE_INT = "number"` because `u64` otherwise become `bigint`, which `JSON.parse` never produce.

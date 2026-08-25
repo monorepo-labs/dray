@@ -68,6 +68,12 @@ pub struct SessionIndexItem {
     /// Defaulted so index entries written before this field parse as `Idle`.
     #[serde(default)]
     pub status: SessionStatus,
+    /// The session whose agent created this one, for a session created over the
+    /// orchestration socket rather than by a person in the composer. `Some` is
+    /// also what the depth guard reads: a session that was itself spawned may
+    /// not spawn more.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
     pub created: String,
     pub modified: String,
     pub archived: bool,
@@ -197,6 +203,7 @@ impl SessionIndexItem {
         model: ModelId,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        parent_session_id: Option<&str>,
     ) -> Self {
         let now = now_rfc3339();
 
@@ -218,6 +225,7 @@ impl SessionIndexItem {
             effort,
             permission_mode,
             status: SessionStatus::default(),
+            parent_session_id: parent_session_id.map(str::to_string),
             created: now.clone(),
             modified: now,
             archived: false,
@@ -765,6 +773,7 @@ mod tests {
                 ModelId::Opus,
                 None,
                 ApprovalPolicy::Auto,
+                None,
             );
             i.archived = archived;
             i
@@ -801,6 +810,7 @@ mod tests {
             ModelId::Opus,
             None,
             ApprovalPolicy::Auto,
+            None,
         );
 
         assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
@@ -849,6 +859,7 @@ mod tests {
                 ModelId::Opus,
                 None,
                 ApprovalPolicy::Auto,
+                None,
             )
         };
 
@@ -885,6 +896,7 @@ mod tests {
             ModelId::Opus,
             Some(Effort::High),
             ApprovalPolicy::AcceptEdits,
+            None,
         );
         let json = serde_json::to_value(SessionSnapshot {
             index_item: item,

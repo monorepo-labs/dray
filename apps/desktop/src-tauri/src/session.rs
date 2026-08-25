@@ -315,6 +315,10 @@ impl SessionManager {
         use_worktree: bool,
         worktree_name: Option<&str>,
         is_new_session: bool,
+        // Set only for a session created over the orchestration socket. The
+        // composer never has one, and it is recorded rather than acted on —
+        // the depth cap reads it back off the index on the *next* create.
+        parent_session_id: Option<&str>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
         let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
@@ -354,6 +358,7 @@ impl SessionManager {
                 model,
                 effort,
                 permission_mode,
+                parent_session_id,
             );
             append_session_index_item(item.clone()).await?;
 

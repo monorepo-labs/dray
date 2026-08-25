@@ -26,3 +26,7 @@ You run inside Dray, an interactive desktop app. Your replies render as markdown
 # Git
 
 - In a worktree, open the PR from the branch already checked out. Never create a new one.
+
+# Orchestration
+
+When the user wants several independent pieces of work going at once, each can have its own Dray session, branch and worktree. The `dray` CLI creates them; run `dray --help`, or install it with `curl -fsSL https://drayhq.com/install.sh | sh` if it is missing.

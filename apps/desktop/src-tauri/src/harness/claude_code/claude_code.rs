@@ -27,6 +27,44 @@ use permissions::PendingPermissions;
 /// the CLI does not carry one across `--resume`.
 const APPEND_SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 
+/// Tools the agent may use without being asked. Only `dray`, and only because
+/// orchestration is meant to run unattended — the user approved the fan-out
+/// when they asked for it, and a card per session would make three issues three
+/// interruptions.
+///
+/// Verified against v2.1.241 rather than assumed, because a pattern that fails
+/// to match fails *silently* — as an unexpected consent card, not an error.
+/// Measured with `mkdir` under `--permission-mode manual`: `Bash(mkdir:*)` and
+/// `Bash(mkdir *)` both ran it, `Bash(git *)` reported
+/// `system`/`permission_denied`. Test it with a command that *mutates* — a
+/// read-only one like `echo` is auto-allowed whatever the rule says, so it
+/// reports success for a pattern that matches nothing.
+const ALLOWED_TOOLS: &str = "Bash(dray:*)";
+
+/// The child's `PATH`: the inherited one with the user-bin directories put
+/// back.
+///
+/// Load-bearing rather than defensive. A bundled `.app` launched from Finder
+/// inherits launchd's `PATH` — `/usr/bin:/bin:/usr/sbin:/sbin` — so a `dray`
+/// installed to `~/.local/bin` is simply not there for the agent, and the
+/// failure reads as "the CLI is broken" rather than "the CLI is unreachable".
+/// Appended, not prepended: the user's own `PATH` should still win where the
+/// two name the same binary.
+fn agent_path() -> String {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<_> = std::env::split_paths(&inherited).collect();
+
+    for dir in crate::binpath::known_dirs() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+
+    std::env::join_paths(dirs)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
+}
+
 /// Takes a resolved [`Model`] rather than an id: there's no way to build one
 /// outside `models`, so an unknown model can't reach the spawn and this doesn't
 /// re-validate what the caller already checked.
@@ -75,6 +113,11 @@ pub async fn init(
     // broken rather than unasked.
     args.extend(["--permission-prompt-tool", "stdio"]);
 
+    // Orchestration calls raise no consent card. An additive allow rule, not a
+    // whitelist — everything else still routes through `can_use_tool` exactly
+    // as before.
+    args.extend(["--allowedTools", ALLOWED_TOOLS]);
+
     if is_new_session {
         args.extend(["--session-id", session_id]);
     } else {
@@ -93,6 +136,10 @@ pub async fn init(
     let mut child = Command::new(crate::binpath::claude().await)
         .args(args)
         .current_dir(cwd)
+        // How the CLI knows which session is calling it, which is what links a
+        // spawned session to its parent and what the depth cap reads.
+        .env("DRAY_SESSION_ID", session_id)
+        .env("PATH", agent_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

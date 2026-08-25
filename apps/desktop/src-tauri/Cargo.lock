@@ -952,6 +952,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs 6.0.0",
+ "dray-proto",
  "fff-search",
  "libc",
  "notify-rust",
@@ -965,6 +966,15 @@ dependencies = [
  "tokio",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "dray-proto"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

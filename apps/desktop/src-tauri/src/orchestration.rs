@@ -1,0 +1,372 @@
+//! The socket an agent reaches Dray through.
+//!
+//! Every other command in this app travels frontend → Rust. This one travels
+//! the other way: the `dray` CLI connects, asks for a session, and the frontend
+//! learns about it from an event rather than from the return value of something
+//! it called. That inversion is the whole of what this module adds — the work
+//! itself goes through [`SessionManager::send_msg`], the same function the
+//! composer reaches, so a session created here is not a second kind of session.
+//!
+//! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock`, one
+//! request per connection. Access control is the socket's `0600` mode: nothing
+//! outside the user's own account can connect, and nothing on the network can
+//! reach it at all.
+
+use crate::{
+    events::ApprovalPolicy,
+    models::{default_model, find_model, ModelId},
+    session::{Harness, SessionManager},
+    store::{self, SessionIndexItem},
+};
+use anyhow::{bail, Context, Result};
+use dray_proto::{
+    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SessionSummary,
+    MAX_LINE, PROTOCOL_VERSION,
+};
+use std::path::Path;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    net::{UnixListener, UnixStream},
+};
+
+/// Emitted when a session is created by something other than the composer, so
+/// the sidebar gains the row without a refetch.
+///
+/// Carries the index item alone, not a `SessionSnapshot`. The frontend's
+/// `agent_event` listener writes into sessions it already holds and drops
+/// events for ids it doesn't — so shipping a snapshot would open a window where
+/// the transcript is half-built in memory and half only on disk. An index item
+/// leaves the transcript unread until the row is clicked, and
+/// `handleSelectSessionIndexItem` already loads it whole from disk at that
+/// point.
+pub const SESSION_CREATED: &str = "session_created";
+
+/// A spawned session may spawn; its children may not. Walked off
+/// `parent_session_id` rather than stored as a number, so there is no depth
+/// field free to disagree with the chain it describes.
+const MAX_DEPTH: usize = 2;
+
+/// Guards the walk against an index that somehow points at itself. Cheap
+/// insurance: a cycle here would hang the caller's turn rather than fail it.
+const MAX_WALK: usize = 64;
+
+/// Binds the socket and serves it for the life of the process.
+///
+/// Errors are logged and swallowed by the caller: orchestration is a side
+/// channel, and an app that refuses to start because a socket is in use would
+/// be trading the whole product for a feature.
+pub async fn serve(app: AppHandle) -> Result<()> {
+    let path = dray_proto::default_socket_path().context("could not resolve the socket path")?;
+
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.ok();
+    }
+
+    // A socket file outlives the process that made it — a crash or a SIGKILL
+    // leaves one behind, and binding onto it fails with "address in use". The
+    // file is not a lock and holds nothing, so removing it is safe: a *live*
+    // Dray would still hold the second instance off, because two processes
+    // cannot both have the app's single-instance state anyway.
+    tokio::fs::remove_file(&path).await.ok();
+
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("could not bind {}", path.display()))?;
+
+    restrict(&path)?;
+
+    loop {
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(e) => {
+                eprintln!("[orchestration accept err] {e}");
+                continue;
+            }
+        };
+
+        let app = app.clone();
+        // Per connection, so one slow create cannot hold the next caller off.
+        tokio::spawn(async move {
+            if let Err(e) = handle(stream, &app).await {
+                eprintln!("[orchestration conn err] {e:#}");
+            }
+        });
+    }
+}
+
+/// `0600`. The socket is the whole authentication story, so this is not
+/// optional hardening — bound at the default mode, any account on the machine
+/// could create sessions.
+fn restrict(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .context("could not restrict the socket")
+}
+
+/// Reads one request, answers it, closes. A connection carries one command so
+/// that a client crashing mid-line costs nothing but itself.
+async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
+    let (read_half, mut write_half) = stream.into_split();
+
+    let mut line = String::new();
+    BufReader::new(read_half.take(MAX_LINE))
+        .read_line(&mut line)
+        .await
+        .context("could not read the request")?;
+
+    let response = match serde_json::from_str::<Envelope>(&line) {
+        // Answered before the request is even looked at: an old CLI against a
+        // new app must be told to upgrade, not handed a guess at what it meant.
+        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(format!(
+            "this dray CLI speaks protocol v{}, the app speaks v{PROTOCOL_VERSION} — update one of them",
+            envelope.v
+        )),
+        Ok(envelope) => match dispatch(envelope.request, app).await {
+            Ok(response) => response,
+            // Reported rather than logged: the caller is an agent, and this
+            // string is what it reads back as tool output.
+            Err(e) => Response::error(format!("{e:#}")),
+        },
+        Err(e) => Response::error(format!("could not parse the request: {e}")),
+    };
+
+    write_half
+        .write_all(encode_line(&response)?.as_bytes())
+        .await
+        .context("could not write the response")?;
+
+    Ok(())
+}
+
+async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
+    match request {
+        Request::CreateSession(create) => create_session(create, app).await,
+        Request::ListSessions(list) => list_sessions(list).await,
+    }
+}
+
+async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Response> {
+    if create.prompt.trim().is_empty() {
+        bail!("a session needs a prompt");
+    }
+
+    let parent = match create.parent_session_id.as_deref() {
+        Some(id) => Some(
+            store::get_session_index_item(id)
+                .await?
+                .with_context(|| format!("no session {id}"))?,
+        ),
+        None => None,
+    };
+
+    if let Some(parent) = &parent {
+        let depth = depth_of(parent).await?;
+        if depth >= MAX_DEPTH {
+            bail!(
+                "this session is {depth} levels deep already — a spawned session may create \
+                 sessions, but those may not create more. Ask the user to start the next \
+                 batch from a top-level session."
+            );
+        }
+    }
+
+    let project_path = resolve_project(&create, parent.as_ref())?;
+
+    // The project is deliberately *not* attached here. The sidebar's filter
+    // defaults to null and lists every session whatever its project, so a
+    // session under an unattached repo is already reachable — while
+    // `add_project` bumps `last_selected` and resorts the list, which would
+    // let an agent's call quietly reorder the user's project picker.
+    let model = resolve_model(create.model.as_deref(), parent.as_ref())?;
+
+    // Whatever the parent ran at. `send_msg` reconciles it against the chosen
+    // model through `resolve_effort`, so an effort the model has no levels for
+    // is dropped there rather than needing a second check here.
+    let effort = parent.as_ref().and_then(|p| p.effort);
+    let permission_mode = parent
+        .as_ref()
+        .map(|p| p.permission_mode)
+        .unwrap_or_else(ApprovalPolicy::default);
+
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let manager = app.state::<SessionManager>();
+
+    let outcome = manager
+        .send_msg(
+            &session_id,
+            &create.prompt,
+            &[],
+            Harness::ClaudeCode,
+            model,
+            effort,
+            permission_mode,
+            &project_path,
+            None,
+            create.use_worktree,
+            create.worktree_name.as_deref(),
+            true,
+            create.parent_session_id.as_deref(),
+            app,
+        )
+        .await?;
+
+    let item = outcome
+        .snapshot
+        .map(|s| s.index_item)
+        .context("the session was created but returned no index entry")?;
+
+    // After the send, so the row the sidebar gains is one that actually started.
+    app.emit(SESSION_CREATED, &item).ok();
+
+    Ok(Response::Created {
+        session: summarize(item),
+    })
+}
+
+async fn list_sessions(list: ListSessions) -> Result<Response> {
+    let items = store::list_session_index_items_by_archived(false).await?;
+
+    let scope = if list.all {
+        None
+    } else {
+        let parent = match list.parent_session_id.as_deref() {
+            Some(id) => store::get_session_index_item(id).await?,
+            None => None,
+        };
+        project_from(list.project_path.as_deref(), parent.as_ref())
+    };
+
+    let sessions = items
+        .into_iter()
+        .filter(|i| scope.as_deref().is_none_or(|p| i.project_path == p))
+        .map(summarize)
+        .collect();
+
+    Ok(Response::Listed { sessions })
+}
+
+/// How many creates deep this session already sits. A session with no parent is
+/// depth 0, one created by an agent is depth 1.
+async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
+    let mut depth = 0;
+    let mut cursor = item.parent_session_id.clone();
+
+    while let Some(id) = cursor {
+        depth += 1;
+        if depth >= MAX_WALK {
+            bail!("the session's parent chain does not terminate");
+        }
+        cursor = store::get_session_index_item(&id)
+            .await?
+            .and_then(|parent| parent.parent_session_id);
+    }
+
+    Ok(depth)
+}
+
+/// The caller's alias if it gave one, else the parent's recorded model, else
+/// the app default. A parent indexed before models were recorded reads back as
+/// `Unknown`, which has no CLI alias — so that falls through to the default
+/// rather than failing a create for a field the user never chose.
+fn resolve_model(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Result<ModelId> {
+    if let Some(alias) = requested {
+        let id = ModelId::from_arg(alias)
+            .filter(|id| find_model(*id).is_some())
+            .with_context(|| {
+                format!("unknown model {alias:?} — try opus, sonnet, fable or haiku")
+            })?;
+        return Ok(id);
+    }
+
+    Ok(parent
+        .map(|p| p.model)
+        .filter(|id| find_model(*id).is_some())
+        .unwrap_or_else(default_model))
+}
+
+fn resolve_project(create: &CreateSession, parent: Option<&SessionIndexItem>) -> Result<String> {
+    project_from(create.project_path.as_deref(), parent).context(
+        "no project to create the session in — pass --project, or run this from inside a repo",
+    )
+}
+
+/// The caller's own answer wins, then the parent's. Canonicalized because
+/// `projects.rs` canonicalizes at attach time: `/x/proj` and `/x/proj/` would
+/// otherwise become two projects and split the sidebar's grouping.
+fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Option<String> {
+    let raw = requested.or_else(|| parent.map(|p| p.project_path.as_str()))?;
+
+    Some(
+        std::fs::canonicalize(raw)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| raw.to_string()),
+    )
+}
+
+fn summarize(item: SessionIndexItem) -> SessionSummary {
+    SessionSummary {
+        session_id: item.session_id,
+        title: item.title,
+        cwd: item.cwd,
+        project_path: item.project_path,
+        branch: item.branch,
+        worktree_name: item.worktree_name,
+        // Through serde rather than a match, so a status added to the enum
+        // cannot leave this arm reporting the wrong one.
+        status: serde_json::to_value(item.status)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| "idle".into()),
+        modified: item.modified,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Effort;
+
+    fn item(id: &str, parent: Option<&str>) -> SessionIndexItem {
+        SessionIndexItem::new(
+            id,
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            None,
+            "hi",
+            ModelId::Opus,
+            Some(Effort::High),
+            ApprovalPolicy::Auto,
+            parent,
+        )
+    }
+
+    #[test]
+    fn summary_spells_status_the_way_the_index_does() {
+        let summary = summarize(item("a", None));
+        assert_eq!(summary.status, "idle");
+        assert_eq!(summary.session_id, "a");
+    }
+
+    #[test]
+    fn the_callers_project_beats_the_parents() {
+        let parent = item("a", None);
+        // Neither path exists, so canonicalize falls through and the raw value
+        // stands — which is the behaviour that matters here.
+        assert_eq!(
+            project_from(Some("/other"), Some(&parent)).as_deref(),
+            Some("/other")
+        );
+        assert_eq!(project_from(None, Some(&parent)).as_deref(), Some("/p"));
+        assert_eq!(project_from(None, None), None);
+    }
+
+    #[test]
+    fn a_version_mismatch_is_refused_before_the_request_is_read() {
+        let line = r#"{"v":99,"cmd":"create_session","prompt":"hi","useWorktree":true}"#;
+        let envelope: Envelope = serde_json::from_str(line).unwrap();
+        assert_ne!(envelope.v, PROTOCOL_VERSION);
+    }
+}
