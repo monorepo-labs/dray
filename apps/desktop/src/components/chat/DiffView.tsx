@@ -4,7 +4,7 @@ import { FileDiff } from "@pierre/diffs/react";
 
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
-import { fileName, type EditSides } from "@/lib/diff";
+import { diffSides, fileName, type EditSides } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 
 /// `parseDiffFromFile` is pure and synchronous but walks both files, so it is
@@ -51,12 +51,8 @@ export default function DiffView({
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
   const fileDiff = useMemo(
-    () =>
-      parseDiffFromFile(
-        sides.oldText === null ? null : { name, contents: sides.oldText },
-        { name, contents: sides.newText },
-      ),
-    [name, sides.oldText, sides.newText],
+    () => parseDiffFromFile(...diffSides(sides)),
+    [sides.path, sides.oldText, sides.newText],
   );
 
   const options = useMemo(

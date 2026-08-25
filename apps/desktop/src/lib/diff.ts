@@ -77,6 +77,42 @@ export function fileName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/// FNV-1a over the text, hex. Content identity, not a cryptographic hash: a
+/// collision here costs one mis-coloured diff.
+function fnv1a(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+/// One side of a diff as the viewer takes it, keyed on its own content.
+///
+/// The library falls back to the file *name* as `cacheKey` when none is given,
+/// and its worker pool caches highlighted line arrays on that key alone. So two
+/// diffs of one file — a second `Edit` to it, the changes panel re-reading it a
+/// snapshot later, an `index.ts` in another directory — silently share one
+/// tokenized result, and the longer one walks off its end ("deletionLine and
+/// additionLine are null"). Keying on full path and text means a new side can
+/// only ever miss the cache, never hit a stale entry.
+export function diffSide(path: string, contents: string) {
+  return {
+    name: fileName(path),
+    contents,
+    cacheKey: `${path}#${contents.length}:${fnv1a(contents)}`,
+  };
+}
+
+/// Both sides, spread into `parseDiffFromFile`. `oldText` null = creation.
+export function diffSides(sides: EditSides) {
+  return [
+    sides.oldText === null ? null : diffSide(sides.path, sides.oldText),
+    diffSide(sides.path, sides.newText),
+  ] as const;
+}
+
 /// Lines added and removed, for the collapsed row's `+N -M`.
 ///
 /// Counted from the same hunks the viewer renders, so the row and the diff
@@ -88,11 +124,7 @@ export function fileName(path: string): string {
 ///
 /// A changed line counts once on each side, as `git --stat` reports it.
 export function countChanges(sides: EditSides): { added: number; removed: number } {
-  const name = fileName(sides.path);
-  const diff = parseDiffFromFile(
-    sides.oldText === null ? null : { name, contents: sides.oldText },
-    { name, contents: sides.newText },
-  );
+  const diff = parseDiffFromFile(...diffSides(sides));
 
   let added = 0;
   let removed = 0;
