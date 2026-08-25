@@ -149,6 +149,15 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
       return "blocked";
     case "UNSTABLE":
       return "unstable";
+    // GitHub's own word for "I cannot work this out right now", and the second
+    // way this field says nothing — `mergeable` settling to `MERGEABLE` does not
+    // settle this one, so it has to be named rather than left to the arm below.
+    // Read as ready it puts a merge button under a PR that cannot take one, and
+    // now also sounds a notification for it.
+    case "UNKNOWN":
+      return "unknown";
+    // What is left is `CLEAN` and `HAS_HOOKS` — nothing in the way, with or
+    // without a pre-receive hook to run on the way in.
     default:
       return "ready";
   }

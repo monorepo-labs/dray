@@ -120,6 +120,20 @@ describe("mergeReadiness", () => {
     expect(mergeReadiness(pr({ mergeable: "UNKNOWN" })).tone).toBe("pending");
   });
 
+  // The two fields settle separately, so `mergeable` coming back `MERGEABLE`
+  // says nothing about this one. Left to the switch's default arm it read as
+  // ready, which puts a merge button under a PR that cannot take one.
+  it("does not call an unresolved merge state ready either", () => {
+    expect(mergeReadiness(pr({ mergeStateStatus: "UNKNOWN" })).tone).toBe("pending");
+  });
+
+  // The arm everything unnamed falls through to, and the only two words that
+  // belong there.
+  it("reads a clean tree with hooks to run as ready", () => {
+    expect(mergeReadiness(pr({ mergeStateStatus: "HAS_HOOKS" })).tone).toBe("ready");
+    expect(mergeReadiness(pr({ mergeStateStatus: "CLEAN" })).tone).toBe("ready");
+  });
+
   it("reports a closed or merged PR from its state, not its merge status", () => {
     expect(mergeReadiness(pr({ state: "MERGED", mergeStateStatus: "UNKNOWN" })).label).toBe(
       "Merged",
@@ -175,9 +189,12 @@ describe("isReadyToMerge", () => {
     );
     expect(isReadyToMerge(mark({ mergeable: null }))).toBe(false);
     expect(isReadyToMerge(mark({ mergeStateStatus: null }))).toBe(false);
-    // Same answer for GitHub's own way of not knowing, which the first read of
-    // a fresh PR always lands on.
+    // Same answer for GitHub's own two ways of not knowing. `mergeable` lands
+    // there on the first read of a fresh PR; `mergeStateStatus` can be there
+    // while `mergeable` has already settled, which is the case that fired a
+    // notification sound for a PR that could not be merged.
     expect(isReadyToMerge(mark({ mergeable: "UNKNOWN" }))).toBe(false);
+    expect(isReadyToMerge(mark({ mergeStateStatus: "UNKNOWN" }))).toBe(false);
   });
 });
 
