@@ -2,7 +2,8 @@ import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
 ///
-/// `observed` is what git says HEAD is, and it wins outright. Everything else
+/// `observed` is what git says HEAD is, and it wins wherever the session still
+/// has a checkout of its own to be read off. Everything else
 /// here is a *guess made at creation*: a worktree session's branch is the
 /// CLI's to name, so it is rebuilt from the worktree name, and the recorded
 /// `branch` is whatever was checked out when the session was first sent to.
@@ -16,6 +17,14 @@ import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 /// The guess is right for every session that leaves HEAD where the CLI put it,
 /// which is most of them, so falling back to it beats drawing nothing.
 ///
+/// `worktreeRemoved` is the one case `observed` loses. A relocated session runs
+/// in the project root, shared with every other session and with the reader's
+/// own editor — so HEAD there answers "what is this checkout on", never "where
+/// did this session's work land". Reading it moved the PR tab onto `main` the
+/// moment a tree was settled, which is exactly when the PR is most likely open.
+/// The recorded `branch` survives the removal for this, and the sidebar's mark
+/// kept working throughout because it never had an `observed` to be misled by.
+///
 /// One function because the header and the PR lookup have to agree about which
 /// branch the session is on; two rebuilding it apart is how they come to
 /// disagree about which PR it has.
@@ -23,9 +32,11 @@ export function sessionBranch(
   session: {
     branch: string | null;
     worktreeName: string | null;
+    worktreeRemoved?: boolean;
   },
   observed?: string | null,
 ): string | null {
+  if (session.worktreeRemoved) return session.branch;
   if (observed) return observed;
   return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
 }

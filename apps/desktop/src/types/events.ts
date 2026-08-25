@@ -738,7 +738,14 @@ projectPath: string, branch: string | null,
  * `Some` marks this a worktree session; Claude Code names the branch
  * `worktree-<name>`.
  */
-worktreeName: string | null, title: string, 
+worktreeName: string | null, 
+/**
+ * This session ran in a worktree and that tree has since been deleted, so
+ * `cwd` is the project root it was moved back to. The distinction is what
+ * keeps `branch` above authoritative: the shared checkout's HEAD describes
+ * whatever else is going on in it, not this session's work.
+ */
+worktreeRemoved: boolean, title: string, 
 /**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
@@ -783,7 +790,14 @@ projectPath: string, branch: string | null,
  * `Some` marks this a worktree session; Claude Code names the branch
  * `worktree-<name>`.
  */
-worktreeName: string | null, title: string, 
+worktreeName: string | null, 
+/**
+ * This session ran in a worktree and that tree has since been deleted, so
+ * `cwd` is the project root it was moved back to. The distinction is what
+ * keeps `branch` above authoritative: the shared checkout's HEAD describes
+ * whatever else is going on in it, not this session's work.
+ */
+worktreeRemoved: boolean, title: string, 
 /**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.

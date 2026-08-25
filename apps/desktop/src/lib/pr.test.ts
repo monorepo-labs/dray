@@ -77,6 +77,18 @@ describe("sessionBranch", () => {
     );
   });
 
+  // The relocated session runs in the project root, so HEAD there is whatever
+  // that shared checkout happens to be on — `main`, most of the time. Reading
+  // it took the PR tab away the moment a tree was settled.
+  it("ignores the shared checkout's HEAD once the worktree is gone", () => {
+    expect(
+      sessionBranch(
+        { branch: "worktree-calm-owl", worktreeName: null, worktreeRemoved: true },
+        "main",
+      ),
+    ).toBe("worktree-calm-owl");
+  });
+
   // The read is per-session and lands a frame late, and a non-repo has no
   // branch at all — so both fall back rather than drawing nothing.
   it("falls back while there is no reading to use", () => {

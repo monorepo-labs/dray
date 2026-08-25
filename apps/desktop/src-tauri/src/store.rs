@@ -47,6 +47,12 @@ pub struct SessionIndexItem {
     /// `Some` marks this a worktree session; Claude Code names the branch
     /// `worktree-<name>`.
     pub worktree_name: Option<String>,
+    /// This session ran in a worktree and that tree has since been deleted, so
+    /// `cwd` is the project root it was moved back to. The distinction is what
+    /// keeps `branch` above authoritative: the shared checkout's HEAD describes
+    /// whatever else is going on in it, not this session's work.
+    #[serde(default)]
+    pub worktree_removed: bool,
     pub title: String,
     /// Remembered per session so switching between sessions restores the model
     /// the user last picked instead of resetting to a default.
@@ -206,6 +212,7 @@ impl SessionIndexItem {
                 None => branch.map(str::to_string),
             },
             worktree_name: worktree_name.map(str::to_string),
+            worktree_removed: false,
             title: title_from_prompt(first_prompt),
             model,
             effort,
@@ -437,6 +444,13 @@ pub async fn set_session_status(
 /// on a settled session pointing at that session's own PR. Clearing it here
 /// took the tab away from every worktree session the moment it was tidied up.
 ///
+/// `worktree_removed` is what makes that fallback reachable. The PR tab prefers
+/// git's own reading of HEAD over anything the index remembers, and after this
+/// write that reading comes from the project root — a checkout shared with
+/// every other session and with the reader's editor, so it answers `main` and
+/// the tab hides itself again. The flag says "this session no longer has a
+/// checkout of its own", which is the fact that settles which of the two wins.
+///
 /// Returns the entry as written, or `None` for an id the index doesn't hold.
 pub async fn relocate_session_to_project(
     session_id: &str,
@@ -450,11 +464,58 @@ pub async fn relocate_session_to_project(
 
     item.cwd = item.project_path.clone();
     item.worktree_name = None;
+    item.worktree_removed = true;
     let updated = item.clone();
 
     write_session_index(&sessions).await?;
 
     Ok(Some(updated))
+}
+
+/// Marks the sessions whose worktree was deleted before the index recorded it.
+///
+/// `worktree_removed` arrived after the removal path already worked, so every
+/// tree settled before it reads as a session that still owns its directory —
+/// which is the one reading that takes its PR tab away, since git's HEAD in the
+/// shared project root then outranks the branch the work landed on. Inferred
+/// from the shape the relocation leaves behind and nothing else: no worktree
+/// name, `cwd` back at the project root, and a `branch` still holding the
+/// `worktree-` prefix that only [`SessionIndexItem::new`] mints. A plain
+/// session sitting on a branch named that way is the false positive this can
+/// produce, and it costs that session its recorded branch instead of its HEAD
+/// rather than anything destructive.
+///
+/// Writes only when it changed something, so this is a read on every launch
+/// after the first.
+pub async fn backfill_removed_worktrees() -> Result<()> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    if mark_relocated(&mut sessions) {
+        write_session_index(&sessions).await?;
+    }
+
+    Ok(())
+}
+
+/// Split out from the async read so it can be tested without an `index.json`.
+/// Answers whether anything changed, which is what decides the write.
+fn mark_relocated(items: &mut [SessionIndexItem]) -> bool {
+    let mut changed = false;
+    for item in items.iter_mut() {
+        let relocated = item.worktree_name.is_none()
+            && item.cwd == item.project_path
+            && item
+                .branch
+                .as_deref()
+                .is_some_and(|b| b.starts_with("worktree-"));
+
+        if relocated && !item.worktree_removed {
+            item.worktree_removed = true;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// A persisted `in_progress` is a lie after a restart — no child survives the
@@ -743,6 +804,72 @@ mod tests {
         );
 
         assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
+        assert!(!item.worktree_removed);
+    }
+
+    /// Entries written before the field existed have to read as sessions that
+    /// still own their directory, or every worktree session predating it starts
+    /// ignoring a HEAD that is genuinely its own.
+    #[test]
+    fn an_index_entry_without_the_flag_reads_as_a_tree_still_there() {
+        let item: SessionIndexItem = serde_json::from_value(serde_json::json!({
+            "sessionId": "a",
+            "harness": "claude_code",
+            "cwd": "/p/.claude/worktrees/calm-owl",
+            "projectPath": "/p",
+            "branch": "worktree-calm-owl",
+            "worktreeName": "calm-owl",
+            "title": "hi",
+            "created": "2026-01-01T00:00:00Z",
+            "modified": "2026-01-01T00:00:00Z",
+            "archived": false,
+            "pinned": false,
+        }))
+        .unwrap();
+
+        assert!(!item.worktree_removed);
+    }
+
+    /// The flag arrived after the removal path already worked, so trees settled
+    /// before it have to be recognised by the shape relocation leaves: no
+    /// worktree name, `cwd` back at the project root, and a branch still
+    /// carrying the prefix only `new` mints. Without this those sessions keep
+    /// reading the shared checkout's HEAD and keep losing their PR tab.
+    #[test]
+    fn a_tree_settled_before_the_flag_existed_is_recognised_by_its_shape() {
+        let session = |cwd: &str, branch: Option<&str>, worktree: Option<&str>| {
+            SessionIndexItem::new(
+                "a",
+                Harness::ClaudeCode,
+                cwd,
+                "/p",
+                worktree,
+                branch,
+                "hi",
+                ModelId::Opus,
+                None,
+                ApprovalPolicy::Auto,
+            )
+        };
+
+        let mut items = vec![
+            // Relocated: the tree is gone and the branch is all that is left.
+            session("/p", Some("worktree-calm-owl"), None),
+            // Still in its tree — its own HEAD is the right thing to read.
+            session("/p/.claude/worktrees/calm-owl", None, Some("calm-owl")),
+            // Never had one.
+            session("/p", Some("main"), None),
+        ];
+
+        assert!(mark_relocated(&mut items));
+        assert!(items[0].worktree_removed);
+        assert!(!items[1].worktree_removed);
+        assert!(!items[2].worktree_removed);
+
+        assert!(
+            !mark_relocated(&mut items),
+            "a second pass must report nothing to write"
+        );
     }
 
     #[test]

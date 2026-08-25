@@ -459,6 +459,12 @@ pub fn run() {
                 if let Err(e) = store::reset_in_progress_sessions().await {
                     eprintln!("[status reset err] {e}");
                 }
+                // Sessions whose worktree was deleted before the index had a
+                // field for it, which is what their PR tab reads to know its
+                // branch outranks the shared checkout's HEAD.
+                if let Err(e) = store::backfill_removed_worktrees().await {
+                    eprintln!("[worktree backfill err] {e}");
+                }
             });
             Ok(())
         })

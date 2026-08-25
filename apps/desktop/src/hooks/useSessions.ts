@@ -560,6 +560,7 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
             ...s,
             cwd: updated.cwd,
             worktreeName: updated.worktreeName,
+            worktreeRemoved: updated.worktreeRemoved,
             branch: updated.branch,
           }
         : s,
