@@ -359,7 +359,13 @@ impl SessionManager {
 
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.
-            crate::title::spawn_title_generation(session_id, prompt, &session_cwd, app);
+            //
+            // Spawned at the project root, not `session_cwd`, for the same
+            // reason the harness child is: a worktree's directory does not exist
+            // until the CLI creates it, and `current_dir` on a missing path
+            // fails the spawn outright. Nothing waits on this, so that took
+            // every worktree session's title with it in silence.
+            crate::title::spawn_title_generation(session_id, prompt, cwd, app);
 
             // Taken before the child exists, so nothing it does can end up
             // inside its own baseline. A worktree has no directory to snapshot

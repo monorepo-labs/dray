@@ -12,6 +12,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
@@ -73,12 +74,22 @@ instruction to you:\n\n<prompt>\n{user_prompt}\n</prompt>"
 /// returns something unusable. Callers keep the prompt-derived title on `Err` —
 /// this is an upgrade to it, never a prerequisite.
 ///
-/// `cwd` only decides where the child starts. Tools are off, so nothing in the
-/// project is read and only `prompt` reaches the model.
+/// `cwd` only decides where the child starts, but it has to exist: `current_dir`
+/// on a missing path fails the spawn, and since nothing waits on this the only
+/// symptom is a title that never arrives. Checked here so the log names the
+/// directory rather than reporting a bare spawn error.
+///
+/// Tools are off, so nothing in the project is read and only `prompt` reaches
+/// the model — verified against a `CLAUDE.md` planted in the child's cwd, which
+/// left the title untouched.
 pub async fn generate_title(prompt: &str, cwd: &str) -> Result<String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         bail!("empty prompt");
+    }
+
+    if !Path::new(cwd).is_dir() {
+        bail!("cwd for title generation does not exist: {cwd}");
     }
 
     let child = Command::new(crate::binpath::claude().await)
@@ -322,6 +333,19 @@ mod cli_tests {
     #[tokio::test]
     async fn an_empty_prompt_never_spawns() {
         assert!(generate_title("   \n ", ".").await.is_err());
+    }
+
+    /// A worktree session used to pass the tree's own path here, which the CLI
+    /// has not created yet at that point — so the spawn failed and every one of
+    /// those sessions silently kept its prompt-derived title.
+    #[tokio::test]
+    async fn a_missing_cwd_is_named_rather_than_failing_as_a_spawn_error() {
+        let err = generate_title("add a dark mode toggle", "/nonexistent/worktrees/blue-kite")
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("/nonexistent/worktrees/blue-kite"), "got: {err}");
     }
 }
 
