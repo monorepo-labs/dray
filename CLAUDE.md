@@ -323,6 +323,14 @@ Unstamped cost near nothing: stamp only gate `load(false)`, which run when visib
 
 **Module `generation` counter what make that clear stick.** Read capture it on start and check before writing. Without it, read already in flight — issued *before* merge, for repo now off screen — land after and stamp its pre-merge answer fresh again, putting entry back exactly where clearing just took it from. Damaging half not stale row but **stamp**: it tell every later reader pre-merge answer current and suppress read that would correct it. Stale answer therefore dropped whole, not written unstamped — entry left as it was, and unstamped = next visit refetch.
 
+**`inFlight` carry generation too, because "read running" ≠ "read will answer for me".** Non-forced `load` stand down behind running read; if that read issued *before* write it get discarded on landing, so caller who stood down leave **nothing** scheduled — entry it would have replaced sit on screen unstamped, and stale merged mark hold `anyOpen` off so no poll correct it either. Now generation mismatch defer like `force` do. Generation captured **after** waiting for slot, one capture feeding both guard and slot so what slot advertise and what guard enforce can't drift.
+
+**Slot wait = loop, not one `await`.** More than one caller can queue behind same read (turn ending *and* merge landing while one out). Each captured **same** occupant, so on its settling both resume and both spawn `gh` — exact overlap slot exist to stop. Re-read slot each pass so second wait for first.
+
+**Poll read only repos holding open PR**, not everything visible (`load`'s `only`). Forcing all meant directory `gh` can never answer for — not GitHub repo, logged out for that host — take failing spawn every 30s for as long as some *other* repo on screen had PR open. Repos joined into string key for effect dep, since fresh array identity each render would re-arm interval every render.
+
+**Archived view draw no check spinner.** It ask for no repos, so its row draw from cache nothing will update. Stale glyph = accepted trade there; stale *spinner* not, since it animate claim that something happening **now** — PR whose check finished after archiving span forever.
+
 **Poll's `anyOpen` read over `repoPaths`, not over whole cached map.** `byRepo` = copy of module cache, holding every repo ever fetched — so project reader filtered away kept poll running for one they can't see: `gh` every 30s against visible repos, or in archived view no-op rescheduling itself forever.
 
 ## The repo view

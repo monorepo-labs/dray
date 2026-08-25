@@ -291,6 +291,11 @@ export default function Sidebar({
               // rather than filtered out. Only there: the active list is a
               // worklist, where an older row is still open work.
               faded={showArchived && !isToday(item.modified)}
+              // Nothing refreshes marks over here: the archived view asks for
+              // no repos, so its rows draw from a cache nothing will update.
+              // A stale glyph is the accepted trade; a stale *spinner* is not,
+              // since it animates a claim that something is happening now.
+              marksLive={!showArchived}
               onSelect={onSelect}
               onSetFlags={onSetFlags}
               onDelete={onDelete}
@@ -702,6 +707,7 @@ function SessionRow({
   pr,
   active,
   faded = false,
+  marksLive = true,
   onSelect,
   onSetFlags,
   onDelete,
@@ -715,6 +721,9 @@ function SessionRow({
   pr?: PrMark;
   active: boolean;
   faded?: boolean;
+  /// Something is still refreshing this row's mark. False in the archived view,
+  /// which asks for no repos — see the call site.
+  marksLive?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
   onSetFlags: (
     sessionId: string,
@@ -883,7 +892,7 @@ function SessionRow({
                 theme="dark"
                 aria-label="Working"
               />
-            ) : pr?.checksState === "RUNNING" ? (
+            ) : marksLive && pr?.checksState === "RUNNING" ? (
               <CircleDashed
                 className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
                 strokeWidth={1.5}

@@ -22,3 +22,7 @@ You run inside Dray, an interactive desktop app. Your replies render as markdown
 
 - Don't add comments unless the code can't speak for itself. 1-2 lines, and say why, not what.
 - Documentation comment on functions can include what.
+
+# Git
+
+- In a worktree, open the PR from the branch already checked out. Never create a new one.

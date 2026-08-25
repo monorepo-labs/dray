@@ -33,7 +33,12 @@ const fetchedAt = new Map<string, number>();
 /// frame — a turn ending in a project that is also newly visible — cost one
 /// `gh`. The promise rather than a bare flag, because a *forced* read that
 /// collides has to queue behind it rather than be dropped; see `load`.
-const inFlight = new Map<string, Promise<void>>();
+///
+/// It carries the generation it was issued at, because "a read is running" is
+/// not the same fact as "a read will answer for me". One issued before a write
+/// is discarded when it lands — see `generation` — so a later caller that
+/// stands down behind it waits for an answer that never comes.
+const inFlight = new Map<string, { promise: Promise<void>; generation: number }>();
 
 const EMPTY: Map<string, PrMark> = new Map();
 
@@ -97,7 +102,12 @@ export function usePrMarks(repoPaths: string[]) {
 
   const [byRepo, setByRepo] = useState<Map<string, Map<string, PrMark>>>(() => new Map(cache));
 
-  const load = useCallback(async (force: boolean) => {
+  /// `only` narrows the read to a subset of what is visible. The poll passes
+  /// the repos that actually hold an open pull request: forcing every visible
+  /// one meant a directory `gh` can never answer for — not a GitHub repo, or
+  /// logged out for that host — got a failing spawn every 30s for as long as
+  /// some *other* repo on screen had a PR open.
+  const load = useCallback(async (force: boolean, only?: string[]) => {
     // Deferred rather than dropped, and that distinction is the whole of this
     // branch. A forced read is one the caller knows something new about — a
     // turn has just ended and may have opened a pull request — while the read
@@ -107,9 +117,16 @@ export function usePrMarks(repoPaths: string[]) {
     // Create PR for a branch that has one.
     const deferred: string[] = [];
 
-    const stale = pathsRef.current.filter((path) => {
-      if (inFlight.has(path)) {
-        if (force) deferred.push(path);
+    const stale = (only ?? pathsRef.current).filter((path) => {
+      const running = inFlight.get(path);
+      if (running) {
+        // Standing down is only safe where the running read can actually answer
+        // for this one. If it was issued before a write it will be thrown away
+        // when it lands, so a caller that skipped the path behind it leaves
+        // nothing scheduled at all — and the entry it would have replaced stays
+        // on screen with no stamp and no poll to correct it, since a stale
+        // merged mark is exactly what holds `anyOpen` off.
+        if (force || running.generation !== generation) deferred.push(path);
         return false;
       }
       return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS;
@@ -117,15 +134,29 @@ export function usePrMarks(repoPaths: string[]) {
     if (stale.length === 0 && deferred.length === 0) return;
 
     const read = async (path: string) => {
-      const running = inFlight.get(path);
       // Waits for the slot rather than taking it: two reads of one repo answer
       // the same thing, and letting them overlap makes which one lands last a
       // race.
-      if (running) await running;
+      //
+      // A loop, not one await, because more than one caller can queue behind
+      // the same read — a turn ending and a merge landing while one is out.
+      // Each captured the *same* occupant, so on its settling they would both
+      // resume and both spawn `gh`, which is the overlap this exists to stop.
+      // Re-reading the slot each time makes the second wait for the first.
+      let running = inFlight.get(path);
+      while (running) {
+        await running.promise;
+        running = inFlight.get(path);
+      }
+
+      // Captured after the wait, not at `read`'s entry: this may have queued
+      // behind another read, and a write landing during that wait is one this
+      // attempt has not seen either. One capture serves both the guard below
+      // and the slot, so what the slot advertises and what the guard enforces
+      // cannot drift.
+      const startedAt = generation;
 
       const attempt = (async () => {
-        const startedAt = generation;
-
         let answer: Map<string, PrMark>;
         try {
           answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
@@ -149,8 +180,8 @@ export function usePrMarks(repoPaths: string[]) {
           //
           // Leaving it unstamped is not a cost worth buying back. Stamps only
           // gate `load(false)`, which runs when the visible repo set changes —
-          // a project switch, not a render — and a repo `gh` cannot answer for
-          // caches no open PR, so it is never polled either.
+          // a project switch, not a render — and the poll reads only the repos
+          // holding an open PR, which a repo `gh` cannot answer for never is.
           return;
         }
 
@@ -165,11 +196,11 @@ export function usePrMarks(repoPaths: string[]) {
         fetchedAt.set(path, Date.now());
       })();
 
-      inFlight.set(path, attempt);
+      inFlight.set(path, { promise: attempt, generation: startedAt });
       await attempt;
       // Only if it is still ours: a later read may already have claimed the
       // slot while this one was settling.
-      if (inFlight.get(path) === attempt) inFlight.delete(path);
+      if (inFlight.get(path)?.promise === attempt) inFlight.delete(path);
     };
 
     await Promise.all([...stale, ...deferred].map(read));
@@ -196,16 +227,22 @@ export function usePrMarks(repoPaths: string[]) {
   // the reader has filtered away kept the poll running for one they can't see:
   // a `gh` every 30s against the *visible* repos, or in the archived view a
   // no-op rescheduling itself forever.
-  const anyOpen = repoPaths.some((path) =>
+  //
+  // The repos themselves rather than a boolean, because only they are polled —
+  // see `load`'s `only`. Joined into a key for the effect, which must not
+  // re-run on the fresh array identity every render mints.
+  const openRepos = repoPaths.filter((path) =>
     [...(byRepo.get(path) ?? EMPTY).values()].some((pr) => pr.state === "OPEN"),
   );
+  const openKey = openRepos.join("\n");
 
   useEffect(() => {
-    if (!anyOpen) return;
+    if (!openKey) return;
 
-    const id = setInterval(() => void load(true), OPEN_POLL_MS);
+    const targets = openKey.split("\n");
+    const id = setInterval(() => void load(true, targets), OPEN_POLL_MS);
     return () => clearInterval(id);
-  }, [anyOpen, load]);
+  }, [openKey, load]);
 
   return {
     /// The pull request a session's row is marked with, or nothing. Takes the
