@@ -315,6 +315,10 @@ Field named `checks_state`, not `checks`: `PullRequest.checks` already = list of
 
 Cache module-level per repo, fresh **120s** — longer than panel's 30s, because this feed mark rather than view being read. Refreshed on same turn-end edge panel use, so mark and pane land together. Failure silent and total (no `gh`, not GitHub repo, logged out): empty map cached *and stamped* like success, so repo `gh` can't answer for stop being asked until window expire. Undefined therefore mean both "no PR" and "couldn't ask".
 
+**Two refresh, and write need bigger one.** `refresh` force-read what **visible now** — right for turn-end edge, wrong for merge: write can land after reader filter mutated repo off screen, leaving its cached mark at pre-merge glyph *stamped inside window*, so coming back within two minute reuse it. Reopened PR reading as merged worse still, since that hold poll off too (poll gate on open PR existing). `refreshAfterWrite` drop **every** stamp then force-read visible — off-screen repo spawn no `gh`, just stop counting fresh, so `load(false)` already running on arriving at project pick up truth. Every repo not just changed one, because caller hold session **cwd** where this keyed by **repo root** (two differ for worktree session) and write rare enough that worst case = one extra `gh` on next project switch.
+
+**Poll's `anyOpen` read over `repoPaths`, not over whole cached map.** `byRepo` = copy of module cache, holding every repo ever fetched — so project reader filtered away kept poll running for one they can't see: `gh` every 30s against visible repos, or in archived view no-op rescheduling itself forever.
+
 ## The repo view
 
 **Main column have tabs now, and Chat = one of them.** [ViewTabs](apps/desktop/src/components/layout/ViewTabs.tsx) sit in header row between session name and `PanelToggle`; `VIEW_TABS` = set *and* order, so Terminal later = one array entry plus one body. Accelerator read off array position (⌘1, ⌘2), not stored per tab — reorder array and keys move with it. Bodies use `TabBody` from `RightPanel`, so transcript **hide, not unmount**: scroll position, follow pin and every highlighted diff survive flip.

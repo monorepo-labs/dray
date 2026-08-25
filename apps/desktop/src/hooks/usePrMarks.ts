@@ -147,8 +147,14 @@ export function usePrMarks(repoPaths: string[]) {
   // read and the wrong one: checks *start* a few seconds after a turn ends, so
   // at the moment of the turn-end refresh there is nothing running to poll for
   // and the indicator would never appear at all.
-  const anyOpen = [...byRepo.values()].some((branches) =>
-    [...branches.values()].some((pr) => pr.state === "OPEN"),
+  //
+  // Read over `repoPaths`, **not** over the whole of `byRepo`. That map is a
+  // copy of the module cache and holds every repo ever fetched, so a project
+  // the reader has filtered away kept the poll running for one they can't see:
+  // a `gh` every 30s against the *visible* repos, or in the archived view a
+  // no-op rescheduling itself forever.
+  const anyOpen = repoPaths.some((path) =>
+    [...(byRepo.get(path) ?? EMPTY).values()].some((pr) => pr.state === "OPEN"),
   );
 
   useEffect(() => {
@@ -171,5 +177,27 @@ export function usePrMarks(repoPaths: string[]) {
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
     refresh: useCallback(() => void load(true), [load]),
+    /// Same, plus every *off-screen* repo marked due for a re-read.
+    ///
+    /// For a write — a merge, a reopen — where [refresh] alone is not enough.
+    /// It reads whatever is visible at the moment it lands, and a reader who
+    /// switches project between clicking merge and the merge returning takes
+    /// the mutated repo off that list: its cached mark keeps the pre-merge
+    /// glyph, stamped inside the freshness window, and coming back within two
+    /// minutes reuses it. A merged mark then reads as open — or worse, a
+    /// reopened one reads as merged, which also holds the poll off, since that
+    /// is gated on an open PR existing.
+    ///
+    /// Dropping the stamps rather than re-reading them costs nothing: a repo
+    /// nobody is looking at spawns no `gh`, it just stops counting as fresh, so
+    /// the `load(false)` that already runs on arriving at a project picks up
+    /// the truth. Every repo rather than the one that changed, because the
+    /// caller holds a session cwd where this is keyed by repo root — the two
+    /// differ for a worktree session — and a write is rare enough that the
+    /// worst case is one extra `gh` on the next project switch.
+    refreshAfterWrite: useCallback(() => {
+      fetchedAt.clear();
+      void load(true);
+    }, [load]),
   };
 }

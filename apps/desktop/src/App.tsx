@@ -258,6 +258,10 @@ function App() {
     // mark comes from a different read with a two-minute freshness window — so
     // without this the row keeps its open-PR glyph until the window expires or
     // a turn ends.
+    //
+    // `refreshAfterWrite`, not `refresh`: the write can land after the reader
+    // has filtered the mutated repo off screen, and a plain refresh only reads
+    // what is visible then. See the hook.
     () => prMarksRef.current?.(),
   );
   // A draft counts: GitHub reports one as `OPEN` with `isDraft` set, and a
@@ -340,7 +344,7 @@ function App() {
     [showArchived, visibleSessions],
   );
   const prMarks = usePrMarks(repoPaths);
-  prMarksRef.current = prMarks.refresh;
+  prMarksRef.current = prMarks.refreshAfterWrite;
 
   // A pull request appears because something happened, and the thing that
   // happens is a turn — the agent running `gh pr create`, or the reader opening
