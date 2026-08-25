@@ -482,6 +482,19 @@ function App() {
   // report the unshifted one — see `code`.
   useHotkey("{", () => stepTab(-1), { shift: true, code: "BracketLeft" });
   useHotkey("}", () => stepTab(1), { shift: true, code: "BracketRight" });
+  // ⌘R re-reads whatever the panel is showing — the same one button in the tab
+  // row, so the chord means "refresh this" and never "refresh a specific
+  // thing". `panelRefresh` is null on Subagents, which has nothing to fetch,
+  // and the pane being closed is a no-op: refreshing something invisible is
+  // work with no way to see it land, and both panel hooks pause their reads
+  // there anyway.
+  //
+  // Safe to take despite being the webview's reload, because `useHotkey` claims
+  // every chord it matches — and the app has no Reload menu item, which on
+  // macOS would swallow the key before the webview ever saw it.
+  useHotkey("r", () => {
+    if (panelOpen) panelRefresh?.onRefresh();
+  });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch.
   useHotkey("1", () => setViewTab("chat"));

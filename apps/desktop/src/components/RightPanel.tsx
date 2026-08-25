@@ -253,15 +253,30 @@ export default function RightPanel({
             to hold still, and an empty box on the far edge is a slot for a
             button the reader is not waiting for. */}
         {refresh && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-mr-0.5 ml-auto text-muted-foreground/60 hover:text-muted-foreground"
-            onClick={refresh.onRefresh}
-            title="Refresh"
-          >
-            <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
-          </Button>
+          // A real tooltip rather than the `title` this used to carry: the
+          // chord has to be shown somewhere, and the app puts shortcuts in
+          // tooltips everywhere else. `ml-auto` moves to the wrapper, since the
+          // trigger is what sits in the flex row now.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="-mr-0.5 ml-auto text-muted-foreground/60 hover:text-muted-foreground"
+                onClick={refresh.onRefresh}
+                aria-label="Refresh"
+              >
+                <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              Refresh
+              <KbdGroup>
+                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                <Kbd>R</Kbd>
+              </KbdGroup>
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
 
