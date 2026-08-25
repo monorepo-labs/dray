@@ -27,12 +27,6 @@ export default function ToolGroupRow({
       !resultByCallId.has(event.payload.callId),
   );
 
-  const failed = group.calls.some(
-    (event) =>
-      event.payload.type === "tool_call_started" &&
-      resultByCallId.get(event.payload.callId)?.isError,
-  );
-
   // The run's total `+N -M`, summed from the same per-call counts the rows
   // underneath show, so the header can never disagree with what expanding it
   // reveals. Without this a run of edits collapses to "Edited 1 file · 4 calls"
@@ -81,15 +75,10 @@ export default function ToolGroupRow({
         {/* Styled as the turn summary is, not as a tool row: with the
             double-nesting rule this heads the turn's work where that summary
             otherwise would, so the two must read as the same kind of toggle.
-            A group can hold both a failure and a still-running call, and
-            pending wins — the shimmer's transparent fill would cancel the
-            destructive color and leave the text invisible. */}
-        <span
-          className={cn(
-            "shrink-0",
-            pending ? "shimmer-text" : failed && "text-destructive",
-          )}
-        >
+            A failing call inside does not color it: one error among a dozen
+            calls would paint the whole run as failed, and the row that failed
+            says so itself once the group is expanded. */}
+        <span className={cn("shrink-0", pending && "shimmer-text")}>
           {group.target
             ? groupVerb(group.name, pending)
             : groupLabel(group.name, group.targets, pending)}

@@ -175,3 +175,33 @@ export function toolArgument(input: JsonValue): string | null {
     null
   );
 }
+
+// An errored call the reader never has to act on. Every one of these is the
+// agent probing — a path it guessed at, a binary it checked for, a command the
+// harness declined — and it recovers on the next call without anyone looking.
+// Measured over ten sessions of real logs: 38 of 45 failed `Bash` calls were
+// one of these five, so colouring on `isError` alone made red the transcript's
+// resting state and left nothing to mark the seven that mattered.
+//
+// Matched anywhere in the text, not anchored: a shell failure arrives as
+// "Exit code 1" with the message on the line under it. `Blocked:` is the
+// exception and is anchored per-line, because it opens the harness's own
+// refusal rather than appearing inside output.
+const ROUTINE_ERRORS = [
+  // A worktree-isolated session refusing a command it can't prove stays inside
+  // its own tree. Not a failure at all — the command never ran.
+  /is isolated in the worktree|too complex to verify that it stays inside the worktree/i,
+  /no such file or directory/i,
+  // zsh's own wording when a glob matches nothing, which is the same miss.
+  /no matches found:/i,
+  /command not found:/i,
+  /^Blocked:/m,
+];
+
+/// Whether a failed call's error is one the reader can safely ignore, so the
+/// row reports it without the alarm. The row still reads as failed — only the
+/// red goes.
+export function isRoutineError(text: string | undefined): boolean {
+  if (!text) return false;
+  return ROUTINE_ERRORS.some((pattern) => pattern.test(text));
+}

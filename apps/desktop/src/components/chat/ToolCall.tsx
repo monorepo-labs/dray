@@ -6,7 +6,7 @@ import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
 import { cn } from "@/lib/utils";
 import { countChanges, editSides, readRange } from "@/lib/diff";
-import { formatToolInput, toolLabel, toolSummary } from "@/lib/tools";
+import { formatToolInput, isRoutineError, toolLabel, toolSummary } from "@/lib/tools";
 import type { ToolResult, ToolType } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
@@ -83,6 +83,12 @@ export default function ToolCall({
   const summary = title ?? toolSummary(name, toolType, input);
   const pending = result === undefined;
   const failed = result?.isError ?? false;
+
+  // Failed and worth interrupting the reader over are different questions. Most
+  // errors here are the agent probing a path or a binary and moving on, so red
+  // on every one of them is red on a resting transcript. The row still reads as
+  // failed either way — the "Error:" body says so — this only decides the colour.
+  const alarming = failed && !isRoutineError(result?.text);
 
   // Inside a group the label is redundant — except with no summary to stand in
   // its place, where dropping it would leave a blank, unclickable row.
@@ -169,7 +175,7 @@ export default function ToolCall({
           <span
             className={cn(
               "shrink-0",
-              failed ? "text-destructive" : "text-foreground/80",
+              alarming ? "text-destructive" : "text-foreground/80",
               pending && "shimmer-text",
             )}
           >
@@ -185,7 +191,7 @@ export default function ToolCall({
           <span
             className={cn(
               "min-w-0 max-w-fit truncate font-mono",
-              !showLabel && failed ? "text-destructive" : "text-muted-foreground",
+              !showLabel && alarming ? "text-destructive" : "text-muted-foreground",
               !showLabel && pending && "shimmer-text",
             )}
           >
@@ -218,7 +224,14 @@ export default function ToolCall({
             indicators for one fact just competed with each other. A non-zero
             exit stays: that is an outcome, which the label never encodes. */}
         {result?.exitCode != null && result.exitCode !== 0 && (
-          <span className="ml-auto shrink-0 text-destructive">exit {result.exitCode}</span>
+          <span
+            className={cn(
+              "ml-auto shrink-0",
+              alarming ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            exit {result.exitCode}
+          </span>
         )}
       </button>
 
@@ -238,8 +251,8 @@ export default function ToolCall({
           because an error is the reason to look at the row and should not be the
           smallest text on it; an answered question, because the harness writes
           it as a sentence and a code box would frame prose as output. Neither is
-          tinted — the red label above already marks a failure, and the "Error:"
-          lead-in names the text without a second color repeating it. */}
+          tinted — the "Error:" lead-in names the text on its own, which is also
+          what carries a routine failure that the label above left uncoloured. */}
       {open && shown && (
         <pre
           className={cn(
