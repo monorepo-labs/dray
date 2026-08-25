@@ -23,6 +23,11 @@ const FRESH_MS = 120_000;
 /// minute late costs nothing, where a merge button showing stale checks does.
 const OPEN_POLL_MS = 30_000;
 
+/// How long to wait before the single retry a failed post-write read gets — see
+/// `refreshAfterWrite`. Long enough for a `gh` blip or a rate-limit pause to
+/// pass, short enough that the reader has not moved on.
+const WRITE_RETRY_MS = 4_000;
+
 /// Last answer per repo, kept across mounts for [usePullRequest]'s reason —
 /// switching projects changes the argument, and a project flipped away from and
 /// back to should draw its marks immediately rather than blank and refill.
@@ -283,7 +288,24 @@ export function usePrMarks(repoPaths: string[]) {
     refreshAfterWrite: useCallback(() => {
       generation += 1;
       fetchedAt.clear();
-      void load(true);
+
+      void (async () => {
+        await load(true);
+
+        // A write's read is the one whose failure does not correct itself. It
+        // is the read that would turn a merged mark back into an open one after
+        // a reopen — and a merged mark is not polled, so if this `gh` call drops
+        // the row stays wrong until a turn ends or the reader switches project.
+        //
+        // Exactly one retry, and only for what is still owed a read: a repo `gh`
+        // can never answer for must not turn a rare write into a standing spawn,
+        // which is what folding this into the poll would have done.
+        const owed = pathsRef.current.filter((path) => !fetchedAt.has(path));
+        if (owed.length === 0) return;
+
+        await new Promise((resolve) => setTimeout(resolve, WRITE_RETRY_MS));
+        await load(true, owed);
+      })();
     }, [load]),
   };
 }

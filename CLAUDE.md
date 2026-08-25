@@ -329,6 +329,8 @@ Unstamped cost near nothing: stamp only gate `load(false)`, which run when visib
 
 **Poll read only repos holding open PR**, not everything visible (`load`'s `only`). Forcing all meant directory `gh` can never answer for — not GitHub repo, logged out for that host — take failing spawn every 30s for as long as some *other* repo on screen had PR open. Repos joined into string key for effect dep, since fresh array identity each render would re-arm interval every render.
 
+**Write's read get one retry; nothing else do.** It only read whose failure don't correct itself — it what turn merged mark back into open one after reopen, and merged mark **not polled**, so dropped `gh` there leave row wrong until turn end or project switch. Retry after 4s, targeting only paths still unstamped. Exactly one, and not folded into poll: repo `gh` can never answer for must not let rare write become standing spawn.
+
 **Archived view draw no check spinner.** It ask for no repos, so its row draw from cache nothing will update. Stale glyph = accepted trade there; stale *spinner* not, since it animate claim that something happening **now** — PR whose check finished after archiving span forever.
 
 **Poll's `anyOpen` read over `repoPaths`, not over whole cached map.** `byRepo` = copy of module cache, holding every repo ever fetched — so project reader filtered away kept poll running for one they can't see: `gh` every 30s against visible repos, or in archived view no-op rescheduling itself forever.
