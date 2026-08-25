@@ -1,13 +1,32 @@
 import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 
-/// The branch a session's work lands on. A worktree session's branch is named
-/// by the CLI from the worktree name and never recorded on the index, so it has
-/// to be rebuilt here — and both the header and the PR lookup have to rebuild
-/// it the same way or they disagree about which PR the session has.
-export function sessionBranch(session: {
-  branch: string | null;
-  worktreeName: string | null;
-}): string | null {
+/// The branch a session's work lands on, for the PR lookup and the header.
+///
+/// `observed` is what git says HEAD is, and it wins outright. Everything else
+/// here is a *guess made at creation*: a worktree session's branch is the
+/// CLI's to name, so it is rebuilt from the worktree name, and the recorded
+/// `branch` is whatever was checked out when the session was first sent to.
+/// Neither is re-read, so a checkout inside the tree moves HEAD and leaves
+/// both describing a branch the session is no longer on — which the PR tab
+/// fails *closed* on, asking GitHub about a branch that has no PR and hiding
+/// itself because the answer is empty.
+///
+/// A null `observed` is the ordinary resting state, not an error: the read is
+/// per-session and lands a frame late, and a non-repo has no branch at all.
+/// The guess is right for every session that leaves HEAD where the CLI put it,
+/// which is most of them, so falling back to it beats drawing nothing.
+///
+/// One function because the header and the PR lookup have to agree about which
+/// branch the session is on; two rebuilding it apart is how they come to
+/// disagree about which PR it has.
+export function sessionBranch(
+  session: {
+    branch: string | null;
+    worktreeName: string | null;
+  },
+  observed?: string | null,
+): string | null {
+  if (observed) return observed;
   return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
 }
 

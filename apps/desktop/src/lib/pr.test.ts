@@ -55,6 +55,38 @@ describe("sessionBranch", () => {
     expect(sessionBranch({ branch: "feature", worktreeName: null })).toBe("feature");
     expect(sessionBranch({ branch: null, worktreeName: null })).toBeNull();
   });
+
+  // A settled session whose worktree was deleted keeps the branch its work is
+  // on and loses only the name of the directory it ran in. The PR outlives
+  // both, so the tab has to survive the tidy-up.
+  it("keeps naming the PR's branch after the worktree is deleted", () => {
+    expect(sessionBranch({ branch: "worktree-calm-owl", worktreeName: null })).toBe(
+      "worktree-calm-owl",
+    );
+  });
+
+  // The name rebuilt from the index is a guess made at creation. Anything that
+  // checks out another branch inside the tree leaves it describing a branch the
+  // session is no longer on, and the PR tab hid itself over it.
+  it("lets git's own reading of HEAD outrank the guess", () => {
+    expect(
+      sessionBranch({ branch: "main", worktreeName: "calm-owl" }, "fix/thing"),
+    ).toBe("fix/thing");
+    expect(sessionBranch({ branch: "feature", worktreeName: null }, "fix/thing")).toBe(
+      "fix/thing",
+    );
+  });
+
+  // The read is per-session and lands a frame late, and a non-repo has no
+  // branch at all — so both fall back rather than drawing nothing.
+  it("falls back while there is no reading to use", () => {
+    expect(sessionBranch({ branch: "main", worktreeName: "calm-owl" }, null)).toBe(
+      "worktree-calm-owl",
+    );
+    expect(sessionBranch({ branch: "feature", worktreeName: null }, undefined)).toBe(
+      "feature",
+    );
+  });
 });
 
 describe("mergeReadiness", () => {
