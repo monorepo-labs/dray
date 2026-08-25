@@ -428,11 +428,14 @@ pub async fn set_session_status(
 /// worktree binding — so after this write both sides agree the session lives
 /// at the project root.
 ///
-/// `worktree_name` and `branch` are cleared together, and clearing `branch` is
-/// the less obvious half. `sessionBranch` falls back to it when there is no
-/// worktree name, and for a worktree session that field holds the *base*
-/// branch it forked from — so leaving it would point the PR tab at whatever
-/// PRs happen to be open against `main`.
+/// `worktree_name` goes and `branch` stays, and the second half is the one
+/// worth stating. `branch` holds `worktree-<name>` — the branch the CLI made
+/// and the work landed on, written there by `new` — not the base it forked
+/// from, so it is exactly what the PR lookup needs and the only record of it
+/// left once the tree and the local branch are gone. `sessionBranch` falls
+/// back to it when there is no worktree name, which is what keeps the PR tab
+/// on a settled session pointing at that session's own PR. Clearing it here
+/// took the tab away from every worktree session the moment it was tidied up.
 ///
 /// Returns the entry as written, or `None` for an id the index doesn't hold.
 pub async fn relocate_session_to_project(
@@ -447,7 +450,6 @@ pub async fn relocate_session_to_project(
 
     item.cwd = item.project_path.clone();
     item.worktree_name = None;
-    item.branch = None;
     let updated = item.clone();
 
     write_session_index(&sessions).await?;
@@ -719,6 +721,28 @@ mod tests {
             settled.iter().map(|i| i.session_id.as_str()).collect::<Vec<_>>(),
             ["b"]
         );
+    }
+
+    /// A worktree session records the branch the CLI is about to make, not the
+    /// base it forks from — which is why `relocate_session_to_project` keeps
+    /// the field. It is the only place the PR's branch survives once the tree
+    /// and the local branch are deleted.
+    #[test]
+    fn a_worktree_session_records_the_branch_its_work_lands_on() {
+        let item = SessionIndexItem::new(
+            "a",
+            Harness::ClaudeCode,
+            "/p/.claude/worktrees/calm-owl",
+            "/p",
+            Some("calm-owl"),
+            Some("main"),
+            "hi",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+        );
+
+        assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
     }
 
     #[test]

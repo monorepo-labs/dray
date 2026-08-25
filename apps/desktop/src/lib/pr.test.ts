@@ -54,6 +54,15 @@ describe("sessionBranch", () => {
     expect(sessionBranch({ branch: "feature", worktreeName: null })).toBe("feature");
     expect(sessionBranch({ branch: null, worktreeName: null })).toBeNull();
   });
+
+  // A settled session whose worktree was deleted keeps the branch its work is
+  // on and loses only the name of the directory it ran in. The PR outlives
+  // both, so the tab has to survive the tidy-up.
+  it("keeps naming the PR's branch after the worktree is deleted", () => {
+    expect(sessionBranch({ branch: "worktree-calm-owl", worktreeName: null })).toBe(
+      "worktree-calm-owl",
+    );
+  });
 });
 
 describe("mergeReadiness", () => {

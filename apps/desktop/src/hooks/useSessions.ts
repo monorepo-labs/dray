@@ -549,10 +549,19 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
   // The open transcript holds its own copy of these fields, and `cwd` is the
   // one that matters: the changes panel and the PR tab both read it, and left
   // pointing into the deleted tree they would read a directory that is gone.
+  // Copied off the write rather than restated here — spelling the relocation
+  // out a second time is how this and the index drift, and it had: `branch`
+  // was cleared here while the entry on disk keeps `worktree-<name>` for the
+  // PR tab to find its PR by.
   setSessions((prev) =>
     prev.map((s) =>
       s.sessionId === sessionId
-        ? { ...s, cwd: updated.cwd, worktreeName: null, branch: null }
+        ? {
+            ...s,
+            cwd: updated.cwd,
+            worktreeName: updated.worktreeName,
+            branch: updated.branch,
+          }
         : s,
     ),
   );
