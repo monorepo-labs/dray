@@ -82,9 +82,11 @@ function marksByBranch(prs: PrMark[]): Map<string, PrMark> {
 /// worktree session's from its worktree name — and the backend answering a map
 /// would be a second copy of it.
 ///
-/// Failure is silent and total: no `gh`, not a GitHub repo, logged out. The
-/// mark is decoration on a list that works without it, so there is nothing here
-/// to report and nothing for the reader to do.
+/// Failure is silent — no `gh`, not a GitHub repo, logged out. The mark is
+/// decoration on a list that works without it, so there is nothing here to
+/// report and nothing for the reader to do. It is not *destructive*, though:
+/// a read that fails leaves the last good answer standing rather than blanking
+/// the repo. See the catch in `load`.
 export function usePrMarks(repoPaths: string[]) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
@@ -128,10 +130,18 @@ export function usePrMarks(repoPaths: string[]) {
         try {
           answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
         } catch {
-          // An empty map, not an absent one, and stamped like a success below: a
-          // repo `gh` can't answer for should stop being asked until the window
-          // expires rather than on every render.
-          answer = new Map();
+          // Whatever was cached stays. A failed read is a read that failed, not
+          // a repo that lost its pull requests — the rule [usePullRequest] keeps
+          // its own list by, and this one was blanking rows a transient `gh`
+          // hiccup happened to catch. It is stamped either way, which is the
+          // half that matters: the stamp is what stops a repo `gh` genuinely
+          // can't answer for — not installed, not GitHub, logged out — from
+          // being asked again on every render.
+          //
+          // An empty map only where there is no previous answer to keep, so a
+          // first read that fails still reads as "no marks" rather than leaving
+          // the repo unstamped and re-asked forever.
+          answer = cache.get(path) ?? new Map();
         }
 
         // Dropped whole if a write landed while this was out. The `gh` call was
