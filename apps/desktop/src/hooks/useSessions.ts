@@ -255,6 +255,9 @@ const handleSendMsg = async (
 
   if (!sessionId) {
     sessionId = crypto.randomUUID();
+    // Claimed alongside the selection everywhere it moves, or a read still out
+    // from an earlier click can land afterwards and roll this one away.
+    selectionRequestRef.current = sessionId;
     setSelectedSessionId(sessionId);
   }
 
@@ -434,6 +437,7 @@ const handleAnswerQuestions = async (
 // since the picker is the only thing that moves the tree and a remembered name
 // would either be a lie or an unasked-for checkout.
 const handleNewSession = () => {
+  selectionRequestRef.current = null;
   setSelectedSessionId(null);
   setModelId(prefs.modelId);
   setEffortByModel(prefs.effortByModel);
@@ -443,10 +447,20 @@ const handleNewSession = () => {
 };
 
 const handleSelectSessionIndexItem = async (sessionId: string) => {
-  // Held for the one case the id turns out to resolve to nothing — see the
-  // rollback at the end. Read off the ref rather than state so it is the
-  // selection as of *this* call, not as of the render this closure was made in.
+  // Claimed synchronously, so a click arriving during the read below is visible
+  // to it immediately. The rendered selection cannot serve here — it is a render
+  // behind, so a read finishing in that gap would still see itself as current.
+  selectionRequestRef.current = sessionId;
+
+  // Where to go back to if the id turns out to resolve to nothing. Only a
+  // session already loaded qualifies: the current selection is *optimistic*
+  // until its own read lands, so it can itself be an id about to be rolled
+  // back, and restoring that would recreate the state this exists to prevent.
+  // Nothing loaded to go back to leaves `null` — the empty composer, which is
+  // at least a state the reader can act from.
   const previous = selectedSessionIdRef.current;
+  const restorable =
+    previous && sessions.some((s) => s.sessionId === previous) ? previous : null;
 
   setSelectedSessionId(sessionId);
 
@@ -505,15 +519,16 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     // attribution is persisted deliberately, and the session it points at need
     // not outlive it. A sidebar row can go stale the same way.
     //
-    // Guarded on the ref, not on `previous`, because a second click during the
-    // fetch must win — rolling back onto our own stale answer would take the
-    // reader off the session they just asked for.
-    if (selectedSessionIdRef.current === sessionId) {
-      setSelectedSessionId(previous);
-      // Not "deleted": all this knows is that the id resolved to nothing, and
-      // deletion is the likely cause rather than the observed one.
-      setError("Session not found.");
-    }
+    // Only when this read is still the one being waited on. A click that landed
+    // while it was out has already claimed the request, and rolling back onto
+    // this answer would take the reader off the session they just asked for.
+    if (selectionRequestRef.current !== sessionId) return;
+
+    selectionRequestRef.current = restorable;
+    setSelectedSessionId(restorable);
+    // Not "deleted": all this knows is that the id resolved to nothing, and
+    // deletion is the likely cause rather than the observed one.
+    setError("Session not found.");
   } catch (e) {
     setError(String(e));
   }
@@ -937,6 +952,16 @@ useEffect(() => {
     listenerPromise.then((unlisten) => unlisten());
   };
 }, []);
+
+/// The selection the reader last *asked* for, written at call time rather than
+/// at render.
+///
+/// Not interchangeable with `selectedSessionIdRef` below, which mirrors state
+/// and so lags a render behind: a click landing while a read is in flight has
+/// already changed this, and has not yet changed that. Only this one can answer
+/// "is my answer still the one being waited on", which is what stops a slow
+/// read from overwriting a newer click.
+const selectionRequestRef = useRef<string | null>(selectedSessionId);
 
 // Inside the listener the closure would see the mount-time selection; the ref
 // tracks the live one so "already being viewed" is judged against reality.
