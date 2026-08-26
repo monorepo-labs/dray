@@ -16,9 +16,8 @@ use crate::{
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
         delete_session, get_session_index_item, list_session_events, relocate_session_to_project,
-        resolve_unclaimed_worktree_name, resolve_worktree_name, set_session_status,
-        touch_session_index_item, worktree_path,
-        SessionIndexItem, SessionSnapshot, SessionStatus,
+        resolve_unclaimed_worktree_name, set_session_status, touch_session_index_item,
+        worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -323,7 +322,7 @@ impl SessionManager {
 
         if is_new_session {
             let worktree_name = if use_worktree {
-                Some(resolve_worktree_name(cwd, worktree_name)?)
+                Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
             } else {
                 None
             };
@@ -545,10 +544,7 @@ impl SessionManager {
                 item.project_path.clone(),
                 git::base_ref_tree(&item.project_path).await,
             ),
-            _ => (
-                session_cwd.clone(),
-                git::snapshot_tree(&session_cwd).await,
-            ),
+            _ => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
         };
 
         let mut session = Session::init(
@@ -616,7 +612,7 @@ impl SessionManager {
         // the index as well as disk, since a fork's tree does not exist until
         // its first send.
         let worktree_name = if worktree {
-            Some(resolve_unclaimed_worktree_name(&parent.project_path).await?)
+            Some(resolve_unclaimed_worktree_name(&parent.project_path, None).await?)
         } else {
             None
         };

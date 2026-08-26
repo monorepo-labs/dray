@@ -493,11 +493,14 @@ not from wherever session is, so copy carry whole conversation onto code that
 may not hold work it was about.
 
 **Name resolved against index too, not disk alone.** `resolve_worktree_name` ask
-filesystem, right for creation — that spawn in same call, so tree exist before
-next resolve run. Lazy fork open window creation never had: two fork taken before
-either send and name exist **only in index**, so both get same one and second's
-`-w` fail against tree first just made. `resolve_unclaimed_worktree_name` read
-both.
+filesystem alone, and lazy fork open window that never had: fork's tree not exist
+until first send, so its name live **only in index** until then. Anything else
+drawing name — another fork, or ordinary new worktree session — take one pending
+fork already hold, and that fork's `-w` then fail against tree other one made.
+**Permanently**, since name on its index entry by then and every retry redraw
+same one. Only 16³ name exist, so not vanishing odds it look like.
+`resolve_unclaimed_worktree_name` read both, and **both** call site use it —
+creation path too, since it the one most likely to draw name a fork hold.
 
 **Copied log repointed, twice, and both about outliving parent.** Every event
 carry `session_id` and frontend route live event by it, so log left alone open

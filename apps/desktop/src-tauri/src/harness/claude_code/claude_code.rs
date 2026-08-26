@@ -85,7 +85,13 @@ pub async fn init(
     // same way it does for a new session, and the CLI writes the fork a complete
     // standalone transcript holding the parent's history.
     if let Some(parent) = fork_from {
-        args.extend(["--resume", parent, "--fork-session", "--session-id", session_id]);
+        args.extend([
+            "--resume",
+            parent,
+            "--fork-session",
+            "--session-id",
+            session_id,
+        ]);
     } else if is_new_session {
         args.extend(["--session-id", session_id]);
     } else {

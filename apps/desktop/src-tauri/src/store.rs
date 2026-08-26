@@ -309,17 +309,34 @@ fn fork_title(parent: &str) -> String {
 }
 
 /// A worktree name no tree and no session has claimed. Wider than
-/// [`resolve_worktree_name`] on purpose: a fork's tree is not created until its
-/// first send, so between forking twice and sending once the name exists only in
-/// the index, and resolving against disk alone hands both forks the same one —
-/// where the second's `-w` then fails against the tree the first just made.
-pub async fn resolve_unclaimed_worktree_name(project_path: &str) -> Result<String> {
+/// [`resolve_worktree_name`] on purpose, and every caller wants the wider one: a
+/// fork's tree is not created until its first send, so its name lives only in the
+/// index until then. Resolving against disk alone lets anything else drawing a
+/// name — another fork, or an ordinary new worktree session — take one a pending
+/// fork is already holding, and that fork's `-w` then fails against the tree the
+/// other one made. Permanently, since the name is on its index entry by then and
+/// every retry redraws the same one.
+///
+/// Only 16³ names exist, so this is not the vanishing odds it looks like.
+pub async fn resolve_unclaimed_worktree_name(
+    project_path: &str,
+    requested: Option<&str>,
+) -> Result<String> {
     let claimed: Vec<String> = list_session_index_items()
         .await?
         .into_iter()
         .filter(|i| i.project_path == project_path)
         .filter_map(|i| i.worktree_name)
         .collect();
+
+    // A name the user asked for is answered, never silently swapped — so a
+    // collision here is an error rather than a redraw.
+    if let Some(name) = requested {
+        if claimed.iter().any(|c| c == name) {
+            bail!("a session is already using the worktree name '{name}'");
+        }
+        return resolve_worktree_name(project_path, Some(name));
+    }
 
     for _ in 0..16 {
         let name = resolve_worktree_name(project_path, None)?;
@@ -651,10 +668,7 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
 /// `modified` is left alone, like [`set_session_flags`]: it orders the sidebar,
 /// and a title landing seconds after the send would jump the session to the top
 /// of it for a reason the user never took.
-pub async fn set_session_title(
-    session_id: &str,
-    title: &str,
-) -> Result<Option<SessionIndexItem>> {
+pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = list_session_index_items().await?;
@@ -1182,11 +1196,17 @@ mod tests {
         let settled = filter_by_archived(items, true);
 
         assert_eq!(
-            active.iter().map(|i| i.session_id.as_str()).collect::<Vec<_>>(),
+            active
+                .iter()
+                .map(|i| i.session_id.as_str())
+                .collect::<Vec<_>>(),
             ["a", "c"]
         );
         assert_eq!(
-            settled.iter().map(|i| i.session_id.as_str()).collect::<Vec<_>>(),
+            settled
+                .iter()
+                .map(|i| i.session_id.as_str())
+                .collect::<Vec<_>>(),
             ["b"]
         );
     }
