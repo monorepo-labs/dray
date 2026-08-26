@@ -117,6 +117,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Aptabase's write-only app key, read by `option_env!` at compile
+          # time. Unset is not fatal — the build ships with analytics inert,
+          # which is also what a local build does.
+          APTABASE_KEY: ${{ secrets.APTABASE_KEY }}
         with:
           # The Tauri project no longer sits at the repo root.
           projectPath: apps/desktop

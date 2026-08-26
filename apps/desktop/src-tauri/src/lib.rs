@@ -12,6 +12,7 @@ use crate::{
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
+pub mod analytics;
 pub mod attachments;
 pub mod binpath;
 #[path = "events/events.rs"]
@@ -443,6 +444,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(analytics::plugin())
         .manage(SessionManager::default())
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
@@ -489,6 +491,8 @@ pub fn run() {
                     eprintln!("[orchestration err] {e:#}");
                 }
             });
+
+            analytics::track(app.handle(), "app_started");
 
             Ok(())
         })

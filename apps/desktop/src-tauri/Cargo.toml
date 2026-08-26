@@ -45,3 +45,8 @@ base64 = "0.22"
 # backend is `NSUserNotificationCenter`, which macOS no longer delivers for a
 # GUI app at all. See notifications.rs.
 notify-rust = { version = "4.18", features = ["preview-macos-un"] }
+
+# Anonymous usage analytics. The client holds no persistent device id and the
+# app key is compiled in from `APTABASE_KEY`; an absent key leaves the plugin
+# registered and inert, which is what dev builds run with. See analytics.rs.
+tauri-plugin-aptabase = "1.0.0"
