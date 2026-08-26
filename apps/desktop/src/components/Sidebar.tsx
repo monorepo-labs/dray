@@ -1063,30 +1063,36 @@ function SessionRow({
                 orb's `auto` looks for `data-theme="dark|light"` and this app
                 stamps a palette name there. */}
             {/* Three things want this one slot, and the order is the whole of
-                the rule. The agent working wins: it is this app's own session
-                doing something now, where CI is a machine elsewhere. Checks
-                come next, for the same reason the orb beats the timestamp —
-                "last activity" is the least useful thing to say about a row
-                that has something in flight.
+                the rule. Checks win: the orb says the agent is working, which
+                the reader already knows because they set it going and the
+                transcript is one click away — where CI reports on a machine
+                elsewhere, on its own schedule, and this row is the only place
+                that lands. The orb comes next, for the same reason it beats the
+                timestamp: "last activity" is the least useful thing to say
+                about a row with anything in flight.
 
                 Same dashed spinner and same command yellow the PR panel's own
                 pending check row uses, at the same 3s turn: one glyph for one
                 fact, so a reader who has seen it in the pane knows it here. It
                 is deliberately not a *verdict* — a check that passed or failed
                 is settled, and the row goes back to its timestamp rather than
-                growing a second colour to decode. */}
-            {status === "in_progress" ? (
+                growing a second colour to decode.
+
+                `mr-[3px]` sits it on the orb's centre line: the glyph is 14px
+                against the orb's 20px box, and both are flush right, so without
+                it the mark shifts sideways row to row. */}
+            {marksLive && pr?.checksState === "RUNNING" ? (
+              <CircleDashed
+                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
+                strokeWidth={1.5}
+                aria-label="Checks running"
+              />
+            ) : status === "in_progress" ? (
               <ThinkingOrb
                 state="listening"
                 size={20}
                 theme="dark"
                 aria-label="Working"
-              />
-            ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
               />
             ) : (
               relativeTime(item.modified)
