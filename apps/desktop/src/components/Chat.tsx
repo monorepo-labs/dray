@@ -30,6 +30,10 @@ type ChatProps = {
   session: SessionSnapshot | null;
   streamingBlock: StreamingBlock | null;
   onOpenSubagent: (id: string) => void;
+  /// Opens the session that relayed a prompt into this one, for the avatar a
+  /// `dray send` message draws. Selecting the session is all it does — the same
+  /// thing clicking its sidebar row does.
+  onOpenSession: (sessionId: string) => void;
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
@@ -132,6 +136,7 @@ export default function Chat({
   session,
   streamingBlock,
   onOpenSubagent,
+  onOpenSession,
   onOpenSubagentPanel,
   onRespondPermission,
   onAnswerQuestions,
@@ -448,6 +453,7 @@ export default function Chat({
                 subagentById={subagentById}
                 resultByCallId={resultByCallId}
                 onOpenSubagent={onOpenSubagent}
+                onOpenSession={onOpenSession}
                 // Both cover the wait for output, and never at once —
                 // `waitingTurn` requires no streaming text. Inside the block so
                 // they sit at the gap the committed event will occupy, rather

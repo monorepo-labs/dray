@@ -69,7 +69,16 @@ baseline: string | null,
  * turn stopped — and it does not cut a new turn, because the CLI answers
  * it inside the running one and emits a single `result` for both.
  */
-queued: boolean, } | { "type": "assistant_text", 
+queued: boolean, 
+/**
+ * The Dray session that relayed this prompt, when one did.
+ *
+ * `None` — the ordinary case — means the user typed it. Carried as a
+ * field rather than named in `text` because the transcript draws the
+ * sender, and anything drawn from prose the model can write itself is
+ * a thing the model can forge.
+ */
+from: MessageSender | null, } | { "type": "assistant_text", 
 /**
  * `Some` only when this content was also streamed, naming the preview
  * it supersedes. `None` — the common case, covering Claude Code
@@ -418,6 +427,20 @@ status: string, };
  */
 export type MergeMethod = "merge" | "squash" | "rebase";
 
+/**
+ * Who relayed a prompt into this session, for a `user_message` the user did
+ * not type.
+ *
+ * Both fields are needed and neither substitutes for the other: the title is
+ * what the reader recognizes — it is what the sidebar shows — and the id is
+ * what the transcript navigates to when they click it.
+ *
+ * Persisted, unlike most of what the app synthesizes: the transcript is
+ * replayed from the log, so attribution that lived only in memory would be
+ * gone on the next open.
+ */
+export type MessageSender = { sessionId: string, title: string, };
+
 export type Model = { 
 /**
  * What `--model` receives.
@@ -710,7 +733,13 @@ export type QueuedMessage = { id: string, sessionId: string,
  * The raw prompt. Attachments are resolved at flush rather than now, so
  * what the composer gets back on a cancel is what the user typed.
  */
-text: string, attachmentPaths: Array<string>, };
+text: string, attachmentPaths: Array<string>, 
+/**
+ * Held with the prompt rather than looked up at flush: a relayed message
+ * can wait out a long turn, and the sending session may be renamed or
+ * deleted before the boundary that delivers it.
+ */
+from: MessageSender | null, };
 
 export type RateLimit = { usedPercent: number | null, windowMinutes: number | null, 
 /**

@@ -15,6 +15,9 @@ type TurnBlockProps = {
   subagentById: Map<string, SubagentRun>;
   resultByCallId: Map<string, ToolResult>;
   onOpenSubagent: (id: string) => void;
+  /// Opens the session that relayed a prompt, for a `user_message` that carries
+  /// a sender. Reaches both the turn's own prompt and any queued one inside it.
+  onOpenSession: (sessionId: string) => void;
   /// Trails the turn's work inside this block's own stack. The thinking
   /// indicator and the streaming preview both go here rather than after the
   /// block, so they sit at the same gap the committed event will — placing them
@@ -65,6 +68,7 @@ export default function TurnBlock({
   subagentById,
   resultByCallId,
   onOpenSubagent,
+  onOpenSession,
   footer,
 }: TurnBlockProps) {
   // Per segment, not per turn: a stretch of work between queued prompts opens
@@ -92,14 +96,16 @@ export default function TurnBlock({
 
   return (
     <div className="flex flex-col gap-3">
-      {turn.prompt && <UserMessage {...userProps(turn)} />}
+      {turn.prompt && <UserMessage {...userProps(turn)} onOpenSession={onOpenSession} />}
 
       {/* The work is cut at each queued prompt and each stretch collapses
           behind its own summary line — hiding the rows between the prompts
           would bunch them all together at the end, and *when* the reader said
           something is part of what they said. */}
       {!collapsible
-        ? turn.work.map((item) => renderItem(item, subagentById, resultByCallId, onOpenSubagent))
+        ? turn.work.map((item) =>
+            renderItem(item, subagentById, resultByCallId, onOpenSubagent, onOpenSession),
+          )
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
             return (
@@ -121,10 +127,16 @@ export default function TurnBlock({
                 )}
                 {open &&
                   seg.items.map((item) =>
-                    renderItem(item, subagentById, resultByCallId, onOpenSubagent),
+                    renderItem(item, subagentById, resultByCallId, onOpenSubagent, onOpenSession),
                   )}
                 {seg.prompt &&
-                  renderItem(seg.prompt, subagentById, resultByCallId, onOpenSubagent)}
+                  renderItem(
+                    seg.prompt,
+                    subagentById,
+                    resultByCallId,
+                    onOpenSubagent,
+                    onOpenSession,
+                  )}
               </Fragment>
             );
           })}
@@ -153,6 +165,7 @@ function renderItem(
   subagentById: Map<string, SubagentRun>,
   resultByCallId: Map<string, ToolResult>,
   onOpenSubagent: (id: string) => void,
+  onOpenSession: (sessionId: string) => void,
 ) {
   if (isToolGroup(item)) {
     return <ToolGroupRow key={item.key} group={item} resultByCallId={resultByCallId} />;
@@ -166,7 +179,12 @@ function renderItem(
   return run ? (
     <SubagentRow key={item.id} run={run} onOpen={onOpenSubagent} />
   ) : (
-    <EventRow key={item.id} event={item} resultByCallId={resultByCallId} />
+    <EventRow
+      key={item.id}
+      event={item}
+      resultByCallId={resultByCallId}
+      onOpenSession={onOpenSession}
+    />
   );
 }
 
@@ -175,6 +193,6 @@ function renderItem(
 function userProps(turn: Turn) {
   const payload = turn.prompt?.payload;
   return payload?.type === "user_message"
-    ? { text: payload.text, images: payload.images }
+    ? { text: payload.text, images: payload.images, from: payload.from }
     : { text: "" };
 }

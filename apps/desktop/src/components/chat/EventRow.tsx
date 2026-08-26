@@ -48,6 +48,7 @@ export default function EventRow({
   resultByCallId,
   hideToolLabel = false,
   openTool = false,
+  onOpenSession,
 }: {
   event: AgentEvent;
   /// Results keyed by call id, so a started call renders its own outcome without
@@ -58,12 +59,22 @@ export default function EventRow({
   /// Draws a tool call already expanded. Only the subagent panel sets it, for
   /// the call the reader opened the run to see.
   openTool?: boolean;
+  /// Opens the session that relayed a prompt. Only a `user_message` reads it,
+  /// and only one that came over the orchestration socket.
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const { payload } = event;
 
   switch (payload.type) {
     case "user_message":
-      return <UserMessage text={payload.text} images={payload.images} />;
+      return (
+        <UserMessage
+          text={payload.text}
+          images={payload.images}
+          from={payload.from}
+          onOpenSession={onOpenSession}
+        />
+      );
 
     case "assistant_text":
       return <AssistantMessage text={payload.text} />;

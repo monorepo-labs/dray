@@ -20,7 +20,7 @@ function event(seq: number, payload: AgentEventPayload): AgentEvent {
 }
 
 function prompt(seq: number, text: string, queued: boolean): AgentEvent {
-  return event(seq, { type: "user_message", text, images: [], baseline: null, queued });
+  return event(seq, { type: "user_message", text, images: [], baseline: null, queued, from: null });
 }
 
 function callStarted(seq: number, callId: string): AgentEvent {

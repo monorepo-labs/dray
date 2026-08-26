@@ -481,7 +481,13 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **`dray send` go both way, and that one command not two.** Child reporting summary up and parent handing child extra context = same operation, so no reply channel beside a send. Message arrive as ordinary prompt and *start a turn*, so it wake idle agent; target mid-turn queue it and CLI say so, since queued not failure. Unrestricted to parent/child pair on purpose — id = address, and naming relationship = one more rule to get wrong.
 
-**Relayed message name its sender, in prompt text.** Receiving agent have no other way to tell relay from user typing — both arrive as `user_message` — and "session you spawned reports X" read very differently from user asking for X. Titled not id'd: title = what reader see in sidebar, id = row they'd have to match up by hand.
+**Relayed message name its sender as data, never in prompt text.** `user_message.from` = `MessageSender { session_id, title }`, set only by `send_message` and `None` everywhere else. `[message from the Dray session "…"]` prefix was first version and removed: transcript have to *draw* sender, and drawing from prose mean model on other end write that line itself and be believed. Both field earn place — title = what reader recognise from sidebar, id = what avatar navigate to. Persisted, since transcript replay from log and attribution have to survive reload.
+
+**Cost of that, named: receiving agent no longer told who sent.** Prefix was its only signal — event's `from` never reach child, since only prompt text go down stdin. Skill say so and tell sender to name itself where it matter. Splitting two (bare text in event, prefixed text to child) rejected: transcript must show what model was actually given, same rule attachments already follow.
+
+**Sender draw on user side of transcript, above bubble.** Agent's message arriving in session where that agent not the assistant = still not this session's assistant speaking, so it keep user's column. `Avatar` with no `src` — session not account, so it draw title's initial — plus title, whole row a button opening that session through same `handleSelectSessionIndexItem` sidebar row use. Row sit above attachment tray too: who talking read before what they sent.
+
+**Attribution reach queued path as well.** `QueuedMessage.from` hold it rather than flush looking it up: relayed message can wait out long turn, and sender may be renamed or deleted before boundary that deliver it. Spawned session's *opening* prompt carry none — creating session = parent, which sidebar already draw by nesting, and brief is not message relayed into conversation under way.
 
 **Send pass target's *own* recorded model/effort/permission back in**, which what make it inert: `send_msg` compare them against what child run, find no change, so neither `set_model` nor respawn fire. Message must not reconfigure session it arrive at.
 

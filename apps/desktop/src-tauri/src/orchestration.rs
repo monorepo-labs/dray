@@ -13,7 +13,7 @@
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
 
 use crate::{
-    events::ApprovalPolicy,
+    events::{ApprovalPolicy, MessageSender},
     models::{default_model, find_model, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
@@ -259,6 +259,10 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             None,
             true,
             create.parent_session_id.as_deref(),
+            // The creating session is this one's *parent*, which the sidebar
+            // already draws by nesting the row. Its opening prompt is the brief,
+            // not a message relayed into a conversation already under way.
+            None,
             app,
         )
         .await?;
@@ -362,13 +366,13 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
         bail!("a session cannot send a message to itself");
     }
 
-    let prompt = attribute(&send, app).await;
+    let from = sender(&send).await;
 
     let manager = app.state::<SessionManager>();
     let outcome = manager
         .send_msg(
             &target.session_id,
-            &prompt,
+            &send.prompt,
             &[],
             target.harness,
             target.model,
@@ -380,6 +384,7 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
             None,
             false,
             None,
+            from,
             app,
         )
         .await?;
@@ -389,29 +394,27 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
     })
 }
 
-/// Names the sender in the prompt itself.
+/// Who this message is from, as data the transcript can draw.
 ///
-/// The receiving agent has no other way to tell a relayed message from the
-/// user typing — both arrive as an ordinary `user_message` — and "the session
-/// you spawned reports X" reads very differently from the user asking for X.
-/// Titled rather than identified by id, because the title is what the reader
-/// sees in the sidebar; the id would name a row they would have to go and
-/// match up by hand.
-async fn attribute(send: &SendMessage, _app: &AppHandle) -> String {
-    let Some(from) = send.from_session_id.as_deref() else {
-        return send.prompt.clone();
-    };
+/// The prompt itself is left exactly as the sender wrote it. Naming the sender
+/// in the text was the first version and it could only ever be prose: the model
+/// on the other end can write that same line itself, so a transcript reading
+/// attribution back out of the text would draw whatever it was handed.
+///
+/// `None` for a call from the user's own terminal — there is no session behind
+/// it — and for one whose sender has since been deleted, which the receiving
+/// transcript reads the same way: an ordinary prompt.
+async fn sender(send: &SendMessage) -> Option<MessageSender> {
+    let from = send.from_session_id.as_deref()?;
 
-    let title = store::get_session_index_item(from)
+    store::get_session_index_item(from)
         .await
         .ok()
         .flatten()
-        .map(|item| item.title);
-
-    match title {
-        Some(title) => format!("[message from the Dray session \"{title}\"]\n\n{}", send.prompt),
-        None => format!("[message from another Dray session]\n\n{}", send.prompt),
-    }
+        .map(|item| MessageSender {
+            session_id: item.session_id,
+            title: item.title,
+        })
 }
 
 /// The caller's pick, else the parent's, else Claude Code.

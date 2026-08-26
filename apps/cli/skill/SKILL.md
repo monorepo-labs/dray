@@ -85,8 +85,10 @@ session, so it wakes an idle agent up. If that session is mid-turn the message i
 queued and picked up at the next boundary — that is reported, and is not a
 failure.
 
-The receiving agent is told which session the message came from, so write it as a
-message to a colleague, not as a note to yourself.
+The message arrives as an ordinary prompt, and the receiving agent is **not**
+told who sent it — the user sees that in Dray, the agent does not. So write it as
+a message to a colleague rather than a note to yourself, and say who you are and
+what work you are reporting on if either matters.
 
 Send when there is something the other session genuinely needs. A message costs
 it a whole turn, so "done" on its own is rarely worth one.

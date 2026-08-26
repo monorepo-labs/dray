@@ -1,9 +1,10 @@
 import { Image } from "lucide-react";
 
+import Avatar from "@/components/Avatar";
 import ImageRow from "@/components/chat/ImageRow";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { shortenPath } from "@/lib/tools";
-import type { ImageRef } from "@/types/events";
+import type { ImageRef, MessageSender } from "@/types/events";
 
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
@@ -18,12 +19,25 @@ import type { ImageRef } from "@/types/events";
 /// a picture given a fill and a padding reads as speech with a frame drawn round
 /// it; unwrapped, the image is its own edge. They stay inside this component and
 /// on its column, so the change is only what the reader sees.
+///
+/// A message relayed by `dray send` keeps the user's side of the transcript —
+/// whoever wrote it, it is not this session's assistant speaking — and is named
+/// above the bubble instead of being drawn as a second kind of speech. The name
+/// comes off the event's own `from` field and never out of the text: the model
+/// on the other end can write any line it likes, so prose is not attribution.
 export default function UserMessage({
   text,
   images = [],
+  from = null,
+  onOpenSession,
 }: {
   text: string;
   images?: ImageRef[];
+  /// The session that relayed this, or `null` for a prompt the user typed.
+  from?: MessageSender | null;
+  /// Opens the sending session. Absent where nothing can navigate, which draws
+  /// the attribution as a plain line rather than hiding it.
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const segments = highlightSegments(text);
 
@@ -34,6 +48,22 @@ export default function UserMessage({
 
   return (
     <div className="flex flex-col items-end gap-1.5">
+      {/* Topmost, above even the attachments: who is talking is read before
+          anything they sent. The avatar has no picture behind it — a session is
+          not an account — so it draws the title's initial, which is the same
+          letter the sidebar row starts with. */}
+      {from && (
+        <button
+          type="button"
+          onClick={() => onOpenSession?.(from.sessionId)}
+          disabled={!onOpenSession}
+          className="flex max-w-[85%] cursor-pointer items-center gap-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
+        >
+          <Avatar src={null} name={from.title} />
+          <span className="truncate">{from.title}</span>
+        </button>
+      )}
+
       {/* Above the text, matching the composer's own tray — what was attached is
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the

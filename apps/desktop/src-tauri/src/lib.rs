@@ -69,8 +69,9 @@ async fn send_msg(
             use_worktree,
             worktree_name,
             is_new_session,
-            // The composer never has a parent; only the orchestration socket
-            // sets one.
+            // The composer never has a parent, and its prompts are the user's
+            // own; only the orchestration socket sets either.
+            None,
             None,
             &app,
         )

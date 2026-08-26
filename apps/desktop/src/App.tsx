@@ -751,6 +751,7 @@ function App() {
           selectedSessionId ? streamingContentBlock[selectedSessionId] ?? null : null
         }
         onOpenSubagent={openSubagent}
+        onOpenSession={(id) => void handleSelectSessionIndexItem(id)}
         onOpenSubagentPanel={openSubagentPanel}
         onRespondPermission={handleRespondPermission}
         onAnswerQuestions={handleAnswerQuestions}
