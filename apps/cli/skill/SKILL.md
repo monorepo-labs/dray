@@ -89,10 +89,6 @@ The line `dray new` prints says what it resolved: `Started "…" in worktree
 calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
 session id, since the branch that id resolved to is something only the app knew.
 
-`--from` needs a CLI and an app that both speak protocol v2. If either is older
-the command is refused outright, and the refusal names which one to fix — see
-**Staying current** below.
-
 ## Listing sessions
 
 ```bash
@@ -146,12 +142,14 @@ dray update
 ```
 
 Downloads the installer and re-runs it, landing the new binary where the current
-one sits.
+one sits — and rewrites this skill, which ships inside that binary. So whatever
+you are reading always describes the `dray` you actually have.
 
 The app and this CLI ship separately, so they can drift. When they disagree about
-the protocol the app **refuses the command** — every command, not just the new
-one — rather than doing something you cannot see is wrong. The refusal names the
-cure, and there are only two:
+the protocol the app **refuses the command** — every command, not just whichever
+one is new — rather than doing something you cannot see is wrong. You do not need
+to know which flags need which version: run the command, and if the two disagree
+you get a refusal naming the cure. There are only two:
 
 - *"this dray CLI speaks protocol vN, the app speaks vM — run `dray update`"* —
   you are behind. Run it, then retry the command. This is the common case and
