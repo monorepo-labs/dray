@@ -614,13 +614,12 @@ copied beside log and path rewritten onto it. `id` deliberately **not** re-minte
 — these same event, and nothing join across session on it. `repoint_events` split
 out from copy so rule testable with no `~/.dray` to write into.
 
-**`parent_session_id` deliberately not inherited, unlike everything else.**
-Orchestration use it to nest spawned row under its parent and to count depth, so
-inheriting would file fork under grandparent that never created it and start its
-depth partway up chain it never joined. Fork made by *person* in sidebar, which
-= exactly what field's `None` mean. Only field on entry where fork start fresh
-rather than inherit, and reason = it describe who *created* session, not how
-session run.
+**`parent_session_id` inherit, because fork = copy and copy sit where original
+sit.** Sidebar draw fork **beside** its source under same parent, not under
+source, and depth cap count it at same depth. Reset to `None` look tidier and is
+hole: copy surface top-level and free to spawn where session it copied could
+not — depth cap a copy walk around. Detach = way out for anyone wanting fork
+standing on own, and it already one-way, so nothing lost. Pinned by test.
 
 **`fork_from` = instruction, not lineage.** Cleared once CLI carry fork out, and
 that timing load-bearing both way: cleared **after** spawn, so child failing to

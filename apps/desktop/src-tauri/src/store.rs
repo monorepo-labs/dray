@@ -310,12 +310,14 @@ impl SessionIndexItem {
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
             fork_from: Some(self.session_id.clone()),
-            // Not inherited, and the sidebar is why: this field nests a row
-            // under the session that created it, and a fork was created by a
-            // person in the sidebar — not by whatever agent spawned its parent.
-            // Inheriting would file it under a grandparent it has no relation
-            // to, and start its depth count partway up a chain it never joined.
-            parent_session_id: None,
+            // Inherited, so the copy sits exactly where the original does: the
+            // sidebar draws it beside its source under the same parent, not
+            // under its source, and the orchestration depth cap counts it at the
+            // same depth. A fork that reset this to `None` would surface at the
+            // top level and be free to spawn where the session it copied was
+            // not — a depth cap a copy could walk around. Detach is the way out
+            // for anyone who wants the fork standing on its own.
+            parent_session_id: self.parent_session_id.clone(),
             created: now.clone(),
             modified: now,
             archived: false,
@@ -1123,6 +1125,39 @@ mod tests {
         // A tree of its own, so HEAD in it is the honest answer again.
         let elsewhere = parent.fork("child", Some("bold-otter"));
         assert!(!elsewhere.worktree_removed);
+    }
+
+    /// A fork is a copy, so it sits exactly where the original sits: beside its
+    /// source under the same parent, at the same depth. Resetting this would
+    /// surface the copy at the top level and let it spawn where the session it
+    /// copied could not — a depth cap a copy could walk around.
+    #[test]
+    fn a_fork_keeps_its_source_place_in_the_spawn_chain() {
+        let mut spawned = SessionIndexItem::new(
+            "spawned",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            None,
+            "work the issue",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            Some("orchestrator"),
+        );
+        assert_eq!(spawned.parent_session_id.as_deref(), Some("orchestrator"));
+
+        let fork = spawned.fork("child", None);
+        assert_eq!(
+            fork.parent_session_id.as_deref(),
+            Some("orchestrator"),
+            "the copy is a sibling of its source, not a root"
+        );
+
+        // A session nobody spawned forks to one nobody spawned.
+        spawned.parent_session_id = None;
+        assert_eq!(spawned.fork("child", None).parent_session_id, None);
     }
 
     #[test]
