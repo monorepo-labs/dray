@@ -36,7 +36,7 @@ function Notice({
           the line's top edge while its glyph sits inset within that box, so it
           reads high against the first line of text. */}
       <Icon className={cn("size-3.5 shrink-0", wrap && "mt-1")} />
-      <span className={wrap ? "min-w-0" : "truncate"}>{children}</span>
+      <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
     </p>
   );
 }
@@ -107,7 +107,7 @@ export default function EventRow({
       return (
         <div className="flex items-start gap-2 text-chat text-destructive">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 whitespace-pre-wrap">{payload.message}</span>
+          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere">{payload.message}</span>
         </div>
       );
 

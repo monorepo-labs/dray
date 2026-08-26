@@ -20,7 +20,8 @@ export default function QueuedMessages({ messages }: { messages: QueuedMessage[]
       {messages.map((message, i) => (
         <div key={message.id} className="flex w-full flex-col items-end gap-1">
           <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground opacity-55">
-            <span className="whitespace-pre-wrap">
+            {/* Same bubble, same break rule — see `UserMessage`. */}
+            <span className="whitespace-pre-wrap wrap-anywhere">
               {highlightSegments(message.text).map((segment, s) => {
                 if (segment.kind === "mention") {
                   const { dir, name } = splitMention(segment.text);

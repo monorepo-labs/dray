@@ -72,7 +72,14 @@ export default function UserMessage({
 
       {text && (
         <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground">
-          <span className="text-chat whitespace-pre-wrap">
+          {/* `wrap-anywhere` because a pasted path or URL has no whitespace to
+              wrap at, and the bubble's `max-w` caps the box and not what is
+              drawn in it — so the glyphs run out over the transcript's own
+              background and set the scroll width of the whole column, moving
+              every other message sideways. Anywhere rather than `break-words`:
+              only `anywhere` shrinks min-content width, which is the part that
+              sets that scroll width. */}
+          <span className="text-chat whitespace-pre-wrap wrap-anywhere">
             {/* Plain runs concatenate back to `text` exactly, so the spacing the
                 user typed survives — nothing here is rebuilt from a parse.
                 A mention is the one run drawn shorter than it was sent: the

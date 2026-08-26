@@ -53,7 +53,7 @@ export default function Reasoning({
           )}
         </button>
 
-        <p className="mt-1 whitespace-pre-wrap text-chat text-muted-foreground italic">
+        <p className="mt-1 whitespace-pre-wrap wrap-anywhere text-chat text-muted-foreground italic">
           {shown}
         </p>
       </div>
@@ -77,7 +77,7 @@ export default function Reasoning({
       </button>
 
       {open && (
-        <p className="mt-1 whitespace-pre-wrap text-chat text-muted-foreground italic">
+        <p className="mt-1 whitespace-pre-wrap wrap-anywhere text-chat text-muted-foreground italic">
           {trimmed}
         </p>
       )}
