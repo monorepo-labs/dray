@@ -98,24 +98,40 @@ type SidebarProps = {
   onInstallUpdate: () => void;
 };
 
+/// One drawn row: the session, how deep it sits, and the flags its connector
+/// rails are drawn from.
+export type SessionListRow = {
+  item: SessionIndexItem;
+  /// Levels below the top. 0 is a root and draws no connector at all.
+  depth: number;
+  /// One entry per level *above* this row, saying whether that level's rail
+  /// carries on below it. The last entry is this row's own parent — false there
+  /// closes the line at the elbow, so a rail never runs on into an unrelated
+  /// session.
+  guides: boolean[];
+  /// This row opens a rail of its own for the rows under it.
+  opens: boolean;
+};
+
 /// The order the list is drawn in, with a session spawned by an agent sitting
-/// directly under the one that spawned it.
+/// directly under the one that spawned it — and the depth and guide flags each
+/// row's rails are drawn from.
 ///
-/// Exported because the ⌘⇧↑/↓ shortcut steps through the same sequence, and a
-/// second comparator would let the two disagree about which row is "next" —
-/// worse when the sidebar is collapsed and nothing on screen shows the order
-/// being walked.
+/// Order and rails come out of this one walk on purpose. Computing the rails
+/// separately would let the shape drawn down the left edge disagree with the
+/// order the rows are actually in, and a rail pointing at the wrong row says
+/// something false about who spawned what.
 ///
 /// A child whose parent is not in `items` is drawn at the top level rather than
 /// hidden. That is the ordinary case, not an edge one: the parent may be
 /// archived, filtered to another project, or deleted outright, and a row that
-/// vanished with it would be unreachable.
+/// vanished with it would be unreachable — so it draws as a root, with no rail
+/// reaching for a parent that isn't there.
 ///
-/// Only one level nests. The depth cap allows a spawned session to spawn, so a
-/// grandchild exists — but indenting twice buys a tree nobody asked for in a
-/// 250px column, so it nests under its own parent and the chain reads flat from
-/// there.
-export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
+/// Depth is drawn rather than flattened: the cap allows a spawned session to
+/// spawn, so a grandchild exists, and it hangs off its own parent's rail while
+/// that parent still hangs off the root's.
+export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
   const byRecency = (a: SessionIndexItem, b: SessionIndexItem) =>
     Date.parse(b.modified) - Date.parse(a.modified);
 
@@ -136,35 +152,55 @@ export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
   // depth cap allows a spawned session to spawn, so a grandchild exists, and a
   // single pass emitted neither it nor anything below it — the row simply
   // vanished from the sidebar. Pinned by a test.
-  const ordered: SessionIndexItem[] = [];
+  const rows: SessionListRow[] = [];
   const seen = new Set<string>();
 
-  const walk = (item: SessionIndexItem) => {
+  const walk = (item: SessionIndexItem, depth: number, guides: boolean[]) => {
     if (seen.has(item.sessionId)) return;
     seen.add(item.sessionId);
-    ordered.push(item);
-    for (const child of (children.get(item.sessionId) ?? []).sort(byRecency)) {
-      walk(child);
-    }
+    const row: SessionListRow = { item, depth, guides, opens: false };
+    rows.push(row);
+
+    // Filtered before the walk, not during it: the last *drawn* child is what
+    // closes the rail, and a cycle can leave a listed child already emitted
+    // elsewhere — counting it would run the rail on past the row it ends at.
+    const kids = (children.get(item.sessionId) ?? [])
+      .filter((child) => !seen.has(child.sessionId))
+      .sort(byRecency);
+    const before = rows.length;
+    kids.forEach((child, i) => {
+      walk(child, depth + 1, [...guides, i < kids.length - 1]);
+    });
+    row.opens = rows.length > before;
   };
 
   for (const root of [...items].filter((i) => !parentOf(i)).sort(byRecency)) {
-    walk(root);
+    walk(root, 0, []);
   }
 
   // A cycle in the index reaches no root, so its rows are still unemitted here.
   // Appended rather than dropped: the sidebar losing a session is worse than
   // drawing a strange order, and `seen` is what stops the walk itself hanging.
   for (const stranded of [...items].sort(byRecency)) {
-    walk(stranded);
+    walk(stranded, 0, []);
   }
 
-  return ordered;
+  return rows;
 }
 
-/// Whether a row draws nested, judged the same way [`sortSessions`] places it —
-/// a parent that isn't on screen means the row is top-level, so the marker can
-/// never point at nothing.
+/// The order alone, for callers that only step through it.
+///
+/// Exported because the ⌘⇧↑/↓ shortcut walks the same sequence, and a second
+/// comparator would let the two disagree about which row is "next" — worse when
+/// the sidebar is collapsed and nothing on screen shows the order being walked.
+export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
+  return sessionRows(items).map((row) => row.item);
+}
+
+/// Whether a row has a parent to detach from, judged the same way
+/// [`sessionRows`] places it — a parent that isn't on screen means the row is
+/// drawn at the top level, so the menu item can never offer to cut a link the
+/// list doesn't draw.
 export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boolean {
   return Boolean(
     item.parentSessionId && items.some((i) => i.sessionId === item.parentSessionId),
@@ -250,9 +286,10 @@ export default function Sidebar({
   const fullscreen = useFullscreen();
 
   // Recency-ordered, with agent-spawned sessions nested under the one that
-  // spawned them. Project only survives as the filter above the list, so the
-  // same session never appears under two headings.
-  const sorted = useMemo(() => sortSessions(items), [items]);
+  // spawned them, and each row carrying the flags its connector rails are drawn
+  // from. Project only survives as the filter above the list, so the same
+  // session never appears under two headings.
+  const rows = useMemo(() => sessionRows(items), [items]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
   // and saying "No tasks yet" over a filter reads as data loss.
@@ -349,13 +386,16 @@ export default function Sidebar({
       {/* No right padding: the scrollbar gutter is the right-hand spacing. The
           rows balance the track's extra width themselves with `pr-0.5`. */}
       <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0">
-        {sorted.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          sorted.map((item) => (
+          rows.map(({ item, depth, guides, opens }) => (
             <SessionRow
               key={item.sessionId}
               item={item}
+              depth={depth}
+              guides={guides}
+              opens={opens}
               status={statusBySession[item.sessionId] ?? item.status}
               asking={askingSessions.has(item.sessionId)}
               pr={prFor(item.projectPath, sessionBranch(item))}
@@ -385,7 +425,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {sorted.length > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
+        {rows.length > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
       </div>
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that
@@ -863,8 +903,18 @@ function RowMenu({
   );
 }
 
+/// Connector geometry, in px from the row's left edge. `RAIL_X` sits just
+/// inside the unread rail's own 8px slot, `STEP` is one level of nesting, and
+/// `ELBOW` is how far the horizontal reaches before the title starts.
+const RAIL_X = 12;
+const STEP = 12;
+const ELBOW = 10;
+
 function SessionRow({
   item,
+  depth,
+  guides,
+  opens,
   status,
   asking,
   pr,
@@ -879,6 +929,11 @@ function SessionRow({
   onDetach,
 }: {
   item: SessionIndexItem;
+  /// Levels below the top; 0 draws no connector at all. See [`sessionRows`] —
+  /// these three come out of the same walk that ordered the list.
+  depth: number;
+  guides: boolean[];
+  opens: boolean;
   status: SessionStatus;
   asking: boolean;
   /// The pull request this row is marked with, already narrowed to one where
@@ -891,7 +946,9 @@ function SessionRow({
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
-  /// Drawn under the session whose agent created it.
+  /// This row has a parent in the same list, so 'Detach from parent' is a real
+  /// offer. Kept apart from `depth` only because a cyclic index draws a row at
+  /// the top level that still has a link worth cutting.
   nested?: boolean;
   onSetFlags: (
     sessionId: string,
@@ -907,6 +964,11 @@ function SessionRow({
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  // The rail this row elbows onto is its parent's, one step to the left of the
+  // one it opens for its own children.
+  const ownRail = RAIL_X + (depth - 1) * STEP;
+  const parentCarriesOn = guides[depth - 1] ?? false;
 
   return (
     <RowMenu
@@ -990,19 +1052,68 @@ function SessionRow({
           )}
         </span>
 
-        {/* Says this session was created by the one above it, and nothing more.
-            Aria-hidden because the marker is a picture of the list's own shape:
-            a screen reader reads the rows in the order they are drawn anyway,
-            and "vertical line hyphen" ahead of every nested title is noise.
+        {/* The lineage, drawn as rails: this row elbows onto its parent's, and
+            an ancestor's carries straight through to the last row of its
+            subtree. Aria-hidden and never a target — it is a picture of the
+            list's own shape, and a screen reader reads the rows in the order
+            they are drawn anyway.
 
-            Two characters rather than an indent, because 250px of sidebar has
-            none to spare — a title is the one thing on this row that must not
-            get shorter, and it is already truncated on most. Muted so it reads
-            as structure rather than as part of the title it sits beside. */}
-        {nested && (
-          <span aria-hidden className="shrink-0 pr-1 font-mono text-ui text-muted-foreground/70">
-            |-
-          </span>
+            Every piece sits on its own pixel and no two overlap.
+            `--sidebar-border` is white at 8%, so two segments sharing a column
+            stack to ~15% and read as a bright patch halfway down the rail. */}
+
+        {/* One pass-through per ancestor above this row's own parent whose line
+            is still open, each on its own column. */}
+        {guides.slice(0, -1).map(
+          (open, level) =>
+            open && (
+              <span
+                key={level}
+                aria-hidden
+                className="pointer-events-none absolute top-0 -bottom-px w-px bg-sidebar-border"
+                style={{ left: RAIL_X + level * STEP }}
+              />
+            ),
+        )}
+
+        {depth > 0 && (
+          <>
+            {/* Stops at the elbow unless the parent's rail carries on below —
+                never a full-height line with the corner drawn over half of it.
+                Rows sit in a `gap-px` column, so a piece that carries on has to
+                reach 1px past its own bottom edge or the rail reads dashed. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-0 w-px bg-sidebar-border"
+              style={{
+                left: ownRail,
+                height: parentCarriesOn ? "calc(100% + 1px)" : "50%",
+              }}
+            />
+            {/* Square corner, started one pixel clear of the vertical's own
+                column. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute h-px bg-sidebar-border"
+              style={{ left: ownRail + 1, top: "50%", width: ELBOW - 5 }}
+            />
+          </>
+        )}
+
+        {/* The rail this row opens for the rows under it, from its own centre
+            down. Without it a parent's line would start a row late. */}
+        {opens && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -bottom-px w-px bg-sidebar-border"
+            style={{ left: RAIL_X + depth * STEP, top: "50%" }}
+          />
+        )}
+
+        {/* A fixed slot rather than padding, so every row at a level starts its
+            title on the same column whatever else the row is carrying. */}
+        {depth > 0 && (
+          <span aria-hidden className="shrink-0" style={{ width: ownRail + ELBOW - 8 }} />
         )}
 
         {/* Ahead of the title, and it takes no room when there is none — unlike
