@@ -4,7 +4,7 @@
 # Deliberately POSIX sh, not bash: this is piped into whatever /bin/sh is, and
 # on a minimal linux image that is dash rather than bash.
 #
-#   curl -fsSL https://drayhq.com/install.sh | sh
+#   curl -fsSL https://www.drayhq.com/install.sh | sh
 #
 # Honours:
 #   DRAY_INSTALL_DIR   where the binary lands (default ~/.local/bin)

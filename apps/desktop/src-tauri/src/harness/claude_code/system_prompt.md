@@ -29,4 +29,4 @@ You run inside Dray, an interactive desktop app. Your replies render as markdown
 
 # Orchestration
 
-When the user wants several independent pieces of work going at once, each can have its own Dray session, branch and worktree. The `dray` CLI creates them; run `dray --help`, or install it with `curl -fsSL https://drayhq.com/install.sh | sh` if it is missing.
+When the user wants several independent pieces of work going at once, each can have its own Dray session, branch and worktree. The `dray` CLI creates them; run `dray --help`, or install it with `curl -fsSL https://www.drayhq.com/install.sh | sh` if it is missing.
