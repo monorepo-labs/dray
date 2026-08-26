@@ -62,11 +62,6 @@ struct New {
     #[arg(long)]
     project: Option<PathBuf>,
 
-    /// Name the worktree instead of letting Dray generate one. Every session
-    /// gets one — they are meant to run at the same time.
-    #[arg(long)]
-    worktree_name: Option<String>,
-
     /// opus, sonnet, fable or haiku. Defaults to the calling session's model.
     #[arg(long)]
     model: Option<String>,
@@ -135,7 +130,6 @@ fn new(args: New) -> Result<(), String> {
     let request = Request::CreateSession(CreateSession {
         prompt: args.prompt,
         project_path: resolve_project(args.project),
-        worktree_name: args.worktree_name,
         model: args.model,
         effort: args.effort,
         harness: args.harness,
@@ -349,6 +343,13 @@ mod tests {
         // checkout is never the right answer — the flag is gone rather than
         // defaulted.
         assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    }
+
+    #[test]
+    fn the_worktree_cannot_be_named_either() {
+        // An agent has no basis for picking a name, Dray generates a readable
+        // one, and a caller-supplied name is one more thing that can collide.
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--worktree-name", "n"]).is_err());
     }
 
     #[test]

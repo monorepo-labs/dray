@@ -62,11 +62,6 @@ pub struct CreateSession {
     /// session's project, and with neither the server refuses.
     #[serde(default)]
     pub project_path: Option<String>,
-    /// `None` lets the app generate one. There is no opting out of the worktree
-    /// itself: sessions created this way run at the same time by design, and
-    /// several agents writing to one checkout overwrite each other.
-    #[serde(default)]
-    pub worktree_name: Option<String>,
     /// `None` inherits the parent session's model, or the app's default with no
     /// parent. A bare alias (`opus`), matching what the composer stores.
     #[serde(default)]

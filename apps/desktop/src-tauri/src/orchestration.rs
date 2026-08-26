@@ -253,7 +253,10 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             // time, and several agents writing to one checkout overwrite each
             // other — the changes panel cannot even tell them apart.
             true,
-            create.worktree_name.as_deref(),
+            // Never named by the caller: an agent has no basis for choosing
+            // one, and a name that collides is a create that fails for a field
+            // nobody wanted. `None` lets the app generate a readable one.
+            None,
             true,
             create.parent_session_id.as_deref(),
             app,

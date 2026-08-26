@@ -41,7 +41,6 @@ Options:
 | flag | meaning |
 |---|---|
 | `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
-| `--worktree-name <name>` | Name the worktree instead of letting Dray generate one. |
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku`. Defaults to the current session's model. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's. |
 | `--harness <name>` | `claude_code`. Defaults to the current session's. |
