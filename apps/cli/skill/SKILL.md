@@ -64,8 +64,10 @@ dray ls --all        # every project
 ```
 
 Each row carries the session id, title, status (`idle`, `in_progress`,
-`completed`), and branch. This is how you check on sessions you started — nothing
-reports back on its own, so poll `dray ls` if you need to know when one finishes.
+`completed`), and branch. A session created by another one also says which —
+`spawned by <id>` in the table, `parentSessionId` in the JSON. This is how you
+check on sessions you started — nothing reports back on its own, so poll
+`dray ls` if you need to know when one finishes.
 
 ## Messaging a session
 

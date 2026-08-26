@@ -458,6 +458,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_else(|| "idle".into()),
         modified: item.modified,
+        parent_session_id: item.parent_session_id,
     }
 }
 

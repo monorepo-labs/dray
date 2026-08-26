@@ -150,6 +150,11 @@ pub struct SessionSummary {
     /// `idle`, `in_progress` or `completed`, as the app's own index spells them.
     pub status: String,
     pub modified: String,
+    /// Which session created this one, so a caller can answer "who spawned
+    /// that" without reading the app's own index. Absent for a session started
+    /// from the composer or from a terminal, and for one since detached.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
 }
 
 /// Where to reach the app: `DRAY_ENDPOINT` if set, else the socket under the
@@ -235,6 +240,18 @@ mod tests {
         };
         assert_eq!(send.session_id, "abc");
         assert_eq!(send.from_session_id.as_deref(), Some("parent"));
+    }
+
+    /// Added after the CLI shipped, so an app that predates it sends no such
+    /// key — which has to read as "no parent" rather than failing the list.
+    #[test]
+    fn a_summary_without_a_parent_key_still_parses() {
+        let summary: SessionSummary = serde_json::from_str(
+            r#"{"sessionId":"a","title":"t","cwd":"/p","projectPath":"/p","branch":null,
+                "worktreeName":null,"status":"idle","modified":"now"}"#,
+        )
+        .unwrap();
+        assert_eq!(summary.parent_session_id, None);
     }
 
     #[test]

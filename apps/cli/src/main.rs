@@ -234,15 +234,24 @@ fn print_table(sessions: &[SessionSummary]) {
 
     let status_width = width(|s| s.status.as_str());
     let title_width = width(|s| s.title.as_str()).min(60);
+    let branch_width = width(|s| s.branch.as_deref().unwrap_or("-"));
 
     for session in sessions {
         let title: String = session.title.chars().take(title_width).collect();
+        // Named rather than given a column of its own: two bare ids on one row
+        // under no header is a table nobody can read, and most rows have no
+        // parent to print at all.
+        let parent = match &session.parent_session_id {
+            Some(id) => format!("  spawned by {id}"),
+            None => String::new(),
+        };
         println!(
-            "{}  {:<status_width$}  {:<title_width$}  {}",
+            "{}  {:<status_width$}  {:<title_width$}  {:<branch_width$}{}",
             session.session_id,
             session.status,
             title,
             session.branch.as_deref().unwrap_or("-"),
+            parent,
         );
     }
 }
