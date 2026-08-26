@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CheckCheck,
@@ -188,13 +188,55 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
   return rows;
 }
 
+/// One project's run of rows, in the order the sidebar draws them.
+export type SessionGroup = {
+  projectPath: string;
+  rows: SessionListRow[];
+};
+
+/// [`sessionRows`] gathered under the project each row's *root* belongs to.
+///
+/// Grouped on the root rather than on the row: a spawned session hangs off its
+/// parent wherever its own `projectPath` points, and splitting one nest across
+/// two headings would draw a child under a parent that isn't there.
+///
+/// A project with no session opens no group, which is the whole of "don't show
+/// an empty project" — headings come from the sessions present, never from the
+/// attached list. Groups keep first-appearance order, so they run newest-session
+/// first like the rows inside them do, and a list already narrowed to one
+/// project comes back in exactly the order it had before grouping existed.
+export function sessionGroups(items: SessionIndexItem[]): SessionGroup[] {
+  const groups: SessionGroup[] = [];
+  const byPath = new Map<string, SessionGroup>();
+  let current: SessionGroup | undefined;
+
+  for (const row of sessionRows(items)) {
+    // Every subtree the walk emits opens with its own root, so a depth-0 row is
+    // where one run ends and the next begins.
+    if (row.depth === 0 || !current) {
+      const path = row.item.projectPath;
+      current = byPath.get(path);
+      if (!current) {
+        current = { projectPath: path, rows: [] };
+        byPath.set(path, current);
+        groups.push(current);
+      }
+    }
+    current.rows.push(row);
+  }
+
+  return groups;
+}
+
 /// The order alone, for callers that only step through it.
 ///
 /// Exported because the ⌘⇧↑/↓ shortcut walks the same sequence, and a second
 /// comparator would let the two disagree about which row is "next" — worse when
 /// the sidebar is collapsed and nothing on screen shows the order being walked.
+/// Grouped for the same reason: the shortcut has to step past a heading the way
+/// the eye does.
 export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
-  return sessionRows(items).map((row) => row.item);
+  return sessionGroups(items).flatMap((group) => group.rows.map((row) => row.item));
 }
 
 /// Whether a row has a parent to detach from, judged the same way
@@ -287,9 +329,22 @@ export default function Sidebar({
 
   // Recency-ordered, with agent-spawned sessions nested under the one that
   // spawned them, and each row carrying the flags its connector rails are drawn
-  // from. Project only survives as the filter above the list, so the same
-  // session never appears under two headings.
-  const rows = useMemo(() => sessionRows(items), [items]);
+  // from — then gathered under the project it belongs to, so the all-projects
+  // view reads as one list per repo rather than as interleaved rows.
+  const groups = useMemo(() => sessionGroups(items), [items]);
+  const rowCount = useMemo(
+    () => groups.reduce((n, group) => n + group.rows.length, 0),
+    [groups],
+  );
+
+  // A session under a repo nobody attached still has a project, so the folder
+  // name stands in rather than the heading being dropped — the row has to sit
+  // under something.
+  const projectName = useMemo(() => {
+    const named = new Map(projects.map((p) => [p.path, p.name]));
+    return (path: string) =>
+      named.get(path) ?? path.split("/").filter(Boolean).pop() ?? path;
+  }, [projects]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
   // and saying "No tasks yet" over a filter reads as data loss.
@@ -386,37 +441,62 @@ export default function Sidebar({
       {/* No right padding: the scrollbar gutter is the right-hand spacing. The
           rows balance the track's extra width themselves with `pr-0.5`. */}
       <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0">
-        {rows.length === 0 ? (
+        {rowCount === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          rows.map(({ item, depth, guides, opens }) => (
-            <SessionRow
-              key={item.sessionId}
-              item={item}
-              depth={depth}
-              guides={guides}
-              opens={opens}
-              status={statusBySession[item.sessionId] ?? item.status}
-              asking={askingSessions.has(item.sessionId)}
-              pr={prFor(item.projectPath, sessionBranch(item))}
-              active={item.sessionId === selectedSessionId}
-              // The settled list is a history, and the question asked of it is
-              // "what did I finish today" — so everything older is held back
-              // rather than filtered out. Only there: the active list is a
-              // worklist, where an older row is still open work.
-              faded={showArchived && !isToday(item.modified)}
-              // Nothing refreshes marks over here: the archived view asks for
-              // no repos, so its rows draw from a cache nothing will update.
-              // A stale glyph is the accepted trade; a stale *spinner* is not,
-              // since it animates a claim that something is happening now.
-              marksLive={!showArchived}
-              nested={isNested(item, items)}
-              onSelect={onSelect}
-              onSetFlags={onSetFlags}
-              onFork={onFork}
-              onDelete={onDelete}
-              onDetach={onDetach}
-            />
+          groups.map((group, index) => (
+            <Fragment key={group.projectPath}>
+              {/* Only where the list spans projects. Under a filter the label
+                  above already names the one project every row belongs to, and
+                  a heading repeating it would be a second copy of the same
+                  fact. Name only — no icon, no count: the heading says which
+                  repo the run below it is, and anything else on it competes
+                  with the titles it introduces. Full path on hover, since two
+                  projects can share a folder name. */}
+              {projectFilter === null && (
+                <div
+                  title={group.projectPath}
+                  className={cn(
+                    "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
+                    // The first heading sits under the filter's own row, which
+                    // already carries the gap; the rest open a run and need it.
+                    index > 0 && "mt-3",
+                  )}
+                >
+                  {projectName(group.projectPath)}
+                </div>
+              )}
+
+              {group.rows.map(({ item, depth, guides, opens }) => (
+                <SessionRow
+                  key={item.sessionId}
+                  item={item}
+                  depth={depth}
+                  guides={guides}
+                  opens={opens}
+                  status={statusBySession[item.sessionId] ?? item.status}
+                  asking={askingSessions.has(item.sessionId)}
+                  pr={prFor(item.projectPath, sessionBranch(item))}
+                  active={item.sessionId === selectedSessionId}
+                  // The settled list is a history, and the question asked of it is
+                  // "what did I finish today" — so everything older is held back
+                  // rather than filtered out. Only there: the active list is a
+                  // worklist, where an older row is still open work.
+                  faded={showArchived && !isToday(item.modified)}
+                  // Nothing refreshes marks over here: the archived view asks for
+                  // no repos, so its rows draw from a cache nothing will update.
+                  // A stale glyph is the accepted trade; a stale *spinner* is not,
+                  // since it animates a claim that something is happening now.
+                  marksLive={!showArchived}
+                  nested={isNested(item, items)}
+                  onSelect={onSelect}
+                  onSetFlags={onSetFlags}
+                  onFork={onFork}
+                  onDelete={onDelete}
+                  onDetach={onDetach}
+                />
+              ))}
+            </Fragment>
           ))
         )}
 
@@ -425,7 +505,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {rows.length > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
+        {rowCount > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
       </div>
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isNested, sessionRows, sortSessions } from "@/components/Sidebar";
+import { isNested, sessionGroups, sessionRows, sortSessions } from "@/components/Sidebar";
 import type { SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
@@ -10,11 +10,13 @@ function item(
   sessionId: string,
   modified: string,
   parentSessionId: string | null = null,
+  projectPath = "/repo",
 ): SessionIndexItem {
   return {
     sessionId,
     modified,
     parentSessionId,
+    projectPath,
   } as unknown as SessionIndexItem;
 }
 
@@ -193,5 +195,56 @@ describe("isNested", () => {
     expect(isNested(child, [parent, child, orphan])).toBe(true);
     expect(isNested(orphan, [parent, child, orphan])).toBe(false);
     expect(isNested(parent, [parent, child, orphan])).toBe(false);
+  });
+});
+
+describe("sessionGroups", () => {
+  const shape = (groups: ReturnType<typeof sessionGroups>) =>
+    groups.map((g) => [g.projectPath, g.rows.map((r) => r.item.sessionId)] as const);
+
+  it("gathers each project's sessions into one run, newest project first", () => {
+    const items = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-03-01T00:00:00Z", null, "/b"),
+      item("a2", "2026-02-01T00:00:00Z", null, "/a"),
+    ];
+
+    // `/b` leads on its newest session, and `a2` joins `a1` rather than sitting
+    // between the two projects where plain recency would put it.
+    expect(shape(sessionGroups(items))).toEqual([
+      ["/b", ["b1"]],
+      ["/a", ["a2", "a1"]],
+    ]);
+  });
+
+  it("keeps a spawned session under its parent's project", () => {
+    // A fork can run in another repo, and following its own path would file the
+    // child under a second heading with no parent above it.
+    const items = [
+      item("parent", "2026-02-01T00:00:00Z", null, "/a"),
+      item("child", "2026-01-01T00:00:00Z", "parent", "/b"),
+    ];
+
+    expect(shape(sessionGroups(items))).toEqual([["/a", ["parent", "child"]]]);
+  });
+
+  it("opens no group for a project with no session", () => {
+    // Headings come from the rows present, so nothing here can draw one for a
+    // project that has no work in the list.
+    expect(sessionGroups([]).length).toBe(0);
+    expect(
+      shape(sessionGroups([item("only", "2026-01-01T00:00:00Z", null, "/a")])),
+    ).toEqual([["/a", ["only"]]]);
+  });
+
+  it("leaves a single-project list in the order it already had", () => {
+    // What keeps the ⌘⇧↑/↓ walk unchanged under a project filter.
+    const items = [
+      item("old", "2026-01-01T00:00:00Z"),
+      item("new", "2026-03-01T00:00:00Z"),
+      item("mid", "2026-02-01T00:00:00Z"),
+    ];
+
+    expect(ids(sortSessions(items))).toEqual(ids(sessionRows(items).map((r) => r.item)));
   });
 });
