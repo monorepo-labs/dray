@@ -12,10 +12,29 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Bumped when a field changes meaning rather than when one is added — the
-/// server refuses a version it doesn't know instead of guessing at it. An
-/// added optional field needs no bump, since both sides default it.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Bumped when an old side would answer a new request *wrongly and silently* —
+/// the server refuses a version it doesn't know rather than guessing at it.
+///
+/// Not simply "a field changed meaning", which was the earlier rule and is too
+/// narrow. What matters is whether the default an old side falls back to is
+/// detectable. An added optional field usually needs no bump: an old app that
+/// ignores `model` runs the session on its own default, which is a session the
+/// caller can see and judge. `from` is the other kind — an old app ignores it,
+/// starts the worktree from `origin/<default>`, and answers *identically to a
+/// success*, so a session spawned to review unpushed work reviews none of it
+/// and reports back that everything looks fine. Wrong work that looks like
+/// right work is what earns a bump.
+///
+/// Refusing costs every command, not just the new one — but that cost falls
+/// where it is cheapest. A CLI behind the app is told to run `dray update` and
+/// fixes itself in one step; an app behind the CLI cannot be fixed from here at
+/// all, and that is exactly the direction a silent default does the most
+/// damage in. See [`Envelope`] and the app's own `mismatch`, which names which
+/// half is behind so the reader — usually an agent, reading it as tool output —
+/// runs the cure that applies rather than the one that doesn't.
+///
+/// v2 added `CreateSession::from`.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -129,12 +148,17 @@ pub struct ListSessions {
 pub enum Response {
     Created {
         session: SessionSummary,
-        /// What `from` resolved to, echoed back so the caller sees the commit
-        /// its session actually started at rather than the string it asked
-        /// with. `None` both for an ordinary create and — the case that
-        /// matters — for an app too old to know the field at all, which is how
-        /// the CLI catches a `--from` that was silently dropped instead of
-        /// honoured.
+        /// What `from` resolved to, echoed back because the caller asked with a
+        /// string and the answer is a branch: `--from <session-id>` names a
+        /// session, and only the app can say which branch that session's work
+        /// is on. `None` for an ordinary create, which starts where the harness
+        /// would have started it anyway.
+        ///
+        /// Not a compatibility signal. It was one before [`PROTOCOL_VERSION`]
+        /// was bumped for `from` — its absence stood in for "this app is too
+        /// old to honour the flag" — and the bump is what made that job
+        /// unreachable: such an app now refuses the envelope before it ever
+        /// reads the request.
         #[serde(default)]
         base_ref: Option<String>,
     },
@@ -222,7 +246,7 @@ mod tests {
         })))
         .unwrap();
 
-        assert_eq!(line["v"], 1);
+        assert_eq!(line["v"], PROTOCOL_VERSION);
         assert_eq!(line["cmd"], "create_session");
         assert_eq!(line["prompt"], "hi");
         // Flattened, not nested — a `request` key here means the server reads
@@ -230,10 +254,15 @@ mod tests {
         assert!(line.get("request").is_none());
     }
 
+    /// Deliberately a v1 line, and that is half the point: an envelope from a
+    /// version we no longer speak still has to *parse*, or the app answers
+    /// "could not parse the request" where it should be answering "run
+    /// `dray update`". The version check is a layer above this, not a way in.
     #[test]
     fn absent_optionals_parse_as_none() {
         let envelope: Envelope =
             serde_json::from_str(r#"{"v":1,"cmd":"create_session","prompt":"hi"}"#).unwrap();
+        assert_ne!(envelope.v, PROTOCOL_VERSION, "this line is the old shape");
 
         let Request::CreateSession(create) = envelope.request else {
             panic!("wrong variant");
@@ -263,9 +292,26 @@ mod tests {
         assert_eq!(create.from.as_deref(), Some("worktree-calm-owl"));
     }
 
-    /// An app predating `--from` answers a create with no `baseRef` at all, and
-    /// that absence is the only signal the CLI gets that the flag was dropped
-    /// rather than honoured — so it has to survive parsing rather than fail it.
+    /// `from` is what v2 exists for: a v1 app would have ignored the field,
+    /// started the worktree from `origin/<default>`, and answered like a
+    /// success. The envelope carries the version ahead of the command so that
+    /// is refused before the request is read at all.
+    #[test]
+    fn a_create_carrying_a_base_goes_out_at_the_version_that_added_it() {
+        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
+            prompt: "review it".into(),
+            from: Some("worktree-calm-owl".into()),
+            ..Default::default()
+        })))
+        .unwrap();
+
+        assert_eq!(line["v"], 2);
+        assert!(PROTOCOL_VERSION >= 2, "from must not travel under v1");
+    }
+
+    /// The field is defaulted, so a response shape without it parses rather
+    /// than failing the create. No longer a compatibility signal — the bump
+    /// took that job — but an unexercised `serde(default)` is one nobody checks.
     #[test]
     fn a_create_answered_without_a_base_still_parses() {
         let response: Response = serde_json::from_str(

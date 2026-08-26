@@ -86,9 +86,12 @@ Three things to know:
   each other, and the changes panel cannot tell them apart.
 
 The line `dray new` prints says what it resolved: `Started "…" in worktree
-calm-owl, based on worktree-brisk-jade`. If it warns that `--from` was ignored,
-the app is older than the flag — tell the user, and treat the session as based on
-the default branch.
+calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
+session id, since the branch that id resolved to is something only the app knew.
+
+`--from` needs a CLI and an app that both speak protocol v2. If either is older
+the command is refused outright, and the refusal names which one to fix — see
+**Staying current** below.
 
 ## Listing sessions
 
@@ -143,9 +146,22 @@ dray update
 ```
 
 Downloads the installer and re-runs it, landing the new binary where the current
-one sits. Reach for it when the app refuses a command because the two disagree
-about the protocol — the refusal names this command, and running it is the whole
-fix.
+one sits.
+
+The app and this CLI ship separately, so they can drift. When they disagree about
+the protocol the app **refuses the command** — every command, not just the new
+one — rather than doing something you cannot see is wrong. The refusal names the
+cure, and there are only two:
+
+- *"this dray CLI speaks protocol vN, the app speaks vM — run `dray update`"* —
+  you are behind. Run it, then retry the command. This is the common case and
+  you can fix it yourself, in one step, without asking anyone.
+- *"… — update the Dray app"* — the **app** is behind. You cannot fix this from
+  here. Say so to the user, name the command you were trying to run, and stop.
+  Do not work around it.
+
+A refusal is not a failure of the thing you were doing. Nothing was created and
+nothing was sent, so retrying after the fix is safe.
 
 ## Limits
 
@@ -157,4 +173,6 @@ fix.
 - **Dray must be running.** If it is not, `dray` says so and exits non-zero.
 - **Nothing updates itself.** A CLI too old for the app is refused with a line
   saying so; `dray update` is how that gets fixed. If the refusal says the *app*
-  is behind, tell the user — you cannot update it from here.
+  is behind, tell the user — you cannot update it from here. Updating the app
+  first is the smoother order for exactly that reason: it leaves the CLI behind,
+  which is the half that can fix itself.

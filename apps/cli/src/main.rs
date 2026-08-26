@@ -142,8 +142,6 @@ fn run() -> Result<(), String> {
 }
 
 fn new(args: New) -> Result<(), String> {
-    let asked_for_a_base = args.from.is_some();
-
     let request = Request::CreateSession(CreateSession {
         prompt: args.prompt,
         project_path: resolve_project(args.project),
@@ -166,28 +164,14 @@ fn new(args: New) -> Result<(), String> {
                     Some(name) => format!(" in worktree {name}"),
                     None => String::new(),
                 },
+                // `--from <session-id>` names a session, so the branch it
+                // resolved to is news: the caller asked with an id and only the
+                // app could say what that session's work is on.
                 match &base_ref {
                     Some(base) => format!(", based on {base}"),
                     None => String::new(),
                 }
             );
-
-            // The one place a create can half-succeed. An app predating `--from`
-            // drops the field in silence, starts the session off
-            // `origin/<default>` and answers exactly as it always did — so a
-            // reviewer spawned to look at unpushed work would find none of it
-            // and report confidently on the wrong tree. The absent `baseRef` is
-            // the only evidence, and this turns it into a sentence.
-            //
-            // Said, not failed: the session is running either way, and exiting
-            // non-zero here reads as "nothing happened" and earns a second one.
-            if asked_for_a_base && base_ref.is_none() {
-                eprintln!(
-                    "warning: --from was ignored — this Dray app predates it, so the session \
-                     started from the default branch instead. Update the app, then delete this \
-                     session and try again."
-                );
-            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -588,6 +572,23 @@ mod tests {
         // The app tells a stale CLI to run this, so the skill has to say what
         // it is — that sentence is the whole self-heal path.
         assert!(SKILL.contains("dray update"));
+    }
+
+    /// A version bump refuses *every* command, and that is only tolerable
+    /// because the refusal is actionable. Which half is behind decides which
+    /// cure applies, and only one of the two can be run from here — so the
+    /// skill has to teach both, or an agent meeting the app-is-behind half
+    /// burns the turn running `dray update` at a problem it cannot touch.
+    ///
+    /// Anchored on the two cures `mismatch` emits verbatim rather than on the
+    /// prose around them: those strings are the actual contract, and the prose
+    /// wraps.
+    #[test]
+    fn the_skill_teaches_both_halves_of_a_protocol_refusal() {
+        assert!(SKILL.contains("update the Dray app"));
+        // And that a refusal is safe to retry, or it reads as a failed create
+        // and earns a second session nobody asked for.
+        assert!(SKILL.contains("Nothing was created"));
     }
 
     /// A worktree carries what was committed, so a reviewer pointed at work in
