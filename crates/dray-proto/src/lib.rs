@@ -81,6 +81,15 @@ pub struct CreateSession {
     /// Absent for a call from the user's own terminal, which is ordinary.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+    /// Where the new session's worktree starts from: a session id, a branch, or
+    /// any git ref. `None` is the ordinary case and means `origin/<default>`,
+    /// which is what the harness would have picked on its own.
+    ///
+    /// A session id is resolved to the branch that session's work lands on, and
+    /// that resolution is the app's — the CLI has no index to read and no
+    /// business learning how a session's branch is named.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 /// A prompt sent into a session that already exists.
@@ -118,7 +127,17 @@ pub struct ListSessions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
-    Created { session: SessionSummary },
+    Created {
+        session: SessionSummary,
+        /// What `from` resolved to, echoed back so the caller sees the commit
+        /// its session actually started at rather than the string it asked
+        /// with. `None` both for an ordinary create and — the case that
+        /// matters — for an app too old to know the field at all, which is how
+        /// the CLI catches a `--from` that was silently dropped instead of
+        /// honoured.
+        #[serde(default)]
+        base_ref: Option<String>,
+    },
     Listed { sessions: Vec<SessionSummary> },
     /// `queued` when the target had a turn in flight, so the prompt is held
     /// until it reaches a boundary rather than being dropped or interrupting.
@@ -224,6 +243,42 @@ mod tests {
         assert_eq!(create.model, None);
         assert_eq!(create.effort, None);
         assert_eq!(create.harness, None);
+        assert_eq!(create.from, None);
+    }
+
+    #[test]
+    fn a_base_travels_on_the_create() {
+        let line = serde_json::to_string(&Envelope::new(Request::CreateSession(CreateSession {
+            prompt: "review it".into(),
+            from: Some("worktree-calm-owl".into()),
+            ..Default::default()
+        })))
+        .unwrap();
+        assert!(line.contains(r#""from":"worktree-calm-owl""#));
+
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::CreateSession(create) = back.request else {
+            panic!("wrong variant");
+        };
+        assert_eq!(create.from.as_deref(), Some("worktree-calm-owl"));
+    }
+
+    /// An app predating `--from` answers a create with no `baseRef` at all, and
+    /// that absence is the only signal the CLI gets that the flag was dropped
+    /// rather than honoured — so it has to survive parsing rather than fail it.
+    #[test]
+    fn a_create_answered_without_a_base_still_parses() {
+        let response: Response = serde_json::from_str(
+            r#"{"status":"created","session":{"sessionId":"a","title":"t","cwd":"/p",
+                "projectPath":"/p","branch":null,"worktreeName":null,"status":"idle",
+                "modified":"now"}}"#,
+        )
+        .unwrap();
+
+        let Response::Created { base_ref, .. } = response else {
+            panic!("wrong variant");
+        };
+        assert_eq!(base_ref, None);
     }
 
     #[test]

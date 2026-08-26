@@ -82,6 +82,12 @@ struct New {
     /// Which agent runs it. claude_code today.
     #[arg(long)]
     harness: Option<String>,
+
+    /// Base the new session's worktree on existing work: a session id, a
+    /// branch, or any git ref. Committed work only. Defaults to
+    /// origin/<default>.
+    #[arg(long, value_name = "SESSION|REF")]
+    from: Option<String>,
 }
 
 #[derive(Args)]
@@ -136,6 +142,8 @@ fn run() -> Result<(), String> {
 }
 
 fn new(args: New) -> Result<(), String> {
+    let asked_for_a_base = args.from.is_some();
+
     let request = Request::CreateSession(CreateSession {
         prompt: args.prompt,
         project_path: resolve_project(args.project),
@@ -143,21 +151,43 @@ fn new(args: New) -> Result<(), String> {
         effort: args.effort,
         harness: args.harness,
         parent_session_id: parent_session_id(),
+        from: args.from,
     });
 
     match send(request)? {
-        Response::Created { session } => {
+        Response::Created { session, base_ref } => {
             // The id alone on stdout, so `$(dray new …)` captures something
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
             eprintln!(
-                "Started \"{}\"{}",
+                "Started \"{}\"{}{}",
                 session.title,
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
                     None => String::new(),
+                },
+                match &base_ref {
+                    Some(base) => format!(", based on {base}"),
+                    None => String::new(),
                 }
             );
+
+            // The one place a create can half-succeed. An app predating `--from`
+            // drops the field in silence, starts the session off
+            // `origin/<default>` and answers exactly as it always did — so a
+            // reviewer spawned to look at unpushed work would find none of it
+            // and report confidently on the wrong tree. The absent `baseRef` is
+            // the only evidence, and this turns it into a sentence.
+            //
+            // Said, not failed: the session is running either way, and exiting
+            // non-zero here reads as "nothing happened" and earns a second one.
+            if asked_for_a_base && base_ref.is_none() {
+                eprintln!(
+                    "warning: --from was ignored — this Dray app predates it, so the session \
+                     started from the default branch instead. Update the app, then delete this \
+                     session and try again."
+                );
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -509,6 +539,34 @@ mod tests {
     }
 
     #[test]
+    fn a_base_can_be_a_session_or_a_ref() {
+        // One flag for both, because the app is the only side that can tell
+        // them apart — it holds the index, and this does not.
+        for value in ["0198f0a2-1c5e-7000-8000-000000000000", "feature/login"] {
+            let cli = Cli::parse_from(["dray", "new", "review it", "--from", value]);
+            let Command::New(args) = cli.command else {
+                panic!("wrong subcommand");
+            };
+            assert_eq!(args.from.as_deref(), Some(value));
+        }
+
+        let cli = Cli::parse_from(["dray", "new", "x"]);
+        let Command::New(args) = cli.command else {
+            panic!("wrong subcommand");
+        };
+        assert_eq!(args.from, None);
+    }
+
+    /// The tree is still Dray's to make either way — `--from` moves where the
+    /// branch starts, and there is no flag for running in somebody else's
+    /// checkout.
+    #[test]
+    fn a_base_does_not_bring_back_a_way_into_someone_elses_tree() {
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--in", "abc"]).is_err());
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--detach"]).is_err());
+    }
+
+    #[test]
     fn an_explicit_project_beats_the_working_directory() {
         assert_eq!(
             resolve_project(Some(PathBuf::from("/x/proj"))).as_deref(),
@@ -530,6 +588,16 @@ mod tests {
         // The app tells a stale CLI to run this, so the skill has to say what
         // it is — that sentence is the whole self-heal path.
         assert!(SKILL.contains("dray update"));
+    }
+
+    /// A worktree carries what was committed, so a reviewer pointed at work in
+    /// progress reports on a tree missing the very change the user is looking
+    /// at. Nothing in the mechanism can fix that, which makes saying it part of
+    /// the feature rather than documentation around it.
+    #[test]
+    fn the_skill_says_a_base_carries_committed_work_only() {
+        assert!(SKILL.contains("--from"));
+        assert!(SKILL.contains("Committed work only"));
     }
 
     #[test]

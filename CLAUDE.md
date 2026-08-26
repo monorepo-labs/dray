@@ -487,7 +487,19 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **Row appear, and deliberately not selected.** User mid-conversation in session that spawned this one; yanking them out = opposite of what fanning out for. Listener sit in `[]` effect so it need `showArchivedRef`, same reason `selectedSessionIdRef` next to it exist.
 
-**Spawned session always take worktree, and no flag turn it off.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart — so opt-out = footgun with no good use. `--no-worktree` existed and removed. **Name not caller's either** — `--worktree-name` and its proto field went the same way: agent have no basis for picking one, app already generate readable name, and supplied name = one more thing that collide. Cost already documented above: `-w` fork from `origin/<default>`, not from branch parent sit on, so fanning out from unpushed feature branch give children without parent's work.
+**Spawned session always take worktree, and no flag turn it off.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart — so opt-out = footgun with no good use. `--no-worktree` existed and removed. **Name not caller's either** — `--worktree-name` and its proto field went the same way: agent have no basis for picking one, app already generate readable name, and supplied name = one more thing that collide.
+
+**`--from` move where tree start, not who own it.** `-w` fork from `origin/<default>` whatever checked out, so spawned session could not see work of session that spawned it — which put obvious use, *second model review what first just did*, out of reach. `--from <session-id | branch | ref>` answer it: still new worktree, based at that point. Sharing live checkout stay out of scope, and `--from` is not a way in.
+
+**Mechanism = Dray make tree itself.** `-w`'s flag surface expose no base ref (`worktree.baseRef` = settings key, not flag), so [create_worktree](apps/desktop/src-tauri/src/git.rs) run `git worktree add --no-track -B worktree-<name> <path> <base>` and child spawn **into** that directory with no `-w` at all — symmetric half of `remove_worktree` next to it. Falls out of that: tree exist before child do, so baseline = real `snapshot_tree` not `base_ref_tree`'s approximation; and tree carry no lock, since only CLI lock trees and only `-p` fail to release them.
+
+**Branch, never detached HEAD.** git refuse checking out branch another worktree hold, so `--from` cannot mean "same branch" — leaving detached-vs-new-branch as real choice. Detached suit session that only read, and cost four surfaces: PR tab look branch up, handoff row offer to push it, `remove_worktree` delete it, `sessionBranch` name it. So `--from` always mint same `worktree-<name>` branch `-w` would have, starting at given ref instead. No second flag. `-B` not `-b`, matching CLI: branch left behind by tree deleted outside Dray otherwise make that name fail forever, and `-B` cannot reach branch some worktree hold — exactly case where it somebody's live work.
+
+**Committed work only, and skill say so out loud.** Worktree at branch tip carry what was committed, not what author have open. Usually right for review; unsaid, it = reviewer reporting confidently on tree missing very change user looking at. Pinned by test, like `dray update` is.
+
+**Session id resolve through [`session_branch`](apps/desktop/src-tauri/src/store.rs), same reading `sessionBranch` in [pr.ts](apps/desktop/src/lib/pr.ts) take.** Two reader, neither can call other — PR tab need it in frontend, `--from` need it in Rust — so rule stated twice and tested twice against same four cases. What it must not become = two *different* rules: `--from` starting reviewer on one branch while header beside it name another = disagreement nothing on screen could explain. Id tried before ref, since id = address everywhere else in `dray` and v7 uuid = no branch name anybody type.
+
+**No version bump, and `Response::Created` carry resolved base for that reason.** Added optional field need none — but old app drop `from` in *silence*, start session off `origin/<default>`, and answer exactly as always, so reviewer find none of work it was spawned for. Absent `baseRef` = only evidence, and CLI turn it into sentence naming "update the app". Warned, not failed: session running either way, and non-zero exit read as "nothing happened" and earn second one.
 
 **`dray send` go both way, and that one command not two.** Child reporting summary up and parent handing child extra context = same operation, so no reply channel beside a send. Message arrive as ordinary prompt and *start a turn*, so it wake idle agent; target mid-turn queue it and CLI say so, since queued not failure. Unrestricted to parent/child pair on purpose — id = address, and naming relationship = one more rule to get wrong.
 
@@ -598,7 +610,9 @@ baseline because there no tree to snapshot. Name resolved against **project**,
 not against parent's own, so fork of fork can't collide with tree it came from.
 Item name that cost out loud: `claude -w` fork *tree* from `origin/<default>`,
 not from wherever session is, so copy carry whole conversation onto code that
-may not hold work it was about.
+may not hold work it was about. Cure now exist next door — `create_worktree` take
+base ref, and `send_msg` already spawn into tree it made — so this = wiring, not
+missing machinery. Wanted a base of parent's own branch tip; not done here.
 
 **Name resolved against index too, not disk alone.** `resolve_worktree_name` ask
 filesystem alone, and lazy fork open window that never had: fork's tree not exist

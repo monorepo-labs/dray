@@ -68,6 +68,10 @@ async fn send_msg(
             branch,
             use_worktree,
             worktree_name,
+            // The composer offers no base ref: a worktree session created there
+            // is one the reader is starting fresh, and the picker already hides
+            // the branch list in worktree mode because `-w` would not honour it.
+            None,
             is_new_session,
             // The composer never has a parent, and its prompts are the user's
             // own; only the orchestration socket sets either.

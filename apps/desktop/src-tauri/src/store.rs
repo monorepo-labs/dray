@@ -391,6 +391,39 @@ pub async fn resolve_unclaimed_worktree_name(
     bail!("could not find an unused worktree name after 16 attempts")
 }
 
+/// The branch a session's work lands on — the reading `--from <session-id>`
+/// resolves through, and the same one `sessionBranch` in `pr.ts` takes.
+///
+/// One rule, stated twice because it has two readers and neither can call the
+/// other: the PR tab needs it in the frontend, and basing a worktree on another
+/// session's work needs it here. What it must not become is two *different*
+/// rules — a `--from` that starts a reviewer on one branch while the header
+/// beside it names another is a disagreement nothing on screen could explain.
+///
+/// `observed` is git's own reading of HEAD, and it wins wherever the session
+/// still has a checkout of its own: the recorded branch is a guess made at
+/// creation, and a checkout inside the tree moves HEAD without touching it.
+///
+/// `worktree_removed` is the one case it loses. A relocated session runs in the
+/// project root, a checkout shared with every other session and with the
+/// reader's own editor, so HEAD there answers "what is this checkout on" and
+/// never "where did this session's work land".
+///
+/// The guess itself is just `branch`, with no `worktree-<name>` rebuild beside
+/// it: [`SessionIndexItem::new`] and [`SessionIndexItem::fork`] both write that
+/// name into the field at creation, so the record already holds it. `pr.ts`
+/// rebuilds it because a frontend session object can predate that write.
+pub fn session_branch(item: &SessionIndexItem, observed: Option<&str>) -> Option<String> {
+    if item.worktree_removed {
+        return item.branch.clone();
+    }
+
+    observed
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+        .or_else(|| item.branch.clone())
+}
+
 /// `claude -w <name>` places the tree here and names its branch
 /// `worktree-<name>` — both confirmed against the worktree fixtures.
 pub fn worktree_path(project_path: &str, name: &str) -> String {
@@ -1125,6 +1158,62 @@ mod tests {
         // A tree of its own, so HEAD in it is the honest answer again.
         let elsewhere = parent.fork("child", Some("bold-otter"));
         assert!(!elsewhere.worktree_removed);
+    }
+
+    /// The four cases `sessionBranch` in `pr.ts` is tested on, so `--from` and
+    /// the PR tab cannot come to disagree about which branch a session is on.
+    #[test]
+    fn a_sessions_branch_reads_the_same_way_the_pr_tab_reads_it() {
+        let worktree = SessionIndexItem::new(
+            "a",
+            Harness::ClaudeCode,
+            "/p/.claude/worktrees/calm-owl",
+            "/p",
+            Some("calm-owl"),
+            Some("main"),
+            "hi",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+        // The name the CLI mints, which `new` already wrote into the field.
+        assert_eq!(
+            session_branch(&worktree, None).as_deref(),
+            Some("worktree-calm-owl")
+        );
+        // Git's own reading outranks the guess: anything checking out another
+        // branch inside the tree leaves the record describing one it left.
+        assert_eq!(
+            session_branch(&worktree, Some("fix/thing")).as_deref(),
+            Some("fix/thing")
+        );
+
+        let plain = SessionIndexItem::new(
+            "b",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            Some("feature"),
+            "hi",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+        assert_eq!(session_branch(&plain, None).as_deref(), Some("feature"));
+
+        // Relocated: `cwd` is the shared project root, so HEAD there answers
+        // what that checkout is on and never where this session's work landed.
+        let mut settled = worktree.clone();
+        settled.worktree_name = None;
+        settled.cwd = settled.project_path.clone();
+        settled.worktree_removed = true;
+        assert_eq!(
+            session_branch(&settled, Some("main")).as_deref(),
+            Some("worktree-calm-owl")
+        );
     }
 
     /// A fork is a copy, so it sits exactly where the original sits: beside its

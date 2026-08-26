@@ -245,6 +245,14 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
         .map(|p| p.permission_mode)
         .unwrap_or_else(ApprovalPolicy::default);
 
+    // Resolved before anything is written, so a `--from` naming a session or a
+    // ref that cannot be found costs an error rather than a session sitting in
+    // the sidebar on the wrong base.
+    let base_ref = match create.from.as_deref() {
+        Some(from) => Some(resolve_base(from, &project_path).await?),
+        None => None,
+    };
+
     let session_id = uuid::Uuid::now_v7().to_string();
     let manager = app.state::<SessionManager>();
 
@@ -267,6 +275,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             // one, and a name that collides is a create that fails for a field
             // nobody wanted. `None` lets the app generate a readable one.
             None,
+            base_ref.as_deref(),
             true,
             create.parent_session_id.as_deref(),
             // The creating session is this one's *parent*, which the sidebar
@@ -287,7 +296,60 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
 
     Ok(Response::Created {
         session: summarize(item),
+        base_ref,
     })
+}
+
+/// What `--from` starts the new worktree at: a session id, a branch, or any
+/// other ref.
+///
+/// A session id is tried first, because it is the address everywhere else in
+/// `dray` — `ls` prints it, `send` takes it — and an agent holding one should
+/// not have to learn how Dray names branches to point at that session's work.
+/// A ref that happens to look like a session id is the only ambiguity, and a
+/// v7 UUID is not a branch name anybody types.
+///
+/// The session's branch comes from [`store::session_branch`], the one reading
+/// of that question, so this cannot start a reviewer on one branch while the
+/// author's header names another.
+///
+/// **Committed work only**, and nothing here can change that: a worktree at a
+/// branch tip carries what was committed and not what the author has open in
+/// their editor. Usually right for a review, and said plainly in the skill,
+/// because the failure is an agent reporting confidently on a tree that is
+/// missing the very change the user is looking at.
+async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
+    if let Some(item) = store::get_session_index_item(from).await? {
+        // Read where the session actually runs, which is its worktree for a
+        // worktree session — `session_branch` outranks it for a relocated one,
+        // whose `cwd` is the shared project root.
+        let observed = crate::git::current_branch(&item.cwd).await;
+        let branch = store::session_branch(&item, observed.as_deref()).with_context(|| {
+            format!(
+                "session {from} is on no branch — a detached HEAD, or a directory that is not \
+                 a repository. Pass a branch or a commit instead."
+            )
+        })?;
+
+        // A session in another repo — or one whose branch has since been
+        // deleted — names a branch this one has never heard of. Said here
+        // rather than left to git, whose error names the branch without saying
+        // that a session was what asked for it.
+        if crate::git::resolve_commit(project_path, &branch).await.is_none() {
+            bail!(
+                "session {from} is on branch {branch}, which {project_path} does not have — \
+                 check the two are the same repository, and that the branch still exists"
+            );
+        }
+
+        return Ok(branch);
+    }
+
+    if crate::git::resolve_commit(project_path, from).await.is_some() {
+        return Ok(from.to_string());
+    }
+
+    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path}")
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {
@@ -392,6 +454,7 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
             &target.cwd,
             None,
             false,
+            None,
             None,
             false,
             None,

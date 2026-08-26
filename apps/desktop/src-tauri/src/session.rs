@@ -320,6 +320,11 @@ impl SessionManager {
         branch: Option<&str>,
         use_worktree: bool,
         worktree_name: Option<&str>,
+        // Where the worktree starts from, already resolved to a git ref by the
+        // caller — the orchestration socket turns a session id into one, and
+        // nothing below here knows sessions. `None` is the ordinary case and
+        // hands the tree to `claude -w`, which forks it from `origin/<default>`.
+        base_ref: Option<&str>,
         is_new_session: bool,
         // Set only for a session created over the orchestration socket. The
         // composer never has one, and it is recorded rather than acted on —
@@ -345,6 +350,27 @@ impl SessionManager {
             let session_cwd = match &worktree_name {
                 Some(name) => worktree_path(cwd, name),
                 None => cwd.to_string(),
+            };
+
+            // A base ref is the one case Dray makes the tree itself. The harness
+            // cannot be told where to fork from — `-w` resolves the default
+            // branch and fetches `origin/<it>`, and its flag surface exposes no
+            // base at all — so the tree is created here and the child is spawned
+            // *into* it with no `-w`. Refused for a session with no worktree,
+            // which would mean checking a ref out over whatever the reader has
+            // in the project root.
+            //
+            // Ahead of the index write, unlike the spawn below: a session whose
+            // process fails to start is still worth a row, since its transcript
+            // and its worktree exist, while a base git cannot resolve has left
+            // nothing behind at all and the caller is getting the error.
+            let owned_worktree = match (base_ref, &worktree_name) {
+                (Some(base), Some(name)) => {
+                    git::create_worktree(cwd, name, base).await?;
+                    true
+                }
+                (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
+                (None, _) => false,
             };
 
             // Read back rather than taken from the caller: the picker sends
@@ -384,15 +410,26 @@ impl SessionManager {
             crate::title::spawn_title_generation(session_id, prompt, cwd, app);
 
             // Taken before the child exists, so nothing it does can end up
-            // inside its own baseline. A worktree has no directory to snapshot
-            // yet — the CLI creates the tree after launch — so that case
-            // resolves the fork point the tree will start from instead. Slightly
-            // approximate: the CLI fetches `origin/<default>` first, so an
-            // upstream commit landing in between would read as this turn's work.
-            let baseline = if worktree_name.is_some() {
-                git::base_ref_tree(cwd).await
+            // inside its own baseline. A worktree the CLI has yet to create has
+            // no directory to snapshot, so that case resolves the fork point the
+            // tree will start from instead — slightly approximate, since the CLI
+            // fetches `origin/<default>` first and an upstream commit landing in
+            // between would read as this turn's work. A tree created above has
+            // none of that: it is on disk and clean, so its snapshot is exact.
+            let baseline = match (owned_worktree, worktree_name.is_some()) {
+                (false, true) => git::base_ref_tree(cwd).await,
+                _ => git::snapshot_tree(&session_cwd).await,
+            };
+
+            // A tree we made is a directory that already exists and a checkout
+            // already on the right commit, so the child starts in it and is told
+            // nothing about worktrees at all. Every other creation spawns at the
+            // project root, because the directory `-w` is about to make cannot
+            // be `chdir`ed into before it exists.
+            let (spawn_cwd, spawn_worktree) = if owned_worktree {
+                (session_cwd.as_str(), None)
             } else {
-                git::snapshot_tree(&session_cwd).await
+                (cwd, worktree_name.as_deref())
             };
 
             let mut session = Session::init(
@@ -401,9 +438,9 @@ impl SessionManager {
                 &model_spec,
                 effort,
                 permission_mode,
-                cwd,
+                spawn_cwd,
                 &session_cwd,
-                worktree_name.as_deref(),
+                spawn_worktree,
                 is_new_session,
                 None,
                 app,
