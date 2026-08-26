@@ -13,15 +13,21 @@ use dray_proto::{
     encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
     SessionSummary,
 };
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The skill, embedded rather than downloaded at install time — a skill that
 /// describes a different version of the CLI than the one installed is worse
 /// than no skill, and fetching it separately is exactly how that happens.
 const SKILL: &str = include_str!("../skill/SKILL.md");
+
+/// `update` runs the same script a first install runs rather than doing its own
+/// fetch, verify and swap: two copies of that drift on exactly the step that
+/// checks what is about to be executed.
+const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +52,8 @@ enum Command {
     Ls(Ls),
     /// Send a message into a session that already exists.
     Send(Send),
+    /// Upgrade this binary to the newest release.
+    Update,
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -127,6 +135,7 @@ fn run() -> Result<(), String> {
         Command::New(args) => new(args),
         Command::Ls(args) => ls(args),
         Command::Send(args) => send_message(args),
+        Command::Update => update(),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
 }
@@ -253,6 +262,93 @@ fn print_table(sessions: &[SessionSummary]) {
     }
 }
 
+fn update() -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("could not find the running dray binary: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or("the running dray binary sits in no directory")?;
+
+    let scratch = scratch_dir()?;
+    let script = scratch.join("install.sh");
+    let result = download(INSTALLER_URL, &script).and_then(|()| run_installer(&script, dir));
+
+    // On the failing paths too, or a refused download leaves a half-written
+    // script behind every time someone retries.
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    result
+}
+
+/// A directory of our own to download the installer into, because the next step
+/// executes what lands there.
+///
+/// `create_dir` refuses a path that already exists — symlink included — so
+/// another local account cannot park something at the predictable name and have
+/// it run. `0700` closes the window between creating it and writing into it.
+fn scratch_dir() -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::temp_dir().join(format!("dray-update-{}", std::process::id()));
+
+    std::fs::create_dir(&path)
+        .map_err(|e| format!("could not create {}: {e}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("could not restrict {}: {e}", path.display()))?;
+
+    Ok(path)
+}
+
+fn run_installer(script: &Path, install_dir: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("sh")
+        .arg(script)
+        // So the upgrade lands where the install did instead of defaulting back
+        // to ~/.local/bin. Overwriting this very binary is safe on unix: the
+        // installer renames over the path and this process keeps the inode it
+        // started from.
+        .env("DRAY_INSTALL_DIR", install_dir)
+        .status();
+
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("the installer failed ({status})")),
+        Err(e) => Err(format!("could not run the installer: {e}")),
+    }
+}
+
+/// curl or wget, the same pair `install.sh` accepts.
+///
+/// To a file rather than `curl … | sh`, because `pipefail` is not POSIX: piped
+/// straight into a shell, a failed download reports success and installs
+/// nothing.
+fn download(url: &str, path: &Path) -> Result<(), String> {
+    for (program, args) in [
+        (
+            "curl",
+            vec![
+                OsStr::new("-fsSL"),
+                OsStr::new(url),
+                OsStr::new("-o"),
+                path.as_os_str(),
+            ],
+        ),
+        (
+            "wget",
+            vec![OsStr::new("-qO"), path.as_os_str(), OsStr::new(url)],
+        ),
+    ] {
+        match std::process::Command::new(program).args(args).status() {
+            Ok(status) if status.success() => return Ok(()),
+            // It ran and failed, which is a real failure rather than a reason
+            // to reach for the other one.
+            Ok(_) => return Err(format!("{program} could not download {url}")),
+            Err(_) => continue,
+        }
+    }
+
+    Err("curl or wget is required to update.".into())
+}
+
 fn install_skill() -> Result<(), String> {
     let dir = dirs::home_dir()
         .ok_or("could not resolve your home directory")?
@@ -376,6 +472,22 @@ mod tests {
             resolve_project(Some(PathBuf::from("/x/proj"))).as_deref(),
             Some("/x/proj")
         );
+    }
+
+    #[test]
+    fn update_takes_no_arguments() {
+        assert!(matches!(
+            Cli::parse_from(["dray", "update"]).command,
+            Command::Update
+        ));
+        assert!(Cli::try_parse_from(["dray", "update", "--version"]).is_err());
+    }
+
+    #[test]
+    fn the_skill_documents_the_command_the_mismatch_error_names() {
+        // The app tells a stale CLI to run this, so the skill has to say what
+        // it is — that sentence is the whole self-heal path.
+        assert!(SKILL.contains("dray update"));
     }
 
     #[test]

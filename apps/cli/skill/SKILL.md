@@ -99,6 +99,17 @@ sidebar, nested under this one, and reading ids back is noise they cannot act on
 Don't poll in a loop waiting for sessions to finish unless the user asked you to.
 They can watch the sidebar.
 
+## Staying current
+
+```bash
+dray update
+```
+
+Downloads the installer and re-runs it, landing the new binary where the current
+one sits. Reach for it when the app refuses a command because the two disagree
+about the protocol — the refusal names this command, and running it is the whole
+fix.
+
 ## Limits
 
 - **No reading transcripts.** You can create, list and message. You cannot read
@@ -107,3 +118,6 @@ They can watch the sidebar.
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.
 - **Dray must be running.** If it is not, `dray` says so and exits non-zero.
+- **Nothing updates itself.** A CLI too old for the app is refused with a line
+  saying so; `dray update` is how that gets fixed. If the refusal says the *app*
+  is behind, tell the user — you cannot update it from here.
