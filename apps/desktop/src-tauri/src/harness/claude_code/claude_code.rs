@@ -150,7 +150,17 @@ pub async fn init(
 
     // Resolved rather than spawned by bare name: a bundled `.app` launched from
     // Finder inherits launchd's `PATH`, which holds no `claude`.
-    let mut child = Command::new(crate::binpath::claude().await)
+    let mut command = Command::new(crate::binpath::claude().await);
+
+    // Which app the agent's own `dray` calls reach. Set because dev and release
+    // builds listen on different sockets and the CLI's default names the
+    // release one — without this a dev session's agent would file its work into
+    // the release app's sidebar.
+    if let Some(endpoint) = crate::orchestration::child_endpoint() {
+        command.env("DRAY_ENDPOINT", endpoint);
+    }
+
+    let mut child = command
         .args(args)
         .current_dir(cwd)
         // How the CLI knows which session is calling it, which is what links a

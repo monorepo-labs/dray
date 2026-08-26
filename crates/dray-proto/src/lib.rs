@@ -39,6 +39,16 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
 
+/// Where a `pnpm tauri dev` build listens instead.
+///
+/// One name per build, because the socket is a single file: a dev app binding
+/// the release app's path unlinks it and takes the channel over, so from then
+/// on every `dray` call reaches the dev app and the release app's own agents
+/// write into a socket nothing is listening on. Restarting the release app
+/// takes it back the same way. Two names let the two run side by side, which
+/// is the ordinary state while developing this app.
+pub const SOCKET_NAME_DEV: &str = "dray-dev.sock";
+
 /// A line longer than this is refused unread. The socket is `0600`, so this is
 /// hygiene rather than a threat model — but a length-prefixed-by-newline
 /// protocol with no cap is one malformed writer away from an allocation the
@@ -222,7 +232,17 @@ pub fn endpoint() -> Option<String> {
 /// agrees with the app's own `get_home_app_dir`, which is what creates the
 /// directory this sits in.
 pub fn default_socket_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".dray").join(SOCKET_NAME))
+    socket_path(false)
+}
+
+/// The socket one build of the app listens on.
+///
+/// The CLI never asks for the dev one: `dray` typed in a terminal means the app
+/// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`
+/// rather than leaving them to guess which build spawned them.
+pub fn socket_path(dev: bool) -> Option<PathBuf> {
+    let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
+    Some(dirs::home_dir()?.join(".dray").join(name))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
@@ -372,6 +392,14 @@ mod tests {
         let line = encode_line(&Response::error("nope")).unwrap();
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    #[test]
+    fn dev_and_release_sockets_are_different_files() {
+        // The whole point: a dev app must not be able to unlink the socket the
+        // installed app is serving on.
+        assert_ne!(socket_path(true), socket_path(false));
+        assert_eq!(socket_path(false), default_socket_path());
     }
 
     #[test]

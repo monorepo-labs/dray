@@ -473,6 +473,12 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **Unix socket, not HTTP port.** `~/.dray/dray.sock` — nothing on network reach it at all, no port to pick, collide on, or accidentally expose. Stale socket unlinked at bind: socket file outlive process that made it, so crash leave one behind and bind fail "address in use".
 
+**Dev build listen on `dray-dev.sock`, and that what make unlinking safe.** One path for both build mean whichever start last own channel: `bind` unlink other's socket, so release app left behind keep listener no `dray` ever reach again, and reader have to quit and restart it — every time they run `pnpm tauri dev`, which while building this app = all day. Silent both way, since neither app read socket it no longer own. `tauri::is_dev()` pick name (`dray_proto::socket_path`), same call notification path already branch on.
+
+**Child get `DRAY_ENDPOINT` injected, not left to CLI's default.** CLI resolve release socket, rightly — `dray` typed in terminal mean app reader installed — so dev app's own agent would file its session into release app's sidebar. Endpoint = one value already ([above](#orchestration)), so this = one `.env` beside `DRAY_SESSION_ID` and nothing above it change.
+
+Two build now run side by side and **share `~/.dray`** — same index, same session logs. `INDEX_LOCK` = in-process mutex, so cross-process write = last-writer-wins on whole file. Not split, deliberately: separate dev store hide exactly session reader testing against. Live with it or split store, don't add file lock for it.
+
 **Boundary = directory's `0700`, not socket's `0600`.** `bind` apply process umask, so socket land world-writable under permissive one and stay that way until chmod run moment later — window another local account connect through and reach session creation unauthenticated. Measured: umask 022 give 0755, umask 000 give 0777. Directory cannot have that window, since connecting need search permission on every dir in path — so `0700` settle it *before socket exist*. Socket's own `0600` stay as second line, not only one.
 
 **`~/.dray` narrowed in `get_home_app_dir`, and that fix privacy bug too.** It was `0755`, so every transcript — holding whole files agent read and wrote — readable by any local account.

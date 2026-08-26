@@ -7,7 +7,8 @@
 //! itself goes through [`SessionManager::send_msg`], the same function the
 //! composer reaches, so a session created here is not a second kind of session.
 //!
-//! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock`, one
+//! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock` — or
+//! `dray-dev.sock` for a dev build, see [`socket_path`] — one
 //! request per connection. Nothing on the network can reach it at all, and
 //! access control is the containing directory's `0700` — see
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
@@ -51,13 +52,34 @@ const MAX_DEPTH: usize = 2;
 /// insurance: a cycle here would hang the caller's turn rather than fail it.
 const MAX_WALK: usize = 64;
 
+/// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
+/// `dray.sock` otherwise.
+///
+/// Split by build because the release app is normally running while this one is
+/// being developed, and one path between them means whichever started last owns
+/// the channel — `bind` unlinks the other's socket, so the app left behind
+/// keeps a listener no `dray` will ever reach again.
+pub fn socket_path() -> Option<std::path::PathBuf> {
+    dray_proto::socket_path(tauri::is_dev())
+}
+
+/// What a spawned agent's `DRAY_ENDPOINT` is set to.
+///
+/// Injected rather than left to the CLI's own default, so a session started by
+/// the dev app reaches the dev app. Without it every `dray` call inside a dev
+/// session would go to the release app's socket and create sessions in the
+/// wrong sidebar.
+pub fn child_endpoint() -> Option<String> {
+    socket_path().map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Binds the socket and serves it for the life of the process.
 ///
 /// Errors are logged and swallowed by the caller: orchestration is a side
 /// channel, and an app that refuses to start because a socket is in use would
 /// be trading the whole product for a feature.
 pub async fn serve(app: AppHandle) -> Result<()> {
-    let path = dray_proto::default_socket_path().context("could not resolve the socket path")?;
+    let path = socket_path().context("could not resolve the socket path")?;
 
     // Creates `~/.dray` and narrows it to `0700`, which is what actually
     // guards this socket. `bind` applies the process umask, so under a
@@ -93,9 +115,10 @@ pub async fn serve(app: AppHandle) -> Result<()> {
 
     // A socket file outlives the process that made it — a crash or a SIGKILL
     // leaves one behind, and binding onto it fails with "address in use". The
-    // file is not a lock and holds nothing, so removing it is safe: a *live*
-    // Dray would still hold the second instance off, because two processes
-    // cannot both have the app's single-instance state anyway.
+    // file is not a lock and holds nothing, so removing it is safe *because
+    // this path names one build*: unlinking can only ever take the channel from
+    // another copy of the same build, never from the release app a dev one is
+    // running beside.
     tokio::fs::remove_file(&path).await.ok();
 
     let listener = UnixListener::bind(&path)
