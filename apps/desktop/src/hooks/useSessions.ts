@@ -255,6 +255,9 @@ const handleSendMsg = async (
 
   if (!sessionId) {
     sessionId = crypto.randomUUID();
+    // Claimed alongside the selection everywhere it moves, or a read still out
+    // from an earlier click can land afterwards and roll this one away.
+    selectionRequestRef.current = sessionId;
     setSelectedSessionId(sessionId);
   }
 
@@ -434,6 +437,7 @@ const handleAnswerQuestions = async (
 // since the picker is the only thing that moves the tree and a remembered name
 // would either be a lie or an unasked-for checkout.
 const handleNewSession = () => {
+  selectionRequestRef.current = null;
   setSelectedSessionId(null);
   setModelId(prefs.modelId);
   setEffortByModel(prefs.effortByModel);
@@ -466,6 +470,16 @@ const restoreSessionControls = (item: SessionIndexItem) => {
 };
 
 const handleSelectSessionIndexItem = async (sessionId: string) => {
+  // Claimed synchronously, so a click arriving during the read below is visible
+  // to it immediately. The rendered selection cannot serve here — it is a render
+  // behind, so a read finishing in that gap would still see itself as current.
+  selectionRequestRef.current = sessionId;
+
+  // Where the reader was, for the case the id turns out to resolve to nothing.
+  // Whether it is still somewhere they can be put back is decided at the
+  // rollback itself, not here — see there.
+  const previous = selectedSessionIdRef.current;
+
   setSelectedSessionId(sessionId);
 
   // Opening the session is answering the notice about it — an unread completion
@@ -493,7 +507,45 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
       upsertSession(snapshot);
+      return;
     }
+
+    // The id resolves to nothing on disk, so the selection has to go back where
+    // it was. Leaving it is not the harmless-looking half-state it reads as:
+    // `selectedSession` would be null while `selectedSessionId` still held the
+    // dead id, and both `centered` and `isNewTask` derive from that null — so
+    // the reader gets the *new task* composer while `handleSendMsg` still finds
+    // an id, computes `isNewSession: false`, and resumes a session that is gone.
+    //
+    // Reached by a relayed message naming a sender since deleted: the
+    // attribution is persisted deliberately, and the session it points at need
+    // not outlive it. A sidebar row can go stale the same way.
+    //
+    // Only when this read is still the one being waited on. A click that landed
+    // while it was out has already claimed the request, and rolling back onto
+    // this answer would take the reader off the session they just asked for.
+    if (selectionRequestRef.current !== sessionId) return;
+
+    // Only a session still loaded can be gone back to, and that is judged here
+    // rather than before the read, for two reasons that both end in this same
+    // dead end. The selection this started from is *optimistic* until its own
+    // read lands, so it may itself be an id about to be rolled back; and a
+    // session that was loaded when this began can be deleted while the read is
+    // out, which `deleteSession` does not clear the selection for unless that
+    // session was the one selected — and by here it is not.
+    //
+    // Nothing to go back to leaves `null`, the empty composer. Not where the
+    // reader asked to be, but a state they can act from.
+    const restorable =
+      previous && sessionsRef.current.some((s) => s.sessionId === previous)
+        ? previous
+        : null;
+
+    selectionRequestRef.current = restorable;
+    setSelectedSessionId(restorable);
+    // Not "deleted": all this knows is that the id resolved to nothing, and
+    // deletion is the likely cause rather than the observed one.
+    setError("Session not found.");
   } catch (e) {
     setError(String(e));
   }
@@ -505,6 +557,27 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
 // replaced from what the store returned rather than from the value we sent —
 // the index is authoritative, and a failed write must not leave the sidebar
 // showing a state the disk doesn't have.
+/// Cuts a spawned session loose from its parent, so the sidebar stops nesting
+/// it under a row it no longer belongs to.
+///
+/// The row is replaced from what the backend returned rather than from a local
+/// edit, for `setSessionFlags`' reason: the index is authoritative, and a
+/// failed write must not leave the sidebar drawing a state the disk doesn't
+/// have. Nothing re-parents — detaching is one-way.
+const detachSession = async (sessionId: string) => {
+  try {
+    const updated = await invoke<SessionIndexItem | null>("detach_session", {
+      sessionId,
+    });
+    if (!updated) return;
+    setSessionIndexItems((prev) =>
+      prev.map((i) => (i.sessionId === sessionId ? updated : i)),
+    );
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
 const setSessionFlags = async (
   sessionId: string,
   flags: { archived?: boolean; pinned?: boolean },
@@ -931,6 +1004,16 @@ useEffect(() => {
   };
 }, []);
 
+/// The selection the reader last *asked* for, written at call time rather than
+/// at render.
+///
+/// Not interchangeable with `selectedSessionIdRef` below, which mirrors state
+/// and so lags a render behind: a click landing while a read is in flight has
+/// already changed this, and has not yet changed that. Only this one can answer
+/// "is my answer still the one being waited on", which is what stops a slow
+/// read from overwriting a newer click.
+const selectionRequestRef = useRef<string | null>(selectedSessionId);
+
 // Inside the listener the closure would see the mount-time selection; the ref
 // tracks the live one so "already being viewed" is judged against reality.
 const selectedSessionIdRef = useRef(selectedSessionId);
@@ -943,6 +1026,20 @@ const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
+
+// And again for the archived split: `session_created` is registered once, so
+// without this it would judge every arriving session against whichever view was
+// open at mount.
+const showArchivedRef = useRef(showArchived);
+showArchivedRef.current = showArchived;
+
+/// The loaded sessions as of now, for the one reader that runs after an `await`
+/// and so cannot trust the copy its closure captured. `deleteSession` empties a
+/// row out of `sessions` without touching the selection unless that row *was*
+/// the selection — so a session validated before a read can be gone by the time
+/// the read answers.
+const sessionsRef = useRef(sessions);
+sessionsRef.current = sessions;
 
 // `completed` means finished *and unread*. Reading is what retires it, so every
 // path to a read funnels through here: the status landing on the session already
@@ -1073,6 +1170,38 @@ useEffect(() => {
 // it to the index itself, so this only mirrors what's already on disk. Its own
 // listener rather than a branch in `agent_event`: nothing here came from the
 // agent, and it must not land in the session's event list.
+// A session created by something other than the composer — an agent calling the
+// `dray` CLI, which reaches the backend over its own socket. The row has to
+// appear without a refetch, the way a composer-created one does.
+//
+// The index item alone, never a `SessionSnapshot`: `agent_event` writes into
+// sessions this hook already holds and drops events for ids it doesn't, so a
+// snapshot here would start a transcript in memory that later events could miss.
+// Left as an index item, `handleSelectSessionIndexItem` loads it whole from disk
+// on first open — and `session_status` and `session_title` still land, since
+// both write by id into maps the sidebar reads rather than into `sessions`.
+//
+// Deliberately not selected. The user is mid-conversation in the session that
+// spawned this one; yanking them out of it is the opposite of what fanning work
+// out is for.
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("session_created", (event) => {
+    const item = event.payload;
+    // A new session is never archived, so it belongs to the active list only.
+    if (showArchivedRef.current) return;
+
+    setSessionIndexItems((prev) =>
+      prev.some((i) => i.sessionId === item.sessionId)
+        ? prev.map((i) => (i.sessionId === item.sessionId ? item : i))
+        : [...prev, item],
+    );
+  });
+
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
 useEffect(() => {
   const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
     const { sessionId, title } = event.payload;
@@ -1195,6 +1324,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, detachSession, deleteSession, removeWorktree};
 
 }

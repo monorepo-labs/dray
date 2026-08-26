@@ -1,7 +1,8 @@
 use crate::{
     attachments,
     events::{
-        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ImageRef, PermissionBehavior,
+        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ImageRef, MessageSender,
+        PermissionBehavior,
     },
     git,
     harness::{
@@ -77,6 +78,11 @@ pub struct QueuedMessage {
     /// what the composer gets back on a cancel is what the user typed.
     pub text: String,
     pub attachment_paths: Vec<String>,
+    /// Held with the prompt rather than looked up at flush: a relayed message
+    /// can wait out a long turn, and the sending session may be renamed or
+    /// deleted before the boundary that delivers it.
+    #[serde(default)]
+    pub from: Option<MessageSender>,
 }
 
 /// Held prompts, oldest first. Shared with the stdout task, which is where the
@@ -315,6 +321,15 @@ impl SessionManager {
         use_worktree: bool,
         worktree_name: Option<&str>,
         is_new_session: bool,
+        // Set only for a session created over the orchestration socket. The
+        // composer never has one, and it is recorded rather than acted on —
+        // the depth cap reads it back off the index on the *next* create.
+        parent_session_id: Option<&str>,
+        // The session that relayed this prompt, for a message arriving over the
+        // orchestration socket. `None` everywhere else: the composer's prompts
+        // are the user's own, and a `user_message` with a sender is drawn
+        // differently.
+        from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
         let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
@@ -354,6 +369,7 @@ impl SessionManager {
                 model,
                 effort,
                 permission_mode,
+                parent_session_id,
             );
             append_session_index_item(item.clone()).await?;
 
@@ -394,7 +410,7 @@ impl SessionManager {
             )
             .await?;
             session
-                .send_msg(prompt, attachment_paths, baseline, app)
+                .send_msg(prompt, attachment_paths, baseline, from, app)
                 .await?;
             // The prompt event is synthesized by `send_msg`, so read the log
             // back rather than returning empty — otherwise the frontend's first
@@ -496,11 +512,11 @@ impl SessionManager {
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
                 if tool_in_flight {
-                    s.queue_and_flush(prompt, attachment_paths, app).await;
+                    s.queue_and_flush(prompt, attachment_paths, from, app).await;
                     return Ok(SendOutcome::default());
                 }
 
-                let queued = s.queue_msg(prompt, attachment_paths).await;
+                let queued = s.queue_msg(prompt, attachment_paths, from).await;
                 return Ok(SendOutcome {
                     snapshot: None,
                     queued: Some(queued),
@@ -518,7 +534,7 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, baseline, app).await?;
+            s.send_msg(prompt, attachment_paths, baseline, from, app).await?;
             return Ok(SendOutcome::default());
         }
 
@@ -571,7 +587,7 @@ impl SessionManager {
         }
 
         session
-            .send_msg(prompt, attachment_paths, baseline, app)
+            .send_msg(prompt, attachment_paths, baseline, from, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome::default())
@@ -893,6 +909,7 @@ impl Session {
         prompt: &str,
         attachment_paths: &[String],
         baseline: Option<String>,
+        from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<()> {
         deliver_prompt(
@@ -901,6 +918,7 @@ impl Session {
             attachment_paths,
             baseline,
             false,
+            from,
             &self.seq,
             &self.events,
             &self.stdin,
@@ -920,12 +938,18 @@ impl Session {
     /// Holds a prompt typed during a running turn. Nothing is written or
     /// persisted here — [`flush_queued`] does both once the turn reaches a
     /// boundary, which is what leaves a cancel possible until then.
-    pub async fn queue_msg(&self, prompt: &str, attachment_paths: &[String]) -> QueuedMessage {
+    pub async fn queue_msg(
+        &self,
+        prompt: &str,
+        attachment_paths: &[String],
+        from: Option<MessageSender>,
+    ) -> QueuedMessage {
         let message = QueuedMessage {
             id: Uuid::now_v7().to_string(),
             session_id: self.id.clone(),
             text: prompt.to_string(),
             attachment_paths: attachment_paths.to_vec(),
+            from,
         };
         self.queued.lock().await.push(message.clone());
         message
@@ -946,8 +970,14 @@ impl Session {
     ///
     /// Through the queue rather than written directly, so a prompt already
     /// waiting goes out ahead of this one instead of being overtaken.
-    pub async fn queue_and_flush(&self, prompt: &str, attachment_paths: &[String], app: &AppHandle) {
-        self.queue_msg(prompt, attachment_paths).await;
+    pub async fn queue_and_flush(
+        &self,
+        prompt: &str,
+        attachment_paths: &[String],
+        from: Option<MessageSender>,
+        app: &AppHandle,
+    ) {
+        self.queue_msg(prompt, attachment_paths, from).await;
         flush_queued(
             &self.id,
             &self.queued,
@@ -1198,6 +1228,7 @@ async fn deliver_prompt(
     attachment_paths: &[String],
     baseline: Option<String>,
     queued: bool,
+    from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -1223,6 +1254,7 @@ async fn deliver_prompt(
             .collect(),
         baseline,
         queued,
+        from,
     };
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),
@@ -1317,6 +1349,7 @@ pub async fn flush_queued(
             &message.attachment_paths,
             None,
             true,
+            message.from,
             seq,
             events,
             stdin,

@@ -76,8 +76,17 @@ pub struct SessionIndexItem {
     /// this app's own log and index entry is instant, while the CLI's half only
     /// happens on a spawn — so the first send resumes the parent with
     /// `--fork-session` and clears this. Every send after is an ordinary resume.
+    ///
+    /// Distinct from `parent_session_id` below, which is lineage and permanent:
+    /// this one is cleared the moment the CLI carries the fork out.
     #[serde(default)]
     pub fork_from: Option<String>,
+    /// The session whose agent created this one, for a session created over the
+    /// orchestration socket rather than by a person in the composer. `Some` is
+    /// also what the depth guard reads: a session that was itself spawned may
+    /// not spawn more.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
     pub created: String,
     pub modified: String,
     pub archived: bool,
@@ -121,7 +130,31 @@ pub async fn get_home_app_dir() -> Result<PathBuf> {
     }
 
     fs::create_dir_all(&path).await?;
+    restrict_to_owner(&path).await;
+
     Ok(path)
+}
+
+/// Narrows the app directory to the owner alone.
+///
+/// Two things depend on it. Everything under here is private by content —
+/// transcripts hold whole files the agent read and wrote — and the default
+/// `0755` left all of it readable by any other local account.
+///
+/// It is also the orchestration socket's real authentication boundary.
+/// Connecting to a unix socket needs search permission on every directory in
+/// its path, so a `0700` parent settles the question *before the socket
+/// exists* — where the socket's own mode cannot, since `bind` applies the
+/// process umask and a permissive one leaves a window between bind and chmod.
+///
+/// Best-effort: a directory that cannot be narrowed is worth carrying on with,
+/// since the alternative is an app that refuses to start.
+async fn restrict_to_owner(path: &PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+        eprintln!("[app dir permissions err] {e}");
+    }
 }
 
 /// `~/.dray/sessions`, creating it if needed.
@@ -207,6 +240,7 @@ impl SessionIndexItem {
         model: ModelId,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        parent_session_id: Option<&str>,
     ) -> Self {
         let now = now_rfc3339();
 
@@ -229,6 +263,7 @@ impl SessionIndexItem {
             permission_mode,
             status: SessionStatus::default(),
             fork_from: None,
+            parent_session_id: parent_session_id.map(str::to_string),
             created: now.clone(),
             modified: now,
             archived: false,
@@ -275,6 +310,12 @@ impl SessionIndexItem {
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
             fork_from: Some(self.session_id.clone()),
+            // Not inherited, and the sidebar is why: this field nests a row
+            // under the session that created it, and a fork was created by a
+            // person in the sidebar — not by whatever agent spawned its parent.
+            // Inheriting would file it under a grandparent it has no relation
+            // to, and start its depth count partway up a chain it never joined.
+            parent_session_id: None,
             created: now.clone(),
             modified: now,
             archived: false,
@@ -459,6 +500,32 @@ pub async fn touch_session_index_item(
 /// Sets `archived` and/or `pinned` on one entry. `None` leaves that flag alone,
 /// so the two sidebar controls share one command without either clobbering the
 /// other's field. Returns the entry as written, or `None` if the id is unknown.
+/// Cuts a session loose from the parent that spawned it, so the sidebar draws
+/// it as a top-level row rather than nested.
+///
+/// One-way on purpose: there is no re-attach. Parentage records who *created*
+/// a session, which is a fact about the past — a session detached and then
+/// re-parented somewhere else would describe a history that never happened,
+/// and nothing in the app needs that.
+///
+/// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
+/// list, and detaching must not jump the row to the top of it.
+pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(None);
+    };
+
+    item.parent_session_id = None;
+    let updated = item.clone();
+
+    write_session_index(&sessions).await?;
+
+    Ok(Some(updated))
+}
+
 pub async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
@@ -1005,6 +1072,7 @@ mod tests {
             ModelId::Opus,
             Some(Effort::High),
             ApprovalPolicy::AcceptEdits,
+            None,
         );
         parent.archived = true;
         parent.pinned = true;
@@ -1043,6 +1111,7 @@ mod tests {
             ModelId::Opus,
             None,
             ApprovalPolicy::Auto,
+            None,
         );
         parent.worktree_name = None;
         parent.worktree_removed = true;
@@ -1069,6 +1138,7 @@ mod tests {
             ModelId::Opus,
             None,
             ApprovalPolicy::Auto,
+            None,
         );
 
         let fork = parent.fork("child", Some("bold-otter"));
@@ -1135,6 +1205,7 @@ mod tests {
                 images: vec![image("/home/.dray/attachments/parent/a.png")],
                 baseline: None,
                 queued: false,
+                from: None,
             }),
             event(AgentEventPayload::ToolCallCompleted {
                 call_id: "c1".into(),
@@ -1186,6 +1257,7 @@ mod tests {
                 ModelId::Opus,
                 None,
                 ApprovalPolicy::Auto,
+                None,
             );
             i.archived = archived;
             i
@@ -1228,6 +1300,7 @@ mod tests {
             ModelId::Opus,
             None,
             ApprovalPolicy::Auto,
+            None,
         );
 
         assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
@@ -1276,6 +1349,7 @@ mod tests {
                 ModelId::Opus,
                 None,
                 ApprovalPolicy::Auto,
+                None,
             )
         };
 
@@ -1312,6 +1386,7 @@ mod tests {
             ModelId::Opus,
             Some(Effort::High),
             ApprovalPolicy::AcceptEdits,
+            None,
         );
         let json = serde_json::to_value(SessionSnapshot {
             index_item: item,

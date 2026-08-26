@@ -5,6 +5,34 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.6.0
+
+### Added
+
+- **An agent can fan work out into its own Dray sessions.** "Work through these
+  three issues" now becomes three sessions, each in its own worktree, each a row
+  in the sidebar you can open, interrupt and delete like any other. Spawned
+  sessions nest under the one that created them, and messages travel both ways —
+  a child reporting a summary up and a parent handing extra context down are the
+  same command. They inherit the model, effort and permission mode of the
+  session that spawned them, and a spawned session may spawn once more but no
+  deeper.
+
+  It wants the `dray` CLI, which the agent installs itself:
+  `curl -fsSL https://www.drayhq.com/install.sh | sh`. The app installs nothing —
+  it only names the capability, and the agent gets on with it.
+
+- **⌘⇧← and ⌘⇧→ step the Changes sub-tabs**, the same shape ⌘⇧↑/↓ already steps
+  the session list. Clamped rather than wrapped: with two entries, wrapping
+  makes both chords do the same thing.
+
+### Fixed
+
+- **The `dray` install command 404'd.** It resolved GitHub's latest release,
+  which the app's own releases take over — so the one command that installs the
+  CLI reached a build that never carried it. It now asks for the CLI release by
+  name.
+
 ## 0.5.3
 
 ### Added

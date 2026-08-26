@@ -1,0 +1,23 @@
+[package]
+name = "dray"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Create and list Dray sessions from the command line."
+repository = "https://github.com/monorepo-labs/dray"
+
+[[bin]]
+name = "dray"
+path = "src/main.rs"
+
+[dependencies]
+dray-proto = { path = "../../crates/dray-proto" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+dirs = "6.0.0"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1

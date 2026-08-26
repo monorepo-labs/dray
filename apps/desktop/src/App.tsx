@@ -99,6 +99,7 @@ function App() {
     handleNewSession,
     setSessionFlags,
     forkSession,
+    detachSession,
     deleteSession,
     removeWorktree,
   } = useSessions();
@@ -551,6 +552,7 @@ function App() {
           onToggleCollapsed={toggleSidebar}
           onSelect={handleSelectSessionIndexItem}
           onNewSession={handleNewSession}
+          onDetach={detachSession}
           onSetFlags={async (sessionId, flags) => {
             await setSessionFlags(sessionId, flags);
             if (flags.archived === true) {
@@ -751,6 +753,7 @@ function App() {
           selectedSessionId ? streamingContentBlock[selectedSessionId] ?? null : null
         }
         onOpenSubagent={openSubagent}
+        onOpenSession={(id) => void handleSelectSessionIndexItem(id)}
         onOpenSubagentPanel={openSubagentPanel}
         onRespondPermission={handleRespondPermission}
         onAnswerQuestions={handleAnswerQuestions}

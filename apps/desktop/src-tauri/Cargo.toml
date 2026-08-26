@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.5.3"
+version = "0.6.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +33,7 @@ dirs = "6.0.0"
 # `kill(pid, 0)`: whether the process named in a worktree lock is still alive,
 # which is what separates a lock Dray may clear from one it must not.
 libc = "0.2"
+dray-proto = { path = "../../../crates/dray-proto" }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 fff-search = "0.10.3"

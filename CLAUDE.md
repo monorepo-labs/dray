@@ -4,6 +4,20 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Working practices
 
+**Product work = Linear issue, before first edit.** Feature, bug fix, UX change, refactor. Plan freely without one; create through Linear MCP before code land. Existing issue = use that one.
+
+**Housekeeping take no issue.** CLAUDE.md, plan note, tooling config — thing changing how we work, not what ship. Issue there = noise.
+
+**Description over ~1000 character open with `## TLDR for human`, closed by `---`.** One line per thing worked on, even when only one. Shorter description need none — it already scan faster than its own summary.
+
+**Status:** start → `In Progress`. PR opened → `In Review`. Merged, or pushed straight to `main` → `Done`.
+
+**PR carry issue id so Linear link itself.** Body (`Fixes DRA-123`) or branch name — integration read both. Worktree branch = `worktree-<name>` minted by CLI, so body = reliable slot. Link move status on own but can lag, so set `In Review` by hand too.
+
+**One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
+
+Linear MCP not connected → say so and stop. No issue, no work.
+
 **Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
@@ -379,7 +393,7 @@ If it come back: commit = `add -A -- <paths>` then `commit -m … -- <paths>`, b
 
 **Almost every button send prompt.** Click = reader typing "commit" without typing it, straight through `handleSendMsg`. So no confirm dialog and no error surface — agent write message with context it already have, and whatever go wrong report in transcript like any other tool failure. This a shortcut *into* conversation, not around it.
 
-**Prompt = one to three word**, literally `"commit"`, `"commit and push"`, `"create a PR"`, `"create a draft PR"`. Model know how to commit and whether branch have upstream better than sentence written here do — and longer prompt = spec competing with repo's own instruction, which firm about commit message. Pinned by test (≤4 words).
+**Prompt = few word**, literally `"commit your changes"`, `"commit and push your changes"`, `"create a PR"`, `"create a draft PR"`. Model know how to commit and whether branch have upstream better than sentence written here do — and longer prompt = spec competing with repo's own instruction, which firm about commit message. Pinned by test (≤5 words).
 
 **Push the exception, and run git direct.** Line = whether there a judgement to make. Push have exactly one correct implementation and nothing to decide, so it call `push_branch` — which already both case, `git push` with upstream and `git push -u origin <branch>` without. Hence no separate **Publish branch** action: one button, count dropped from label when no upstream since "Push 0" answer question nobody asked.
 
@@ -434,6 +448,94 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 **Already-gone tree ask nothing.** Disposition read *before* deciding whether to ask, so worktree deleted by hand tidy up silently. Same read make stale registration prune itself.
 
 **Delete take tree with it, no second question.** Folded into `SessionManager::delete`, best-effort beside attachments, with one cost worth naming: failed removal there orphan tree with no UI left to retry from. `git worktree remove` by hand = recovery. Failing whole delete instead worse — session reader asked to be rid of would still be there.
+
+## Orchestration
+
+**One agent can fan work out into several sessions.** "Work through these 3 Linear issues" become three Dray sessions, each own worktree, each row in sidebar user can open, interrupt, delete like any other. Three commands: create, list, send.
+
+**First inbound channel into app.** Every other command travel frontend → Rust; this one travel agent → Rust → frontend, so frontend learn about session from *event* rather than from return value of thing it called. That inversion = whole of what [orchestration.rs](apps/desktop/src-tauri/src/orchestration.rs) add. Work itself go through `SessionManager::send_msg` — same function composer reach, not parallel path — so session created this way not second kind of session.
+
+**Three shipped pieces, one line of glue.** App serve unix socket; `dray` = standalone CLI in own crate; skill document it; and one line in [system_prompt.md](apps/desktop/src-tauri/src/harness/claude_code/system_prompt.md) name capability plus install command. Agent check for `dray`, install if missing, read skill, get on with it. **App install nothing** — it inform, agent do.
+
+**CLI deliberately not part of app.** It have to run on linux later, where no Dray app exist at all. So `apps/cli` = own crate (package `dray`, reserved name), own `cli-v*` release tag, `curl -fsSL https://www.drayhq.com/install.sh | sh`. Links neither app nor tokio: one connect, one write, one read, exit — startup instant, which matter when caller = agent shelling out.
+
+**`install.sh` resolve newest `cli-v*` tag itself, and `dray update` re-run it.** App cannot push CLI update — Tauri updater swap `.app` bundle only, and CLI not in it. So upgrade = re-running installer, which mean installer must not pin. `/releases/latest/download/` still unusable for reason pin existed: app and CLI publish into same repo, both non-prerelease, so that URL belong to whichever released last and app release there carry no `dray-*.tar.gz`. Instead ask releases API (`?per_page=100`) and take first `tag_name` starting `cli-v` — API answer newest-first, so no version sort, and `sort -V` not portable anyway. `DRAY_VERSION` stay as literal-tag override; `latest` spelled as request to resolve, not as tag.
+
+**Failed resolution refuse, never fall back.** Rate-limited or unreachable API quietly installing something ancient = exact failure being removed, so die naming `DRAY_VERSION` and releases page. `per_page=100` = other escape hatch's reason: 100 app releases between two `cli-v*` ones and resolver find nothing, which that same line cover.
+
+**`dray update` shell out to installer, not reimplement it.** Two copies of fetch-verify-swap drift on exactly step verifying what about to be executed. Set `DRAY_INSTALL_DIR` to dir `current_exe()` sit in, so upgrade land where install did rather than default back to `~/.local/bin`. Replacing running executable safe on unix — installer rename over path, running process keep inode it started from. Fetch script to temp file then `sh <file>`, **not** `curl … | sh`: pipefail not POSIX, so pipe report success when curl what failed.
+
+**Mismatch error name cure, and which cure depend on direction.** `envelope.v < PROTOCOL_VERSION` = CLI behind, say `dray update`; `>` = app behind, say update app. Naming wrong half worse than naming neither — reader run command that cannot fix what they have. Skill document `update` for same reason, pinned by test: whole point of naming command = agent reading refusal can self-heal.
+
+**`prerelease: false` hard-coded in [release-cli.yml](.github/workflows/release-cli.yml) = what keep resolver honest.** Resolver take newest `cli-v*` tag without reading flag, so prerelease CLI would go to everyone re-running installer. Beta channel = moment to teach resolver about flag, not before.
+
+**Wire types live in third crate, and that the point of split.** `crates/dray-proto` compiled into both side, so request shape cannot drift. Drifted shape here fail way [control.rs](apps/desktop/src-tauri/src/harness/claude_code/control.rs) warn about — no error, command simply stop working. No root Cargo workspace and this add none: `src-tauri` have own `.cargo/config.toml` carrying ts-rs export path, and workspace move target dir out from under it. Path dep work fine between separate cargo project.
+
+**Unix socket, not HTTP port.** `~/.dray/dray.sock` — nothing on network reach it at all, no port to pick, collide on, or accidentally expose. Stale socket unlinked at bind: socket file outlive process that made it, so crash leave one behind and bind fail "address in use".
+
+**Boundary = directory's `0700`, not socket's `0600`.** `bind` apply process umask, so socket land world-writable under permissive one and stay that way until chmod run moment later — window another local account connect through and reach session creation unauthenticated. Measured: umask 022 give 0755, umask 000 give 0777. Directory cannot have that window, since connecting need search permission on every dir in path — so `0700` settle it *before socket exist*. Socket's own `0600` stay as second line, not only one.
+
+**`~/.dray` narrowed in `get_home_app_dir`, and that fix privacy bug too.** It was `0755`, so every transcript — holding whole files agent read and wrote — readable by any local account.
+
+**Narrowing best-effort, so `serve` check rather than assume.** App must start whether or not chmod land; socket must not bind where it can't be guarded. Dir still group- or world-reachable → refuse to bind with readable line naming `chmod 700`. Cost feature, never app — same bargain rest of module make. Verified live with `chflags uchg` forcing chmod to fail: dir stay 0755, no socket, app fine.
+
+**Address = one value, and that what let app move to server.** `DRAY_ENDPOINT` read from env child already get injected: `.sock` path today, HTTPS URL and token in cloud build. Types, subcommands and skill all unchanged by that swap — only ~30 lines that open connection. Socket = same-machine only, which hold if manager and its agent children move to server *together* and break if agent ever run where manager isn't.
+
+**Protocol version checked before request even looked at.** Two release pipeline mean old CLI can meet new app; `v` field refuse mismatch with readable line rather than guess what it meant.
+
+**`session_created` carry index item, never `SessionSnapshot`.** Frontend's `agent_event` listener write into sessions it already hold and *drop* events for id it don't — so snapshot would start transcript in memory that later event could miss. Index item leave transcript unread until row clicked, and `handleSelectSessionIndexItem` already load it whole from disk at that point. That close window rather than live with it. `session_status` and `session_title` still land: both write by id into maps sidebar read, not into `sessions`.
+
+**Row appear, and deliberately not selected.** User mid-conversation in session that spawned this one; yanking them out = opposite of what fanning out for. Listener sit in `[]` effect so it need `showArchivedRef`, same reason `selectedSessionIdRef` next to it exist.
+
+**Spawned session always take worktree, and no flag turn it off.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart — so opt-out = footgun with no good use. `--no-worktree` existed and removed. **Name not caller's either** — `--worktree-name` and its proto field went the same way: agent have no basis for picking one, app already generate readable name, and supplied name = one more thing that collide. Cost already documented above: `-w` fork from `origin/<default>`, not from branch parent sit on, so fanning out from unpushed feature branch give children without parent's work.
+
+**`dray send` go both way, and that one command not two.** Child reporting summary up and parent handing child extra context = same operation, so no reply channel beside a send. Message arrive as ordinary prompt and *start a turn*, so it wake idle agent; target mid-turn queue it and CLI say so, since queued not failure. Unrestricted to parent/child pair on purpose — id = address, and naming relationship = one more rule to get wrong.
+
+**Relayed message name its sender twice, and neither copy do other's job.** `user_message.from` = `MessageSender { session_id, title }`, set only by `send_message`, `None` everywhere else, persisted so attribution survive replay. Prompt text carry `[message from the Dray session "title" (id)]` as well. Both built from one lookup in `attribute`, so two cannot name different sessions.
+
+**Agent have no channel but prompt text.** Verified: every control-request subtype carry a setting (`set_model`, `set_permission_mode`, `interrupt`, `stop_task`, `initialize`), none carry metadata, unknown field dropped in silence not refused, `--append-system-prompt` fixed at spawn. Codex same — `codex exec` take prompt and nothing beside it. So prefix not one option among several, it the only one. Id ride along because it = address: agent answer `dray send <id>` without paying `dray ls` to learn who asked.
+
+**Transcript have no business parsing it back out.** Field-only rendering shipped first and cost job prefix was doing; parse-the-prefix considered and refused. Not for forgery — `from_session_id` come from `DRAY_SESSION_ID` in child env, settable by anything reaching socket, so **field no more authentic than prose**. Refused because parse *fail silently*: title holding bracket, reworded prefix, harness with differently shaped prompt each break regex and leave relayed message drawn as user's own. Field either there or not.
+
+**Bubble's first line therefore echo avatar's label, and that accepted.** Transcript must show what model was actually given — same rule attachments follow, and `deliver_prompt` log `prepared.text` mention included. Muting that line in frontend = safe if it ever grate, precisely because field make it non-load-bearing. Stripping it not.
+
+**Sender draw on user side of transcript, above bubble.** Agent's message arriving in session where that agent not the assistant = still not this session's assistant speaking, so it keep user's column. `Avatar` with no `src` — session not account, so it draw title's initial — plus title, whole row a button opening that session through same `handleSelectSessionIndexItem` sidebar row use. Row sit above attachment tray too: who talking read before what they sent.
+
+**Sender can outlive session it name, so selection roll back on empty read.** Attribution persisted, session it point at need not be — click avatar of deleted sender and `get_session_by_id` answer null. Leaving id selected look harmless and isn't: `selectedSession` go null while `selectedSessionId` still hold dead id, and `centered`/`isNewTask` both derive from that null — so reader get *new task* composer while `handleSendMsg` still find id, compute `isNewSession: false`, and resume session that gone. `handleSelectSessionIndexItem` therefore restore previous pick and say "Session not found" — not "deleted", since all it know is id resolved to nothing. Fix sit there and not on avatar, so stale sidebar row covered too.
+
+**Two ref, and they answer different question — collapsing them was the bug.** `selectedSessionIdRef` mirror state, so it a **render behind**: read landing in that gap still see itself as current and overwrite click that already happened. `selectionRequestRef` written at *call* time instead, claimed at every site selection move (`handleSelectSessionIndexItem`, `handleSendMsg`'s new id, `handleNewSession`, rollback itself), and rollback fire only where it still name this read. Roll-back target likewise cannot be "whatever selected": selection **optimistic until own read land**, so it may itself be id about to be rolled back — restoring it recreate exactly the state this exist to prevent. Hence `restorable` = previous pick *only if loaded in `sessions`*, else `null`. Two dead id clicked in row therefore land on empty composer, which safe; single one — real case — land back where reader was.
+
+**And that validity judged at rollback, not at capture, off `sessionsRef`.** Closure's `sessions` = render's copy, and rollback run after `await`. `deleteSession` drop row from `sessions` and only clear selection where deleted row *was* selected — which by here it not, since dead id hold selection. So session validated before read can be gone by time read answer, and rollback onto it recreate same dead end. Three attempt at this line, each narrower race, all same root: **state read across an await must come from ref, not closure**.
+
+**Attribution reach queued path as well.** `QueuedMessage.from` hold it rather than flush looking it up: relayed message can wait out long turn, and sender may be renamed or deleted before boundary that deliver it. Spawned session's *opening* prompt carry none — creating session = parent, which sidebar already draw by nesting, and brief is not message relayed into conversation under way.
+
+**Send pass target's *own* recorded model/effort/permission back in**, which what make it inert: `send_msg` compare them against what child run, find no change, so neither `set_model` nor respawn fire. Message must not reconfigure session it arrive at.
+
+**Depth cap = 2, walked not stored.** Spawned session may spawn; its children may not. Walk `parent_session_id` up index at create time with cycle guard, rather than storing `depth` number free to disagree with chain it describe. Chains three long, so walk cost nothing. Refusal = readable sentence, since agent read it as tool output.
+
+**`dray ls` carry parentage, and table name it rather than column it.** `SessionSummary.parent_session_id` mirror index's own field, so `--json` get it free and agent can answer "who spawned that" without reading index. Table print `spawned by <id>` trailing row instead of second id column: two bare uuid under no header = table nobody read, and most row have no parent at all. Field `#[serde(default)]` because it landed after CLI shipped — older app send no such key, and that must read as no parent, not as failed list.
+
+**Model, effort, harness and permission mode inherit from parent**, each overridable by flag (`--model`, `--effort`, `--harness`). So fanned-out session run way one that spawned it do. No parent (call from user's own terminal) = Rust's own default, because composer's remembered pick live in frontend localStorage where Rust cannot read it. `ModelId::default()` cannot serve — it `Unknown`, which exist so old index entry still deserialize and which have no CLI alias — hence `default_model()`.
+
+**That default = Opus, deliberately not composer's Haiku seed.** Composer's seed open picker user about to touch, so it start cheap; this one = session nobody sit in front of doing whole task unattended, and cost of it being weak = work redone by hand. Effort follow from model's own default (`High`) through `resolve_effort`, so no second constant.
+
+**Project deliberately not attached.** Sidebar's `projectFilter` default null and list every session whatever its project, so session under unattached repo already reachable — while `add_project` bump `last_selected` and resort list, which would let agent's call quietly reorder user's project picker.
+
+**`dray` raise no consent card, and that one flag.** `--allowedTools "Bash(dray:*)"` on spawn — additive allow rule, everything else still route through `can_use_tool` exactly as before. Verified against v2.1.241, not assumed: pattern that fail to match fail *silently*, as unexpected card rather than error. Measured with `mkdir` under `manual` — `Bash(mkdir:*)` and `Bash(mkdir *)` both ran, `Bash(git *)` reported `permission_denied`. **Test with command that mutate**: read-only one like `echo` auto-allowed whatever rule say, so it report success for pattern matching nothing.
+
+**Child get `PATH` put back, and that load-bearing.** Bundled `.app` launched from Finder inherit launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so `dray` installed to `~/.local/bin` simply not there for agent — same trap [binpath.rs](apps/desktop/src-tauri/src/binpath.rs) exist to solve for `claude`, one layer out. `known_dirs()` now `pub` for this. Appended not prepended: user's own `PATH` should still win where two name same binary.
+
+**Skill embedded in binary, written by `dray skill install`.** Downloaded separately = exactly how skill end up describing different version of CLI than one installed. Global at `~/.claude/skills/dray/`, not scoped with `--plugin-dir`, because CLI meant to work from any Claude session, terminal one included.
+
+**Sidebar nest spawned session under its parent**, `sortSessions` in [Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx). Exported and shared with ⌘⇧↑/↓, so order stepped = order drawn. **Walk depth-first, not one pass over roots** — depth cap allow spawned session to spawn, and single pass emitted neither grandchild nor anything below it, so row simply vanish from sidebar. Caught by test, not by eye. `seen` set also mean cycle in index cost strange order rather than hung sidebar, and unreached row appended not dropped.
+
+**Child whose parent not on screen draw top-level.** Ordinary case not edge one: parent may be archived, filtered to another project, or deleted. `isNested` judge it same way `sortSessions` place it, so marker can never point at parent that isn't drawn.
+
+**Marker = `|-`, two character, not indent.** 250px sidebar have no room to spare and title = one thing on row that must not get shorter. `aria-hidden`: marker = picture of list's own shape, and screen reader already read rows in drawn order.
+
+**Detach one-way, and no re-attach.** Parentage record who *created* session = fact about past; session detached then re-parented elsewhere describe history that never happened. `detach_session` leave `modified` alone for `set_session_flags`' reason — it order list, and detaching must not jump row to top. Menu item absent on un-nested row rather than disabled: disabled item on every row = noise, not promise of something coming.
+
+**Socket failure cost feature, never app.** `serve` error logged and dropped in `setup()` — app refusing to start because socket in use would trade whole product for side channel, and reader could act on it either way.
 
 ## Forking a session
 
@@ -512,6 +614,14 @@ copied beside log and path rewritten onto it. `id` deliberately **not** re-minte
 — these same event, and nothing join across session on it. `repoint_events` split
 out from copy so rule testable with no `~/.dray` to write into.
 
+**`parent_session_id` deliberately not inherited, unlike everything else.**
+Orchestration use it to nest spawned row under its parent and to count depth, so
+inheriting would file fork under grandparent that never created it and start its
+depth partway up chain it never joined. Fork made by *person* in sidebar, which
+= exactly what field's `None` mean. Only field on entry where fork start fresh
+rather than inherit, and reason = it describe who *created* session, not how
+session run.
+
 **`fork_from` = instruction, not lineage.** Cleared once CLI carry fork out, and
 that timing load-bearing both way: cleared **after** spawn, so child failing to
 start leave instruction standing and next send fork again; **before** prompt go
@@ -545,7 +655,6 @@ keyboard alike.
 row until next render. So `restoreSessionControls` take *item* not id, and both
 path call it. Without it fork open under whatever model composer last left on
 rather than one it inherited.
-
 ## Persistence
 
 Everything live under `~/.dray/` ([store.rs](apps/desktop/src-tauri/src/store.rs), [projects.rs](apps/desktop/src-tauri/src/projects.rs)) .
@@ -818,6 +927,8 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 - **Sidebar PR mark say open, draft or merged, and checks say running or failing.** No number, no per-check detail, no merge readiness, and nothing at all for passing — row already carry title, unread rail and timestamp. Number ride `title` attribute alone. Closed-without-merging not asked for at all.
 
+- **Spawned session inherit permission mode, so most block immediately.** Default stance = `auto`, which prompt per action — so session fanned out from ordinary session stop at its first `Write` waiting for card nobody is next to. Notification path do surface it (yellow rail, notice card, dock badge), so it not silent, but "create 3 sessions" currently mean three sessions to go and approve rather than three running. `dray new` take no `--permission-mode`, and adding one raise real question: agent in `plan` session spawning `bypassPermissions` child = escalation past stance user set. Clamping child to be no more autonomous than parent = likely shape of fix. Unresolved on purpose.
+- **No reading a transcript back.** Create, list and send exist; reading what another session said don't. Agent wanting summary have to ask that session to `dray send` one. Parent also cannot learn child finished except by polling `dray ls` — nothing push.
 - **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
 
 - **TS event types generated, not written.** `ts-rs` derive them from Rust model into `src/types/events.ts`, checked in so frontend build need no Rust toolchain. `cargo test` regenerate; never edit output. Two settings live in `src-tauri/.cargo/config.toml`: export path, and `TS_RS_LARGE_INT = "number"` because `u64` otherwise become `bigint`, which `JSON.parse` never produce.

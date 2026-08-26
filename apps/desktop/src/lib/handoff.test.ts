@@ -136,7 +136,7 @@ describe("handoffActions", () => {
   it("keeps the prompts to a few words", () => {
     for (const action of handoffActions(status({ dirty: 1 }), false)) {
       if (action.kind !== "prompt") continue;
-      expect(action.prompt.split(" ").length).toBeLessThanOrEqual(4);
+      expect(action.prompt.split(" ").length).toBeLessThanOrEqual(5);
     }
   });
 

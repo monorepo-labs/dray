@@ -6,7 +6,7 @@ import type { WorkStatus } from "@/types/events";
 /// the design: the agent writes the commit message with the context it just
 /// worked in, so there is no second write path, no confirm dialog and no error
 /// surface — whatever goes wrong is reported in the transcript like any other
-/// tool failure. The prompts are one or three words for the same reason. The
+/// tool failure. The prompts stay a few words for the same reason. The
 /// model knows how to commit and whether the branch has an upstream; a sentence
 /// spelling it out here is a spec competing with the repo's own instructions,
 /// and this repo has firm ones about commit messages.
@@ -79,12 +79,17 @@ export function handoffActions(
   const remote: HandoffAction[] = [];
 
   if (status.dirty > 0) {
-    local.push({ id: "commit", label: "Commit", kind: "prompt", prompt: "commit" });
+    local.push({
+      id: "commit",
+      label: "Commit",
+      kind: "prompt",
+      prompt: "commit your changes",
+    });
     local.push({
       id: "commitPush",
       label: "Commit & push",
       kind: "prompt",
-      prompt: "commit and push",
+      prompt: "commit and push your changes",
     });
   } else if (status.ahead > 0 || status.upstream === null) {
     // Only where there is nothing to commit: with a dirty tree the reader wants

@@ -1,0 +1,11 @@
+[package]
+name = "dray-proto"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Wire types for the socket between the Dray app and the dray CLI."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6.0.0"

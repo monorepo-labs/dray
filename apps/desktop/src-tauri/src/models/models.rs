@@ -29,6 +29,20 @@ impl Effort {
             Effort::Max => "max",
         }
     }
+
+    /// The inverse, for a value arriving from outside the app — the `dray`
+    /// CLI's `--effort`. Strict for [`ModelId::from_arg`]'s reason: a typo is
+    /// worth reporting, where silently running a different effort is not.
+    pub fn from_arg(alias: &str) -> Option<Self> {
+        match alias {
+            "low" => Some(Effort::Low),
+            "medium" => Some(Effort::Medium),
+            "high" => Some(Effort::High),
+            "xhigh" => Some(Effort::Xhigh),
+            "max" => Some(Effort::Max),
+            _ => None,
+        }
+    }
 }
 
 /// The `--model` alias, typed. `Unknown` exists so an index entry naming a
@@ -65,6 +79,33 @@ impl ModelId {
             ModelId::Unknown => None,
         }
     }
+
+    /// The inverse of [`as_arg`](Self::as_arg), for an alias arriving from
+    /// outside the app — the `dray` CLI's `--model`. Deliberately not
+    /// `#[serde(other)]`-style forgiving: an unrecognized alias is a typo worth
+    /// reporting, where silently running a different model is not.
+    pub fn from_arg(alias: &str) -> Option<Self> {
+        match alias {
+            "opus" => Some(ModelId::Opus),
+            "sonnet" => Some(ModelId::Sonnet),
+            "fable" => Some(ModelId::Fable),
+            "haiku" => Some(ModelId::Haiku),
+            _ => None,
+        }
+    }
+}
+
+/// What an orchestrated session runs when nobody said. [`ModelId::default`]
+/// cannot serve here — it is `Unknown`, which exists so an old index entry
+/// still deserializes and which has no CLI alias at all.
+///
+/// Deliberately *not* the composer's seed. That one opens a picker the user is
+/// about to touch, so it starts cheap; this one is a session nobody is sitting
+/// in front of, doing a whole task unattended, and the cost of it being weak is
+/// work that has to be redone by hand. Effort follows from the model's own
+/// default, which is `High` for every model that has levels.
+pub fn default_model() -> ModelId {
+    ModelId::Opus
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
