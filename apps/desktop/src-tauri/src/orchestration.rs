@@ -59,7 +59,7 @@ const MAX_WALK: usize = 64;
 pub async fn serve(app: AppHandle) -> Result<()> {
     let path = dray_proto::default_socket_path().context("could not resolve the socket path")?;
 
-    // Creates `~/.dray` *and narrows it to `0700`*, which is what actually
+    // Creates `~/.dray` and narrows it to `0700`, which is what actually
     // guards this socket. `bind` applies the process umask, so under a
     // permissive one the socket lands world-writable and stays that way until
     // `restrict` runs a moment later — a window another local account can
@@ -67,10 +67,29 @@ pub async fn serve(app: AppHandle) -> Result<()> {
     // umask 022 gives 0755, umask 000 gives 0777.
     //
     // A directory cannot have that window. Connecting needs search permission
-    // on every directory in the path, so `0700` here settles it before the
+    // on every directory in the path, so `0700` there settles it before the
     // socket exists at all. The chmod below stays as a second line rather than
     // the only one.
-    store::get_home_app_dir().await?;
+    let dir = store::get_home_app_dir().await?;
+
+    // That narrowing is best-effort — the app has to start whether or not it
+    // lands — so this checks rather than assumes. A directory that stayed
+    // group- or world-reachable leaves the racy chmod as the socket's only
+    // guard, and binding anyway would be serving session creation to every
+    // account on the machine.
+    //
+    // Refusing costs orchestration and nothing else, which is the bargain this
+    // whole module already makes: the caller logs and drops the error, and the
+    // app carries on without a side channel.
+    let mode = owner_bits(&dir).await?;
+    if mode & 0o077 != 0 {
+        bail!(
+            "{} is mode {mode:04o}; refusing to serve a socket that other accounts can reach. \
+             Run `chmod 700 {}` and restart.",
+            dir.display(),
+            dir.display()
+        );
+    }
 
     // A socket file outlives the process that made it — a crash or a SIGKILL
     // leaves one behind, and binding onto it fails with "address in use". The
@@ -101,6 +120,17 @@ pub async fn serve(app: AppHandle) -> Result<()> {
             }
         });
     }
+}
+
+/// The permission bits on a directory, for the check above.
+async fn owner_bits(path: &Path) -> Result<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let meta = tokio::fs::metadata(path)
+        .await
+        .with_context(|| format!("could not read {}", path.display()))?;
+
+    Ok(meta.permissions().mode() & 0o777)
 }
 
 /// `0600` on the socket itself. Defence in depth behind the `0700` directory,
@@ -467,6 +497,22 @@ mod tests {
         );
         assert_eq!(project_from(None, Some(&parent)).as_deref(), Some("/p"));
         assert_eq!(project_from(None, None), None);
+    }
+
+    /// The predicate the bind guard turns on, spelled out so the two cases
+    /// that matter are pinned rather than read out of a bitmask at a glance.
+    #[test]
+    fn only_owner_only_modes_are_allowed_to_carry_the_socket() {
+        let reachable = |mode: u32| mode & 0o077 != 0;
+
+        assert!(!reachable(0o700), "owner-only is the one acceptable mode");
+        // The default `create_dir_all` leaves, and what the app shipped with.
+        assert!(reachable(0o755));
+        // Group-writable is the case the review named.
+        assert!(reachable(0o770));
+        assert!(reachable(0o777));
+        // Group *read* alone still means another account can traverse in.
+        assert!(reachable(0o750));
     }
 
     #[test]

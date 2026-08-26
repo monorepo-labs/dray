@@ -447,7 +447,13 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **Wire types live in third crate, and that the point of split.** `crates/dray-proto` compiled into both side, so request shape cannot drift. Drifted shape here fail way [control.rs](apps/desktop/src-tauri/src/harness/claude_code/control.rs) warn about — no error, command simply stop working. No root Cargo workspace and this add none: `src-tauri` have own `.cargo/config.toml` carrying ts-rs export path, and workspace move target dir out from under it. Path dep work fine between separate cargo project.
 
-**Unix socket, not HTTP port.** `~/.dray/dray.sock` at `0600` — access control = filesystem permission, so nothing outside user's own account connect and nothing on network reach it at all. No port to pick, collide on, or accidentally expose. Stale socket unlinked at bind: socket file outlive process that made it, so crash leave one behind and bind fail "address in use".
+**Unix socket, not HTTP port.** `~/.dray/dray.sock` — nothing on network reach it at all, no port to pick, collide on, or accidentally expose. Stale socket unlinked at bind: socket file outlive process that made it, so crash leave one behind and bind fail "address in use".
+
+**Boundary = directory's `0700`, not socket's `0600`.** `bind` apply process umask, so socket land world-writable under permissive one and stay that way until chmod run moment later — window another local account connect through and reach session creation unauthenticated. Measured: umask 022 give 0755, umask 000 give 0777. Directory cannot have that window, since connecting need search permission on every dir in path — so `0700` settle it *before socket exist*. Socket's own `0600` stay as second line, not only one.
+
+**`~/.dray` narrowed in `get_home_app_dir`, and that fix privacy bug too.** It was `0755`, so every transcript — holding whole files agent read and wrote — readable by any local account.
+
+**Narrowing best-effort, so `serve` check rather than assume.** App must start whether or not chmod land; socket must not bind where it can't be guarded. Dir still group- or world-reachable → refuse to bind with readable line naming `chmod 700`. Cost feature, never app — same bargain rest of module make. Verified live with `chflags uchg` forcing chmod to fail: dir stay 0755, no socket, app fine.
 
 **Address = one value, and that what let app move to server.** `DRAY_ENDPOINT` read from env child already get injected: `.sock` path today, HTTPS URL and token in cloud build. Types, subcommands and skill all unchanged by that swap — only ~30 lines that open connection. Socket = same-machine only, which hold if manager and its agent children move to server *together* and break if agent ever run where manager isn't.
 
