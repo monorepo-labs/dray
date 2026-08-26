@@ -10,6 +10,7 @@ import {
   // Pin,
   Plus,
   Search,
+  Settings,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -72,6 +73,7 @@ type SidebarProps = {
   selectedSessionId: string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  onOpenSettings: () => void;
   onSelect: (sessionId: string) => Promise<void>;
   onNewSession: () => void;
   onSetFlags: (
@@ -203,6 +205,39 @@ export function SidebarToggle({
   );
 }
 
+/// Opens the settings dialog.
+///
+/// Shares the titlebar strip with the sidebar toggle rather than sitting in the
+/// filter row below it: settings are app-wide, and every control in that row
+/// scopes the list under it.
+///
+/// Gone with a collapsed sidebar, since the sidebar is. ⌘, is the route that
+/// survives that, which is why the tooltip names it.
+export function SettingsButton({ onOpen }: { onOpen: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onOpen}
+          aria-label="Settings"
+          className="opacity-80 transition-opacity hover:opacity-100"
+        >
+          <Settings className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        Settings
+        <KbdGroup>
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+          <Kbd>,</Kbd>
+        </KbdGroup>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /// Marks a dev build so it can't be mistaken for the installed app. Gated on
 /// `import.meta.env.DEV`, which Vite folds to a constant — the badge and this
 /// component are dropped from a production bundle entirely.
@@ -241,6 +276,7 @@ export default function Sidebar({
   updateBlocked,
   updateManual,
   onInstallUpdate,
+  onOpenSettings,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
 
@@ -278,7 +314,20 @@ export default function Sidebar({
         data-tauri-drag-region="deep"
       >
         {import.meta.env.DEV && <DevBadge className="mr-auto" />}
-        <SidebarToggle onToggle={onToggleCollapsed} />
+        {/* The toggle holds the strip's outer edge in both layouts and settings
+            sit inboard of it, so the one control also drawn in the app header
+            never changes which end of the row it is at. */}
+        {fullscreen ? (
+          <>
+            <SidebarToggle onToggle={onToggleCollapsed} />
+            <SettingsButton onOpen={onOpenSettings} />
+          </>
+        ) : (
+          <>
+            <SettingsButton onOpen={onOpenSettings} />
+            <SidebarToggle onToggle={onToggleCollapsed} />
+          </>
+        )}
       </div>
 
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their

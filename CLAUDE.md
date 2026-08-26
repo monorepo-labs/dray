@@ -526,6 +526,20 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Except when user ask.** App menu's "Check for Updates…" = question, so it answered either way — "Up to date" and "Couldn't check" both drawn, both retire themselves after 4s. Difference = who asked: scheduled check say nothing because nobody asked it, hand-triggered one leave menu item looking broken if it do same. Menu item **emit to frontend** rather than check in Rust, because channel live in frontend's local storage — emitting also mean manual check reuse scheduled path, in-flight guard included. Verdict read off `check_update` resolving with no `update_status` having arrived: command emit nothing when nothing newer, so absence = whole of signal. Still nothing while sidebar collapsed, so manual check there answer into void — real gap, see _Known issues_.
 
+## Settings
+
+**One dialog, one row so far** ([SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)). Gear in sidebar's titlebar strip, ⌘, from anywhere, and analytics opt-out = only thing in it.
+
+**Mounted in `App`, not beside gear that open it.** Sidebar unmount whole when collapsed, so dialog living there take ⌘, with it — and that chord = one route into settings that survive collapsed sidebar. Open state not persisted: settings opened to change something and closed again, so reopening app into them = app remembering wrong half of session.
+
+**Gear share titlebar strip with sidebar toggle, and order swap in fullscreen.** Strip `justify-end` normally (clearing traffic lights), `justify-start` in fullscreen (they gone). Toggle also drawn in app header when sidebar collapsed, so it must hold strip's outer edge in both layouts and never change which end it at; gear have no second home and move instead.
+
+**Row shape = `SettingRow`**, label and reason left, control right. Two rules it encode: description **not optional** — it where "why is this off by default" live — and setting that cannot apply on this platform **disabled, not hidden**, since row that vanish read as setting app forgot and sentence under it = only place reason can be said.
+
+**Analytics row = two sentence: what it for, what it never touch.** Second one = row's whole job. "Analytics" read as behavioural tracking to most people, and for tool that watch you work on own code, saying plainly conversation and activity not collected = part worth space. Deliberately **not** itemised — listing every field read as something to be wary of rather than something to skim, which why row don't name ping, version or OS one by one.
+
+**`Dialog` = `alert-dialog`'s frame exactly, `showClose` the one difference.** To reader two are same object and differ only in whether app asking question or reader opened something — alert answered by own buttons so carry no dismiss, dialog dismissed rather than answered, and Escape alone = way out only for people who already know it there. `--popover` not `--card`: under vibrancy `--card` become 5.5% white veil, right for surface sitting *in* page and wrong for one floating over it.
+
 ## Analytics
 
 **One event, `app_started`, and that whole of it** ([analytics.rs](apps/desktop/src-tauri/src/analytics.rs)). Hosted Aptabase over `tauri-plugin-aptabase`. Question it answer = how many people run Dray, on what version, on what OS — and plugin stamp `appVersion`, `osName`, `osVersion`, `locale`, `engineVersion` and `isDebug` on every event itself, so call site carry no props. Nothing about what reader *do* in app measured, deliberately.
@@ -538,7 +552,13 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Flush interval 15s, against plugin's own 60s default.** Longer than good many launches — open Dray, look at running session, quit — and those run would then report only through blocking flush on exit. Free when queue empty: poll return without request.
 
-**Opt-out live in one `AtomicBool`, and toggle not built yet.** Plugin decide enablement once, at `build` time, from key alone, so it cannot answer switch reader flip while app run — hence `ENABLED` here and `set_enabled` beside it. `DRAY_NO_ANALYTICS` = only route today; settings dialog expected to call same function and persist own answer. Until it land, shipped build report with no in-app way to stop it — see _Known issues_.
+**Opt-out live in one `AtomicBool`, because plugin cannot answer it.** Plugin decide enablement once, at `build` time, from key alone, so switch reader flip mid-run reach nothing — hence `ENABLED` here and `set_enabled` beside it, which settings command call so toggle need no restart.
+
+**Persisted answer live in `~/.dray/settings.json`, not local storage, and timing = whole reason** ([settings.rs](apps/desktop/src-tauri/src/settings.rs)). `app_started` send from `setup`, before webview exist — so pref kept where `ade.diffStyle` and every other pick live could not be consulted until after one event it govern already gone. **Anything frontend can read for itself belong there, not here**, or this become second settings store free to disagree with first.
+
+**Read and track folded into one `analytics::start`.** Ordering = point: `track` must not run before persisted answer in hand. Spawned inside `setup` rather than blocking it, since nothing on screen wait on it. `DRAY_NO_ANALYTICS` win one direction only — it turn reporting off, cannot turn it on over stored `false`.
+
+**Missing, empty or unparseable file read as defaults, not error.** This sit on launch path, so file someone hand-edited badly must not stop app starting. Default = opted in, and that what unwritten file mean.
 
 ## Notifications
 
@@ -785,7 +805,6 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 Diagnosed defects, not yet fixed. Unlike _Current state_ above, these broken rather than unbuilt. Delete entry when you fix it.
 
-- **Analytics have no in-app opt-out.** `DRAY_NO_ANALYTICS=1` = whole switch, and nobody find env var. `analytics::set_enabled` already the seam — settings dialog want checkbox calling it and persisting answer, plus one line naming what get sent. Until then release build report `app_started` with no way to refuse it from inside app. Disclosure, not data problem: event carry no identifier and no props at all.
 - **"Check for Updates…" answer into void when sidebar collapsed.** Verdict draw in `UpdateRow`, which live inside `<aside>` and show nothing collapsed — right for scheduled check, wrong for one user just asked for, and menu item give no hint it need sidebar open. Fix = surface not tied to sidebar (toast, or menu item's own state), not special-case in row.
 - **Quit from Dock's context menu unguarded.** Bypass menu bar, so custom Quit item never see it and confirmation never appear. Nothing in Tauri API reach it today — `applicationShouldTerminate` = hook and not exposed.
 - **Blocked install have no way to say when it unblock.** Wait on any session being mid-turn but name none, so on busy app "waiting for the running task to finish" = whole of what reader get. That sentence sit in button's tooltip not under it — reason belong to button and only wanted on approach. Which why button carry `aria-disabled` and guard own click instead of taking `disabled`: disabled button fire no pointer events to open tooltip and leave tab order. Naming session, or offering to install once it settle, still fix.

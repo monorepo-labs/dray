@@ -191,6 +191,14 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  */
 trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unknown", harnessType: string, } | { "type": "unrecognized" };
 
+export type AppSettings = { 
+/**
+ * Opted in by default, and the default is what a missing file reads as.
+ * The event carries no identifier and no properties, and the dialog says
+ * so — see the analytics section in CLAUDE.md.
+ */
+analyticsEnabled: boolean, };
+
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
  * autonomy. Every variant is settable, so this is what the app stores and

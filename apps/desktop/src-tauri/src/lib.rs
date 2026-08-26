@@ -29,6 +29,7 @@ pub mod orchestration;
 pub mod projects;
 pub mod quit;
 pub mod session;
+pub mod settings;
 pub mod store;
 pub mod title;
 pub mod updater;
@@ -90,6 +91,31 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 #[tauri::command]
 fn list_models() -> Vec<Model> {
     models::claude_models()
+}
+
+/// The preferences Rust owns. Everything else the settings dialog draws is the
+/// frontend's own local storage — see [`settings`].
+#[tauri::command]
+async fn get_settings() -> settings::AppSettings {
+    settings::read().await
+}
+
+/// Persists the analytics opt-out and applies it to this run at once, so the
+/// switch does not need a restart to mean anything.
+///
+/// `DRAY_NO_ANALYTICS` still wins: it is re-read here rather than remembered,
+/// so a run started with it set cannot be talked back into reporting by the
+/// dialog.
+#[tauri::command]
+async fn set_analytics_enabled(enabled: bool) -> Result<settings::AppSettings, String> {
+    let next = settings::AppSettings {
+        analytics_enabled: enabled,
+    };
+
+    settings::write(&next).await.map_err(|e| e.to_string())?;
+    analytics::set_enabled(enabled && std::env::var_os("DRAY_NO_ANALYTICS").is_none());
+
+    Ok(next)
 }
 
 /// The slash commands available in a directory. Cached per directory in the
@@ -492,7 +518,14 @@ pub fn run() {
                 }
             });
 
-            analytics::track(app.handle(), "app_started");
+            // Spawned rather than awaited, but the two halves inside it are
+            // ordered: the launch is reported only once the persisted opt-out
+            // has been read, or an opted-out install would still send the one
+            // event it opted out of.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                analytics::start(&handle).await;
+            });
 
             Ok(())
         })
@@ -500,6 +533,8 @@ pub fn run() {
             send_msg,
             read_attachments,
             list_models,
+            get_settings,
+            set_analytics_enabled,
             list_slash_commands,
             warm_file_index,
             search_files,

@@ -52,8 +52,8 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(15);
 /// a toggle someone flips while the app is running.
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Opts this run in or out. The environment is the only route today; the
-/// settings dialog is expected to call this and persist its own answer.
+/// Opts this run in or out, effective immediately. Called by [`start`] with the
+/// persisted answer and by the settings command when the toggle moves.
 pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
 }
@@ -62,14 +62,29 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// The plugin, and the one place the environment is read.
+/// Resolves consent from disk, then reports the launch.
+///
+/// Ordering is the point of folding the two together: [`track`] must not run
+/// before the persisted answer is in hand, or an opted-out install still sends
+/// the one event it opted out of. Awaited inside `setup`'s own spawn rather
+/// than blocking it — nothing on screen waits for this.
+///
+/// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
+/// can turn reporting off; it cannot turn it on over a stored `false`.
+pub async fn start(app: &AppHandle) {
+    let opted_out_by_env = std::env::var_os("DRAY_NO_ANALYTICS").is_some();
+    let opted_in_by_setting = crate::settings::read().await.analytics_enabled;
+
+    set_enabled(!opted_out_by_env && opted_in_by_setting);
+    track(app, "app_started");
+}
+
+/// The plugin.
 ///
 /// Registered whether or not a key exists: an inert plugin keeps [`track`] an
 /// ordinary call rather than an `Option` every call site unwraps, and the
 /// managed state the tracking trait reaches for only exists once it is.
 pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
-    set_enabled(std::env::var_os("DRAY_NO_ANALYTICS").is_none());
-
     tauri_plugin_aptabase::Builder::new(APP_KEY.unwrap_or_default())
         .with_options(InitOptions {
             host: None,
