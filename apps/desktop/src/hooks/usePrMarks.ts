@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
-import { pickPrMark } from "@/lib/pr";
+import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";
+import { branchChanged, panelRead } from "@/lib/prSync";
 import type { PrMark } from "@/types/events";
 
 /// How long a repo's answer counts as fresh. Longer than the panel's own 30s,
@@ -112,7 +113,12 @@ export function usePrMarks(repoPaths: string[]) {
   /// one meant a directory `gh` can never answer for — not a GitHub repo, or
   /// logged out for that host — got a failing spawn every 30s for as long as
   /// some *other* repo on screen had a PR open.
-  const load = useCallback(async (force: boolean, only?: string[]) => {
+  /// `announce` false keeps a read from telling the panel what changed. Set by
+  /// the one read the panel itself triggered — see `panelRead` below — because
+  /// the panel's answer is what this read is catching up to, and telling it
+  /// back would have it re-read, disagree again wherever the two folds differ
+  /// by construction, and the pair would spawn `gh` at each other forever.
+  const load = useCallback(async (force: boolean, only?: string[], announce = true) => {
     // Deferred rather than dropped, and that distinction is the whole of this
     // branch. A forced read is one the caller knows something new about — a
     // turn has just ended and may have opened a pull request — while the read
@@ -197,8 +203,22 @@ export function usePrMarks(repoPaths: string[]) {
         // unstamped is what makes the next visit refetch.
         if (generation !== startedAt) return;
 
+        const before = cache.get(path);
         cache.set(path, answer);
         fetchedAt.set(path, Date.now());
+
+        // Tell the panel which branches moved, so its own cache for them is
+        // stale from here and not from its next poll. Compared against the
+        // previous answer rather than emitted for every branch: the poll runs
+        // every 30s while anything is open, and a panel re-read on each would
+        // be the second `gh` per tick this hook exists to avoid. A first read
+        // has nothing to compare and says nothing — the panel reads fresh on
+        // arrival anyway.
+        if (before && announce) {
+          for (const branch of new Set([...before.keys(), ...answer.keys()])) {
+            if (!sameMark(before.get(branch), answer.get(branch))) branchChanged.emit(branch);
+          }
+        }
       })();
 
       inFlight.set(path, { promise: attempt, generation: startedAt });
@@ -216,6 +236,28 @@ export function usePrMarks(repoPaths: string[]) {
   useEffect(() => {
     void load(false);
   }, [key, load]);
+
+  // The panel's read is the faster one while its tab is open — 15s against
+  // 30s here — so it is the first to see a check land or a merge go through.
+  // Where its answer contradicts the mark, the repo is re-read now rather than
+  // at the next poll, so the row cannot sit a window behind the pane beside
+  // it. Only on disagreement, or every panel poll would double as a marks one.
+  //
+  // The repo is found by prefix: the panel hands back a session cwd, which
+  // for a worktree session sits under the repo root this is keyed by. Longest
+  // match, so a repo nested inside another resolves to itself.
+  useEffect(
+    () =>
+      panelRead.subscribe(({ cwd, branch, prs }) => {
+        const repo = [...cache.keys()]
+          .filter((path) => cwd === path || cwd.startsWith(`${path}/`))
+          .sort((a, b) => b.length - a.length)[0];
+        if (!repo || !markDisagrees(cache.get(repo)?.get(branch), prs)) return;
+        fetchedAt.delete(repo);
+        void load(true, [repo], false);
+      }),
+    [load],
+  );
 
   // Whether anything on screen can still change on its own. An open pull
   // request can — its checks report, someone merges it — and nothing else here

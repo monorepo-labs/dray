@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { isSettling } from "@/lib/pr";
+import { branchChanged, panelRead } from "@/lib/prSync";
 import type { MergeMethod, PrUnavailable, PullRequest } from "@/types/events";
 
 /// How often to re-ask while something is still moving. Checks report on their
@@ -43,6 +44,17 @@ const cache = new Map<string, PullRequest[]>();
 const fetchedAt = new Map<string, number>();
 
 const keyOf = (cwd: string, branch: string) => `${cwd} ${branch}`;
+
+// The sidebar's read saw this branch change. Every cwd's stamp for it goes,
+// not just the selected one: the marks are keyed by repo root and the panel by
+// cwd, which differ for a worktree session, and a stale stamp anywhere is a
+// stale panel the next time that session is opened. The rows stay — a
+// dropped stamp means "re-read on next look", never "blank".
+branchChanged.subscribe((branch) => {
+  for (const key of fetchedAt.keys()) {
+    if (key.endsWith(` ${branch}`)) fetchedAt.delete(key);
+  }
+});
 
 const isOpen = (pr: PullRequest) => pr.state === "OPEN";
 
@@ -174,6 +186,9 @@ export function usePullRequest(
         cache.set(key, prs);
         fetchedAt.set(key, Date.now());
         commit(key, () => ({ prs, error: null, loading: false }));
+        // Whatever the reader switched to: the answer is about this branch,
+        // and the mark it is checked against is too.
+        panelRead.emit({ cwd, branch, prs });
 
         // Guarded on the key for the same reason every other write here is: a
         // read that lands after a session switch must not pull the panel open
@@ -208,6 +223,17 @@ export function usePullRequest(
   useEffect(() => {
     if (active) void load(false);
   }, [active, load]);
+
+  // The sidebar's read saw this branch's pull request change — the same
+  // reading that raises "Ready to merge". Re-read at once, tab or no tab: this
+  // is the read the card lands on, and it is one `gh` per real change rather
+  // than per poll. Other branches only lose their stamp, above.
+  useEffect(() => {
+    if (!branch) return;
+    return branchChanged.subscribe((changed) => {
+      if (changed === branch) void load(true);
+    });
+  }, [branch, load]);
 
   // Two rates, and which one applies is the whole of this. An open PR is always
   // worth re-asking about — a check can still arrive, someone can still comment

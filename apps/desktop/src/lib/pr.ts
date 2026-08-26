@@ -65,6 +65,59 @@ export function pickPrMark(prs: PrMark[]): PrMark | undefined {
   return best;
 }
 
+/// Whether two readings of one branch's mark say the same thing, on every field
+/// a row or a notice reads. What [usePrMarks](../hooks/usePrMarks.ts) asks after
+/// each read to decide whether the panel's own cache for that branch is stale.
+export function sameMark(a: PrMark | undefined, b: PrMark | undefined): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.number === b.number &&
+    a.state === b.state &&
+    a.isDraft === b.isDraft &&
+    a.checksState === b.checksState &&
+    a.mergeable === b.mergeable &&
+    a.mergeStateStatus === b.mergeStateStatus
+  );
+}
+
+/// Whether the panel's answer for a branch contradicts the sidebar's mark for
+/// it — the trigger for a marks re-read, never the mark itself.
+///
+/// Compared on the fields both carry: which pull request the mark would pick,
+/// and its merge state. Checks are compared loosely, since the mark's checks
+/// state is the backend's fold of GitHub's rollup and the panel holds a
+/// per-check list; a row spinning with nothing pending, or plain with something
+/// failed, are the disagreements a reader sees, so those are what is asked. A
+/// wrong answer here costs one extra `gh` and never a wrong glyph, because the
+/// re-read is what draws.
+///
+/// Closed-without-merging sits outside the marks' vocabulary, so the panel's
+/// list is narrowed to what the marks would have seen first.
+export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boolean {
+  const seen = prs.filter((pr) => pr.state === "OPEN" || pr.state === "MERGED");
+  const pick = pickPrMark(
+    seen.map((pr) => ({
+      number: pr.number,
+      headRefName: pr.headRefName,
+      isDraft: pr.isDraft,
+      state: pr.state as PrMark["state"],
+      checksState: "CLEAR",
+      mergeable: pr.state === "OPEN" ? pr.mergeable : null,
+      mergeStateStatus: pr.state === "OPEN" ? pr.mergeStateStatus : null,
+    })),
+  );
+
+  if (!mark || !pick) return mark !== pick;
+  if (!sameMark({ ...mark, checksState: "CLEAR" }, pick)) return true;
+
+  const checks = seen.find((pr) => pr.number === pick.number)?.checks ?? [];
+  const pending = checks.some((c) => c.state === "pending");
+  const failing = checks.some((c) => c.state === "failure");
+  if (mark.checksState === "RUNNING") return !pending;
+  if (mark.checksState === "FAILING") return !failing;
+  return failing && !pending;
+}
+
 /// What the tab's badge says, or nothing.
 ///
 /// Merged PRs are left out. Every other state on this panel has something the
