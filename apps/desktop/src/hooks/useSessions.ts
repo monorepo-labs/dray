@@ -443,6 +443,11 @@ const handleNewSession = () => {
 };
 
 const handleSelectSessionIndexItem = async (sessionId: string) => {
+  // Held for the one case the id turns out to resolve to nothing — see the
+  // rollback at the end. Read off the ref rather than state so it is the
+  // selection as of *this* call, not as of the render this closure was made in.
+  const previous = selectedSessionIdRef.current;
+
   setSelectedSessionId(sessionId);
 
   // Opening the session is answering the notice about it — an unread completion
@@ -486,6 +491,28 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
       upsertSession(snapshot);
+      return;
+    }
+
+    // The id resolves to nothing on disk, so the selection has to go back where
+    // it was. Leaving it is not the harmless-looking half-state it reads as:
+    // `selectedSession` would be null while `selectedSessionId` still held the
+    // dead id, and both `centered` and `isNewTask` derive from that null — so
+    // the reader gets the *new task* composer while `handleSendMsg` still finds
+    // an id, computes `isNewSession: false`, and resumes a session that is gone.
+    //
+    // Reached by a relayed message naming a sender since deleted: the
+    // attribution is persisted deliberately, and the session it points at need
+    // not outlive it. A sidebar row can go stale the same way.
+    //
+    // Guarded on the ref, not on `previous`, because a second click during the
+    // fetch must win — rolling back onto our own stale answer would take the
+    // reader off the session they just asked for.
+    if (selectedSessionIdRef.current === sessionId) {
+      setSelectedSessionId(previous);
+      // Not "deleted": all this knows is that the id resolved to nothing, and
+      // deletion is the likely cause rather than the observed one.
+      setError("Session not found.");
     }
   } catch (e) {
     setError(String(e));
