@@ -367,12 +367,13 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
     }
 
     let from = sender(&send).await;
+    let prompt = attribute(&send.prompt, from.as_ref());
 
     let manager = app.state::<SessionManager>();
     let outcome = manager
         .send_msg(
             &target.session_id,
-            &send.prompt,
+            &prompt,
             &[],
             target.harness,
             target.model,
@@ -394,16 +395,44 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
     })
 }
 
+/// The prompt as the receiving *agent* will read it, with its sender named.
+///
+/// This and [`user_message.from`](crate::events::MessageSender) carry the same
+/// fact to two different readers, and both are needed because neither can do
+/// the other's job.
+///
+/// The agent has no channel but this text. Verified against the CLI: every
+/// control-request subtype carries a setting (`set_model`,
+/// `set_permission_mode`, `interrupt`, `stop_task`, `initialize`) and none
+/// carries metadata, unknown fields are dropped in silence rather than
+/// refused, and `--append-system-prompt` is fixed at spawn. Codex is no
+/// different — `codex exec` takes a prompt and nothing beside it. So a prefix
+/// is not one option among several here; it is the only one.
+///
+/// The transcript, meanwhile, has the field and so never parses this line back
+/// out. A title holding a bracket, a reworded prefix, or a harness whose prompt
+/// is shaped differently would break a regex *silently* and leave a relayed
+/// message looking like the user's own. A field is either there or it isn't.
+///
+/// Both built from one [`MessageSender`], so the two cannot name different
+/// sessions. The id rides along because it is the address: the agent answers
+/// with `dray send <id>` rather than paying a `dray ls` to work out who asked.
+fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
+    match from {
+        Some(from) => format!(
+            "[message from the Dray session \"{}\" ({})]\n\n{prompt}",
+            from.title, from.session_id
+        ),
+        None => prompt.to_string(),
+    }
+}
+
 /// Who this message is from, as data the transcript can draw.
 ///
-/// The prompt itself is left exactly as the sender wrote it. Naming the sender
-/// in the text was the first version and it could only ever be prose: the model
-/// on the other end can write that same line itself, so a transcript reading
-/// attribution back out of the text would draw whatever it was handed.
-///
 /// `None` for a call from the user's own terminal — there is no session behind
-/// it — and for one whose sender has since been deleted, which the receiving
-/// transcript reads the same way: an ordinary prompt.
+/// it — and for one whose sender has since been deleted. One lookup answers for
+/// both readers, so neither the prefix nor the card claims a session the index
+/// can no longer name.
 async fn sender(send: &SendMessage) -> Option<MessageSender> {
     let from = send.from_session_id.as_deref()?;
 
@@ -520,6 +549,29 @@ mod tests {
         assert!(reachable(0o777));
         // Group *read* alone still means another account can traverse in.
         assert!(reachable(0o750));
+    }
+
+    /// The prefix is the receiving agent's only signal, so its two facts are
+    /// pinned: the title it reads, and the id it can answer to.
+    #[test]
+    fn a_relayed_prompt_names_its_sender_and_the_id_to_reply_to() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Fix the login redirect".into(),
+        };
+        let prompt = attribute("review is done", Some(&from));
+
+        assert!(prompt.starts_with(
+            "[message from the Dray session \"Fix the login redirect\" (abc-123)]\n\n"
+        ));
+        assert!(prompt.ends_with("review is done"));
+    }
+
+    /// A prompt from the user's own terminal has no sender, and must reach the
+    /// agent exactly as it was typed.
+    #[test]
+    fn an_unattributed_prompt_is_left_alone() {
+        assert_eq!(attribute("just do it", None), "just do it");
     }
 
     #[test]
