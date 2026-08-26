@@ -94,7 +94,13 @@ export function sameMark(a: PrMark | undefined, b: PrMark | undefined): boolean 
 /// Closed-without-merging sits outside the marks' vocabulary, so the panel's
 /// list is narrowed to what the marks would have seen first.
 export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boolean {
-  const seen = prs.filter((pr) => pr.state === "OPEN" || pr.state === "MERGED");
+  // Newest-updated first, the order the marks arrive in. `pickPrMark` breaks
+  // ties within a rank by position, and the panel's list is ordered by number,
+  // so without this two open PRs on one branch pick differently on each side
+  // and every panel poll would force a marks read that changes nothing.
+  const seen = prs
+    .filter((pr) => pr.state === "OPEN" || pr.state === "MERGED")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const pick = pickPrMark(
     seen.map((pr) => ({
       number: pr.number,

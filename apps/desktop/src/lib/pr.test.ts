@@ -428,6 +428,16 @@ describe("markDisagrees", () => {
     expect(markDisagrees(landed, [open, merged])).toBe(true);
   });
 
+  it("breaks ties the way the marks do, newest-updated first", () => {
+    // The panel lists by number; the marks arrive by update. Two open PRs on
+    // one branch must pick the same one on both sides or every panel poll
+    // forces a marks read.
+    const older = pr({ number: 1, updatedAt: "2026-01-01T00:00:00Z" });
+    const newer = pr({ number: 2, updatedAt: "2026-02-01T00:00:00Z" });
+    expect(markDisagrees(mark({ number: 2 }), [older, newer])).toBe(false);
+    expect(markDisagrees(mark({ number: 1 }), [older, newer])).toBe(true);
+  });
+
   it("compares checks loosely, in the two directions a row shows", () => {
     const running = mark({ checksState: "RUNNING" });
     const failing = mark({ checksState: "FAILING" });

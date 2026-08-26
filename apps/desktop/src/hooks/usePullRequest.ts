@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { isSettling } from "@/lib/pr";
-import { branchChanged, panelRead } from "@/lib/prSync";
+import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { MergeMethod, PrUnavailable, PullRequest } from "@/types/events";
 
 /// How often to re-ask while something is still moving. Checks report on their
@@ -43,16 +43,28 @@ const FRESH_MS = 30_000;
 const cache = new Map<string, PullRequest[]>();
 const fetchedAt = new Map<string, number>();
 
-const keyOf = (cwd: string, branch: string) => `${cwd} ${branch}`;
+// NUL, because a path can hold a space and the key is split back apart below.
+const keyOf = (cwd: string, branch: string) => `${cwd}\0${branch}`;
+const partsOf = (key: string) => {
+  const [cwd, branch] = key.split("\0");
+  return { cwd, branch };
+};
 
-// The sidebar's read saw this branch change. Every cwd's stamp for it goes,
-// not just the selected one: the marks are keyed by repo root and the panel by
-// cwd, which differ for a worktree session, and a stale stamp anywhere is a
-// stale panel the next time that session is opened. The rows stay — a
-// dropped stamp means "re-read on next look", never "blank".
-branchChanged.subscribe((branch) => {
+/// Sequence per key, so only the newest read for a branch may write. Reads
+/// overlap here on purpose — a poll, a tab opening and the marks' signal can
+/// each issue one — and without this an older `gh` answer landing last
+/// overwrote the newer one, undoing exactly the sync it was asked for.
+const latest = new Map<string, number>();
+
+// The sidebar's read saw this branch change. Every cwd's stamp for it under
+// that repo goes, not just the selected one: the marks are keyed by repo root
+// and the panel by cwd, which differ for a worktree session, and a stale stamp
+// anywhere is a stale panel the next time that session is opened. The rows
+// stay — a dropped stamp means "re-read on next look", never "blank".
+branchChanged.subscribe(({ repo, branch }) => {
   for (const key of fetchedAt.keys()) {
-    if (key.endsWith(` ${branch}`)) fetchedAt.delete(key);
+    const parts = partsOf(key);
+    if (parts.branch === branch && inRepo(parts.cwd, repo)) fetchedAt.delete(key);
   }
 });
 
@@ -178,9 +190,14 @@ export function usePullRequest(
       // Read before the write below, since that is what makes this an
       // appearance rather than a first sighting.
       const before = cache.get(key);
+      const seq = (latest.get(key) ?? 0) + 1;
+      latest.set(key, seq);
 
       try {
         const prs = await invoke<PullRequest[]>("prs_for_branch", { cwd, branch });
+        // A newer read for this branch is out or already landed; its answer
+        // is the one to keep, and it clears `loading` on its own way in.
+        if (latest.get(key) !== seq) return;
         // The cache is keyed, so it is written whatever the reader switched to
         // meanwhile — the answer is still true of the branch that was asked.
         cache.set(key, prs);
@@ -197,6 +214,7 @@ export function usePullRequest(
           onOpenedRef.current?.();
         }
       } catch (e) {
+        if (latest.get(key) !== seq) return;
         // The previous answer stays up: a failed refresh is a refresh that
         // failed, not the PR going away.
         commit(key, (prev) => ({ ...prev, error: asUnavailable(e), loading: false }));
@@ -231,9 +249,9 @@ export function usePullRequest(
   useEffect(() => {
     if (!branch) return;
     return branchChanged.subscribe((changed) => {
-      if (changed === branch) void load(true);
+      if (changed.branch === branch && inRepo(cwd, changed.repo)) void load(true);
     });
-  }, [branch, load]);
+  }, [cwd, branch, load]);
 
   // Two rates, and which one applies is the whole of this. An open PR is always
   // worth re-asking about — a check can still arrive, someone can still comment

@@ -31,9 +31,18 @@ function channel<T>() {
   };
 }
 
+/// Whether a session cwd belongs to a repo root — the root itself, or a
+/// worktree under it. Both readers key differently (marks by root, panel by
+/// cwd) and this is the one rule joining them.
+export function inRepo(cwd: string, repo: string): boolean {
+  return cwd === repo || cwd.startsWith(`${repo}/`);
+}
+
 /// A marks read found this branch's pull request changed since the last read.
-/// The panel drops its stamp for the branch and re-reads if it is on screen.
-export const branchChanged = channel<string>();
+/// The repo rides along, so `feature` moving in one repo cannot invalidate
+/// every other repo's `feature`. The panel drops its stamp for the branch under
+/// that repo and re-reads if it is on screen.
+export const branchChanged = channel<{ repo: string; branch: string }>();
 
 /// A panel read landed. The marks side compares it against the mark it holds
 /// for that branch — only it has one — and re-reads the repo on disagreement.

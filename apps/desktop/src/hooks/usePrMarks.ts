@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";
-import { branchChanged, panelRead } from "@/lib/prSync";
+import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { PrMark } from "@/types/events";
 
 /// How long a repo's answer counts as fresh. Longer than the panel's own 30s,
@@ -113,12 +113,15 @@ export function usePrMarks(repoPaths: string[]) {
   /// one meant a directory `gh` can never answer for — not a GitHub repo, or
   /// logged out for that host — got a failing spawn every 30s for as long as
   /// some *other* repo on screen had a PR open.
-  /// `announce` false keeps a read from telling the panel what changed. Set by
-  /// the one read the panel itself triggered — see `panelRead` below — because
-  /// the panel's answer is what this read is catching up to, and telling it
-  /// back would have it re-read, disagree again wherever the two folds differ
-  /// by construction, and the pair would spawn `gh` at each other forever.
-  const load = useCallback(async (force: boolean, only?: string[], announce = true) => {
+  /// `except` names one branch this read must not report back to the panel.
+  /// Set by the read the panel itself triggered — see `panelRead` below —
+  /// because the panel's answer for *that* branch is what this read is
+  /// catching up to, and echoing it would have the panel re-read, disagree
+  /// again wherever the two folds differ by construction, and the pair would
+  /// spawn `gh` at each other forever. Only that branch: a repo-wide answer can
+  /// carry news about others, and swallowing the whole response left their
+  /// panel stamps fresh and wrong.
+  const load = useCallback(async (force: boolean, only?: string[], except?: string) => {
     // Deferred rather than dropped, and that distinction is the whole of this
     // branch. A forced read is one the caller knows something new about — a
     // turn has just ended and may have opened a pull request — while the read
@@ -214,9 +217,12 @@ export function usePrMarks(repoPaths: string[]) {
         // be the second `gh` per tick this hook exists to avoid. A first read
         // has nothing to compare and says nothing — the panel reads fresh on
         // arrival anyway.
-        if (before && announce) {
+        if (before) {
           for (const branch of new Set([...before.keys(), ...answer.keys()])) {
-            if (!sameMark(before.get(branch), answer.get(branch))) branchChanged.emit(branch);
+            if (branch === except) continue;
+            if (!sameMark(before.get(branch), answer.get(branch))) {
+              branchChanged.emit({ repo: path, branch });
+            }
           }
         }
       })();
@@ -250,11 +256,11 @@ export function usePrMarks(repoPaths: string[]) {
     () =>
       panelRead.subscribe(({ cwd, branch, prs }) => {
         const repo = [...cache.keys()]
-          .filter((path) => cwd === path || cwd.startsWith(`${path}/`))
+          .filter((path) => inRepo(cwd, path))
           .sort((a, b) => b.length - a.length)[0];
         if (!repo || !markDisagrees(cache.get(repo)?.get(branch), prs)) return;
         fetchedAt.delete(repo);
-        void load(true, [repo], false);
+        void load(true, [repo], branch);
       }),
     [load],
   );
