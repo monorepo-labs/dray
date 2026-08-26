@@ -456,8 +456,12 @@ function App() {
         : null;
 
   // Same order the sidebar draws, so the walk matches the list even when the
-  // sidebar is collapsed and there is nothing on screen to follow.
-  const ordered = useMemo(() => sortSessions(visibleSessions), [visibleSessions]);
+  // sidebar is collapsed and there is nothing on screen to follow — project
+  // list included, since that is what orders the groups it steps through.
+  const ordered = useMemo(
+    () => sortSessions(visibleSessions, projects),
+    [visibleSessions, projects],
+  );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
   // which is where a walk through the whole list wants to end up; the top holds

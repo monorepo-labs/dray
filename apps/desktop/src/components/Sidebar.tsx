@@ -202,10 +202,23 @@ export type SessionGroup = {
 ///
 /// A project with no session opens no group, which is the whole of "don't show
 /// an empty project" — headings come from the sessions present, never from the
-/// attached list. Groups keep first-appearance order, so they run newest-session
-/// first like the rows inside them do, and a list already narrowed to one
+/// attached list.
+///
+/// **Group order is the project list's own**, not the recency of the sessions
+/// inside it. Ordering on the newest session read well for one screenshot and
+/// badly in use: every reply to any session lifted its whole project over the
+/// others, so headings the eye had learned the position of moved while a turn
+/// was running. The project list only reorders when a project is *selected*,
+/// which is the reader's own act. A project no longer attached still has
+/// sessions to draw, so it keeps first-appearance order after the attached
+/// ones.
+///
+/// Rows inside a group stay newest-first, and a list already narrowed to one
 /// project comes back in exactly the order it had before grouping existed.
-export function sessionGroups(items: SessionIndexItem[]): SessionGroup[] {
+export function sessionGroups(
+  items: SessionIndexItem[],
+  projects: Project[] = [],
+): SessionGroup[] {
   const groups: SessionGroup[] = [];
   const byPath = new Map<string, SessionGroup>();
   let current: SessionGroup | undefined;
@@ -225,7 +238,13 @@ export function sessionGroups(items: SessionIndexItem[]): SessionGroup[] {
     current.rows.push(row);
   }
 
-  return groups;
+  // Unattached sorts to the end rather than to the front, and `sort` is stable,
+  // so those keep the order they were built in.
+  const rank = new Map(projects.map((p, i) => [p.path, i]));
+  const place = (group: SessionGroup) =>
+    rank.get(group.projectPath) ?? Number.MAX_SAFE_INTEGER;
+
+  return groups.sort((a, b) => place(a) - place(b));
 }
 
 /// The order alone, for callers that only step through it.
@@ -234,9 +253,14 @@ export function sessionGroups(items: SessionIndexItem[]): SessionGroup[] {
 /// comparator would let the two disagree about which row is "next" — worse when
 /// the sidebar is collapsed and nothing on screen shows the order being walked.
 /// Grouped for the same reason: the shortcut has to step past a heading the way
-/// the eye does.
-export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
-  return sessionGroups(items).flatMap((group) => group.rows.map((row) => row.item));
+/// the eye does, so it takes the same project list the headings are ordered by.
+export function sortSessions(
+  items: SessionIndexItem[],
+  projects: Project[] = [],
+): SessionIndexItem[] {
+  return sessionGroups(items, projects).flatMap((group) =>
+    group.rows.map((row) => row.item),
+  );
 }
 
 /// Whether a row has a parent to detach from, judged the same way
@@ -329,9 +353,10 @@ export default function Sidebar({
 
   // Recency-ordered, with agent-spawned sessions nested under the one that
   // spawned them, and each row carrying the flags its connector rails are drawn
-  // from — then gathered under the project it belongs to, so the all-projects
-  // view reads as one list per repo rather than as interleaved rows.
-  const groups = useMemo(() => sessionGroups(items), [items]);
+  // from — then gathered under the project it belongs to, in the project list's
+  // own order, so the all-projects view reads as one list per repo and the
+  // headings hold still while its sessions work.
+  const groups = useMemo(() => sessionGroups(items, projects), [items, projects]);
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
     [groups],

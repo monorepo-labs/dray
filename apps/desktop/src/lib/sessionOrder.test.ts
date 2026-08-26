@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isNested, sessionGroups, sessionRows, sortSessions } from "@/components/Sidebar";
-import type { SessionIndexItem } from "@/types/events";
+import type { Project, SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
 /// irrelevant here and spelling it out would make each case harder to read than
@@ -21,6 +21,10 @@ function item(
 }
 
 const ids = (items: SessionIndexItem[]) => items.map((i) => i.sessionId);
+
+/// Only the field the grouping reads. The list's *order* is the whole of what
+/// it takes from a project, so the rest would be noise here.
+const project = (path: string) => ({ path }) as unknown as Project;
 
 describe("sortSessions", () => {
   it("orders top-level sessions newest first", () => {
@@ -201,20 +205,53 @@ describe("isNested", () => {
 describe("sessionGroups", () => {
   const shape = (groups: ReturnType<typeof sessionGroups>) =>
     groups.map((g) => [g.projectPath, g.rows.map((r) => r.item.sessionId)] as const);
+  const paths = (groups: ReturnType<typeof sessionGroups>) =>
+    groups.map((g) => g.projectPath);
 
-  it("gathers each project's sessions into one run, newest project first", () => {
+  it("gathers each project's sessions into one run, in the project list's order", () => {
     const items = [
       item("a1", "2026-01-01T00:00:00Z", null, "/a"),
       item("b1", "2026-03-01T00:00:00Z", null, "/b"),
       item("a2", "2026-02-01T00:00:00Z", null, "/a"),
     ];
 
-    // `/b` leads on its newest session, and `a2` joins `a1` rather than sitting
-    // between the two projects where plain recency would put it.
-    expect(shape(sessionGroups(items))).toEqual([
-      ["/b", ["b1"]],
+    // `/a` leads because the project list says so, even though `/b` holds the
+    // newest session — and `a2` joins `a1` rather than sitting between the two
+    // projects where plain recency would put it.
+    expect(shape(sessionGroups(items, [project("/a"), project("/b")]))).toEqual([
       ["/a", ["a2", "a1"]],
+      ["/b", ["b1"]],
     ]);
+  });
+
+  it("holds the group order still while a session works", () => {
+    // The whole reason the order is the project list's: a reply to any session
+    // used to lift its project over the others, moving every heading under the
+    // reader's eye mid-turn.
+    const projects = [project("/a"), project("/b")];
+    const before = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-02-01T00:00:00Z", null, "/b"),
+    ];
+    const after = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-09-01T00:00:00Z", null, "/b"),
+    ];
+
+    expect(paths(sessionGroups(before, projects))).toEqual(
+      paths(sessionGroups(after, projects)),
+    );
+  });
+
+  it("puts a project nobody attached after the ones that are", () => {
+    // A detached project still has sessions to draw; it just has no place in
+    // the list that orders the rest.
+    const items = [
+      item("loose", "2026-03-01T00:00:00Z", null, "/loose"),
+      item("known", "2026-01-01T00:00:00Z", null, "/a"),
+    ];
+
+    expect(paths(sessionGroups(items, [project("/a")]))).toEqual(["/a", "/loose"]);
   });
 
   it("keeps a spawned session under its parent's project", () => {
