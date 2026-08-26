@@ -1,4 +1,5 @@
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import { stripSenderPrefix } from "@/lib/relay";
 import type { QueuedMessage } from "@/types/events";
 
 /// Prompts typed into the running turn that the app is still holding.
@@ -22,7 +23,10 @@ export default function QueuedMessages({ messages }: { messages: QueuedMessage[]
           <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground opacity-55">
             {/* Same bubble, same break rule — see `UserMessage`. */}
             <span className="whitespace-pre-wrap wrap-anywhere">
-              {highlightSegments(message.text).map((segment, s) => {
+              {/* Same strip the delivered bubble makes: a relayed prompt waits
+                  here carrying the line written for the receiving agent, and it
+                  must not read one way queued and another way sent. */}
+              {segmentsOf(message).map((segment, s) => {
                 if (segment.kind === "mention") {
                   const { dir, name } = splitMention(segment.text);
                   return (
@@ -50,4 +54,8 @@ export default function QueuedMessages({ messages }: { messages: QueuedMessage[]
       ))}
     </div>
   );
+}
+
+function segmentsOf(message: QueuedMessage) {
+  return highlightSegments(stripSenderPrefix(message.text, message.from));
 }

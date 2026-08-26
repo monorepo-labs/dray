@@ -3,6 +3,7 @@ import { Image } from "lucide-react";
 import SessionAvatar from "@/components/SessionAvatar";
 import ImageRow from "@/components/chat/ImageRow";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import { stripSenderPrefix } from "@/lib/relay";
 import { shortenPath } from "@/lib/tools";
 import type { ImageRef, MessageSender } from "@/types/events";
 
@@ -25,6 +26,9 @@ import type { ImageRef, MessageSender } from "@/types/events";
 /// above the bubble instead of being drawn as a second kind of speech. The name
 /// comes off the event's own `from` field and never out of the text: the model
 /// on the other end can write any line it likes, so prose is not attribution.
+/// The line the backend writes into the prompt for the receiving agent is taken
+/// back off here, since the row above already says who is talking — safe to
+/// mute precisely because the field, not the prose, is what draws it.
 export default function UserMessage({
   text,
   images = [],
@@ -39,7 +43,8 @@ export default function UserMessage({
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
 }) {
-  const segments = highlightSegments(text);
+  const body = stripSenderPrefix(text, from);
+  const segments = highlightSegments(body);
 
   // An image with neither an archived copy nor bytes of its own — the file was
   // cleared out from under a transcript that still names it. `ImageRow` drops
@@ -70,7 +75,7 @@ export default function UserMessage({
           bubble sits on. */}
       <ImageRow images={images} variant="sent" align="end" />
 
-      {text && (
+      {body && (
         <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground">
           {/* `wrap-anywhere` because a pasted path or URL has no whitespace to
               wrap at, and the bubble's `max-w` caps the box and not what is
