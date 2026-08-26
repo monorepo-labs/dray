@@ -49,6 +49,7 @@ impl Envelope {
 pub enum Request {
     CreateSession(CreateSession),
     ListSessions(ListSessions),
+    SendMessage(SendMessage),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -61,21 +62,45 @@ pub struct CreateSession {
     /// session's project, and with neither the server refuses.
     #[serde(default)]
     pub project_path: Option<String>,
-    /// Defaults to true at the CLI, not here: parallel sessions sharing one
-    /// checkout overwrite each other, and fanning out is the whole use case.
-    pub use_worktree: bool,
-    /// `None` lets the app generate one, which is what it does for a worktree
-    /// session started from the composer.
+    /// `None` lets the app generate one. There is no opting out of the worktree
+    /// itself: sessions created this way run at the same time by design, and
+    /// several agents writing to one checkout overwrite each other.
     #[serde(default)]
     pub worktree_name: Option<String>,
     /// `None` inherits the parent session's model, or the app's default with no
     /// parent. A bare alias (`opus`), matching what the composer stores.
     #[serde(default)]
     pub model: Option<String>,
+    /// `low`..`max`. `None` inherits the parent's, and failing that the model's
+    /// own default — which the app resolves, since a model with no effort
+    /// levels must be sent none at all.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// `claude_code` today. `None` inherits the parent's, and defaults to
+    /// Claude Code with no parent.
+    #[serde(default)]
+    pub harness: Option<String>,
     /// The session whose agent is making this call, from `DRAY_SESSION_ID`.
     /// Absent for a call from the user's own terminal, which is ordinary.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+}
+
+/// A prompt sent into a session that already exists.
+///
+/// Both directions on purpose: a spawned session reporting a summary back to
+/// its parent and a parent handing a child extra context are the same
+/// operation, so there is one command rather than a reply channel and a
+/// separate send.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendMessage {
+    pub session_id: String,
+    pub prompt: String,
+    /// Who is sending, for the line the receiving agent actually reads. Absent
+    /// from a terminal call, where the message is the user's own.
+    #[serde(default)]
+    pub from_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -98,6 +123,9 @@ pub struct ListSessions {
 pub enum Response {
     Created { session: SessionSummary },
     Listed { sessions: Vec<SessionSummary> },
+    /// `queued` when the target had a turn in flight, so the prompt is held
+    /// until it reaches a boundary rather than being dropped or interrupting.
+    Sent { queued: bool },
     Error { message: String },
 }
 
@@ -169,7 +197,6 @@ mod tests {
     fn envelope_flattens_the_version_beside_the_command() {
         let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
             prompt: "hi".into(),
-            use_worktree: true,
             ..Default::default()
         })))
         .unwrap();
@@ -185,8 +212,7 @@ mod tests {
     #[test]
     fn absent_optionals_parse_as_none() {
         let envelope: Envelope =
-            serde_json::from_str(r#"{"v":1,"cmd":"create_session","prompt":"hi","useWorktree":false}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"v":1,"cmd":"create_session","prompt":"hi"}"#).unwrap();
 
         let Request::CreateSession(create) = envelope.request else {
             panic!("wrong variant");
@@ -194,6 +220,26 @@ mod tests {
         assert_eq!(create.project_path, None);
         assert_eq!(create.parent_session_id, None);
         assert_eq!(create.model, None);
+        assert_eq!(create.effort, None);
+        assert_eq!(create.harness, None);
+    }
+
+    #[test]
+    fn send_message_round_trips() {
+        let line = serde_json::to_string(&Envelope::new(Request::SendMessage(SendMessage {
+            session_id: "abc".into(),
+            prompt: "review is done".into(),
+            from_session_id: Some("parent".into()),
+        })))
+        .unwrap();
+        assert!(line.contains(r#""cmd":"send_message""#));
+
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::SendMessage(send) = back.request else {
+            panic!("wrong variant");
+        };
+        assert_eq!(send.session_id, "abc");
+        assert_eq!(send.from_session_id.as_deref(), Some("parent"));
     }
 
     #[test]

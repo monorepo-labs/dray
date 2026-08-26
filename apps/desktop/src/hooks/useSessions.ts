@@ -498,6 +498,27 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
 // replaced from what the store returned rather than from the value we sent —
 // the index is authoritative, and a failed write must not leave the sidebar
 // showing a state the disk doesn't have.
+/// Cuts a spawned session loose from its parent, so the sidebar stops nesting
+/// it under a row it no longer belongs to.
+///
+/// The row is replaced from what the backend returned rather than from a local
+/// edit, for `setSessionFlags`' reason: the index is authoritative, and a
+/// failed write must not leave the sidebar drawing a state the disk doesn't
+/// have. Nothing re-parents — detaching is one-way.
+const detachSession = async (sessionId: string) => {
+  try {
+    const updated = await invoke<SessionIndexItem | null>("detach_session", {
+      sessionId,
+    });
+    if (!updated) return;
+    setSessionIndexItems((prev) =>
+      prev.map((i) => (i.sessionId === sessionId ? updated : i)),
+    );
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
 const setSessionFlags = async (
   sessionId: string,
   flags: { archived?: boolean; pinned?: boolean },
@@ -1192,6 +1213,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, detachSession, deleteSession, removeWorktree};
 
 }

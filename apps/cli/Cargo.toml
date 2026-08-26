@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Create and list Dray sessions from the command line."
-repository = "https://github.com/yogesharc/dray"
+repository = "https://github.com/monorepo-labs/dray"
 
 [[bin]]
 name = "dray"

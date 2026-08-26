@@ -14,14 +14,14 @@
 
 use crate::{
     events::ApprovalPolicy,
-    models::{default_model, find_model, ModelId},
+    models::{default_model, find_model, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
 };
 use anyhow::{bail, Context, Result};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SessionSummary,
-    MAX_LINE, PROTOCOL_VERSION,
+    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
+    SessionSummary, MAX_LINE, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
@@ -143,6 +143,7 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
     match request {
         Request::CreateSession(create) => create_session(create, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
+        Request::SendMessage(send) => send_message(send, app).await,
     }
 }
 
@@ -179,11 +180,17 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     // `add_project` bumps `last_selected` and resorts the list, which would
     // let an agent's call quietly reorder the user's project picker.
     let model = resolve_model(create.model.as_deref(), parent.as_ref())?;
+    let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
 
-    // Whatever the parent ran at. `send_msg` reconciles it against the chosen
-    // model through `resolve_effort`, so an effort the model has no levels for
-    // is dropped there rather than needing a second check here.
-    let effort = parent.as_ref().and_then(|p| p.effort);
+    // The caller's pick, else whatever the parent ran at, else `None` — which
+    // `send_msg` resolves to the model's own default through `resolve_effort`,
+    // the same call that drops an effort a model has no levels for.
+    let effort = match create.effort.as_deref() {
+        Some(alias) => Some(Effort::from_arg(alias).with_context(|| {
+            format!("unknown effort {alias:?} — try low, medium, high, xhigh or max")
+        })?),
+        None => parent.as_ref().and_then(|p| p.effort),
+    };
     let permission_mode = parent
         .as_ref()
         .map(|p| p.permission_mode)
@@ -197,13 +204,16 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             &session_id,
             &create.prompt,
             &[],
-            Harness::ClaudeCode,
+            harness,
             model,
             effort,
             permission_mode,
             &project_path,
             None,
-            create.use_worktree,
+            // Always. Sessions created this way are meant to run at the same
+            // time, and several agents writing to one checkout overwrite each
+            // other — the changes panel cannot even tell them apart.
+            true,
             create.worktree_name.as_deref(),
             true,
             create.parent_session_id.as_deref(),
@@ -283,6 +293,93 @@ fn resolve_model(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> 
         .map(|p| p.model)
         .filter(|id| find_model(*id).is_some())
         .unwrap_or_else(default_model))
+}
+
+/// Sends a prompt into a session that already exists.
+///
+/// The target's *own* recorded model, effort and permission mode are passed
+/// back in, which is what makes a relayed message inert: `send_msg` compares
+/// them against what the child is running, finds no change, and so neither
+/// switches the model nor respawns for a new effort. A message must not
+/// reconfigure the session it arrives at.
+///
+/// Deliberately unrestricted to the parent/child pair. A child reporting a
+/// review summary upward and a parent handing a child extra context are the
+/// same operation, and naming the relationship would only add a rule to get
+/// wrong — the id is the address.
+async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
+    if send.prompt.trim().is_empty() {
+        bail!("a message needs some text");
+    }
+
+    let target = store::get_session_index_item(&send.session_id)
+        .await?
+        .with_context(|| format!("no session {}", send.session_id))?;
+
+    if target.session_id == send.from_session_id.clone().unwrap_or_default() {
+        bail!("a session cannot send a message to itself");
+    }
+
+    let prompt = attribute(&send, app).await;
+
+    let manager = app.state::<SessionManager>();
+    let outcome = manager
+        .send_msg(
+            &target.session_id,
+            &prompt,
+            &[],
+            target.harness,
+            target.model,
+            target.effort,
+            target.permission_mode,
+            &target.cwd,
+            None,
+            false,
+            None,
+            false,
+            None,
+            app,
+        )
+        .await?;
+
+    Ok(Response::Sent {
+        queued: outcome.queued.is_some(),
+    })
+}
+
+/// Names the sender in the prompt itself.
+///
+/// The receiving agent has no other way to tell a relayed message from the
+/// user typing — both arrive as an ordinary `user_message` — and "the session
+/// you spawned reports X" reads very differently from the user asking for X.
+/// Titled rather than identified by id, because the title is what the reader
+/// sees in the sidebar; the id would name a row they would have to go and
+/// match up by hand.
+async fn attribute(send: &SendMessage, _app: &AppHandle) -> String {
+    let Some(from) = send.from_session_id.as_deref() else {
+        return send.prompt.clone();
+    };
+
+    let title = store::get_session_index_item(from)
+        .await
+        .ok()
+        .flatten()
+        .map(|item| item.title);
+
+    match title {
+        Some(title) => format!("[message from the Dray session \"{title}\"]\n\n{}", send.prompt),
+        None => format!("[message from another Dray session]\n\n{}", send.prompt),
+    }
+}
+
+/// The caller's pick, else the parent's, else Claude Code.
+fn resolve_harness(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Result<Harness> {
+    match requested {
+        Some("claude_code") => Ok(Harness::ClaudeCode),
+        Some("codex") => Ok(Harness::Codex),
+        Some(other) => bail!("unknown harness {other:?} — try claude_code"),
+        None => Ok(parent.map(|p| p.harness).unwrap_or(Harness::ClaudeCode)),
+    }
 }
 
 fn resolve_project(create: &CreateSession, parent: Option<&SessionIndexItem>) -> Result<String> {

@@ -12,7 +12,7 @@
 
 set -eu
 
-REPO="yogesharc/dray"
+REPO="monorepo-labs/dray"
 INSTALL_DIR="${DRAY_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${DRAY_VERSION:-latest}"
 

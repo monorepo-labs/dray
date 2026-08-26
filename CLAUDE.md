@@ -437,7 +437,7 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 ## Orchestration
 
-**One agent can fan work out into several sessions.** "Work through these 3 Linear issues" become three Dray sessions, each own worktree, each row in sidebar user can open, interrupt, delete like any other. v1 = create and list. No sending into existing session, no child reporting back to parent.
+**One agent can fan work out into several sessions.** "Work through these 3 Linear issues" become three Dray sessions, each own worktree, each row in sidebar user can open, interrupt, delete like any other. Three commands: create, list, send.
 
 **First inbound channel into app.** Every other command travel frontend → Rust; this one travel agent → Rust → frontend, so frontend learn about session from *event* rather than from return value of thing it called. That inversion = whole of what [orchestration.rs](apps/desktop/src-tauri/src/orchestration.rs) add. Work itself go through `SessionManager::send_msg` — same function composer reach, not parallel path — so session created this way not second kind of session.
 
@@ -457,11 +457,19 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 **Row appear, and deliberately not selected.** User mid-conversation in session that spawned this one; yanking them out = opposite of what fanning out for. Listener sit in `[]` effect so it need `showArchivedRef`, same reason `selectedSessionIdRef` next to it exist.
 
-**Spawned session take worktree by default.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart. `--no-worktree` opt out. Cost already documented above: `-w` fork from `origin/<default>`, not from branch parent sit on, so fanning out from unpushed feature branch give children without parent's work.
+**Spawned session always take worktree, and no flag turn it off.** Three issue in one checkout overwrite each other, and changes panel already cannot tell two writer apart — so opt-out = footgun with no good use. `--no-worktree` existed and removed. Cost already documented above: `-w` fork from `origin/<default>`, not from branch parent sit on, so fanning out from unpushed feature branch give children without parent's work.
+
+**`dray send` go both way, and that one command not two.** Child reporting summary up and parent handing child extra context = same operation, so no reply channel beside a send. Message arrive as ordinary prompt and *start a turn*, so it wake idle agent; target mid-turn queue it and CLI say so, since queued not failure. Unrestricted to parent/child pair on purpose — id = address, and naming relationship = one more rule to get wrong.
+
+**Relayed message name its sender, in prompt text.** Receiving agent have no other way to tell relay from user typing — both arrive as `user_message` — and "session you spawned reports X" read very differently from user asking for X. Titled not id'd: title = what reader see in sidebar, id = row they'd have to match up by hand.
+
+**Send pass target's *own* recorded model/effort/permission back in**, which what make it inert: `send_msg` compare them against what child run, find no change, so neither `set_model` nor respawn fire. Message must not reconfigure session it arrive at.
 
 **Depth cap = 2, walked not stored.** Spawned session may spawn; its children may not. Walk `parent_session_id` up index at create time with cycle guard, rather than storing `depth` number free to disagree with chain it describe. Chains three long, so walk cost nothing. Refusal = readable sentence, since agent read it as tool output.
 
-**Model, effort and permission mode inherit from parent.** So fanned-out session run way one that spawned it do. No parent (call from user's own terminal) = Rust's own default, because composer's remembered pick live in frontend localStorage where Rust cannot read it. `ModelId::default()` cannot serve — it `Unknown`, which exist so old index entry still deserialize and which have no CLI alias — hence `default_model()`, mirroring `useComposerPrefs`' seed. Two separate constant; move one, move both.
+**Model, effort, harness and permission mode inherit from parent**, each overridable by flag (`--model`, `--effort`, `--harness`). So fanned-out session run way one that spawned it do. No parent (call from user's own terminal) = Rust's own default, because composer's remembered pick live in frontend localStorage where Rust cannot read it. `ModelId::default()` cannot serve — it `Unknown`, which exist so old index entry still deserialize and which have no CLI alias — hence `default_model()`.
+
+**That default = Opus, deliberately not composer's Haiku seed.** Composer's seed open picker user about to touch, so it start cheap; this one = session nobody sit in front of doing whole task unattended, and cost of it being weak = work redone by hand. Effort follow from model's own default (`High`) through `resolve_effort`, so no second constant.
 
 **Project deliberately not attached.** Sidebar's `projectFilter` default null and list every session whatever its project, so session under unattached repo already reachable — while `add_project` bump `last_selected` and resort list, which would let agent's call quietly reorder user's project picker.
 
@@ -470,6 +478,14 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 **Child get `PATH` put back, and that load-bearing.** Bundled `.app` launched from Finder inherit launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so `dray` installed to `~/.local/bin` simply not there for agent — same trap [binpath.rs](apps/desktop/src-tauri/src/binpath.rs) exist to solve for `claude`, one layer out. `known_dirs()` now `pub` for this. Appended not prepended: user's own `PATH` should still win where two name same binary.
 
 **Skill embedded in binary, written by `dray skill install`.** Downloaded separately = exactly how skill end up describing different version of CLI than one installed. Global at `~/.claude/skills/dray/`, not scoped with `--plugin-dir`, because CLI meant to work from any Claude session, terminal one included.
+
+**Sidebar nest spawned session under its parent**, `sortSessions` in [Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx). Exported and shared with ⌘⇧↑/↓, so order stepped = order drawn. **Walk depth-first, not one pass over roots** — depth cap allow spawned session to spawn, and single pass emitted neither grandchild nor anything below it, so row simply vanish from sidebar. Caught by test, not by eye. `seen` set also mean cycle in index cost strange order rather than hung sidebar, and unreached row appended not dropped.
+
+**Child whose parent not on screen draw top-level.** Ordinary case not edge one: parent may be archived, filtered to another project, or deleted. `isNested` judge it same way `sortSessions` place it, so marker can never point at parent that isn't drawn.
+
+**Marker = `|-`, two character, not indent.** 250px sidebar have no room to spare and title = one thing on row that must not get shorter. `aria-hidden`: marker = picture of list's own shape, and screen reader already read rows in drawn order.
+
+**Detach one-way, and no re-attach.** Parentage record who *created* session = fact about past; session detached then re-parented elsewhere describe history that never happened. `detach_session` leave `modified` alone for `set_session_flags`' reason — it order list, and detaching must not jump row to top. Menu item absent on un-nested row rather than disabled: disabled item on every row = noise, not promise of something coming.
 
 **Socket failure cost feature, never app.** `serve` error logged and dropped in `setup()` — app refusing to start because socket in use would trade whole product for side channel, and reader could act on it either way.
 
@@ -740,7 +756,7 @@ Several things deliberately unfinished — don't mistake for bugs:
 - **Sidebar PR mark say open, draft or merged, and checks say running or failing.** No number, no per-check detail, no merge readiness, and nothing at all for passing — row already carry title, unread rail and timestamp. Number ride `title` attribute alone. Closed-without-merging not asked for at all.
 
 - **Spawned session inherit permission mode, so most block immediately.** Default stance = `auto`, which prompt per action — so session fanned out from ordinary session stop at its first `Write` waiting for card nobody is next to. Notification path do surface it (yellow rail, notice card, dock badge), so it not silent, but "create 3 sessions" currently mean three sessions to go and approve rather than three running. `dray new` take no `--permission-mode`, and adding one raise real question: agent in `plan` session spawning `bypassPermissions` child = escalation past stance user set. Clamping child to be no more autonomous than parent = likely shape of fix. Unresolved on purpose.
-- **Orchestration read and create, never drive.** No sending into existing session, no reading transcript back, no stopping one. Parent cannot learn child finished — `dray ls` report status so agent can poll, but nothing push.
+- **No reading a transcript back.** Create, list and send exist; reading what another session said don't. Agent wanting summary have to ask that session to `dray send` one. Parent also cannot learn child finished except by polling `dray ls` — nothing push.
 - **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
 
 - **TS event types generated, not written.** `ts-rs` derive them from Rust model into `src/types/events.ts`, checked in so frontend build need no Rust toolchain. `cargo test` regenerate; never edit output. Two settings live in `src-tauri/.cargo/config.toml`: export path, and `TS_RS_LARGE_INT = "number"` because `u64` otherwise become `bigint`, which `JSON.parse` never produce.

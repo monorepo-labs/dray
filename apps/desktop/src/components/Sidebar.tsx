@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CircleDashed,
   GitBranchPlus,
+  Unlink,
   Inbox,
   // Pin,
   Plus,
@@ -78,6 +79,7 @@ type SidebarProps = {
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
+  onDetach: (sessionId: string) => Promise<void>;
   showArchived: boolean;
   onToggleArchived: () => void;
   projects: Project[];
@@ -92,12 +94,77 @@ type SidebarProps = {
   onInstallUpdate: () => void;
 };
 
-/// The order the list is drawn in. Exported because the ⌘⇧↑/↓ shortcut steps
-/// through the same sequence, and a second comparator would let the two disagree
-/// about which row is "next" — worse when the sidebar is collapsed and nothing
-/// on screen shows the order being walked.
+/// The order the list is drawn in, with a session spawned by an agent sitting
+/// directly under the one that spawned it.
+///
+/// Exported because the ⌘⇧↑/↓ shortcut steps through the same sequence, and a
+/// second comparator would let the two disagree about which row is "next" —
+/// worse when the sidebar is collapsed and nothing on screen shows the order
+/// being walked.
+///
+/// A child whose parent is not in `items` is drawn at the top level rather than
+/// hidden. That is the ordinary case, not an edge one: the parent may be
+/// archived, filtered to another project, or deleted outright, and a row that
+/// vanished with it would be unreachable.
+///
+/// Only one level nests. The depth cap allows a spawned session to spawn, so a
+/// grandchild exists — but indenting twice buys a tree nobody asked for in a
+/// 250px column, so it nests under its own parent and the chain reads flat from
+/// there.
 export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
-  return [...items].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
+  const byRecency = (a: SessionIndexItem, b: SessionIndexItem) =>
+    Date.parse(b.modified) - Date.parse(a.modified);
+
+  const present = new Set(items.map((i) => i.sessionId));
+  const parentOf = (i: SessionIndexItem) =>
+    i.parentSessionId && present.has(i.parentSessionId) ? i.parentSessionId : null;
+
+  const children = new Map<string, SessionIndexItem[]>();
+  for (const item of items) {
+    const parent = parentOf(item);
+    if (!parent) continue;
+    const group = children.get(parent);
+    if (group) group.push(item);
+    else children.set(parent, [item]);
+  }
+
+  // Depth-first rather than one pass over roots and their direct children: the
+  // depth cap allows a spawned session to spawn, so a grandchild exists, and a
+  // single pass emitted neither it nor anything below it — the row simply
+  // vanished from the sidebar. Pinned by a test.
+  const ordered: SessionIndexItem[] = [];
+  const seen = new Set<string>();
+
+  const walk = (item: SessionIndexItem) => {
+    if (seen.has(item.sessionId)) return;
+    seen.add(item.sessionId);
+    ordered.push(item);
+    for (const child of (children.get(item.sessionId) ?? []).sort(byRecency)) {
+      walk(child);
+    }
+  };
+
+  for (const root of [...items].filter((i) => !parentOf(i)).sort(byRecency)) {
+    walk(root);
+  }
+
+  // A cycle in the index reaches no root, so its rows are still unemitted here.
+  // Appended rather than dropped: the sidebar losing a session is worse than
+  // drawing a strange order, and `seen` is what stops the walk itself hanging.
+  for (const stranded of [...items].sort(byRecency)) {
+    walk(stranded);
+  }
+
+  return ordered;
+}
+
+/// Whether a row draws nested, judged the same way [`sortSessions`] places it —
+/// a parent that isn't on screen means the row is top-level, so the marker can
+/// never point at nothing.
+export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boolean {
+  return Boolean(
+    item.parentSessionId && items.some((i) => i.sessionId === item.parentSessionId),
+  );
 }
 
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
@@ -168,6 +235,7 @@ export default function Sidebar({
   onToggleArchived,
   projects,
   projectFilter,
+  onDetach,
   onProjectFilterChange,
   updateStatus,
   updateBlocked,
@@ -176,8 +244,9 @@ export default function Sidebar({
 }: SidebarProps) {
   const fullscreen = useFullscreen();
 
-  // Flat and recency-ordered. Project only survives as the filter above the
-  // list, so the same session never appears under two headings.
+  // Recency-ordered, with agent-spawned sessions nested under the one that
+  // spawned them. Project only survives as the filter above the list, so the
+  // same session never appears under two headings.
   const sorted = useMemo(() => sortSessions(items), [items]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
@@ -296,9 +365,11 @@ export default function Sidebar({
               // A stale glyph is the accepted trade; a stale *spinner* is not,
               // since it animates a claim that something is happening now.
               marksLive={!showArchived}
+              nested={isNested(item, items)}
               onSelect={onSelect}
               onSetFlags={onSetFlags}
               onDelete={onDelete}
+              onDetach={onDetach}
             />
           ))
         )}
@@ -634,9 +705,14 @@ function RowAction({
 /// is no second copy of the flag to fall out of step with it.
 function RowMenu({
   onDelete,
+  onDetach,
   children,
 }: {
   onDelete: () => void;
+  /// Absent on a row that isn't nested — there is nothing to detach from, and
+  /// a disabled item on every row in the list would be noise rather than a
+  /// promise of something coming.
+  onDetach?: () => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -680,6 +756,13 @@ function RowMenu({
               Fork
             </ContextMenuItem>
 
+            {onDetach && (
+              <ContextMenuItem className="text-ui" onSelect={onDetach}>
+                <Unlink />
+                Detach from parent
+              </ContextMenuItem>
+            )}
+
             {/* `preventDefault` holds the menu open — an item select closes it by
                 default, which would take the confirm step down with it. */}
             <ContextMenuItem
@@ -709,8 +792,10 @@ function SessionRow({
   faded = false,
   marksLive = true,
   onSelect,
+  nested = false,
   onSetFlags,
   onDelete,
+  onDetach,
 }: {
   item: SessionIndexItem;
   status: SessionStatus;
@@ -725,11 +810,14 @@ function SessionRow({
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
+  /// Drawn under the session whose agent created it.
+  nested?: boolean;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
+  onDetach: (sessionId: string) => Promise<void>;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
   // means a row selected by click — already in view — doesn't scroll at all.
@@ -739,7 +827,10 @@ function SessionRow({
   }, [active]);
 
   return (
-    <RowMenu onDelete={() => void onDelete(item.sessionId)}>
+    <RowMenu
+      onDelete={() => void onDelete(item.sessionId)}
+      onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+    >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
       <div
@@ -814,6 +905,21 @@ function SessionRow({
             />
           )}
         </span>
+
+        {/* Says this session was created by the one above it, and nothing more.
+            Aria-hidden because the marker is a picture of the list's own shape:
+            a screen reader reads the rows in the order they are drawn anyway,
+            and "vertical line hyphen" ahead of every nested title is noise.
+
+            Two characters rather than an indent, because 250px of sidebar has
+            none to spare — a title is the one thing on this row that must not
+            get shorter, and it is already truncated on most. Muted so it reads
+            as structure rather than as part of the title it sits beside. */}
+        {nested && (
+          <span aria-hidden className="shrink-0 pr-1 font-mono text-ui text-muted-foreground/70">
+            |-
+          </span>
+        )}
 
         {/* Ahead of the title, and it takes no room when there is none — unlike
             the rail beside it, which holds its slot. The two differ because the

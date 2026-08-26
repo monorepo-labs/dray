@@ -98,6 +98,7 @@ function App() {
     handleSelectSessionIndexItem,
     handleNewSession,
     setSessionFlags,
+    detachSession,
     deleteSession,
     removeWorktree,
   } = useSessions();
@@ -550,6 +551,7 @@ function App() {
           onToggleCollapsed={toggleSidebar}
           onSelect={handleSelectSessionIndexItem}
           onNewSession={handleNewSession}
+          onDetach={detachSession}
           onSetFlags={async (sessionId, flags) => {
             await setSessionFlags(sessionId, flags);
             if (flags.archived === true) {

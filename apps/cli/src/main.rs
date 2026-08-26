@@ -10,7 +10,8 @@
 
 use clap::{Args, Parser, Subcommand};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SessionSummary,
+    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
+    SessionSummary,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -43,6 +44,8 @@ enum Command {
     New(New),
     /// List sessions.
     Ls(Ls),
+    /// Send a message into a session that already exists.
+    Send(Send),
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -59,18 +62,32 @@ struct New {
     #[arg(long)]
     project: Option<PathBuf>,
 
-    /// Run in the project directory rather than an isolated worktree. Only safe
-    /// when nothing else is working in that checkout.
-    #[arg(long)]
-    no_worktree: bool,
-
-    /// Name the worktree instead of letting Dray generate one.
+    /// Name the worktree instead of letting Dray generate one. Every session
+    /// gets one — they are meant to run at the same time.
     #[arg(long)]
     worktree_name: Option<String>,
 
     /// opus, sonnet, fable or haiku. Defaults to the calling session's model.
     #[arg(long)]
     model: Option<String>,
+
+    /// low, medium, high, xhigh or max. Defaults to the calling session's
+    /// effort, then the model's own.
+    #[arg(long)]
+    effort: Option<String>,
+
+    /// Which agent runs it. claude_code today.
+    #[arg(long)]
+    harness: Option<String>,
+}
+
+#[derive(Args)]
+struct Send {
+    /// The session to send to, as printed by `dray ls`.
+    session_id: String,
+
+    /// The message. Write it for someone who cannot see your conversation.
+    prompt: String,
 }
 
 #[derive(Args)]
@@ -109,6 +126,7 @@ fn run() -> Result<(), String> {
     match Cli::parse().command {
         Command::New(args) => new(args),
         Command::Ls(args) => ls(args),
+        Command::Send(args) => send_message(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
 }
@@ -117,11 +135,10 @@ fn new(args: New) -> Result<(), String> {
     let request = Request::CreateSession(CreateSession {
         prompt: args.prompt,
         project_path: resolve_project(args.project),
-        // Defaulted here rather than in the protocol: parallel sessions sharing
-        // one checkout overwrite each other, and fanning out is the whole point.
-        use_worktree: !args.no_worktree,
         worktree_name: args.worktree_name,
         model: args.model,
+        effort: args.effort,
+        harness: args.harness,
         parent_session_id: parent_session_id(),
     });
 
@@ -141,8 +158,48 @@ fn new(args: New) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        Response::Listed { .. } => Err("the app answered a list to a create".into()),
+        other => Err(unexpected(&other)),
     }
+}
+
+fn send_message(args: Send) -> Result<(), String> {
+    let request = Request::SendMessage(SendMessage {
+        session_id: args.session_id,
+        prompt: args.prompt,
+        from_session_id: parent_session_id(),
+    });
+
+    match send(request)? {
+        // Queued is not a failure and must not read as one: the target had a
+        // turn in flight, so the prompt waits for a boundary rather than
+        // interrupting it.
+        Response::Sent { queued } => {
+            eprintln!(
+                "{}",
+                if queued {
+                    "Queued — the session is mid-turn and will pick it up."
+                } else {
+                    "Delivered."
+                }
+            );
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(&other)),
+    }
+}
+
+/// The app answered something this command never asks for, which means the two
+/// sides disagree about the protocol rather than that anything went wrong with
+/// the request.
+fn unexpected(response: &Response) -> String {
+    let kind = match response {
+        Response::Created { .. } => "a create",
+        Response::Listed { .. } => "a list",
+        Response::Sent { .. } => "a send",
+        Response::Error { .. } => "an error",
+    };
+    format!("the app answered {kind} to a different command — versions may disagree")
 }
 
 fn ls(args: Ls) -> Result<(), String> {
@@ -165,7 +222,7 @@ fn ls(args: Ls) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        Response::Created { .. } => Err("the app answered a create to a list".into()),
+        other => Err(unexpected(&other)),
     }
 }
 
@@ -287,18 +344,21 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_is_the_default_and_the_flag_opts_out() {
-        let plain = Cli::parse_from(["dray", "new", "do a thing"]);
-        let Command::New(args) = plain.command else {
-            panic!("wrong subcommand");
-        };
-        assert!(!args.no_worktree, "worktree must be the default");
+    fn there_is_no_way_to_opt_out_of_the_worktree() {
+        // Sessions created here run at the same time by design, so sharing a
+        // checkout is never the right answer — the flag is gone rather than
+        // defaulted.
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    }
 
-        let opted_out = Cli::parse_from(["dray", "new", "do a thing", "--no-worktree"]);
-        let Command::New(args) = opted_out.command else {
+    #[test]
+    fn send_takes_a_target_and_a_message() {
+        let cli = Cli::parse_from(["dray", "send", "abc-123", "review is done"]);
+        let Command::Send(args) = cli.command else {
             panic!("wrong subcommand");
         };
-        assert!(args.no_worktree);
+        assert_eq!(args.session_id, "abc-123");
+        assert_eq!(args.prompt, "review is done");
     }
 
     #[test]

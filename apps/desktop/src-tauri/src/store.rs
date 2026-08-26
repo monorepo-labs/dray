@@ -345,6 +345,32 @@ pub async fn touch_session_index_item(
 /// Sets `archived` and/or `pinned` on one entry. `None` leaves that flag alone,
 /// so the two sidebar controls share one command without either clobbering the
 /// other's field. Returns the entry as written, or `None` if the id is unknown.
+/// Cuts a session loose from the parent that spawned it, so the sidebar draws
+/// it as a top-level row rather than nested.
+///
+/// One-way on purpose: there is no re-attach. Parentage records who *created*
+/// a session, which is a fact about the past — a session detached and then
+/// re-parented somewhere else would describe a history that never happened,
+/// and nothing in the app needs that.
+///
+/// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
+/// list, and detaching must not jump the row to the top of it.
+pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(None);
+    };
+
+    item.parent_session_id = None;
+    let updated = item.clone();
+
+    write_session_index(&sessions).await?;
+
+    Ok(Some(updated))
+}
+
 pub async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,

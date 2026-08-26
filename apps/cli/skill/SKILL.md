@@ -1,6 +1,6 @@
 ---
 name: dray
-description: Create and list Dray sessions from the command line. Use when the user asks to work on several things at once — a batch of issues, tickets, or tasks — and each deserves its own agent, its own branch, and its own place in the sidebar. Also for checking what other sessions are running.
+description: Create, list and message Dray sessions from the command line. Use when the user asks to work on several things at once — a batch of issues, tickets, or tasks — and each deserves its own agent, its own branch, and its own place in the sidebar. Also for checking on sessions you started, and for sending a message or summary between sessions.
 ---
 
 # Dray sessions
@@ -41,23 +41,20 @@ Options:
 | flag | meaning |
 |---|---|
 | `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
-| `--no-worktree` | Run in the project directory instead of an isolated worktree. |
 | `--worktree-name <name>` | Name the worktree instead of letting Dray generate one. |
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku`. Defaults to the current session's model. |
+| `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's. |
+| `--harness <name>` | `claude_code`. Defaults to the current session's. |
 
 ### Each session gets its own worktree
 
-By default every session runs in its own git worktree on its own branch. This is
-what makes running them at once safe — without it, three agents write to one
-checkout and overwrite each other.
+Every session runs in its own git worktree on its own branch, and there is no way
+to turn that off. It is what makes running them at once safe — without it, three
+agents write to one checkout and overwrite each other.
 
-Two consequences worth knowing:
-
-- The worktree branches from `origin/<default>`, **not** from the branch you are
-  on. If your work is on a feature branch and is not pushed, the new session will
-  not have it.
-- `--no-worktree` puts a session in the shared checkout. Only reasonable when
-  nothing else is running, or for work that touches no files.
+One consequence worth knowing: the worktree branches from `origin/<default>`,
+**not** from the branch you are on. If your work is on a feature branch and is
+not pushed, the new session will not have it.
 
 ## Listing sessions
 
@@ -71,19 +68,41 @@ Each row carries the session id, title, status (`idle`, `in_progress`,
 `completed`), and branch. This is how you check on sessions you started — nothing
 reports back on its own, so poll `dray ls` if you need to know when one finishes.
 
-## Reporting back
+## Messaging a session
 
-After creating sessions, tell the user plainly what is now running and where to
-look. Name the work, not the session ids — the ids are for you, the sidebar is
-for them.
+```bash
+dray send <session-id> "Code review is done. Two findings, both fixed."
+```
 
-Don't poll in a loop waiting for them to finish unless the user asked you to. They
-can watch the sidebar.
+Works in both directions and between any two sessions:
+
+- A session you created can report a summary back to the one that created it.
+- You can hand a session you created extra context after it has started.
+
+The message arrives as an ordinary prompt and **starts a turn** in the receiving
+session, so it wakes an idle agent up. If that session is mid-turn the message is
+queued and picked up at the next boundary — that is reported, and is not a
+failure.
+
+The receiving agent is told which session the message came from, so write it as a
+message to a colleague, not as a note to yourself.
+
+Send when there is something the other session genuinely needs. A message costs
+it a whole turn, so "done" on its own is rarely worth one.
+
+## Reporting back to the user
+
+Say briefly what is now running, in terms of the work — "three sessions, one per
+issue". **Do not list session names or ids.** The user sees every session in the
+sidebar, nested under this one, and reading ids back is noise they cannot act on.
+
+Don't poll in a loop waiting for sessions to finish unless the user asked you to.
+They can watch the sidebar.
 
 ## Limits
 
-- **Create and list only.** You cannot send a follow-up message into a session you
-  created, and you cannot read its transcript. The user drives it from there.
+- **No reading transcripts.** You can create, list and message. You cannot read
+  what another session said — ask it to send you a summary instead.
 - **Two levels deep.** A session you create may create sessions of its own; those
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.

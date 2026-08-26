@@ -287,6 +287,15 @@ async fn set_session_flags(
         .map_err(|e| e.to_string())
 }
 
+/// Cuts a spawned session loose from its parent, so the sidebar stops nesting
+/// it. Returns the entry as written; `None` for an unknown id.
+#[tauri::command]
+async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, String> {
+    store::detach_session(session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// What removing this session's worktree would cost, for the dialog that asks.
 ///
 /// Answers for a session with no worktree too — an all-zero, `exists: false`
@@ -508,6 +517,7 @@ pub fn run() {
             commit_files,
             push_branch,
             set_session_flags,
+            detach_session,
             delete_session,
             worktree_disposition,
             remove_session_worktree,
