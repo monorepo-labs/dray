@@ -7,6 +7,8 @@
 //! read for itself belongs there, not here**, or this file becomes a second
 //! settings store free to disagree with the first.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::{fs, sync::Mutex};
@@ -18,13 +20,14 @@ use crate::store::get_home_app_dir;
 /// would drop the other's field — same bargain `projects.json` makes.
 static SETTINGS_LOCK: Mutex<()> = Mutex::const_new(());
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// What is on disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    /// Opted in by default, and the default is what a missing file reads as.
-    /// The event carries no identifier and no properties, and the dialog says
-    /// so — see the analytics section in CLAUDE.md.
+    /// Opted in by default, and the default is what a **missing** file reads
+    /// as. A file that exists and cannot be parsed reads the other way — see
+    /// [`read`].
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
 }
@@ -41,23 +44,59 @@ impl Default for AppSettings {
     }
 }
 
-/// Reads `settings.json`. A missing, empty or unparseable file reads as the
-/// defaults rather than an error: this is consulted on the launch path, and a
-/// file someone hand-edited badly must not be able to stop the app starting.
+/// What the settings dialog draws, which is not what is on disk.
+///
+/// The environment can force reporting off for a run, and a switch drawn from
+/// the file alone would then sit at `on` while nothing was being sent.
+/// `analytics_locked` is what lets the row disable itself and say why, rather
+/// than lie.
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    /// Effective, not stored — the environment is already folded in.
+    pub analytics_enabled: bool,
+    pub analytics_locked: bool,
+}
+
+/// Reads `settings.json`, **failing closed**.
+///
+/// A missing or empty file is a fresh install and reads as the defaults. Any
+/// other failure — unparseable JSON, an unreadable file, no home directory —
+/// reads as opted *out*, because a file that exists and cannot be understood is
+/// far likelier to belong to someone who turned this off than to someone who
+/// never touched it. Never an error: this sits on the launch path, and a
+/// hand-edited file must not be able to stop the app starting.
 pub async fn read() -> AppSettings {
-    match read_inner().await {
+    let dir = match get_home_app_dir().await {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            return opted_out();
+        }
+    };
+
+    match read_from(&dir).await {
         Ok(settings) => settings,
         Err(e) => {
             eprintln!("[settings read err] {e:#}");
-            AppSettings::default()
+            opted_out()
         }
     }
 }
 
-async fn read_inner() -> Result<AppSettings> {
-    let path = get_home_app_dir().await?.join("settings.json");
+/// The fail-closed answer. Spelled out rather than reusing `Default` so the two
+/// can never be confused: the default is opted *in*, and this is its opposite.
+fn opted_out() -> AppSettings {
+    AppSettings {
+        analytics_enabled: false,
+    }
+}
 
-    let contents = match fs::read_to_string(path).await {
+/// Takes the directory so a test can round-trip against a tempdir rather than
+/// the real `~/.dray`.
+async fn read_from(dir: &Path) -> Result<AppSettings> {
+    let contents = match fs::read_to_string(path_in(dir)).await {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AppSettings::default()),
         Err(e) => return Err(e).context("could not open settings file"),
@@ -67,24 +106,113 @@ async fn read_inner() -> Result<AppSettings> {
         return Ok(AppSettings::default());
     }
 
-    Ok(serde_json::from_str(&contents)?)
+    serde_json::from_str(&contents).context("could not parse settings file")
+}
+
+pub async fn write(settings: &AppSettings) -> Result<()> {
+    let _guard = SETTINGS_LOCK.lock().await;
+    let dir = get_home_app_dir().await?;
+
+    write_to(&dir, settings).await
 }
 
 /// Rewrites the file whole, landing via write-temp + `rename` like the session
-/// index does — a torn settings file would be read as the defaults on the next
-/// launch, silently undoing whatever was just set.
-pub async fn write(settings: &AppSettings) -> Result<()> {
-    let _guard = SETTINGS_LOCK.lock().await;
-
-    let path = get_home_app_dir().await?.join("settings.json");
+/// index does — a torn settings file would fail to parse on the next launch and
+/// read as opted out, silently undoing whatever was just set.
+async fn write_to(dir: &Path, settings: &AppSettings) -> Result<()> {
+    let path = path_in(dir);
     let tmp = path.with_extension("json.tmp");
 
     fs::write(&tmp, serde_json::to_string_pretty(settings)?)
         .await
         .context("could not write settings file")?;
-    fs::rename(&tmp, &path)
-        .await
-        .context("could not replace settings file")?;
+
+    if let Err(e) = fs::rename(&tmp, &path).await {
+        // Or the next write inherits a stale temp file it never wrote.
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e).context("could not replace settings file");
+    }
 
     Ok(())
+}
+
+fn path_in(dir: &Path) -> PathBuf {
+    dir.join("settings.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tempdir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dray-settings-{}-{}",
+            std::process::id(),
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn missing_file_reads_as_opted_in() {
+        let dir = tempdir();
+
+        assert!(read_from(&dir).await.unwrap().analytics_enabled);
+    }
+
+    #[tokio::test]
+    async fn empty_file_reads_as_opted_in() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "   \n").unwrap();
+
+        assert!(read_from(&dir).await.unwrap().analytics_enabled);
+    }
+
+    /// The direction that matters: a file someone opted out in, then corrupted,
+    /// must not come back as opted in. `read_from` reports it as an error, and
+    /// [`read`] turns any error into [`opted_out`].
+    #[tokio::test]
+    async fn unparseable_file_is_an_error_not_a_default() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "{ not json").unwrap();
+
+        assert!(read_from(&dir).await.is_err());
+        assert!(!opted_out().analytics_enabled);
+    }
+
+    #[tokio::test]
+    async fn round_trips() {
+        let dir = tempdir();
+        let off = AppSettings {
+            analytics_enabled: false,
+        };
+
+        write_to(&dir, &off).await.unwrap();
+
+        assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// An unknown field must not fail the read, or a file written by a newer
+    /// build reads as opted out on every older one.
+    #[tokio::test]
+    async fn unknown_fields_are_ignored() {
+        let dir = tempdir();
+        std::fs::write(
+            path_in(&dir),
+            r#"{"analyticsEnabled": false, "somethingNewer": 3}"#,
+        )
+        .unwrap();
+
+        assert!(!read_from(&dir).await.unwrap().analytics_enabled);
+    }
+
+    #[tokio::test]
+    async fn write_leaves_no_temp_file_behind() {
+        let dir = tempdir();
+
+        write_to(&dir, &AppSettings::default()).await.unwrap();
+
+        assert!(!dir.join("settings.json.tmp").exists());
+    }
 }

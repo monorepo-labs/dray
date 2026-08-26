@@ -191,11 +191,14 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  */
 trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unknown", harnessType: string, } | { "type": "unrecognized" };
 
+/**
+ * What is on disk.
+ */
 export type AppSettings = { 
 /**
- * Opted in by default, and the default is what a missing file reads as.
- * The event carries no identifier and no properties, and the dialog says
- * so — see the analytics section in CLAUDE.md.
+ * Opted in by default, and the default is what a **missing** file reads
+ * as. A file that exists and cannot be parsed reads the other way — see
+ * [`read`].
  */
 analyticsEnabled: boolean, };
 
@@ -888,6 +891,20 @@ export type Settings = { model: string | null,
  * onto these, gaining variants if it turns out to need them.
  */
 approvalPolicy: PermissionMode | null, sandbox: string | null, writableRoots: Array<string>, networkAccess: boolean | null, fastMode: string | null, };
+
+/**
+ * What the settings dialog draws, which is not what is on disk.
+ *
+ * The environment can force reporting off for a run, and a switch drawn from
+ * the file alone would then sit at `on` while nothing was being sent.
+ * `analytics_locked` is what lets the row disable itself and say why, rather
+ * than lie.
+ */
+export type SettingsView = { 
+/**
+ * Effective, not stored — the environment is already folded in.
+ */
+analyticsEnabled: boolean, analyticsLocked: boolean, };
 
 /**
  * One command the user may type. `name` carries no leading slash — the picker

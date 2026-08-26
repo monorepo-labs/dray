@@ -95,27 +95,38 @@ fn list_models() -> Vec<Model> {
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
 /// frontend's own local storage — see [`settings`].
+///
+/// Answers with the **effective** state, off `analytics::enabled`, not with
+/// what is on disk. The two differ whenever `DRAY_NO_ANALYTICS` is set, and a
+/// switch drawn from the file there would sit at `on` while nothing was being
+/// sent.
 #[tauri::command]
-async fn get_settings() -> settings::AppSettings {
-    settings::read().await
+fn get_settings() -> settings::SettingsView {
+    settings_view()
 }
 
 /// Persists the analytics opt-out and applies it to this run at once, so the
 /// switch does not need a restart to mean anything.
 ///
-/// `DRAY_NO_ANALYTICS` still wins: it is re-read here rather than remembered,
-/// so a run started with it set cannot be talked back into reporting by the
-/// dialog.
+/// Read-modify-write rather than a fresh struct: with a second field here one
+/// day, building this from `enabled` alone would reset whatever the caller did
+/// not name.
 #[tauri::command]
-async fn set_analytics_enabled(enabled: bool) -> Result<settings::AppSettings, String> {
-    let next = settings::AppSettings {
-        analytics_enabled: enabled,
-    };
+async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, String> {
+    let mut next = settings::read().await;
+    next.analytics_enabled = enabled;
 
     settings::write(&next).await.map_err(|e| e.to_string())?;
-    analytics::set_enabled(enabled && std::env::var_os("DRAY_NO_ANALYTICS").is_none());
+    analytics::set_enabled(enabled && !analytics::env_opt_out());
 
-    Ok(next)
+    Ok(settings_view())
+}
+
+fn settings_view() -> settings::SettingsView {
+    settings::SettingsView {
+        analytics_enabled: analytics::enabled(),
+        analytics_locked: analytics::env_opt_out(),
+    }
 }
 
 /// The slash commands available in a directory. Cached per directory in the

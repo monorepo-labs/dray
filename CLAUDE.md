@@ -558,7 +558,11 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Read and track folded into one `analytics::start`.** Ordering = point: `track` must not run before persisted answer in hand. Spawned inside `setup` rather than blocking it, since nothing on screen wait on it. `DRAY_NO_ANALYTICS` win one direction only — it turn reporting off, cannot turn it on over stored `false`.
 
-**Missing, empty or unparseable file read as defaults, not error.** This sit on launch path, so file someone hand-edited badly must not stop app starting. Default = opted in, and that what unwritten file mean.
+**Read fail *closed*, and missing file not same case as broken one.** Missing or empty = fresh install, read as default (opted in). Anything else — unparseable JSON, unreadable file, no home dir — read as opted **out**, because file that exist and can't be understood far likelier belong to someone who turned this off than someone who never touched it. Never error either way: this sit on launch path, so hand-edited file must not stop app starting. Pinned by test, and the direction is the test worth having.
+
+**`ENABLED` start `false`, not `true`.** `analytics::start` spawned, so window exist at launch where consent not yet read; anything reaching `track` inside it would report for someone who may have opted out. Nothing do today — `start` own only call — but second call site = exactly change that wouldn't think to check.
+
+**Dialog draw *effective* state, not stored one.** `get_settings` answer off `analytics::enabled()`, and `SettingsView` carry `analytics_locked` beside it. Two differ whenever `DRAY_NO_ANALYTICS` set, and switch drawn from file there sit at `on` while nothing being sent — so row disable itself and name env var instead. `env_opt_out()` read in one place for that reason: two site reading same variable = how flag and switch drawn from it drift apart.
 
 ## Notifications
 

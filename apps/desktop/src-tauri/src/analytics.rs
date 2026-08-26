@@ -50,7 +50,13 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(15);
 /// because the plugin decides it once, at `build` time, from the key alone — an
 /// empty key disables tracking for the life of the process, which cannot answer
 /// a toggle someone flips while the app is running.
-static ENABLED: AtomicBool = AtomicBool::new(true);
+///
+/// **Starts `false`, and that is the safe direction rather than the tidy one.**
+/// [`start`] is spawned, so there is a window at launch where consent has not
+/// been read yet; anything reaching [`track`] inside it would report for someone
+/// who may have opted out. Nothing does today — `start` owns the only call —
+/// but a second call site is exactly the change that would not think to check.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Opts this run in or out, effective immediately. Called by [`start`] with the
 /// persisted answer and by the settings command when the toggle moves.
@@ -58,8 +64,18 @@ pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// The effective answer for this run — what the settings dialog draws, and not
+/// the same as what is on disk whenever [`env_opt_out`] holds.
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+/// Whether the environment has forced reporting off for this run.
+///
+/// Read live rather than remembered, and in one place: two call sites reading
+/// the same variable is how the flag and the switch drawn from it drift apart.
+pub fn env_opt_out() -> bool {
+    std::env::var_os("DRAY_NO_ANALYTICS").is_some()
 }
 
 /// Resolves consent from disk, then reports the launch.
@@ -72,10 +88,9 @@ pub fn enabled() -> bool {
 /// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
 /// can turn reporting off; it cannot turn it on over a stored `false`.
 pub async fn start(app: &AppHandle) {
-    let opted_out_by_env = std::env::var_os("DRAY_NO_ANALYTICS").is_some();
     let opted_in_by_setting = crate::settings::read().await.analytics_enabled;
 
-    set_enabled(!opted_out_by_env && opted_in_by_setting);
+    set_enabled(!env_opt_out() && opted_in_by_setting);
     track(app, "app_started");
 }
 

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAppSettings } from "@/hooks/useAppSettings";
+import type { SettingsView } from "@/types/events";
 
 /// The app's preferences, such as they are.
 ///
@@ -35,13 +36,7 @@ export default function SettingsDialog({
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <AnalyticsRow
-          // Null only until the first read lands, which is a frame or two. The
-          // switch draws its default meanwhile rather than flickering off and
-          // back on, since opted in is what an unwritten file means.
-          enabled={settings?.analyticsEnabled ?? true}
-          onChange={setAnalyticsEnabled}
-        />
+        <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
       </DialogContent>
     </Dialog>
   );
@@ -55,10 +50,10 @@ export default function SettingsDialog({
 /// the part worth the space. Kept short on purpose — an itemised list of
 /// fields reads as something to be wary of rather than something to skim.
 function AnalyticsRow({
-  enabled,
+  view,
   onChange,
 }: {
-  enabled: boolean;
+  view: SettingsView | null;
   onChange: (next: boolean) => void;
 }) {
   const id = useId();
@@ -67,9 +62,23 @@ function AnalyticsRow({
     <SettingRow
       id={id}
       label="Share basic analytics"
-      description="Counts how many people use Dray. Your conversations and activity are never collected."
+      description={
+        view?.analyticsLocked
+          ? // Disabled and saying why, rather than hidden or — worse — drawn
+            // from the stored value and sitting at `on` while nothing is sent.
+            "Turned off for this run by DRAY_NO_ANALYTICS."
+          : "Counts how many people use Dray. Your conversations and activity are never collected."
+      }
     >
-      <Switch id={id} checked={enabled} onCheckedChange={onChange} />
+      <Switch
+        id={id}
+        // `null` until the first read lands. Disabled rather than guessing a
+        // value: either guess is wrong for somebody, and the dialog's own open
+        // animation is longer than a local file read.
+        disabled={view === null || view.analyticsLocked}
+        checked={view?.analyticsEnabled ?? false}
+        onCheckedChange={onChange}
+      />
     </SettingRow>
   );
 }
