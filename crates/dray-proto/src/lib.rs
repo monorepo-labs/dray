@@ -12,13 +12,42 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Bumped when a field changes meaning rather than when one is added — the
-/// server refuses a version it doesn't know instead of guessing at it. An
-/// added optional field needs no bump, since both sides default it.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Bumped when an old side would answer a new request *wrongly and silently* —
+/// the server refuses a version it doesn't know rather than guessing at it.
+///
+/// Not simply "a field changed meaning", which was the earlier rule and is too
+/// narrow. What matters is whether the default an old side falls back to is
+/// detectable. An added optional field usually needs no bump: an old app that
+/// ignores `model` runs the session on its own default, which is a session the
+/// caller can see and judge. `from` is the other kind — an old app ignores it,
+/// starts the worktree from `origin/<default>`, and answers *identically to a
+/// success*, so a session spawned to review unpushed work reviews none of it
+/// and reports back that everything looks fine. Wrong work that looks like
+/// right work is what earns a bump.
+///
+/// Refusing costs every command, not just the new one — but that cost falls
+/// where it is cheapest. A CLI behind the app is told to run `dray update` and
+/// fixes itself in one step; an app behind the CLI cannot be fixed from here at
+/// all, and that is exactly the direction a silent default does the most
+/// damage in. See [`Envelope`] and the app's own `mismatch`, which names which
+/// half is behind so the reader — usually an agent, reading it as tool output —
+/// runs the cure that applies rather than the one that doesn't.
+///
+/// v2 added `CreateSession::from`.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
+
+/// Where a `pnpm tauri dev` build listens instead.
+///
+/// One name per build, because the socket is a single file: a dev app binding
+/// the release app's path unlinks it and takes the channel over, so from then
+/// on every `dray` call reaches the dev app and the release app's own agents
+/// write into a socket nothing is listening on. Restarting the release app
+/// takes it back the same way. Two names let the two run side by side, which
+/// is the ordinary state while developing this app.
+pub const SOCKET_NAME_DEV: &str = "dray-dev.sock";
 
 /// A line longer than this is refused unread. The socket is `0600`, so this is
 /// hygiene rather than a threat model — but a length-prefixed-by-newline
@@ -56,17 +85,14 @@ pub enum Request {
 #[serde(rename_all = "camelCase")]
 pub struct CreateSession {
     pub prompt: String,
-    /// The repo the session runs in. The CLI fills this from `git rev-parse
-    /// --show-toplevel` when `--project` is absent, so a call from a terminal
-    /// lands in the repo it was made from; `None` falls back to the parent
-    /// session's project, and with neither the server refuses.
+    /// The repo the session runs in — the main worktree, which the CLI fills
+    /// from `git worktree list` when `--project` is absent, so a call from a
+    /// terminal lands in the repo it was made from and a call from inside a
+    /// linked worktree still names the repo rather than that tree. `None` falls
+    /// back to the parent session's project, and with neither the server
+    /// refuses.
     #[serde(default)]
     pub project_path: Option<String>,
-    /// `None` lets the app generate one. There is no opting out of the worktree
-    /// itself: sessions created this way run at the same time by design, and
-    /// several agents writing to one checkout overwrite each other.
-    #[serde(default)]
-    pub worktree_name: Option<String>,
     /// `None` inherits the parent session's model, or the app's default with no
     /// parent. A bare alias (`opus`), matching what the composer stores.
     #[serde(default)]
@@ -84,6 +110,15 @@ pub struct CreateSession {
     /// Absent for a call from the user's own terminal, which is ordinary.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+    /// Where the new session's worktree starts from: a session id, a branch, or
+    /// any git ref. `None` is the ordinary case and means `origin/<default>`,
+    /// which is what the harness would have picked on its own.
+    ///
+    /// A session id is resolved to the branch that session's work lands on, and
+    /// that resolution is the app's — the CLI has no index to read and no
+    /// business learning how a session's branch is named.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 /// A prompt sent into a session that already exists.
@@ -121,7 +156,22 @@ pub struct ListSessions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
-    Created { session: SessionSummary },
+    Created {
+        session: SessionSummary,
+        /// What `from` resolved to, echoed back because the caller asked with a
+        /// string and the answer is a branch: `--from <session-id>` names a
+        /// session, and only the app can say which branch that session's work
+        /// is on. `None` for an ordinary create, which starts where the harness
+        /// would have started it anyway.
+        ///
+        /// Not a compatibility signal. It was one before [`PROTOCOL_VERSION`]
+        /// was bumped for `from` — its absence stood in for "this app is too
+        /// old to honour the flag" — and the bump is what made that job
+        /// unreachable: such an app now refuses the envelope before it ever
+        /// reads the request.
+        #[serde(default)]
+        base_ref: Option<String>,
+    },
     Listed { sessions: Vec<SessionSummary> },
     /// `queued` when the target had a turn in flight, so the prompt is held
     /// until it reaches a boundary rather than being dropped or interrupting.
@@ -155,6 +205,11 @@ pub struct SessionSummary {
     /// `idle`, `in_progress` or `completed`, as the app's own index spells them.
     pub status: String,
     pub modified: String,
+    /// Which session created this one, so a caller can answer "who spawned
+    /// that" without reading the app's own index. Absent for a session started
+    /// from the composer or from a terminal, and for one since detached.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
 }
 
 /// Where to reach the app: `DRAY_ENDPOINT` if set, else the socket under the
@@ -177,7 +232,17 @@ pub fn endpoint() -> Option<String> {
 /// agrees with the app's own `get_home_app_dir`, which is what creates the
 /// directory this sits in.
 pub fn default_socket_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".dray").join(SOCKET_NAME))
+    socket_path(false)
+}
+
+/// The socket one build of the app listens on.
+///
+/// The CLI never asks for the dev one: `dray` typed in a terminal means the app
+/// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`
+/// rather than leaving them to guess which build spawned them.
+pub fn socket_path(dev: bool) -> Option<PathBuf> {
+    let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
+    Some(dirs::home_dir()?.join(".dray").join(name))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
@@ -201,7 +266,7 @@ mod tests {
         })))
         .unwrap();
 
-        assert_eq!(line["v"], 1);
+        assert_eq!(line["v"], PROTOCOL_VERSION);
         assert_eq!(line["cmd"], "create_session");
         assert_eq!(line["prompt"], "hi");
         // Flattened, not nested — a `request` key here means the server reads
@@ -209,10 +274,15 @@ mod tests {
         assert!(line.get("request").is_none());
     }
 
+    /// Deliberately a v1 line, and that is half the point: an envelope from a
+    /// version we no longer speak still has to *parse*, or the app answers
+    /// "could not parse the request" where it should be answering "run
+    /// `dray update`". The version check is a layer above this, not a way in.
     #[test]
     fn absent_optionals_parse_as_none() {
         let envelope: Envelope =
             serde_json::from_str(r#"{"v":1,"cmd":"create_session","prompt":"hi"}"#).unwrap();
+        assert_ne!(envelope.v, PROTOCOL_VERSION, "this line is the old shape");
 
         let Request::CreateSession(create) = envelope.request else {
             panic!("wrong variant");
@@ -222,6 +292,59 @@ mod tests {
         assert_eq!(create.model, None);
         assert_eq!(create.effort, None);
         assert_eq!(create.harness, None);
+        assert_eq!(create.from, None);
+    }
+
+    #[test]
+    fn a_base_travels_on_the_create() {
+        let line = serde_json::to_string(&Envelope::new(Request::CreateSession(CreateSession {
+            prompt: "review it".into(),
+            from: Some("worktree-calm-owl".into()),
+            ..Default::default()
+        })))
+        .unwrap();
+        assert!(line.contains(r#""from":"worktree-calm-owl""#));
+
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::CreateSession(create) = back.request else {
+            panic!("wrong variant");
+        };
+        assert_eq!(create.from.as_deref(), Some("worktree-calm-owl"));
+    }
+
+    /// `from` is what v2 exists for: a v1 app would have ignored the field,
+    /// started the worktree from `origin/<default>`, and answered like a
+    /// success. The envelope carries the version ahead of the command so that
+    /// is refused before the request is read at all.
+    #[test]
+    fn a_create_carrying_a_base_goes_out_at_the_version_that_added_it() {
+        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
+            prompt: "review it".into(),
+            from: Some("worktree-calm-owl".into()),
+            ..Default::default()
+        })))
+        .unwrap();
+
+        assert_eq!(line["v"], 2);
+        assert!(PROTOCOL_VERSION >= 2, "from must not travel under v1");
+    }
+
+    /// The field is defaulted, so a response shape without it parses rather
+    /// than failing the create. No longer a compatibility signal — the bump
+    /// took that job — but an unexercised `serde(default)` is one nobody checks.
+    #[test]
+    fn a_create_answered_without_a_base_still_parses() {
+        let response: Response = serde_json::from_str(
+            r#"{"status":"created","session":{"sessionId":"a","title":"t","cwd":"/p",
+                "projectPath":"/p","branch":null,"worktreeName":null,"status":"idle",
+                "modified":"now"}}"#,
+        )
+        .unwrap();
+
+        let Response::Created { base_ref, .. } = response else {
+            panic!("wrong variant");
+        };
+        assert_eq!(base_ref, None);
     }
 
     #[test]
@@ -242,6 +365,18 @@ mod tests {
         assert_eq!(send.from_session_id.as_deref(), Some("parent"));
     }
 
+    /// Added after the CLI shipped, so an app that predates it sends no such
+    /// key — which has to read as "no parent" rather than failing the list.
+    #[test]
+    fn a_summary_without_a_parent_key_still_parses() {
+        let summary: SessionSummary = serde_json::from_str(
+            r#"{"sessionId":"a","title":"t","cwd":"/p","projectPath":"/p","branch":null,
+                "worktreeName":null,"status":"idle","modified":"now"}"#,
+        )
+        .unwrap();
+        assert_eq!(summary.parent_session_id, None);
+    }
+
     #[test]
     fn responses_round_trip_through_their_tag() {
         let listed = Response::Listed { sessions: vec![] };
@@ -257,6 +392,14 @@ mod tests {
         let line = encode_line(&Response::error("nope")).unwrap();
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    #[test]
+    fn dev_and_release_sockets_are_different_files() {
+        // The whole point: a dev app must not be able to unlink the socket the
+        // installed app is serving on.
+        assert_ne!(socket_path(true), socket_path(false));
+        assert_eq!(socket_path(false), default_socket_path());
     }
 
     #[test]

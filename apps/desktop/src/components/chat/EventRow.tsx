@@ -36,7 +36,7 @@ function Notice({
           the line's top edge while its glyph sits inset within that box, so it
           reads high against the first line of text. */}
       <Icon className={cn("size-3.5 shrink-0", wrap && "mt-1")} />
-      <span className={wrap ? "min-w-0" : "truncate"}>{children}</span>
+      <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
     </p>
   );
 }
@@ -48,6 +48,7 @@ export default function EventRow({
   resultByCallId,
   hideToolLabel = false,
   openTool = false,
+  onOpenSession,
 }: {
   event: AgentEvent;
   /// Results keyed by call id, so a started call renders its own outcome without
@@ -58,12 +59,22 @@ export default function EventRow({
   /// Draws a tool call already expanded. Only the subagent panel sets it, for
   /// the call the reader opened the run to see.
   openTool?: boolean;
+  /// Opens the session that relayed a prompt. Only a `user_message` reads it,
+  /// and only one that came over the orchestration socket.
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const { payload } = event;
 
   switch (payload.type) {
     case "user_message":
-      return <UserMessage text={payload.text} images={payload.images} />;
+      return (
+        <UserMessage
+          text={payload.text}
+          images={payload.images}
+          from={payload.from}
+          onOpenSession={onOpenSession}
+        />
+      );
 
     case "assistant_text":
       return <AssistantMessage text={payload.text} />;
@@ -96,7 +107,7 @@ export default function EventRow({
       return (
         <div className="flex items-start gap-2 text-chat text-destructive">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 whitespace-pre-wrap">{payload.message}</span>
+          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere">{payload.message}</span>
         </div>
       );
 

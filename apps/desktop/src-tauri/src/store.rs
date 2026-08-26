@@ -1,4 +1,7 @@
-use std::{path::PathBuf, vec};
+use std::{
+    path::{Path, PathBuf},
+    vec,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -68,6 +71,16 @@ pub struct SessionIndexItem {
     /// Defaulted so index entries written before this field parse as `Idle`.
     #[serde(default)]
     pub status: SessionStatus,
+    /// An instruction, not a record of lineage: the session this one was forked
+    /// from, set until the CLI has actually forked. The fork is lazy — copying
+    /// this app's own log and index entry is instant, while the CLI's half only
+    /// happens on a spawn — so the first send resumes the parent with
+    /// `--fork-session` and clears this. Every send after is an ordinary resume.
+    ///
+    /// Distinct from `parent_session_id` below, which is lineage and permanent:
+    /// this one is cleared the moment the CLI carries the fork out.
+    #[serde(default)]
+    pub fork_from: Option<String>,
     /// The session whose agent created this one, for a session created over the
     /// orchestration socket rather than by a person in the composer. `Some` is
     /// also what the depth guard reads: a session that was itself spawned may
@@ -249,6 +262,7 @@ impl SessionIndexItem {
             effort,
             permission_mode,
             status: SessionStatus::default(),
+            fork_from: None,
             parent_session_id: parent_session_id.map(str::to_string),
             created: now.clone(),
             modified: now,
@@ -256,6 +270,158 @@ impl SessionIndexItem {
             pinned: false,
         }
     }
+
+    /// The entry for a fork of `self`. Everything deciding *how* the agent runs
+    /// is inherited, since a fork continues the same conversation; everything
+    /// describing this session's own history starts fresh.
+    ///
+    /// `worktree_name` is what the two fork flavours differ on. Forking in place
+    /// leaves it `None` even when the parent is a worktree session: the field
+    /// means "this session owns that tree", and settling or deleting the fork
+    /// would otherwise pull the directory out from under the parent still
+    /// working in it. `cwd` and `branch` are inherited either way, so the fork
+    /// still runs in the parent's tree and its PR tab still finds the branch.
+    pub fn fork(&self, session_id: &str, worktree_name: Option<&str>) -> Self {
+        let now = now_rfc3339();
+
+        Self {
+            session_id: session_id.to_string(),
+            harness: self.harness,
+            cwd: match worktree_name {
+                Some(name) => worktree_path(&self.project_path, name),
+                None => self.cwd.clone(),
+            },
+            project_path: self.project_path.clone(),
+            branch: match worktree_name {
+                Some(name) => Some(format!("worktree-{name}")),
+                None => self.branch.clone(),
+            },
+            worktree_name: worktree_name.map(str::to_string),
+            // Inherited, because this decides whether the recorded `branch` or
+            // git's own HEAD is believed. A fork in place of a session whose
+            // tree was removed sits in the shared checkout exactly as its parent
+            // does, so HEAD there names whatever else is going on in it — the
+            // same reason the parent carries the flag. A fork into a new tree
+            // has one of its own and reads HEAD straight.
+            worktree_removed: worktree_name.is_none() && self.worktree_removed,
+            title: fork_title(&self.title),
+            model: self.model,
+            effort: self.effort,
+            permission_mode: self.permission_mode,
+            status: SessionStatus::default(),
+            fork_from: Some(self.session_id.clone()),
+            // Inherited, so the copy sits exactly where the original does: the
+            // sidebar draws it beside its source under the same parent, not
+            // under its source, and the orchestration depth cap counts it at the
+            // same depth. A fork that reset this to `None` would surface at the
+            // top level and be free to spawn where the session it copied was
+            // not — a depth cap a copy could walk around. Detach is the way out
+            // for anyone who wants the fork standing on its own.
+            parent_session_id: self.parent_session_id.clone(),
+            created: now.clone(),
+            modified: now,
+            archived: false,
+            pinned: false,
+        }
+    }
+}
+
+/// Marks a fork in the sidebar without costing a second row's worth of reading.
+/// Truncated to the same width every other title is, and the suffix survives
+/// truncation because a title cut off mid-word is what most needs the mark.
+///
+/// Strips a suffix already there before adding one, so forking a fork reads
+/// `(fork)` once rather than stacking one per generation. Nothing tracks
+/// lineage here anyway — see `fork_from`, which is an instruction and never a
+/// record of it — so a title counting generations would promise more than the
+/// rest of the feature keeps.
+fn fork_title(parent: &str) -> String {
+    const MAX: usize = 60;
+    const SUFFIX: &str = " (fork)";
+
+    let base = parent.strip_suffix(SUFFIX).unwrap_or(parent);
+
+    let title = format!("{base}{SUFFIX}");
+    if title.chars().count() <= MAX {
+        return title;
+    }
+
+    let keep = MAX - SUFFIX.chars().count() - 1;
+    let truncated: String = base.chars().take(keep).collect();
+    format!("{}…{SUFFIX}", truncated.trim_end())
+}
+
+/// A worktree name no tree and no session has claimed. Wider than
+/// [`resolve_worktree_name`] on purpose, and every caller wants the wider one: a
+/// fork's tree is not created until its first send, so its name lives only in the
+/// index until then. Resolving against disk alone lets anything else drawing a
+/// name — another fork, or an ordinary new worktree session — take one a pending
+/// fork is already holding, and that fork's `-w` then fails against the tree the
+/// other one made. Permanently, since the name is on its index entry by then and
+/// every retry redraws the same one.
+///
+/// Only 16³ names exist, so this is not the vanishing odds it looks like.
+pub async fn resolve_unclaimed_worktree_name(
+    project_path: &str,
+    requested: Option<&str>,
+) -> Result<String> {
+    let claimed: Vec<String> = list_session_index_items()
+        .await?
+        .into_iter()
+        .filter(|i| i.project_path == project_path)
+        .filter_map(|i| i.worktree_name)
+        .collect();
+
+    // A name the user asked for is answered, never silently swapped — so a
+    // collision here is an error rather than a redraw.
+    if let Some(name) = requested {
+        if claimed.iter().any(|c| c == name) {
+            bail!("a session is already using the worktree name '{name}'");
+        }
+        return resolve_worktree_name(project_path, Some(name));
+    }
+
+    for _ in 0..16 {
+        let name = resolve_worktree_name(project_path, None)?;
+        if !claimed.contains(&name) {
+            return Ok(name);
+        }
+    }
+
+    bail!("could not find an unused worktree name after 16 attempts")
+}
+
+/// The branch a session's work lands on — the reading `--from <session-id>`
+/// resolves through, and the same one `sessionBranch` in `pr.ts` takes.
+///
+/// One rule, stated twice because it has two readers and neither can call the
+/// other: the PR tab needs it in the frontend, and basing a worktree on another
+/// session's work needs it here. What it must not become is two *different*
+/// rules — a `--from` that starts a reviewer on one branch while the header
+/// beside it names another is a disagreement nothing on screen could explain.
+///
+/// `observed` is git's own reading of HEAD, and it wins wherever the session
+/// still has a checkout of its own: the recorded branch is a guess made at
+/// creation, and a checkout inside the tree moves HEAD without touching it.
+///
+/// `worktree_removed` is the one case it loses. A relocated session runs in the
+/// project root, a checkout shared with every other session and with the
+/// reader's own editor, so HEAD there answers "what is this checkout on" and
+/// never "where did this session's work land".
+///
+/// The guess itself is just `branch`, with no `worktree-<name>` rebuild beside
+/// it: [`SessionIndexItem::new`] and [`SessionIndexItem::fork`] both write that
+/// name into the field at creation, so the record already holds it. `pr.ts`
+/// rebuilds it because a frontend session object can predate that write.
+pub fn session_branch(item: &SessionIndexItem, observed: Option<&str>) -> Option<String> {
+    if item.worktree_removed {
+        return item.branch.clone();
+    }
+
+    observed
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+        .or_else(|| item.branch.clone())
 }
 
 /// `claude -w <name>` places the tree here and names its branch
@@ -604,10 +770,7 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
 /// `modified` is left alone, like [`set_session_flags`]: it orders the sidebar,
 /// and a title landing seconds after the send would jump the session to the top
 /// of it for a reason the user never took.
-pub async fn set_session_title(
-    session_id: &str,
-    title: &str,
-) -> Result<Option<SessionIndexItem>> {
+pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = list_session_index_items().await?;
@@ -679,6 +842,110 @@ pub async fn list_session_events(session_id: &str) -> Result<Vec<AgentEvent>> {
         .context("malformed session file")?;
 
     Ok(events)
+}
+
+/// Copies a session's log onto a new id, repointing every archived image at the
+/// fork's own attachment directory. Returns what the fork will replay.
+///
+/// The rewrite is what makes the copy stand alone. `ImageRef.path` names a file
+/// under `~/.dray/attachments/<session-id>/`, so a log copied verbatim would
+/// draw its pictures out of the parent's directory — and deleting the parent
+/// takes that directory with it, blanking images in a session that outlived it.
+///
+/// Missing images are the ordinary case (a session that attached none), and the
+/// directory copy is best-effort for the same reason the archive write is: a
+/// picture that fails to copy costs one image, not the fork.
+pub async fn copy_session_log(from: &str, to: &str) -> Result<Vec<AgentEvent>> {
+    let mut events = list_session_events(from).await?;
+
+    // A session indexed before its process spawned has no log at all, and
+    // nothing is written here rather than an empty one — the caller reads the
+    // empty answer as "there is nothing to copy", and leaving no file behind is
+    // what keeps a refused fork from stranding one under an unused id.
+    if events.is_empty() {
+        return Ok(events);
+    }
+
+    let attachments = get_home_app_dir().await?.join("attachments");
+    let from_dir = attachments.join(from);
+    let to_dir = attachments.join(to);
+    copy_dir(&from_dir, &to_dir).await?;
+
+    repoint_events(&mut events, to, &from_dir, &to_dir);
+
+    let body: String = events
+        .iter()
+        .map(|e| serde_json::to_string(e).map(|s| format!("{s}\n")))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
+
+    // Written whole rather than appended to, so a fork onto an id that somehow
+    // already has a log replaces it instead of interleaving two conversations.
+    fs::write(get_session_path(to).await?, body).await?;
+
+    Ok(events)
+}
+
+/// Rewrites a copied log to belong to `to`. Split out from the copy so it can be
+/// tested without a `~/.dray` to write into.
+fn repoint_events(events: &mut [AgentEvent], to: &str, from_dir: &Path, to_dir: &Path) {
+    for event in events {
+        // The envelope names the session that produced the event, and the
+        // frontend routes live events by it. Left alone, the fork's log would
+        // open claiming to be its parent's and then grow new events under its own
+        // id — one log describing two sessions. `id` is deliberately not
+        // re-minted: these are the same events, and nothing joins across sessions
+        // on it.
+        event.session_id = to.to_string();
+
+        for image in event.payload.images_mut() {
+            let Some(path) = &image.path else { continue };
+            let Ok(rest) = Path::new(path).strip_prefix(from_dir) else {
+                continue;
+            };
+            image.path = Some(to_dir.join(rest).to_string_lossy().into_owned());
+        }
+    }
+}
+
+/// Best-effort recursive copy. A missing source is the ordinary case — most
+/// sessions attach no images — so it is not an error.
+async fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    let mut entries = match fs::read_dir(from).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).context("failed to read attachments"),
+    };
+
+    fs::create_dir_all(to).await?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let target = to.join(entry.file_name());
+        if entry.file_type().await?.is_dir() {
+            Box::pin(copy_dir(&entry.path(), &target)).await?;
+        } else {
+            fs::copy(entry.path(), target).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Retires a fork's pending-fork instruction once the CLI has carried it out.
+/// Returns whether the entry was found; an unknown id means the session was
+/// deleted between the spawn and this write, which is nothing to report.
+pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(false);
+    };
+
+    item.fork_from = None;
+    write_session_index(&sessions).await?;
+
+    Ok(true)
 }
 
 /// Appends one event as a line to the session's `.jsonl` log.
@@ -791,6 +1058,7 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     #[test]
     fn index_entries_written_before_these_fields_still_read() {
@@ -807,6 +1075,296 @@ mod tests {
         // Absent reads as the composer's own default, so an old session resumes
         // under the mode its picker would show.
         assert_eq!(item.permission_mode, ApprovalPolicy::Auto);
+    }
+
+    #[test]
+    fn legacy_index_entry_reads_as_no_pending_fork() {
+        let legacy = r#"{"sessionId":"a","harness":"claude_code","cwd":"/p","projectPath":"/p",
+            "branch":null,"worktreeName":null,"title":"t","created":"c","modified":"m",
+            "archived":false,"pinned":false}"#;
+
+        let item: SessionIndexItem = serde_json::from_str(legacy).unwrap();
+
+        // The field is an instruction, so absent has to read as "nothing to do".
+        // Reading it any other way would fork every session predating it on its
+        // next send.
+        assert_eq!(item.fork_from, None);
+    }
+
+    /// Forking in place must not claim the parent's tree: `worktree_name` is what
+    /// settling and deleting act on, so a fork carrying it would take the
+    /// directory out from under the session still working in it.
+    #[test]
+    fn forking_in_place_inherits_the_tree_without_owning_it() {
+        let mut parent = SessionIndexItem::new(
+            "parent",
+            Harness::ClaudeCode,
+            "/p/.claude/worktrees/wt",
+            "/p",
+            Some("wt"),
+            None,
+            "add the PR panel",
+            ModelId::Opus,
+            Some(Effort::High),
+            ApprovalPolicy::AcceptEdits,
+            None,
+        );
+        parent.archived = true;
+        parent.pinned = true;
+        parent.status = SessionStatus::Completed;
+
+        let fork = parent.fork("child", None);
+
+        assert_eq!(fork.cwd, parent.cwd, "the fork runs where the parent does");
+        assert_eq!(fork.branch, parent.branch, "so its PR tab finds the branch");
+        assert_eq!(fork.worktree_name, None, "but it does not own the tree");
+        assert_eq!(fork.fork_from.as_deref(), Some("parent"));
+
+        // How the agent runs is inherited; this session's own history is not.
+        assert_eq!(fork.model, parent.model);
+        assert_eq!(fork.effort, parent.effort);
+        assert_eq!(fork.permission_mode, parent.permission_mode);
+        assert_eq!(fork.status, SessionStatus::Idle);
+        assert!(!fork.archived, "a fork is new work, not settled work");
+        assert!(!fork.pinned);
+    }
+
+    /// A relocated session's `cwd` is the shared checkout, so git's HEAD there
+    /// names whatever else is going on in it rather than where this session's
+    /// work lands. A fork in place inherits that footing exactly, and dropping
+    /// the flag would take its PR tab with it.
+    #[test]
+    fn forking_a_relocated_session_in_place_keeps_its_branch_authoritative() {
+        let mut parent = SessionIndexItem::new(
+            "parent",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            Some("wt"),
+            None,
+            "add the PR panel",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+        parent.worktree_name = None;
+        parent.worktree_removed = true;
+
+        let here = parent.fork("child", None);
+        assert!(here.worktree_removed);
+        assert_eq!(here.branch.as_deref(), Some("worktree-wt"));
+
+        // A tree of its own, so HEAD in it is the honest answer again.
+        let elsewhere = parent.fork("child", Some("bold-otter"));
+        assert!(!elsewhere.worktree_removed);
+    }
+
+    /// The four cases `sessionBranch` in `pr.ts` is tested on, so `--from` and
+    /// the PR tab cannot come to disagree about which branch a session is on.
+    #[test]
+    fn a_sessions_branch_reads_the_same_way_the_pr_tab_reads_it() {
+        let worktree = SessionIndexItem::new(
+            "a",
+            Harness::ClaudeCode,
+            "/p/.claude/worktrees/calm-owl",
+            "/p",
+            Some("calm-owl"),
+            Some("main"),
+            "hi",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+        // The name the CLI mints, which `new` already wrote into the field.
+        assert_eq!(
+            session_branch(&worktree, None).as_deref(),
+            Some("worktree-calm-owl")
+        );
+        // Git's own reading outranks the guess: anything checking out another
+        // branch inside the tree leaves the record describing one it left.
+        assert_eq!(
+            session_branch(&worktree, Some("fix/thing")).as_deref(),
+            Some("fix/thing")
+        );
+
+        let plain = SessionIndexItem::new(
+            "b",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            Some("feature"),
+            "hi",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+        assert_eq!(session_branch(&plain, None).as_deref(), Some("feature"));
+
+        // Relocated: `cwd` is the shared project root, so HEAD there answers
+        // what that checkout is on and never where this session's work landed.
+        let mut settled = worktree.clone();
+        settled.worktree_name = None;
+        settled.cwd = settled.project_path.clone();
+        settled.worktree_removed = true;
+        assert_eq!(
+            session_branch(&settled, Some("main")).as_deref(),
+            Some("worktree-calm-owl")
+        );
+    }
+
+    /// A fork is a copy, so it sits exactly where the original sits: beside its
+    /// source under the same parent, at the same depth. Resetting this would
+    /// surface the copy at the top level and let it spawn where the session it
+    /// copied could not — a depth cap a copy could walk around.
+    #[test]
+    fn a_fork_keeps_its_source_place_in_the_spawn_chain() {
+        let mut spawned = SessionIndexItem::new(
+            "spawned",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            None,
+            "work the issue",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            Some("orchestrator"),
+        );
+        assert_eq!(spawned.parent_session_id.as_deref(), Some("orchestrator"));
+
+        let fork = spawned.fork("child", None);
+        assert_eq!(
+            fork.parent_session_id.as_deref(),
+            Some("orchestrator"),
+            "the copy is a sibling of its source, not a root"
+        );
+
+        // A session nobody spawned forks to one nobody spawned.
+        spawned.parent_session_id = None;
+        assert_eq!(spawned.fork("child", None).parent_session_id, None);
+    }
+
+    #[test]
+    fn forking_into_a_worktree_takes_a_tree_and_branch_of_its_own() {
+        let parent = SessionIndexItem::new(
+            "parent",
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            Some("main"),
+            "add the PR panel",
+            ModelId::Opus,
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        );
+
+        let fork = parent.fork("child", Some("bold-otter"));
+
+        assert_eq!(fork.cwd, worktree_path("/p", "bold-otter"));
+        assert_eq!(fork.project_path, "/p", "it still groups under the project");
+        assert_eq!(fork.worktree_name.as_deref(), Some("bold-otter"));
+        assert_eq!(fork.branch.as_deref(), Some("worktree-bold-otter"));
+    }
+
+    /// The suffix is the whole point of the title, so truncation takes its room
+    /// from the parent's text rather than from the mark.
+    #[test]
+    fn a_long_title_keeps_its_fork_mark() {
+        let long = "a".repeat(80);
+        let title = fork_title(&long);
+
+        assert!(title.ends_with(" (fork)"), "{title}");
+        assert_eq!(title.chars().count(), 60);
+        assert_eq!(fork_title("short"), "short (fork)");
+    }
+
+    /// Forking a fork must not stack the mark — nothing here tracks lineage, so
+    /// counting generations in the title would promise more than the feature
+    /// keeps.
+    #[test]
+    fn forking_a_fork_keeps_one_suffix_not_two() {
+        assert_eq!(fork_title("Add PR panel (fork)"), "Add PR panel (fork)");
+        assert_eq!(
+            fork_title(&fork_title("Add PR panel")),
+            "Add PR panel (fork)"
+        );
+    }
+
+    /// A fork's log has to stand on its own. Both rewrites are about outliving
+    /// the parent: events still naming it would put one log's worth of history
+    /// under two session ids, and an image still pointing into its attachment
+    /// directory goes blank the moment the parent is deleted.
+    #[test]
+    fn a_copied_log_belongs_to_the_fork_that_replays_it() {
+        let from_dir = Path::new("/home/.dray/attachments/parent");
+        let to_dir = Path::new("/home/.dray/attachments/child");
+
+        let image = |path: &str| ImageRef {
+            path: Some(path.to_string()),
+            url: None,
+            mime_type: None,
+        };
+        let event = |payload| AgentEvent {
+            id: "e1".into(),
+            session_id: "parent".into(),
+            harness: Harness::ClaudeCode,
+            seq: 0,
+            ts: "t".into(),
+            turn_id: None,
+            subagent: None,
+            payload,
+            raw: None,
+        };
+
+        let mut events = vec![
+            event(AgentEventPayload::UserMessage {
+                text: "look at this".into(),
+                images: vec![image("/home/.dray/attachments/parent/a.png")],
+                baseline: None,
+                queued: false,
+                from: None,
+            }),
+            event(AgentEventPayload::ToolCallCompleted {
+                call_id: "c1".into(),
+                result: ToolResult {
+                    text: "shot".into(),
+                    is_error: false,
+                    structured: None,
+                    exit_code: None,
+                    duration_ms: None,
+                    images: vec![
+                        image("/home/.dray/attachments/parent/b.png"),
+                        // Not ours to move: an image the archive never took.
+                        image("/tmp/elsewhere.png"),
+                    ],
+                },
+            }),
+        ];
+
+        repoint_events(&mut events, "child", from_dir, to_dir);
+
+        assert!(events.iter().all(|e| e.session_id == "child"));
+
+        let paths: Vec<_> = events
+            .iter_mut()
+            .flat_map(|e| e.payload.images_mut().to_vec())
+            .filter_map(|i| i.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/home/.dray/attachments/child/a.png",
+                "/home/.dray/attachments/child/b.png",
+                "/tmp/elsewhere.png",
+            ]
+        );
     }
 
     #[test]
@@ -834,11 +1392,17 @@ mod tests {
         let settled = filter_by_archived(items, true);
 
         assert_eq!(
-            active.iter().map(|i| i.session_id.as_str()).collect::<Vec<_>>(),
+            active
+                .iter()
+                .map(|i| i.session_id.as_str())
+                .collect::<Vec<_>>(),
             ["a", "c"]
         );
         assert_eq!(
-            settled.iter().map(|i| i.session_id.as_str()).collect::<Vec<_>>(),
+            settled
+                .iter()
+                .map(|i| i.session_id.as_str())
+                .collect::<Vec<_>>(),
             ["b"]
         );
     }

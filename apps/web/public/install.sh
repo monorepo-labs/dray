@@ -8,17 +8,12 @@
 #
 # Honours:
 #   DRAY_INSTALL_DIR   where the binary lands (default ~/.local/bin)
-#   DRAY_VERSION       a specific release tag (default: the pinned one below)
+#   DRAY_VERSION       a specific release tag (default: the newest cli-v* one)
 
 set -eu
 
 REPO="monorepo-labs/dray"
 INSTALL_DIR="${DRAY_INSTALL_DIR:-$HOME/.local/bin}"
-# Pinned, not `latest`. The app and the CLI publish into the same repo and both
-# ship non-prerelease, so `/releases/latest/download/` belongs to whichever went
-# out most recently — an app release lands there carrying no `dray-*.tar.gz` and
-# the installer 404s. Bump this line with every `cli-v*` tag.
-VERSION="${DRAY_VERSION:-cli-v0.1.0}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
@@ -63,19 +58,51 @@ else
 fi
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL "$1" -o "$2"; }
+  fetch_stdout() { curl -fsSL "$1"; }
 elif command -v wget >/dev/null 2>&1; then
   fetch() { wget -qO "$2" "$1"; }
+  fetch_stdout() { wget -qO- "$1"; }
 else
   die "curl or wget is required."
 fi
 
+# The newest `cli-v*` tag, asked of the releases API rather than guessed at.
+#
+# `/releases/latest/download/` cannot serve here: the app and the CLI publish
+# into the same repo and both ship non-prerelease, so that URL belongs to
+# whichever went out most recently, and an app release there carries no
+# `dray-*.tar.gz` at all.
+#
+# The API answers newest-first, so the first match wins and nothing has to sort
+# versions — `sort -V` is not portable anyway. `tr` splits a compact response
+# into lines the `sed` can match one at a time.
+#
+# `per_page=100` caps how far back this looks. If the app ever ships 100
+# releases between two `cli-v*` ones the resolver finds nothing, and the refusal
+# below is the escape hatch.
+resolve_version() {
+  fetch_stdout "https://api.github.com/repos/$REPO/releases?per_page=100" \
+    | tr ',' '\n' \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-v[^"]*\)".*/\1/p' \
+    | head -n 1
+}
+
 TARGET=$(detect_target)
 
-if [ "$VERSION" = "latest" ]; then
-  URL="https://github.com/$REPO/releases/latest/download/dray-$TARGET.tar.gz"
-else
-  URL="https://github.com/$REPO/releases/download/$VERSION/dray-$TARGET.tar.gz"
+# `latest` is spelled as a request to resolve, not as a tag: it used to build a
+# `/releases/latest/download/` URL, which is the trap above.
+VERSION="${DRAY_VERSION:-}"
+if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+  say "Finding the latest dray release…"
+  VERSION=$(resolve_version) || VERSION=""
+  # No falling back to an older pin: a rate-limited or unreachable API quietly
+  # installing something ancient is the failure mode this replaced.
+  [ -n "$VERSION" ] || die "could not find a dray release.
+    Set DRAY_VERSION to a tag from https://github.com/$REPO/releases and re-run."
+  say "Latest is $VERSION."
 fi
+
+URL="https://github.com/$REPO/releases/download/$VERSION/dray-$TARGET.tar.gz"
 
 TMP=$(mktemp -d)
 # Runs on failure too, so a half-finished install leaves nothing behind.

@@ -828,6 +828,9 @@ fn user_message(text: String) -> AgentEventPayload {
         // Same reasoning: queuing is a property of how *this app* sent a
         // prompt, and this one came off the wire.
         queued: false,
+        // And so is the sender: only the orchestration socket relays a prompt,
+        // and it does so through the session layer, never through the CLI.
+        from: None,
     }
 }
 

@@ -7,13 +7,14 @@
 //! itself goes through [`SessionManager::send_msg`], the same function the
 //! composer reaches, so a session created here is not a second kind of session.
 //!
-//! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock`, one
+//! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock` — or
+//! `dray-dev.sock` for a dev build, see [`socket_path`] — one
 //! request per connection. Nothing on the network can reach it at all, and
 //! access control is the containing directory's `0700` — see
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
 
 use crate::{
-    events::ApprovalPolicy,
+    events::{ApprovalPolicy, MessageSender},
     models::{default_model, find_model, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
@@ -51,13 +52,34 @@ const MAX_DEPTH: usize = 2;
 /// insurance: a cycle here would hang the caller's turn rather than fail it.
 const MAX_WALK: usize = 64;
 
+/// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
+/// `dray.sock` otherwise.
+///
+/// Split by build because the release app is normally running while this one is
+/// being developed, and one path between them means whichever started last owns
+/// the channel — `bind` unlinks the other's socket, so the app left behind
+/// keeps a listener no `dray` will ever reach again.
+pub fn socket_path() -> Option<std::path::PathBuf> {
+    dray_proto::socket_path(tauri::is_dev())
+}
+
+/// What a spawned agent's `DRAY_ENDPOINT` is set to.
+///
+/// Injected rather than left to the CLI's own default, so a session started by
+/// the dev app reaches the dev app. Without it every `dray` call inside a dev
+/// session would go to the release app's socket and create sessions in the
+/// wrong sidebar.
+pub fn child_endpoint() -> Option<String> {
+    socket_path().map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Binds the socket and serves it for the life of the process.
 ///
 /// Errors are logged and swallowed by the caller: orchestration is a side
 /// channel, and an app that refuses to start because a socket is in use would
 /// be trading the whole product for a feature.
 pub async fn serve(app: AppHandle) -> Result<()> {
-    let path = dray_proto::default_socket_path().context("could not resolve the socket path")?;
+    let path = socket_path().context("could not resolve the socket path")?;
 
     // Creates `~/.dray` and narrows it to `0700`, which is what actually
     // guards this socket. `bind` applies the process umask, so under a
@@ -93,9 +115,10 @@ pub async fn serve(app: AppHandle) -> Result<()> {
 
     // A socket file outlives the process that made it — a crash or a SIGKILL
     // leaves one behind, and binding onto it fails with "address in use". The
-    // file is not a lock and holds nothing, so removing it is safe: a *live*
-    // Dray would still hold the second instance off, because two processes
-    // cannot both have the app's single-instance state anyway.
+    // file is not a lock and holds nothing, so removing it is safe *because
+    // this path names one build*: unlinking can only ever take the channel from
+    // another copy of the same build, never from the release app a dev one is
+    // running beside.
     tokio::fs::remove_file(&path).await.ok();
 
     let listener = UnixListener::bind(&path)
@@ -143,6 +166,19 @@ fn restrict(path: &Path) -> Result<()> {
         .context("could not restrict the socket")
 }
 
+/// Which side is behind decides the cure, so the line names one command rather
+/// than leaving the reader — usually an agent, reading this as tool output — to
+/// work out which half to touch.
+fn mismatch(theirs: u32) -> String {
+    let cure = if theirs < PROTOCOL_VERSION {
+        "run `dray update`"
+    } else {
+        "update the Dray app"
+    };
+
+    format!("this dray CLI speaks protocol v{theirs}, the app speaks v{PROTOCOL_VERSION} — {cure}")
+}
+
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
 async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
@@ -157,10 +193,7 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
     let response = match serde_json::from_str::<Envelope>(&line) {
         // Answered before the request is even looked at: an old CLI against a
         // new app must be told to upgrade, not handed a guess at what it meant.
-        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(format!(
-            "this dray CLI speaks protocol v{}, the app speaks v{PROTOCOL_VERSION} — update one of them",
-            envelope.v
-        )),
+        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(mismatch(envelope.v)),
         Ok(envelope) => match dispatch(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
@@ -235,6 +268,14 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
         .map(|p| p.permission_mode)
         .unwrap_or_else(ApprovalPolicy::default);
 
+    // Resolved before anything is written, so a `--from` naming a session or a
+    // ref that cannot be found costs an error rather than a session sitting in
+    // the sidebar on the wrong base.
+    let base_ref = match create.from.as_deref() {
+        Some(from) => Some(resolve_base(from, &project_path).await?),
+        None => None,
+    };
+
     let session_id = uuid::Uuid::now_v7().to_string();
     let manager = app.state::<SessionManager>();
 
@@ -253,9 +294,17 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             // time, and several agents writing to one checkout overwrite each
             // other — the changes panel cannot even tell them apart.
             true,
-            create.worktree_name.as_deref(),
+            // Never named by the caller: an agent has no basis for choosing
+            // one, and a name that collides is a create that fails for a field
+            // nobody wanted. `None` lets the app generate a readable one.
+            None,
+            base_ref.as_deref(),
             true,
             create.parent_session_id.as_deref(),
+            // The creating session is this one's *parent*, which the sidebar
+            // already draws by nesting the row. Its opening prompt is the brief,
+            // not a message relayed into a conversation already under way.
+            None,
             app,
         )
         .await?;
@@ -270,7 +319,60 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
 
     Ok(Response::Created {
         session: summarize(item),
+        base_ref,
     })
+}
+
+/// What `--from` starts the new worktree at: a session id, a branch, or any
+/// other ref.
+///
+/// A session id is tried first, because it is the address everywhere else in
+/// `dray` — `ls` prints it, `send` takes it — and an agent holding one should
+/// not have to learn how Dray names branches to point at that session's work.
+/// A ref that happens to look like a session id is the only ambiguity, and a
+/// v7 UUID is not a branch name anybody types.
+///
+/// The session's branch comes from [`store::session_branch`], the one reading
+/// of that question, so this cannot start a reviewer on one branch while the
+/// author's header names another.
+///
+/// **Committed work only**, and nothing here can change that: a worktree at a
+/// branch tip carries what was committed and not what the author has open in
+/// their editor. Usually right for a review, and said plainly in the skill,
+/// because the failure is an agent reporting confidently on a tree that is
+/// missing the very change the user is looking at.
+async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
+    if let Some(item) = store::get_session_index_item(from).await? {
+        // Read where the session actually runs, which is its worktree for a
+        // worktree session — `session_branch` outranks it for a relocated one,
+        // whose `cwd` is the shared project root.
+        let observed = crate::git::current_branch(&item.cwd).await;
+        let branch = store::session_branch(&item, observed.as_deref()).with_context(|| {
+            format!(
+                "session {from} is on no branch — a detached HEAD, or a directory that is not \
+                 a repository. Pass a branch or a commit instead."
+            )
+        })?;
+
+        // A session in another repo — or one whose branch has since been
+        // deleted — names a branch this one has never heard of. Said here
+        // rather than left to git, whose error names the branch without saying
+        // that a session was what asked for it.
+        if crate::git::resolve_commit(project_path, &branch).await.is_none() {
+            bail!(
+                "session {from} is on branch {branch}, which {project_path} does not have — \
+                 check the two are the same repository, and that the branch still exists"
+            );
+        }
+
+        return Ok(branch);
+    }
+
+    if crate::git::resolve_commit(project_path, from).await.is_some() {
+        return Ok(from.to_string());
+    }
+
+    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path}")
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {
@@ -359,7 +461,8 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
         bail!("a session cannot send a message to itself");
     }
 
-    let prompt = attribute(&send, app).await;
+    let from = sender(&send).await;
+    let prompt = attribute(&send.prompt, from.as_ref());
 
     let manager = app.state::<SessionManager>();
     let outcome = manager
@@ -375,8 +478,10 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
             None,
             false,
             None,
+            None,
             false,
             None,
+            from,
             app,
         )
         .await?;
@@ -386,29 +491,55 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
     })
 }
 
-/// Names the sender in the prompt itself.
+/// The prompt as the receiving *agent* will read it, with its sender named.
 ///
-/// The receiving agent has no other way to tell a relayed message from the
-/// user typing — both arrive as an ordinary `user_message` — and "the session
-/// you spawned reports X" reads very differently from the user asking for X.
-/// Titled rather than identified by id, because the title is what the reader
-/// sees in the sidebar; the id would name a row they would have to go and
-/// match up by hand.
-async fn attribute(send: &SendMessage, _app: &AppHandle) -> String {
-    let Some(from) = send.from_session_id.as_deref() else {
-        return send.prompt.clone();
-    };
+/// This and [`user_message.from`](crate::events::MessageSender) carry the same
+/// fact to two different readers, and both are needed because neither can do
+/// the other's job.
+///
+/// The agent has no channel but this text. Verified against the CLI: every
+/// control-request subtype carries a setting (`set_model`,
+/// `set_permission_mode`, `interrupt`, `stop_task`, `initialize`) and none
+/// carries metadata, unknown fields are dropped in silence rather than
+/// refused, and `--append-system-prompt` is fixed at spawn. Codex is no
+/// different — `codex exec` takes a prompt and nothing beside it. So a prefix
+/// is not one option among several here; it is the only one.
+///
+/// The transcript, meanwhile, has the field and so never parses this line back
+/// out. A title holding a bracket, a reworded prefix, or a harness whose prompt
+/// is shaped differently would break a regex *silently* and leave a relayed
+/// message looking like the user's own. A field is either there or it isn't.
+///
+/// Both built from one [`MessageSender`], so the two cannot name different
+/// sessions. The id rides along because it is the address: the agent answers
+/// with `dray send <id>` rather than paying a `dray ls` to work out who asked.
+fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
+    match from {
+        Some(from) => format!(
+            "[message from the Dray session \"{}\" ({})]\n\n{prompt}",
+            from.title, from.session_id
+        ),
+        None => prompt.to_string(),
+    }
+}
 
-    let title = store::get_session_index_item(from)
+/// Who this message is from, as data the transcript can draw.
+///
+/// `None` for a call from the user's own terminal — there is no session behind
+/// it — and for one whose sender has since been deleted. One lookup answers for
+/// both readers, so neither the prefix nor the card claims a session the index
+/// can no longer name.
+async fn sender(send: &SendMessage) -> Option<MessageSender> {
+    let from = send.from_session_id.as_deref()?;
+
+    store::get_session_index_item(from)
         .await
         .ok()
         .flatten()
-        .map(|item| item.title);
-
-    match title {
-        Some(title) => format!("[message from the Dray session \"{title}\"]\n\n{}", send.prompt),
-        None => format!("[message from another Dray session]\n\n{}", send.prompt),
-    }
+        .map(|item| MessageSender {
+            session_id: item.session_id,
+            title: item.title,
+        })
 }
 
 /// The caller's pick, else the parent's, else Claude Code.
@@ -455,6 +586,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_else(|| "idle".into()),
         modified: item.modified,
+        parent_session_id: item.parent_session_id,
     }
 }
 
@@ -515,10 +647,42 @@ mod tests {
         assert!(reachable(0o750));
     }
 
+    /// The prefix is the receiving agent's only signal, so its two facts are
+    /// pinned: the title it reads, and the id it can answer to.
+    #[test]
+    fn a_relayed_prompt_names_its_sender_and_the_id_to_reply_to() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Fix the login redirect".into(),
+        };
+        let prompt = attribute("review is done", Some(&from));
+
+        assert!(prompt.starts_with(
+            "[message from the Dray session \"Fix the login redirect\" (abc-123)]\n\n"
+        ));
+        assert!(prompt.ends_with("review is done"));
+    }
+
+    /// A prompt from the user's own terminal has no sender, and must reach the
+    /// agent exactly as it was typed.
+    #[test]
+    fn an_unattributed_prompt_is_left_alone() {
+        assert_eq!(attribute("just do it", None), "just do it");
+    }
+
     #[test]
     fn a_version_mismatch_is_refused_before_the_request_is_read() {
         let line = r#"{"v":99,"cmd":"create_session","prompt":"hi","useWorktree":true}"#;
         let envelope: Envelope = serde_json::from_str(line).unwrap();
         assert_ne!(envelope.v, PROTOCOL_VERSION);
+    }
+
+    /// Naming the wrong half is worse than naming neither: the reader runs a
+    /// command that cannot fix what they have.
+    #[test]
+    fn the_mismatch_names_whichever_side_is_behind() {
+        assert!(mismatch(PROTOCOL_VERSION - 1).contains("dray update"));
+        assert!(mismatch(PROTOCOL_VERSION + 1).contains("update the Dray app"));
+        assert!(!mismatch(PROTOCOL_VERSION + 1).contains("dray update"));
     }
 }

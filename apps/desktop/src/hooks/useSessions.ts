@@ -255,6 +255,9 @@ const handleSendMsg = async (
 
   if (!sessionId) {
     sessionId = crypto.randomUUID();
+    // Claimed alongside the selection everywhere it moves, or a read still out
+    // from an earlier click can land afterwards and roll this one away.
+    selectionRequestRef.current = sessionId;
     setSelectedSessionId(sessionId);
   }
 
@@ -434,6 +437,7 @@ const handleAnswerQuestions = async (
 // since the picker is the only thing that moves the tree and a remembered name
 // would either be a lie or an unasked-for checkout.
 const handleNewSession = () => {
+  selectionRequestRef.current = null;
   setSelectedSessionId(null);
   setModelId(prefs.modelId);
   setEffortByModel(prefs.effortByModel);
@@ -442,7 +446,40 @@ const handleNewSession = () => {
   setBranch(branches?.current ?? null);
 };
 
+// Puts the composer's controls back to what the session was started with. Every
+// setter here is the raw state setter, never the prefs-writing wrapper: these
+// values are the session's, not the user's choice, and moving between sessions
+// must not rewrite the defaults that `handleNewSession` reads back.
+//
+// Takes the item rather than an id because a fork's row does not reach
+// `sessionIndexItems` until the render after it is made, and it needs this on
+// the way in like any other session being opened.
+//
+// Project, branch, and the worktree flag aren't restored — the composer hides
+// all three once a session exists, and they'd only mislead the next new chat.
+const restoreSessionControls = (item: SessionIndexItem) => {
+  // Sessions indexed before the model was recorded read back as "unknown".
+  const restored = item.model === "unknown" ? DEFAULT_MODEL : item.model;
+  setModelId(restored);
+  // The index stores one model/effort pair, so it can only seed that model's
+  // entry; the rest of the map falls back to per-model defaults.
+  if (item.effort) {
+    setEffortByModel((prev) => ({ ...prev, [restored]: item.effort! }));
+  }
+  setPermissionModeState(item.permissionMode);
+};
+
 const handleSelectSessionIndexItem = async (sessionId: string) => {
+  // Claimed synchronously, so a click arriving during the read below is visible
+  // to it immediately. The rendered selection cannot serve here — it is a render
+  // behind, so a read finishing in that gap would still see itself as current.
+  selectionRequestRef.current = sessionId;
+
+  // Where the reader was, for the case the id turns out to resolve to nothing.
+  // Whether it is still somewhere they can be put back is decided at the
+  // rollback itself, not here — see there.
+  const previous = selectedSessionIdRef.current;
+
   setSelectedSessionId(sessionId);
 
   // Opening the session is answering the notice about it — an unread completion
@@ -457,26 +494,10 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     markSessionRead(sessionId);
   }
 
-  // Restores what this session was started with. Every setter here is the raw
-  // state setter, never the prefs-writing wrapper: these values are the session's,
-  // not the user's choice, and clicking through the sidebar must not rewrite the
-  // defaults that `handleNewSession` reads back.
   const indexItem = sessionIndexItems.find((i) => i.sessionId === sessionId);
   if (indexItem) {
-    // Sessions indexed before the model was recorded read back as "unknown".
-    const restored =
-      indexItem.model === "unknown" ? DEFAULT_MODEL : indexItem.model;
-    setModelId(restored);
-    // The index stores one model/effort pair, so it can only seed that model's
-    // entry; the rest of the map falls back to per-model defaults.
-    if (indexItem.effort) {
-      setEffortByModel((prev) => ({ ...prev, [restored]: indexItem.effort! }));
-    }
-    setPermissionModeState(indexItem.permissionMode);
+    restoreSessionControls(indexItem);
   }
-
-  // Project, branch, and the worktree flag aren't restored — the composer hides
-  // all three once a session exists, and they'd only mislead the next new chat.
 
   if (sessions.some((s) => s.sessionId === sessionId)) {
     return;
@@ -486,7 +507,45 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
       upsertSession(snapshot);
+      return;
     }
+
+    // The id resolves to nothing on disk, so the selection has to go back where
+    // it was. Leaving it is not the harmless-looking half-state it reads as:
+    // `selectedSession` would be null while `selectedSessionId` still held the
+    // dead id, and both `centered` and `isNewTask` derive from that null — so
+    // the reader gets the *new task* composer while `handleSendMsg` still finds
+    // an id, computes `isNewSession: false`, and resumes a session that is gone.
+    //
+    // Reached by a relayed message naming a sender since deleted: the
+    // attribution is persisted deliberately, and the session it points at need
+    // not outlive it. A sidebar row can go stale the same way.
+    //
+    // Only when this read is still the one being waited on. A click that landed
+    // while it was out has already claimed the request, and rolling back onto
+    // this answer would take the reader off the session they just asked for.
+    if (selectionRequestRef.current !== sessionId) return;
+
+    // Only a session still loaded can be gone back to, and that is judged here
+    // rather than before the read, for two reasons that both end in this same
+    // dead end. The selection this started from is *optimistic* until its own
+    // read lands, so it may itself be an id about to be rolled back; and a
+    // session that was loaded when this began can be deleted while the read is
+    // out, which `deleteSession` does not clear the selection for unless that
+    // session was the one selected — and by here it is not.
+    //
+    // Nothing to go back to leaves `null`, the empty composer. Not where the
+    // reader asked to be, but a state they can act from.
+    const restorable =
+      previous && sessionsRef.current.some((s) => s.sessionId === previous)
+        ? previous
+        : null;
+
+    selectionRequestRef.current = restorable;
+    setSelectedSessionId(restorable);
+    // Not "deleted": all this knows is that the id resolved to nothing, and
+    // deletion is the likely cause rather than the observed one.
+    setError("Session not found.");
   } catch (e) {
     setError(String(e));
   }
@@ -602,6 +661,40 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
   // already reached the reader through the error banner, and the card retires
   // itself rather than claiming something that didn't happen.
   return true;
+};
+
+// Copies a session onto a new id so it can be carried on in two directions at
+// once. The id is minted here for the same reason a new session's is — this app
+// chooses session ids and the CLI adopts them.
+//
+// Selected on arrival, since forking is asking to work in the copy. Nothing
+// spawns yet: the backend leaves the CLI's own fork for the first send, and the
+// snapshot it returns is the parent's copied log, so the new session opens
+// reading exactly like the one it came from.
+const forkSession = async (sessionId: string, worktree: boolean) => {
+  const forkId = crypto.randomUUID();
+
+  let snapshot: SessionSnapshot;
+  try {
+    snapshot = await invoke<SessionSnapshot>("fork_session", {
+      sessionId,
+      forkId,
+      worktree,
+    });
+  } catch (e) {
+    setError(String(e));
+    return;
+  }
+
+  setError(null);
+  upsertSession(snapshot);
+  // A fork is never archived, so it belongs to the active list alone — pushed
+  // unconditionally it would show up under the archived filter too.
+  if (!showArchived) {
+    setSessionIndexItems((prev) => [...prev, snapshot]);
+  }
+  setSelectedSessionId(snapshot.sessionId);
+  restoreSessionControls(snapshot);
 };
 
 // Removes the session everywhere it's held, backend first: the row must not
@@ -911,6 +1004,16 @@ useEffect(() => {
   };
 }, []);
 
+/// The selection the reader last *asked* for, written at call time rather than
+/// at render.
+///
+/// Not interchangeable with `selectedSessionIdRef` below, which mirrors state
+/// and so lags a render behind: a click landing while a read is in flight has
+/// already changed this, and has not yet changed that. Only this one can answer
+/// "is my answer still the one being waited on", which is what stops a slow
+/// read from overwriting a newer click.
+const selectionRequestRef = useRef<string | null>(selectedSessionId);
+
 // Inside the listener the closure would see the mount-time selection; the ref
 // tracks the live one so "already being viewed" is judged against reality.
 const selectedSessionIdRef = useRef(selectedSessionId);
@@ -929,6 +1032,14 @@ statusBySessionRef.current = statusBySession;
 // open at mount.
 const showArchivedRef = useRef(showArchived);
 showArchivedRef.current = showArchived;
+
+/// The loaded sessions as of now, for the one reader that runs after an `await`
+/// and so cannot trust the copy its closure captured. `deleteSession` empties a
+/// row out of `sessions` without touching the selection unless that row *was*
+/// the selection — so a session validated before a read can be gone by the time
+/// the read answers.
+const sessionsRef = useRef(sessions);
+sessionsRef.current = sessions;
 
 // `completed` means finished *and unread*. Reading is what retires it, so every
 // path to a read funnels through here: the status landing on the session already
@@ -1213,6 +1324,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, detachSession, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, detachSession, deleteSession, removeWorktree};
 
 }

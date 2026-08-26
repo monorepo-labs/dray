@@ -13,15 +13,21 @@ use dray_proto::{
     encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
     SessionSummary,
 };
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The skill, embedded rather than downloaded at install time — a skill that
 /// describes a different version of the CLI than the one installed is worse
 /// than no skill, and fetching it separately is exactly how that happens.
 const SKILL: &str = include_str!("../skill/SKILL.md");
+
+/// `update` runs the same script a first install runs rather than doing its own
+/// fetch, verify and swap: two copies of that drift on exactly the step that
+/// checks what is about to be executed.
+const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +52,8 @@ enum Command {
     Ls(Ls),
     /// Send a message into a session that already exists.
     Send(Send),
+    /// Upgrade this binary to the newest release.
+    Update,
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -62,11 +70,6 @@ struct New {
     #[arg(long)]
     project: Option<PathBuf>,
 
-    /// Name the worktree instead of letting Dray generate one. Every session
-    /// gets one — they are meant to run at the same time.
-    #[arg(long)]
-    worktree_name: Option<String>,
-
     /// opus, sonnet, fable or haiku. Defaults to the calling session's model.
     #[arg(long)]
     model: Option<String>,
@@ -79,6 +82,12 @@ struct New {
     /// Which agent runs it. claude_code today.
     #[arg(long)]
     harness: Option<String>,
+
+    /// Base the new session's worktree on existing work: a session id, a
+    /// branch, or any git ref. Committed work only. Defaults to
+    /// origin/<default>.
+    #[arg(long, value_name = "SESSION|REF")]
+    from: Option<String>,
 }
 
 #[derive(Args)]
@@ -127,6 +136,7 @@ fn run() -> Result<(), String> {
         Command::New(args) => new(args),
         Command::Ls(args) => ls(args),
         Command::Send(args) => send_message(args),
+        Command::Update => update(),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
 }
@@ -135,23 +145,30 @@ fn new(args: New) -> Result<(), String> {
     let request = Request::CreateSession(CreateSession {
         prompt: args.prompt,
         project_path: resolve_project(args.project),
-        worktree_name: args.worktree_name,
         model: args.model,
         effort: args.effort,
         harness: args.harness,
         parent_session_id: parent_session_id(),
+        from: args.from,
     });
 
     match send(request)? {
-        Response::Created { session } => {
+        Response::Created { session, base_ref } => {
             // The id alone on stdout, so `$(dray new …)` captures something
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
             eprintln!(
-                "Started \"{}\"{}",
+                "Started \"{}\"{}{}",
                 session.title,
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
+                    None => String::new(),
+                },
+                // `--from <session-id>` names a session, so the branch it
+                // resolved to is news: the caller asked with an id and only the
+                // app could say what that session's work is on.
+                match &base_ref {
+                    Some(base) => format!(", based on {base}"),
                     None => String::new(),
                 }
             );
@@ -240,17 +257,113 @@ fn print_table(sessions: &[SessionSummary]) {
 
     let status_width = width(|s| s.status.as_str());
     let title_width = width(|s| s.title.as_str()).min(60);
+    let branch_width = width(|s| s.branch.as_deref().unwrap_or("-"));
 
     for session in sessions {
         let title: String = session.title.chars().take(title_width).collect();
+        // Named rather than given a column of its own: two bare ids on one row
+        // under no header is a table nobody can read, and most rows have no
+        // parent to print at all.
+        let parent = match &session.parent_session_id {
+            Some(id) => format!("  spawned by {id}"),
+            None => String::new(),
+        };
         println!(
-            "{}  {:<status_width$}  {:<title_width$}  {}",
+            "{}  {:<status_width$}  {:<title_width$}  {:<branch_width$}{}",
             session.session_id,
             session.status,
             title,
             session.branch.as_deref().unwrap_or("-"),
+            parent,
         );
     }
+}
+
+fn update() -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("could not find the running dray binary: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or("the running dray binary sits in no directory")?;
+
+    let scratch = scratch_dir()?;
+    let script = scratch.join("install.sh");
+    let result = download(INSTALLER_URL, &script).and_then(|()| run_installer(&script, dir));
+
+    // On the failing paths too, or a refused download leaves a half-written
+    // script behind every time someone retries.
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    result
+}
+
+/// A directory of our own to download the installer into, because the next step
+/// executes what lands there.
+///
+/// `create_dir` refuses a path that already exists — symlink included — so
+/// another local account cannot park something at the predictable name and have
+/// it run. `0700` closes the window between creating it and writing into it.
+fn scratch_dir() -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::temp_dir().join(format!("dray-update-{}", std::process::id()));
+
+    std::fs::create_dir(&path)
+        .map_err(|e| format!("could not create {}: {e}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("could not restrict {}: {e}", path.display()))?;
+
+    Ok(path)
+}
+
+fn run_installer(script: &Path, install_dir: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("sh")
+        .arg(script)
+        // So the upgrade lands where the install did instead of defaulting back
+        // to ~/.local/bin. Overwriting this very binary is safe on unix: the
+        // installer renames over the path and this process keeps the inode it
+        // started from.
+        .env("DRAY_INSTALL_DIR", install_dir)
+        .status();
+
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("the installer failed ({status})")),
+        Err(e) => Err(format!("could not run the installer: {e}")),
+    }
+}
+
+/// curl or wget, the same pair `install.sh` accepts.
+///
+/// To a file rather than `curl … | sh`, because `pipefail` is not POSIX: piped
+/// straight into a shell, a failed download reports success and installs
+/// nothing.
+fn download(url: &str, path: &Path) -> Result<(), String> {
+    for (program, args) in [
+        (
+            "curl",
+            vec![
+                OsStr::new("-fsSL"),
+                OsStr::new(url),
+                OsStr::new("-o"),
+                path.as_os_str(),
+            ],
+        ),
+        (
+            "wget",
+            vec![OsStr::new("-qO"), path.as_os_str(), OsStr::new(url)],
+        ),
+    ] {
+        match std::process::Command::new(program).args(args).status() {
+            Ok(status) if status.success() => return Ok(()),
+            // It ran and failed, which is a real failure rather than a reason
+            // to reach for the other one.
+            Ok(_) => return Err(format!("{program} could not download {url}")),
+            Err(_) => continue,
+        }
+    }
+
+    Err("curl or wget is required to update.".into())
 }
 
 fn install_skill() -> Result<(), String> {
@@ -316,12 +429,26 @@ fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
         return Some(path.to_string_lossy().into_owned());
     }
 
-    git_toplevel()
+    repo_root(Path::new("."))
 }
 
-fn git_toplevel() -> Option<String> {
+/// The repo `dir` belongs to — its **main** worktree, not whichever linked one
+/// we happen to be standing in.
+///
+/// `rev-parse --show-toplevel` answers the linked worktree, and that is what an
+/// agent running in a Dray worktree session was putting on the wire as the new
+/// session's project. The app then computed a `cwd` of
+/// `<that worktree>/.claude/worktrees/<name>`, which `claude -w` never creates —
+/// it resolves the repo for itself — so Changes, commit and PR all read a
+/// directory that does not exist.
+///
+/// `worktree list` puts the main worktree first whatever you run it from, and
+/// that is what `project_path` has always meant: the grouping key worktree
+/// sessions list under.
+fn repo_root(dir: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .args(["worktree", "list", "--porcelain"])
         .output()
         .ok()?;
 
@@ -329,8 +456,26 @@ fn git_toplevel() -> Option<String> {
         return None;
     }
 
-    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    (!path.is_empty()).then_some(path)
+    main_worktree(&String::from_utf8(output.stdout).ok()?)
+}
+
+/// The first record's path, or `None` for a bare repo — nothing is checked out
+/// there, so it is no place to run a session, and `None` sends the app to the
+/// calling session's own project instead.
+///
+/// Not `-z`: that needs git 2.36, and anything older fails the command outright
+/// and answers nothing. The line format is only ambiguous for a repo root with
+/// a newline in its path.
+fn main_worktree(porcelain: &str) -> Option<String> {
+    let mut lines = porcelain.lines();
+    let path = lines.next()?.strip_prefix("worktree ")?;
+
+    // Records are separated by a blank line, so this reads the first one alone.
+    if lines.take_while(|l| !l.is_empty()).any(|l| l == "bare") {
+        return None;
+    }
+
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 #[cfg(test)]
@@ -349,6 +494,13 @@ mod tests {
         // checkout is never the right answer — the flag is gone rather than
         // defaulted.
         assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    }
+
+    #[test]
+    fn the_worktree_cannot_be_named_either() {
+        // An agent has no basis for picking a name, Dray generates a readable
+        // one, and a caller-supplied name is one more thing that can collide.
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--worktree-name", "n"]).is_err());
     }
 
     #[test]
@@ -371,6 +523,34 @@ mod tests {
     }
 
     #[test]
+    fn a_base_can_be_a_session_or_a_ref() {
+        // One flag for both, because the app is the only side that can tell
+        // them apart — it holds the index, and this does not.
+        for value in ["0198f0a2-1c5e-7000-8000-000000000000", "feature/login"] {
+            let cli = Cli::parse_from(["dray", "new", "review it", "--from", value]);
+            let Command::New(args) = cli.command else {
+                panic!("wrong subcommand");
+            };
+            assert_eq!(args.from.as_deref(), Some(value));
+        }
+
+        let cli = Cli::parse_from(["dray", "new", "x"]);
+        let Command::New(args) = cli.command else {
+            panic!("wrong subcommand");
+        };
+        assert_eq!(args.from, None);
+    }
+
+    /// The tree is still Dray's to make either way — `--from` moves where the
+    /// branch starts, and there is no flag for running in somebody else's
+    /// checkout.
+    #[test]
+    fn a_base_does_not_bring_back_a_way_into_someone_elses_tree() {
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--in", "abc"]).is_err());
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--detach"]).is_err());
+    }
+
+    #[test]
     fn an_explicit_project_beats_the_working_directory() {
         assert_eq!(
             resolve_project(Some(PathBuf::from("/x/proj"))).as_deref(),
@@ -379,9 +559,149 @@ mod tests {
     }
 
     #[test]
+    fn update_takes_no_arguments() {
+        assert!(matches!(
+            Cli::parse_from(["dray", "update"]).command,
+            Command::Update
+        ));
+        assert!(Cli::try_parse_from(["dray", "update", "--version"]).is_err());
+    }
+
+    #[test]
+    fn the_skill_documents_the_command_the_mismatch_error_names() {
+        // The app tells a stale CLI to run this, so the skill has to say what
+        // it is — that sentence is the whole self-heal path.
+        assert!(SKILL.contains("dray update"));
+    }
+
+    /// A version bump refuses *every* command, and that is only tolerable
+    /// because the refusal is actionable. Which half is behind decides which
+    /// cure applies, and only one of the two can be run from here — so the
+    /// skill has to teach both, or an agent meeting the app-is-behind half
+    /// burns the turn running `dray update` at a problem it cannot touch.
+    ///
+    /// Anchored on the two cures `mismatch` emits verbatim rather than on the
+    /// prose around them: those strings are the actual contract, and the prose
+    /// wraps.
+    #[test]
+    fn the_skill_teaches_both_halves_of_a_protocol_refusal() {
+        assert!(SKILL.contains("update the Dray app"));
+        // And that a refusal is safe to retry, or it reads as a failed create
+        // and earns a second session nobody asked for.
+        assert!(SKILL.contains("Nothing was created"));
+    }
+
+    /// A worktree carries what was committed, so a reviewer pointed at work in
+    /// progress reports on a tree missing the very change the user is looking
+    /// at. Nothing in the mechanism can fix that, which makes saying it part of
+    /// the feature rather than documentation around it.
+    #[test]
+    fn the_skill_says_a_base_carries_committed_work_only() {
+        assert!(SKILL.contains("--from"));
+        assert!(SKILL.contains("Committed work only"));
+    }
+
+    #[test]
     fn the_skill_carries_frontmatter_claude_code_can_read() {
         assert!(SKILL.starts_with("---\n"), "skill needs YAML frontmatter");
         assert!(SKILL.contains("\nname: dray\n"));
         assert!(SKILL.contains("\ndescription: "));
+    }
+
+    #[test]
+    fn a_bare_repo_is_no_project() {
+        assert_eq!(main_worktree("worktree /srv/repo.git\nbare\n"), None);
+    }
+
+    #[test]
+    fn only_the_first_record_is_read() {
+        // `bare` on a later record would be a repo that has no main worktree
+        // at all, but reading past the blank line is how a second record's
+        // attribute gets mistaken for the first one's.
+        let porcelain = "worktree /a\nHEAD abc\nbranch refs/heads/main\n\nworktree /b\nbare\n";
+        assert_eq!(main_worktree(porcelain).as_deref(), Some("/a"));
+    }
+
+    #[test]
+    fn nothing_at_all_is_no_project() {
+        assert_eq!(main_worktree(""), None);
+        assert_eq!(main_worktree("HEAD abc\n"), None);
+    }
+
+    /// The one that matters, and it needs a real linked worktree: the whole
+    /// defect was a git subcommand answering differently depending on which
+    /// directory it ran in, which no string fixture can show.
+    #[test]
+    fn resolving_from_inside_a_worktree_answers_the_repo() {
+        let Some(repo) = scratch_repo() else {
+            return;
+        };
+
+        let tree = repo.join(".claude").join("worktrees").join("child");
+        git(&repo, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+
+        let root = repo.to_string_lossy().into_owned();
+        assert_eq!(repo_root(&repo).as_deref(), Some(root.as_str()));
+        assert_eq!(repo_root(&tree).as_deref(), Some(root.as_str()));
+
+        // The reading this replaced, kept as the reason the test exists.
+        assert_eq!(
+            show_toplevel(&tree).as_deref(),
+            Some(tree.to_string_lossy().as_ref())
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_plain_directory_is_no_project() {
+        let dir = std::env::temp_dir().join(format!("dray-clitest-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(repo_root(&dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A throwaway repo with one commit, canonicalized because git prints real
+    /// paths and macOS hands out `/var/…` symlinks into `/private/var/…`.
+    /// `None` when there is no usable git, which is not a failure worth failing
+    /// the suite over.
+    fn scratch_repo() -> Option<PathBuf> {
+        let dir = std::env::temp_dir().join(format!("dray-clitest-{}", std::process::id()));
+        // A run that failed before its cleanup would otherwise leave a repo
+        // here whose `child` worktree already exists.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok()?;
+        let dir = std::fs::canonicalize(&dir).ok()?;
+
+        if !git(&dir, &["init", "-q", "."]) {
+            return None;
+        }
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "user.name", "Test"]);
+        std::fs::write(dir.join("keep.txt"), "a\n").ok()?;
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+
+        Some(dir)
+    }
+
+    fn git(at: &Path, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .current_dir(at)
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    fn show_toplevel(at: &Path) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .current_dir(at)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .ok()?;
+
+        Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
     }
 }

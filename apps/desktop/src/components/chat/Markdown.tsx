@@ -141,6 +141,18 @@ function MarkdownImpl({ children, streaming = false, className }: MarkdownProps)
         // opposite the middle of a paragraph beside it.
         "[&_td]:align-top",
 
+        // Prose has the defect the table cells above had, one level out: a bare
+        // path in a sentence has no break opportunity, so it runs past the
+        // column and scrolls the whole transcript sideways. Streamdown already
+        // carries `wrap-anywhere` on links, so only what it leaves plain is
+        // named here — element by element rather than on the container, since
+        // `overflow-wrap` inherits and a code block is meant to scroll its
+        // lines rather than break them.
+        "[&_p]:wrap-anywhere [&_li]:wrap-anywhere [&_blockquote]:wrap-anywhere",
+        "[&_h1]:wrap-anywhere [&_h2]:wrap-anywhere [&_h3]:wrap-anywhere",
+        "[&_h4]:wrap-anywhere [&_h5]:wrap-anywhere [&_h6]:wrap-anywhere",
+        "[&_[data-streamdown=inline-code]]:wrap-anywhere",
+
         // Streamdown sets its own vertical rhythm; strip the leading and
         // trailing margin so a message sits flush in the transcript's gap.
         "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",

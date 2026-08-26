@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CheckCheck,
@@ -24,6 +24,9 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -80,6 +83,7 @@ type SidebarProps = {
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
+  onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   showArchived: boolean;
@@ -96,24 +100,40 @@ type SidebarProps = {
   onInstallUpdate: () => void;
 };
 
+/// One drawn row: the session, how deep it sits, and the flags its connector
+/// rails are drawn from.
+export type SessionListRow = {
+  item: SessionIndexItem;
+  /// Levels below the top. 0 is a root and draws no connector at all.
+  depth: number;
+  /// One entry per level *above* this row, saying whether that level's rail
+  /// carries on below it. The last entry is this row's own parent — false there
+  /// closes the line at the elbow, so a rail never runs on into an unrelated
+  /// session.
+  guides: boolean[];
+  /// This row opens a rail of its own for the rows under it.
+  opens: boolean;
+};
+
 /// The order the list is drawn in, with a session spawned by an agent sitting
-/// directly under the one that spawned it.
+/// directly under the one that spawned it — and the depth and guide flags each
+/// row's rails are drawn from.
 ///
-/// Exported because the ⌘⇧↑/↓ shortcut steps through the same sequence, and a
-/// second comparator would let the two disagree about which row is "next" —
-/// worse when the sidebar is collapsed and nothing on screen shows the order
-/// being walked.
+/// Order and rails come out of this one walk on purpose. Computing the rails
+/// separately would let the shape drawn down the left edge disagree with the
+/// order the rows are actually in, and a rail pointing at the wrong row says
+/// something false about who spawned what.
 ///
 /// A child whose parent is not in `items` is drawn at the top level rather than
 /// hidden. That is the ordinary case, not an edge one: the parent may be
 /// archived, filtered to another project, or deleted outright, and a row that
-/// vanished with it would be unreachable.
+/// vanished with it would be unreachable — so it draws as a root, with no rail
+/// reaching for a parent that isn't there.
 ///
-/// Only one level nests. The depth cap allows a spawned session to spawn, so a
-/// grandchild exists — but indenting twice buys a tree nobody asked for in a
-/// 250px column, so it nests under its own parent and the chain reads flat from
-/// there.
-export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
+/// Depth is drawn rather than flattened: the cap allows a spawned session to
+/// spawn, so a grandchild exists, and it hangs off its own parent's rail while
+/// that parent still hangs off the root's.
+export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
   const byRecency = (a: SessionIndexItem, b: SessionIndexItem) =>
     Date.parse(b.modified) - Date.parse(a.modified);
 
@@ -134,35 +154,121 @@ export function sortSessions(items: SessionIndexItem[]): SessionIndexItem[] {
   // depth cap allows a spawned session to spawn, so a grandchild exists, and a
   // single pass emitted neither it nor anything below it — the row simply
   // vanished from the sidebar. Pinned by a test.
-  const ordered: SessionIndexItem[] = [];
+  const rows: SessionListRow[] = [];
   const seen = new Set<string>();
 
-  const walk = (item: SessionIndexItem) => {
+  const walk = (item: SessionIndexItem, depth: number, guides: boolean[]) => {
     if (seen.has(item.sessionId)) return;
     seen.add(item.sessionId);
-    ordered.push(item);
-    for (const child of (children.get(item.sessionId) ?? []).sort(byRecency)) {
-      walk(child);
-    }
+    const row: SessionListRow = { item, depth, guides, opens: false };
+    rows.push(row);
+
+    // Filtered before the walk, not during it: the last *drawn* child is what
+    // closes the rail, and a cycle can leave a listed child already emitted
+    // elsewhere — counting it would run the rail on past the row it ends at.
+    const kids = (children.get(item.sessionId) ?? [])
+      .filter((child) => !seen.has(child.sessionId))
+      .sort(byRecency);
+    const before = rows.length;
+    kids.forEach((child, i) => {
+      walk(child, depth + 1, [...guides, i < kids.length - 1]);
+    });
+    row.opens = rows.length > before;
   };
 
   for (const root of [...items].filter((i) => !parentOf(i)).sort(byRecency)) {
-    walk(root);
+    walk(root, 0, []);
   }
 
   // A cycle in the index reaches no root, so its rows are still unemitted here.
   // Appended rather than dropped: the sidebar losing a session is worse than
   // drawing a strange order, and `seen` is what stops the walk itself hanging.
   for (const stranded of [...items].sort(byRecency)) {
-    walk(stranded);
+    walk(stranded, 0, []);
   }
 
-  return ordered;
+  return rows;
 }
 
-/// Whether a row draws nested, judged the same way [`sortSessions`] places it —
-/// a parent that isn't on screen means the row is top-level, so the marker can
-/// never point at nothing.
+/// One project's run of rows, in the order the sidebar draws them.
+export type SessionGroup = {
+  projectPath: string;
+  rows: SessionListRow[];
+};
+
+/// [`sessionRows`] gathered under the project each row's *root* belongs to.
+///
+/// Grouped on the root rather than on the row: a spawned session hangs off its
+/// parent wherever its own `projectPath` points, and splitting one nest across
+/// two headings would draw a child under a parent that isn't there.
+///
+/// A project with no session opens no group, which is the whole of "don't show
+/// an empty project" — headings come from the sessions present, never from the
+/// attached list.
+///
+/// **Group order is the project list's own**, not the recency of the sessions
+/// inside it. Ordering on the newest session read well for one screenshot and
+/// badly in use: every reply to any session lifted its whole project over the
+/// others, so headings the eye had learned the position of moved while a turn
+/// was running. The project list only reorders when a project is *selected*,
+/// which is the reader's own act. A project no longer attached still has
+/// sessions to draw, so it keeps first-appearance order after the attached
+/// ones.
+///
+/// Rows inside a group stay newest-first, and a list already narrowed to one
+/// project comes back in exactly the order it had before grouping existed.
+export function sessionGroups(
+  items: SessionIndexItem[],
+  projects: Project[] = [],
+): SessionGroup[] {
+  const groups: SessionGroup[] = [];
+  const byPath = new Map<string, SessionGroup>();
+  let current: SessionGroup | undefined;
+
+  for (const row of sessionRows(items)) {
+    // Every subtree the walk emits opens with its own root, so a depth-0 row is
+    // where one run ends and the next begins.
+    if (row.depth === 0 || !current) {
+      const path = row.item.projectPath;
+      current = byPath.get(path);
+      if (!current) {
+        current = { projectPath: path, rows: [] };
+        byPath.set(path, current);
+        groups.push(current);
+      }
+    }
+    current.rows.push(row);
+  }
+
+  // Unattached sorts to the end rather than to the front, and `sort` is stable,
+  // so those keep the order they were built in.
+  const rank = new Map(projects.map((p, i) => [p.path, i]));
+  const place = (group: SessionGroup) =>
+    rank.get(group.projectPath) ?? Number.MAX_SAFE_INTEGER;
+
+  return groups.sort((a, b) => place(a) - place(b));
+}
+
+/// The order alone, for callers that only step through it.
+///
+/// Exported because the ⌘⇧↑/↓ shortcut walks the same sequence, and a second
+/// comparator would let the two disagree about which row is "next" — worse when
+/// the sidebar is collapsed and nothing on screen shows the order being walked.
+/// Grouped for the same reason: the shortcut has to step past a heading the way
+/// the eye does, so it takes the same project list the headings are ordered by.
+export function sortSessions(
+  items: SessionIndexItem[],
+  projects: Project[] = [],
+): SessionIndexItem[] {
+  return sessionGroups(items, projects).flatMap((group) =>
+    group.rows.map((row) => row.item),
+  );
+}
+
+/// Whether a row has a parent to detach from, judged the same way
+/// [`sessionRows`] places it — a parent that isn't on screen means the row is
+/// drawn at the top level, so the menu item can never offer to cut a link the
+/// list doesn't draw.
 export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boolean {
   return Boolean(
     item.parentSessionId && items.some((i) => i.sessionId === item.parentSessionId),
@@ -265,6 +371,7 @@ export default function Sidebar({
   onSelect,
   onNewSession,
   onSetFlags,
+  onFork,
   onDelete,
   showArchived,
   onToggleArchived,
@@ -281,9 +388,24 @@ export default function Sidebar({
   const fullscreen = useFullscreen();
 
   // Recency-ordered, with agent-spawned sessions nested under the one that
-  // spawned them. Project only survives as the filter above the list, so the
-  // same session never appears under two headings.
-  const sorted = useMemo(() => sortSessions(items), [items]);
+  // spawned them, and each row carrying the flags its connector rails are drawn
+  // from — then gathered under the project it belongs to, in the project list's
+  // own order, so the all-projects view reads as one list per repo and the
+  // headings hold still while its sessions work.
+  const groups = useMemo(() => sessionGroups(items, projects), [items, projects]);
+  const rowCount = useMemo(
+    () => groups.reduce((n, group) => n + group.rows.length, 0),
+    [groups],
+  );
+
+  // A session under a repo nobody attached still has a project, so the folder
+  // name stands in rather than the heading being dropped — the row has to sit
+  // under something.
+  const projectName = useMemo(() => {
+    const named = new Map(projects.map((p) => [p.path, p.name]));
+    return (path: string) =>
+      named.get(path) ?? path.split("/").filter(Boolean).pop() ?? path;
+  }, [projects]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
   // and saying "No tasks yet" over a filter reads as data loss.
@@ -393,33 +515,62 @@ export default function Sidebar({
       {/* No right padding: the scrollbar gutter is the right-hand spacing. The
           rows balance the track's extra width themselves with `pr-0.5`. */}
       <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0">
-        {sorted.length === 0 ? (
+        {rowCount === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          sorted.map((item) => (
-            <SessionRow
-              key={item.sessionId}
-              item={item}
-              status={statusBySession[item.sessionId] ?? item.status}
-              asking={askingSessions.has(item.sessionId)}
-              pr={prFor(item.projectPath, sessionBranch(item))}
-              active={item.sessionId === selectedSessionId}
-              // The settled list is a history, and the question asked of it is
-              // "what did I finish today" — so everything older is held back
-              // rather than filtered out. Only there: the active list is a
-              // worklist, where an older row is still open work.
-              faded={showArchived && !isToday(item.modified)}
-              // Nothing refreshes marks over here: the archived view asks for
-              // no repos, so its rows draw from a cache nothing will update.
-              // A stale glyph is the accepted trade; a stale *spinner* is not,
-              // since it animates a claim that something is happening now.
-              marksLive={!showArchived}
-              nested={isNested(item, items)}
-              onSelect={onSelect}
-              onSetFlags={onSetFlags}
-              onDelete={onDelete}
-              onDetach={onDetach}
-            />
+          groups.map((group, index) => (
+            <Fragment key={group.projectPath}>
+              {/* Only where the list spans projects. Under a filter the label
+                  above already names the one project every row belongs to, and
+                  a heading repeating it would be a second copy of the same
+                  fact. Name only — no icon, no count: the heading says which
+                  repo the run below it is, and anything else on it competes
+                  with the titles it introduces. Full path on hover, since two
+                  projects can share a folder name. */}
+              {projectFilter === null && (
+                <div
+                  title={group.projectPath}
+                  className={cn(
+                    "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
+                    // The first heading sits under the filter's own row, which
+                    // already carries the gap; the rest open a run and need it.
+                    index > 0 && "mt-3",
+                  )}
+                >
+                  {projectName(group.projectPath)}
+                </div>
+              )}
+
+              {group.rows.map(({ item, depth, guides, opens }) => (
+                <SessionRow
+                  key={item.sessionId}
+                  item={item}
+                  depth={depth}
+                  guides={guides}
+                  opens={opens}
+                  status={statusBySession[item.sessionId] ?? item.status}
+                  asking={askingSessions.has(item.sessionId)}
+                  pr={prFor(item.projectPath, sessionBranch(item))}
+                  active={item.sessionId === selectedSessionId}
+                  // The settled list is a history, and the question asked of it is
+                  // "what did I finish today" — so everything older is held back
+                  // rather than filtered out. Only there: the active list is a
+                  // worklist, where an older row is still open work.
+                  faded={showArchived && !isToday(item.modified)}
+                  // Nothing refreshes marks over here: the archived view asks for
+                  // no repos, so its rows draw from a cache nothing will update.
+                  // A stale glyph is the accepted trade; a stale *spinner* is not,
+                  // since it animates a claim that something is happening now.
+                  marksLive={!showArchived}
+                  nested={isNested(item, items)}
+                  onSelect={onSelect}
+                  onSetFlags={onSetFlags}
+                  onFork={onFork}
+                  onDelete={onDelete}
+                  onDetach={onDetach}
+                />
+              ))}
+            </Fragment>
           ))
         )}
 
@@ -428,7 +579,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {sorted.length > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
+        {rowCount > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
       </div>
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that
@@ -739,6 +890,15 @@ function RowAction({
   );
 }
 
+/// The fork submenu's rows, in the order they are drawn. The number key that
+/// picks one is its position here — same rule `VIEW_TABS` accelerators follow —
+/// so reordering moves the digits with it and there is no second table to fall
+/// out of step with the labels.
+const FORKS = [
+  { label: "Fork here", worktree: false },
+  { label: "Fork in new worktree", worktree: true },
+] as const;
+
 /// The row's right-click menu. Delete confirms in place — a second surface for
 /// two words costs more than it protects, and the menu is already open under the
 /// cursor. Both steps live in one `Content` so the menu holds its position
@@ -753,10 +913,17 @@ function RowAction({
 /// `open` — the trigger's own `data-state` is what the row styles off, and there
 /// is no second copy of the flag to fall out of step with it.
 function RowMenu({
+  onFork,
+  forkDisabled,
   onDelete,
   onDetach,
   children,
 }: {
+  onFork: (worktree: boolean) => void;
+  /// The session is working. The CLI forks by reading its transcript, which a
+  /// live child is still appending to, so a fork taken now can inherit half a
+  /// turn. The backend refuses it too — this only saves the trip.
+  forkDisabled: boolean;
   onDelete: () => void;
   /// Absent on a row that isn't nested — there is nothing to detach from, and
   /// a disabled item on every row in the list would be noise rather than a
@@ -765,13 +932,46 @@ function RowMenu({
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Radix moves DOM focus onto the sub's own content only once the pointer (or
+  // an arrow key) actually enters it — hovering the trigger alone opens the
+  // submenu but leaves focus behind on the trigger. Reading `open` instead of
+  // focus location is what lets a number fire the moment the submenu is drawn,
+  // without the cursor ever crossing into it.
+  const [forkOpen, setForkOpen] = useState(false);
+  // A digit clicks the row rather than calling `onFork` directly, so closing the
+  // menu and restoring focus stay Radix's job — picking by key and picking by
+  // mouse then cannot end in different states.
+  const forkRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   return (
     <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
 
       {/* Portaled, so a click in here never reaches the row's select handler. */}
-      <ContextMenuContent className="w-56">
+      {/* Wide enough for the confirm step's two buttons, which is the widest
+          thing this menu ever holds — the width is fixed rather than fitted so
+          the frame doesn't resize under the cursor when Delete swaps them in. */}
+      {/*
+          The digit listener lives up here rather than on the sub's own content:
+          `SubContent` renders through a portal, so a handler placed there only
+          ever fires once focus — not just the open submenu — has moved inside
+          it. React still delivers the event here through the component tree
+          rather than the DOM one, so this fires the instant the submenu opens,
+          whether that happened by hover or by keyboard, and no matter which of
+          the two elements the key lands on.
+      */}
+      <ContextMenuContent
+        className="w-48"
+        onKeyDown={(e) => {
+          if (!forkOpen) return;
+          const picked = forkRefs.current[Number(e.key) - 1];
+          if (!picked) return;
+          // Holds the digit back from Radix's own typeahead, which would
+          // otherwise read it as a search letter and jump focus instead.
+          e.preventDefault();
+          picked.click();
+        }}
+      >
         {confirming ? (
           <>
             {/* No title in the copy: the menu opens on the row, which stays on
@@ -798,12 +998,37 @@ function RowMenu({
           </>
         ) : (
           <>
-            {/* Inert until forking exists. Disabled rather than absent, so the
-                menu's shape doesn't change when it lands. */}
-            <ContextMenuItem disabled className="text-ui">
-              <GitBranchPlus />
-              Fork
-            </ContextMenuItem>
+            {/* A submenu because the two forks differ in where the copy
+                *runs*, not in what it copies — both carry the whole
+                conversation. Flattening them into two top-level items would put
+                the rarer choice beside Delete on every row. */}
+            <ContextMenuSub onOpenChange={setForkOpen}>
+              <ContextMenuSubTrigger
+                disabled={forkDisabled}
+                className="text-ui"
+              >
+                <GitBranchPlus />
+                Fork
+              </ContextMenuSubTrigger>
+
+              {/* Sized by its own rows. Nothing swaps in here, so there is
+                  no second layout to hold a width for. */}
+              <ContextMenuSubContent>
+                {FORKS.map((fork, i) => (
+                  <ContextMenuItem
+                    key={fork.label}
+                    ref={(el) => {
+                      forkRefs.current[i] = el;
+                    }}
+                    className="text-ui"
+                    onSelect={() => onFork(fork.worktree)}
+                  >
+                    {fork.label}
+                    <Kbd className="ml-auto">{i + 1}</Kbd>
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
 
             {onDetach && (
               <ContextMenuItem className="text-ui" onSelect={onDetach}>
@@ -832,8 +1057,18 @@ function RowMenu({
   );
 }
 
+/// Connector geometry, in px from the row's left edge. `RAIL_X` sits just
+/// inside the unread rail's own 8px slot, `STEP` is one level of nesting, and
+/// `ELBOW` is how far the horizontal reaches before the title starts.
+const RAIL_X = 12;
+const STEP = 12;
+const ELBOW = 10;
+
 function SessionRow({
   item,
+  depth,
+  guides,
+  opens,
   status,
   asking,
   pr,
@@ -843,10 +1078,16 @@ function SessionRow({
   onSelect,
   nested = false,
   onSetFlags,
+  onFork,
   onDelete,
   onDetach,
 }: {
   item: SessionIndexItem;
+  /// Levels below the top; 0 draws no connector at all. See [`sessionRows`] —
+  /// these three come out of the same walk that ordered the list.
+  depth: number;
+  guides: boolean[];
+  opens: boolean;
   status: SessionStatus;
   asking: boolean;
   /// The pull request this row is marked with, already narrowed to one where
@@ -859,12 +1100,15 @@ function SessionRow({
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
   onSelect: (sessionId: string) => Promise<void>;
-  /// Drawn under the session whose agent created it.
+  /// This row has a parent in the same list, so 'Detach from parent' is a real
+  /// offer. Kept apart from `depth` only because a cyclic index draws a row at
+  /// the top level that still has a link worth cutting.
   nested?: boolean;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
+  onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
 }) {
@@ -875,8 +1119,15 @@ function SessionRow({
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  // The rail this row elbows onto is its parent's, one step to the left of the
+  // one it opens for its own children.
+  const ownRail = RAIL_X + (depth - 1) * STEP;
+  const parentCarriesOn = guides[depth - 1] ?? false;
+
   return (
     <RowMenu
+      onFork={(worktree) => void onFork(item.sessionId, worktree)}
+      forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
     >
@@ -955,19 +1206,68 @@ function SessionRow({
           )}
         </span>
 
-        {/* Says this session was created by the one above it, and nothing more.
-            Aria-hidden because the marker is a picture of the list's own shape:
-            a screen reader reads the rows in the order they are drawn anyway,
-            and "vertical line hyphen" ahead of every nested title is noise.
+        {/* The lineage, drawn as rails: this row elbows onto its parent's, and
+            an ancestor's carries straight through to the last row of its
+            subtree. Aria-hidden and never a target — it is a picture of the
+            list's own shape, and a screen reader reads the rows in the order
+            they are drawn anyway.
 
-            Two characters rather than an indent, because 250px of sidebar has
-            none to spare — a title is the one thing on this row that must not
-            get shorter, and it is already truncated on most. Muted so it reads
-            as structure rather than as part of the title it sits beside. */}
-        {nested && (
-          <span aria-hidden className="shrink-0 pr-1 font-mono text-ui text-muted-foreground/70">
-            |-
-          </span>
+            Every piece sits on its own pixel and no two overlap.
+            `--sidebar-border` is white at 8%, so two segments sharing a column
+            stack to ~15% and read as a bright patch halfway down the rail. */}
+
+        {/* One pass-through per ancestor above this row's own parent whose line
+            is still open, each on its own column. */}
+        {guides.slice(0, -1).map(
+          (open, level) =>
+            open && (
+              <span
+                key={level}
+                aria-hidden
+                className="pointer-events-none absolute top-0 -bottom-px w-px bg-sidebar-border"
+                style={{ left: RAIL_X + level * STEP }}
+              />
+            ),
+        )}
+
+        {depth > 0 && (
+          <>
+            {/* Stops at the elbow unless the parent's rail carries on below —
+                never a full-height line with the corner drawn over half of it.
+                Rows sit in a `gap-px` column, so a piece that carries on has to
+                reach 1px past its own bottom edge or the rail reads dashed. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-0 w-px bg-sidebar-border"
+              style={{
+                left: ownRail,
+                height: parentCarriesOn ? "calc(100% + 1px)" : "50%",
+              }}
+            />
+            {/* Square corner, started one pixel clear of the vertical's own
+                column. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute h-px bg-sidebar-border"
+              style={{ left: ownRail + 1, top: "50%", width: ELBOW - 5 }}
+            />
+          </>
+        )}
+
+        {/* The rail this row opens for the rows under it, from its own centre
+            down. Without it a parent's line would start a row late. */}
+        {opens && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -bottom-px w-px bg-sidebar-border"
+            style={{ left: RAIL_X + depth * STEP, top: "50%" }}
+          />
+        )}
+
+        {/* A fixed slot rather than padding, so every row at a level starts its
+            title on the same column whatever else the row is carrying. */}
+        {depth > 0 && (
+          <span aria-hidden className="shrink-0" style={{ width: ownRail + ELBOW - 8 }} />
         )}
 
         {/* Ahead of the title, and it takes no room when there is none — unlike
@@ -1028,30 +1328,36 @@ function SessionRow({
                 orb's `auto` looks for `data-theme="dark|light"` and this app
                 stamps a palette name there. */}
             {/* Three things want this one slot, and the order is the whole of
-                the rule. The agent working wins: it is this app's own session
-                doing something now, where CI is a machine elsewhere. Checks
-                come next, for the same reason the orb beats the timestamp —
-                "last activity" is the least useful thing to say about a row
-                that has something in flight.
+                the rule. Checks win: the orb says the agent is working, which
+                the reader already knows because they set it going and the
+                transcript is one click away — where CI reports on a machine
+                elsewhere, on its own schedule, and this row is the only place
+                that lands. The orb comes next, for the same reason it beats the
+                timestamp: "last activity" is the least useful thing to say
+                about a row with anything in flight.
 
                 Same dashed spinner and same command yellow the PR panel's own
                 pending check row uses, at the same 3s turn: one glyph for one
                 fact, so a reader who has seen it in the pane knows it here. It
                 is deliberately not a *verdict* — a check that passed or failed
                 is settled, and the row goes back to its timestamp rather than
-                growing a second colour to decode. */}
-            {status === "in_progress" ? (
+                growing a second colour to decode.
+
+                `mr-[3px]` sits it on the orb's centre line: the glyph is 14px
+                against the orb's 20px box, and both are flush right, so without
+                it the mark shifts sideways row to row. */}
+            {marksLive && pr?.checksState === "RUNNING" ? (
+              <CircleDashed
+                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
+                strokeWidth={1.5}
+                aria-label="Checks running"
+              />
+            ) : status === "in_progress" ? (
               <ThinkingOrb
                 state="listening"
                 size={20}
                 theme="dark"
                 aria-label="Working"
-              />
-            ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
               />
             ) : (
               relativeTime(item.modified)

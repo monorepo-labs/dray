@@ -10,6 +10,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@blobatar/react':
+        specifier: ^2.5.0
+        version: 2.5.0(blobatar@2.5.0(react@19.2.8))(react@19.2.8)
       '@fontsource-variable/geist':
         specifier: ^5.3.0
         version: 5.3.0
@@ -34,6 +37,9 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2
         version: 2.5.4
+      blobatar:
+        specifier: ^2.5.0
+        version: 2.5.0(react@19.2.8)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -288,6 +294,12 @@ packages:
   '@babel/types@7.29.7':
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
+
+  '@blobatar/react@2.5.0':
+    resolution: {integrity: sha512-O+gA8Xq3/jEO5kTWzH1UniJ9Y5DbIERB+pf4uzExws6eynKXplIn3LBpWQDnhlvZLYswHmPc+tOequ/Cq1beLA==}
+    peerDependencies:
+      blobatar: 2.x
+      react: '>=18'
 
   '@braintree/sanitize-url@7.1.2':
     resolution: {integrity: sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA==}
@@ -2145,6 +2157,17 @@ packages:
     resolution: {integrity: sha512-s4+sLr9mZ/CyqeRritFeYV/Zx73OAtmaHn6kkBS1XRoJn1hrg3xIDUcpicAEX68tkcIN0iBCgti31C8zxtkhsQ==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  blobatar@2.5.0:
+    resolution: {integrity: sha512-fVFzNgElUbqiLt8NLWYPRg7ljbOPP2/L+8hW6wdVntULNaTnQjlsy1FPr2JTux/Sckpfmc1misXWt+6CL3xXqg==}
+    peerDependencies:
+      react: '>=18'
+      vue: '>=3'
+    peerDependenciesMeta:
+      react:
+        optional: true
+      vue:
+        optional: true
 
   body-parser@2.3.0:
     resolution: {integrity: sha512-2cGmJupaNgg+QUwVLAucDuWuoMZ6EX9iHDRswZ5lsNYEmwPaRknMPCLZz07yTzVq/83p4o/wzbDZbBrTvGGTIw==}
@@ -4370,6 +4393,11 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
+  '@blobatar/react@2.5.0(blobatar@2.5.0(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      blobatar: 2.5.0(react@19.2.8)
+      react: 19.2.8
+
   '@braintree/sanitize-url@7.1.2': {}
 
   '@chevrotain/types@11.1.2': {}
@@ -6053,6 +6081,10 @@ snapshots:
   balanced-match@4.0.4: {}
 
   baseline-browser-mapping@2.11.4: {}
+
+  blobatar@2.5.0(react@19.2.8):
+    optionalDependencies:
+      react: 19.2.8
 
   body-parser@2.3.0:
     dependencies:

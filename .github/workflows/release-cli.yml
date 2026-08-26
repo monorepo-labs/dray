@@ -151,8 +151,10 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.tar.gz.sha256
-          # install.sh's default URL is `/releases/latest/download/`, which skips
-          # prereleases — so a CLI marked prerelease would be built, published,
-          # and unreachable by the one command that installs it.
+          # install.sh resolves the newest `cli-v*` tag without reading this
+          # flag, so hard-coding it false is what keeps the resolver honest — a
+          # CLI marked prerelease would be handed to everyone re-running the
+          # installer. Teaching the resolver to read the flag is the moment a
+          # beta channel becomes possible, and not before.
           prerelease: false
           generate_release_notes: true

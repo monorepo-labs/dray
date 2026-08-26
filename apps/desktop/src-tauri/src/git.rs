@@ -1283,16 +1283,13 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         .map(|raw| count_changes(&raw))
         .unwrap_or(0);
 
+    let branch = current_branch(worktree_path).await;
+
     // `--exclude` applies to the *next* ref-enumerating option only, so this
     // drops the worktree's own branch from `--branches` while `--remotes` and
     // `--tags` stay whole — which is what lets a pushed branch read as safe.
     // The glob is relative to `refs/heads`, and spelling it in full silently
     // matches nothing, leaving every count at zero.
-    let branch = git(worktree_path, &["symbolic-ref", "--short", "-q", "HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
     let unpushed_commits = match &branch {
         Some(branch) => git(
             worktree_path,
@@ -1326,6 +1323,104 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         unpushed_commits,
         locked_by,
     }
+}
+
+/// The branch `cwd` has checked out, or `None` for a detached HEAD, a
+/// directory that isn't a repo, and a repo whose branch is unborn.
+///
+/// `symbolic-ref` rather than `rev-parse --abbrev-ref`, which answers the
+/// literal string `HEAD` on a detached one — a branch name nothing can look up
+/// and everything downstream would treat as real.
+pub async fn current_branch(cwd: &str) -> Option<String> {
+    git(cwd, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// The commit `base` names, or `None` when it names nothing in this repo.
+///
+/// `^{commit}` rather than a bare verify, so a tag or a tree-ish is either
+/// peeled to a commit or refused — `worktree add` wants a commit, and the
+/// failure it gives for anything else arrives after the tree is half made.
+pub async fn resolve_commit(cwd: &str, base: &str) -> Option<String> {
+    git(
+        cwd,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ],
+    )
+    .await
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+}
+
+/// Creates a worktree at `<project>/.claude/worktrees/<name>` on a new branch
+/// `worktree-<name>`, starting from `base`. Returns the path.
+///
+/// The symmetric half of [`remove_worktree`], and it exists because the harness
+/// cannot do this: `claude -w` resolves the repo's default branch, fetches
+/// `origin/<it>` and passes *that* to `git worktree add`, and its flag surface
+/// exposes no base ref at all. So a session that has to start from existing
+/// work is one Dray makes the tree for and then spawns the child *into*, with
+/// no `-w` at all.
+///
+/// **A branch, never a detached HEAD.** Detaching would suit a session that
+/// only reads, but every surface downstream reads a worktree session's branch
+/// off its name — the PR tab looks one up, the handoff row offers to push it,
+/// and the removal above deletes it — so a tree with no branch breaks four
+/// things to prevent a commit nobody was going to object to. Same name the CLI
+/// would have minted, so `--from` changes where the branch starts and nothing
+/// else about it.
+///
+/// `-B` rather than `-b`, matching the CLI: a branch left behind by a tree
+/// deleted outside Dray would otherwise make that name fail forever, since the
+/// name is what the branch is derived from. It cannot clobber live work — git
+/// refuses to reset a branch another worktree holds, which is exactly the case
+/// where somebody is using it.
+///
+/// Deliberately **not** locked. The CLI locks the trees it makes and a `-p` run
+/// never releases the lock, which is the whole reason removal has to unlock
+/// first; a tree made here has no such lock to leave behind.
+pub async fn create_worktree(project_path: &str, name: &str, base: &str) -> Result<String> {
+    let path = PathBuf::from(project_path)
+        .join(".claude")
+        .join("worktrees")
+        .join(name);
+
+    // Checked before the tree, not after: `worktree add` on an unresolvable
+    // start point leaves the branch and directory behind on some git versions,
+    // and this way the reader gets the ref they typed named back at them.
+    if resolve_commit(project_path, base).await.is_none() {
+        bail!("{base} is not a branch, tag or commit in this repository");
+    }
+
+    let path = path.to_string_lossy().into_owned();
+    let branch = format!("worktree-{name}");
+
+    // `--no-track` so the branch takes no upstream from the base. Without it a
+    // base that is a remote-tracking ref makes every later `git push` on this
+    // session's branch aim at the *base's* branch.
+    run(
+        project_path,
+        &[
+            "worktree",
+            "add",
+            "--no-track",
+            "-B",
+            &branch,
+            "--end-of-options",
+            &path,
+            base,
+        ],
+    )
+    .await?;
+
+    Ok(path)
 }
 
 /// Deletes a worktree directory and the branch it was checked out on.
@@ -1615,6 +1710,153 @@ mod tests {
         }
 
         path
+    }
+
+    /// The whole point of the function: the tree holds the commits of the ref
+    /// it was based on, not whatever the default branch is at. That is what
+    /// `claude -w` cannot be asked for.
+    #[tokio::test]
+    async fn creates_a_worktree_at_the_ref_it_was_given() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        // Work sitting on a branch nobody pushed — the case a reviewer spawned
+        // off `origin/<default>` would find nothing of.
+        run(at, &["checkout", "-q", "-b", "authors-work"]).await.unwrap();
+        fs::write(dir.join("feature.txt"), "the work\n").await.unwrap();
+        run(at, &["add", "-A"]).await.unwrap();
+        run(at, &["commit", "-qm", "the work"]).await.unwrap();
+        run(at, &["checkout", "-q", "-"]).await.unwrap();
+
+        let path = create_worktree(at, "reviewer", "authors-work")
+            .await
+            .expect("a branch that exists is a base");
+
+        assert!(
+            Path::new(&path).join("feature.txt").exists(),
+            "the base's own commits are missing from the tree"
+        );
+        // Its own branch, not the author's: git would refuse to check that one
+        // out twice, and a session that shares a branch can move it.
+        assert_eq!(
+            current_branch(&path).await.as_deref(),
+            Some("worktree-reviewer")
+        );
+        // `--no-track`, or every push from this session would aim at the base.
+        assert_eq!(
+            git(at, &["config", "--get", "branch.worktree-reviewer.merge"]).await,
+            None
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// Refused before anything is on disk, so a typo costs an error rather than
+    /// a half-made tree the reader has to clean up.
+    #[tokio::test]
+    async fn refuses_a_base_the_repo_cannot_resolve() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let err = create_worktree(at, "nope", "no-such-branch")
+            .await
+            .expect_err("an unresolvable base is not a base");
+        assert!(err.to_string().contains("no-such-branch"), "unhelpful: {err}");
+
+        assert!(!dir.join(".claude").join("worktrees").join("nope").exists());
+        let branches = git(at, &["branch", "--list", "worktree-nope"]).await.unwrap();
+        assert!(branches.trim().is_empty(), "branch left behind: {branches}");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// A commit is as good a base as a branch, and `resolve_commit` peels a
+    /// tag rather than handing `worktree add` something it will refuse late.
+    #[tokio::test]
+    async fn a_commit_and_a_tag_are_both_bases() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let head = git(at, &["rev-parse", "HEAD"]).await.unwrap();
+        let head = head.trim();
+        run(at, &["tag", "v1"]).await.unwrap();
+
+        assert_eq!(resolve_commit(at, "v1").await.as_deref(), Some(head));
+        create_worktree(at, "at-a-commit", head)
+            .await
+            .expect("a commit is a base");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The name is what the branch is derived from, so a branch left behind by
+    /// a tree deleted outside Dray would make that name fail forever. `-B`
+    /// resets it — and cannot reach a branch some worktree still holds, which
+    /// is every case where the branch is somebody's live work.
+    #[tokio::test]
+    async fn a_leftover_branch_does_not_block_the_name() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        run(at, &["branch", "worktree-recycled"]).await.unwrap();
+        create_worktree(at, "recycled", "HEAD")
+            .await
+            .expect("a branch with no worktree behind it is ours to reset");
+
+        // And the live half: the same name a second time is git's refusal, not
+        // a silent second checkout.
+        let err = create_worktree(at, "recycled", "HEAD")
+            .await
+            .expect_err("a branch another worktree holds must not be reset");
+        assert!(err.to_string().contains("already used"), "unexpected: {err}");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// `send_msg` undoes the tree when the index write that follows it fails,
+    /// because removal is offered from a session's own row and an orphan with
+    /// no row is one nothing in the app can reach. That rollback is this pair,
+    /// so the pair has to close: no directory, no branch, no registration.
+    #[tokio::test]
+    async fn a_created_worktree_is_removable_again() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let path = create_worktree(at, "rolled-back", "HEAD").await.unwrap();
+
+        let deleted_branch = remove_worktree(at, &path, Some("worktree-rolled-back"))
+            .await
+            .expect("a tree we made a moment ago is ours to remove");
+
+        // Unlocked, so this needs none of the unlock dance a `-w` tree does —
+        // only the CLI locks trees, and only a `-p` run fails to release one.
+        assert!(deleted_branch, "the branch outlived its worktree");
+        assert!(!Path::new(&path).exists());
+
+        let list = git(at, &["worktree", "list", "--porcelain"]).await.unwrap();
+        assert!(!list.contains("rolled-back"), "registration left behind");
+
+        // And the name is free again, which is what makes the rollback complete
+        // rather than merely tidy.
+        create_worktree(at, "rolled-back", "HEAD")
+            .await
+            .expect("a rolled-back name must not be burned");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_detached_head_is_no_branch() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        assert!(current_branch(at).await.is_some());
+        run(at, &["checkout", "-q", "--detach", "HEAD"]).await.unwrap();
+        // `rev-parse --abbrev-ref` answers the literal string "HEAD" here,
+        // which is the wrong answer this reads around.
+        assert_eq!(current_branch(at).await, None);
+
+        fs::remove_dir_all(&dir).await.ok();
     }
 
     #[tokio::test]

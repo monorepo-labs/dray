@@ -5,6 +5,107 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.7.1
+
+### Changed
+
+- **The sidebar groups sessions by project.** All Projects used to interleave
+  rows from every repo with nothing saying which one a row belonged to. Rows
+  now gather under a muted project name, taken from the sessions actually
+  present — so an idle project draws no heading at all. A spawned session stays
+  under its parent whatever its own project says, and ⌘⇧↑/↓ still walks the
+  order you see.
+
+## 0.7.0
+
+### Upgrading
+
+**Update the app first, then the CLI.** This release moves the app/CLI socket
+to protocol v2, and the two refuse each other across that line rather than
+guessing — an old CLI silently ignoring a field it does not know is how a
+session spawned to review unpushed work reviews none of it and reports back
+that everything looks fine. The app is the half that cannot be fixed from an
+agent, so it goes first; the CLI then self-heals with `dray update`.
+
+**If you are on CLI 0.1.0, re-run the install command by hand:**
+
+```sh
+curl -fsSL https://www.drayhq.com/install.sh | sh
+```
+
+`dray update` shipped in 0.2.0, so the refusal names a command that version
+does not have. This is the last release that can happen to.
+
+### Added
+
+- **Fork a session from the sidebar.** Right-click a row to carry a
+  conversation on twice — in place, or into a worktree of its own. The copy
+  opens reading exactly like its source, and the fork is lazy: the row appears
+  at once and the CLI only does its half on the first send, so forking costs no
+  child process and no waiting. Refused while the source is mid-turn, since a
+  fork is taken by reading a transcript a live session is still writing to.
+
+- **`dray new --from` bases a spawned session on existing work.** Sessions
+  always forked from `origin/<default>`, so a spawned session could not see
+  what the session that spawned it had just done — putting "have a second model
+  review this" out of reach. Takes a session id, a branch or any ref. Still a
+  new worktree; only the base moves, and only committed work travels.
+
+- **The sidebar draws lineage as connector rails.** Each level gets its own
+  rail and a row elbows onto its parent's, so a grandchild reads as hanging off
+  its own parent rather than off the root.
+
+- **A relayed message is drawn as its sender.** A `dray send` used to land
+  looking like something you typed, with the attribution as prose in the text.
+  The sender now rides the event itself, above the bubble and clicking through
+  to the session that sent it. It gets a generated mark seeded on session id —
+  a session is not an account, and the initial-in-a-circle was a people
+  fallback standing in for a picture that never existed.
+
+- **`dray ls` says which session spawned which.** The parent is named on the
+  row rather than given a second id column, since most rows have no parent and
+  two bare uuids under no header read as noise.
+
+- **`dray update` upgrades the CLI in place.** Re-running the installer used to
+  be the only route, and it reinstalled the same version forever.
+
+### Changed
+
+- **The commit buttons name what they act on.** "commit" on its own reads as a
+  topic rather than an instruction; "commit your changes" settles it.
+
+- **`dray new` no longer takes a worktree name.** An agent has no basis for
+  picking one, the app already generates a readable name, and a supplied name
+  is one more thing that can collide. Every spawned session still gets a
+  worktree.
+
+### Fixed
+
+- **`dray new` from inside a worktree session named the wrong project.** It
+  read the worktree it was standing in rather than the repository, so the new
+  session got a directory that never gets created — leaving Changes, commit and
+  PR all reading somewhere that does not exist. Silent, because nothing could
+  tell that guess apart from a deliberate `--project`.
+
+- **A long path or URL moved every other message sideways.** With no
+  whitespace to break on it ran past the bubble and set the scroll width of the
+  whole column.
+
+- **Re-running the CLI installer reinstalled 0.1.0 forever.** It asked for a
+  pinned tag, and nothing else could push a CLI update — the app's updater
+  swaps the `.app` bundle, which the CLI is not in. The installer now resolves
+  the newest CLI release itself, and refuses rather than quietly installing
+  something ancient when it cannot reach the API.
+
+- **A protocol mismatch names the cure, and the right half of it.** A CLI
+  behind the app is told to run `dray update`; an app behind the CLI is told to
+  update the app. Naming the wrong one is worse than naming neither.
+
+- **A running check no longer sits off the row's centre line**, and it outranks
+  the working orb rather than the other way around. The orb reports something
+  you set going and can read in the transcript; CI reports on its own schedule
+  and the row is the only place it lands.
+
 ## 0.6.0
 
 ### Added

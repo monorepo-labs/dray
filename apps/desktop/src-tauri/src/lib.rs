@@ -70,9 +70,14 @@ async fn send_msg(
             branch,
             use_worktree,
             worktree_name,
+            // The composer offers no base ref: a worktree session created there
+            // is one the reader is starting fresh, and the picker already hides
+            // the branch list in worktree mode because `-w` would not honour it.
+            None,
             is_new_session,
-            // The composer never has a parent; only the orchestration socket
-            // sets one.
+            // The composer never has a parent, and its prompts are the user's
+            // own; only the orchestration socket sets either.
+            None,
             None,
             &app,
         )
@@ -382,6 +387,29 @@ async fn delete_session(
     manager.delete(session_id).await.map_err(|e| e.to_string())
 }
 
+/// Copies a session onto `fork_id`, to be carried on separately from the one it
+/// came from. `worktree` gives the fork a tree of its own rather than leaving it
+/// in the parent's directory.
+///
+/// The id comes from the caller for the same reason a new session's does: this
+/// app chooses session ids and the CLI adopts them, and `--fork-session` honours
+/// `--session-id` like any other spawn.
+///
+/// Returns what the fork replays — the parent's log, already copied — so the
+/// frontend can open it without a second read.
+#[tauri::command]
+async fn fork_session(
+    session_id: &str,
+    fork_id: &str,
+    worktree: bool,
+    manager: State<'_, SessionManager>,
+) -> Result<SessionSnapshot, String> {
+    manager
+        .fork(session_id, fork_id, worktree)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Stops the in-flight turn without killing the session — the CLI aborts its
 /// tools and streaming, ends the turn, and stays alive for the next prompt.
 #[tauri::command]
@@ -569,6 +597,7 @@ pub fn run() {
             set_session_flags,
             detach_session,
             delete_session,
+            fork_session,
             worktree_disposition,
             remove_session_worktree,
             mark_session_idle,

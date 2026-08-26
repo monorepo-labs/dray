@@ -139,6 +139,14 @@ pub enum AgentEventPayload {
         /// it inside the running one and emits a single `result` for both.
         #[serde(default)]
         queued: bool,
+        /// The Dray session that relayed this prompt, when one did.
+        ///
+        /// `None` — the ordinary case — means the user typed it. Carried as a
+        /// field rather than named in `text` because the transcript draws the
+        /// sender, and anything drawn from prose the model can write itself is
+        /// a thing the model can forge.
+        #[serde(default)]
+        from: Option<MessageSender>,
     },
     AssistantText {
         /// `Some` only when this content was also streamed, naming the preview
@@ -398,6 +406,20 @@ pub enum AgentEventPayload {
     Unrecognized,
 }
 
+impl AgentEventPayload {
+    /// Every archived picture this payload points at. Both arms hold paths under
+    /// `~/.dray/attachments/<session-id>/`, so anything moving a log between
+    /// sessions has to repoint them — see
+    /// [`copy_session_log`](crate::store::copy_session_log).
+    pub fn images_mut(&mut self) -> &mut [ImageRef] {
+        match self {
+            Self::UserMessage { images, .. } => images,
+            Self::ToolCallCompleted { result, .. } => &mut result.images,
+            _ => &mut [],
+        }
+    }
+}
+
 /// One answer the user can give to a [permission
 /// request](AgentEventPayload::PermissionRequested).
 ///
@@ -613,6 +635,24 @@ pub struct ToolResult {
     pub images: Vec<ImageRef>,
 }
 
+/// Who relayed a prompt into this session, for a `user_message` the user did
+/// not type.
+///
+/// Both fields are needed and neither substitutes for the other: the title is
+/// what the reader recognizes — it is what the sidebar shows — and the id is
+/// what the transcript navigates to when they click it.
+///
+/// Persisted, unlike most of what the app synthesizes: the transcript is
+/// replayed from the log, so attribution that lived only in memory would be
+/// gone on the next open.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct MessageSender {
+    pub session_id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -811,10 +851,11 @@ mod tests {
             serde_json::from_str(r#"{"type":"user_message","text":"hi"}"#).unwrap();
         assert!(matches!(
             v,
-            // `baseline` and `queued` default too: every prompt logged before
-            // each of those existed must not fail the line.
-            AgentEventPayload::UserMessage { ref text, ref images, ref baseline, queued }
+            // `baseline`, `queued` and `from` default too: every prompt logged
+            // before each of those existed must not fail the line.
+            AgentEventPayload::UserMessage { ref text, ref images, ref baseline, queued, ref from }
                 if text == "hi" && images.is_empty() && baseline.is_none() && !queued
+                    && from.is_none()
         ));
 
         let v: AgentEventPayload = serde_json::from_str(

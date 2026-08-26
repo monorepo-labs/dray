@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isNested, sortSessions } from "@/components/Sidebar";
-import type { SessionIndexItem } from "@/types/events";
+import { isNested, sessionGroups, sessionRows, sortSessions } from "@/components/Sidebar";
+import type { Project, SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
 /// irrelevant here and spelling it out would make each case harder to read than
@@ -10,15 +10,21 @@ function item(
   sessionId: string,
   modified: string,
   parentSessionId: string | null = null,
+  projectPath = "/repo",
 ): SessionIndexItem {
   return {
     sessionId,
     modified,
     parentSessionId,
+    projectPath,
   } as unknown as SessionIndexItem;
 }
 
 const ids = (items: SessionIndexItem[]) => items.map((i) => i.sessionId);
+
+/// Only the field the grouping reads. The list's *order* is the whole of what
+/// it takes from a project, so the rest would be noise here.
+const project = (path: string) => ({ path }) as unknown as Project;
 
 describe("sortSessions", () => {
   it("orders top-level sessions newest first", () => {
@@ -112,6 +118,76 @@ describe("sortSessions", () => {
   });
 });
 
+describe("sessionRows", () => {
+  /// The layout of one row, in the shape the assertions read most plainly.
+  const layout = (rows: ReturnType<typeof sessionRows>) =>
+    rows.map((r) => [r.item.sessionId, r.depth, r.guides, r.opens] as const);
+
+  it("draws a grandchild one step further in than its parent", () => {
+    // Depth is drawn rather than flattened, so the chain reads as a tree and
+    // not as one rail with everything below the root hanging off it.
+    const rows = sessionRows([
+      item("root", "2026-03-01T00:00:00Z"),
+      item("child", "2026-02-01T00:00:00Z", "root"),
+      item("grandchild", "2026-01-01T00:00:00Z", "child"),
+    ]);
+
+    expect(layout(rows)).toEqual([
+      ["root", 0, [], true],
+      ["child", 1, [false], true],
+      ["grandchild", 2, [false, false], false],
+    ]);
+  });
+
+  it("keeps an ancestor's rail open past its later descendants", () => {
+    // `younger`'s subtree is drawn between `younger` and `older`, so the root's
+    // rail has to pass straight through those rows — and close on the last row
+    // of the subtree it belongs to, which is `older` itself.
+    const rows = sessionRows([
+      item("root", "2026-04-01T00:00:00Z"),
+      item("younger", "2026-03-01T00:00:00Z", "root"),
+      item("older", "2026-01-01T00:00:00Z", "root"),
+      item("leaf", "2026-02-01T00:00:00Z", "younger"),
+    ]);
+
+    expect(layout(rows)).toEqual([
+      ["root", 0, [], true],
+      // The root's rail carries on: `older` is still to come.
+      ["younger", 1, [true], true],
+      // Sits under an open root rail *and* an open `younger` rail.
+      ["leaf", 2, [true, false], false],
+      // Last of the root's children, so the line ends at this elbow.
+      ["older", 1, [false], false],
+    ]);
+  });
+
+  it("draws a child whose parent is not on screen at the top level", () => {
+    // The parent may be archived, filtered to another project, or deleted, so
+    // the row draws as a root — a rail reaching for it would point at nothing.
+    const rows = sessionRows([
+      item("orphan", "2026-01-01T00:00:00Z", "gone"),
+      item("plain", "2026-02-01T00:00:00Z"),
+    ]);
+
+    expect(layout(rows)).toEqual([
+      ["plain", 0, [], false],
+      ["orphan", 0, [], false],
+    ]);
+  });
+
+  it("opens no rail on a row with nothing drawn under it", () => {
+    // `opens` is read off what was emitted, not off what the index claims: a
+    // cycle can list a child that was already drawn elsewhere, and a rail
+    // opened for it would hang below the last row with nothing to reach.
+    const rows = sessionRows([
+      item("a", "2026-01-01T00:00:00Z", "b"),
+      item("b", "2026-02-01T00:00:00Z", "a"),
+    ]);
+
+    expect(rows.at(-1)?.opens).toBe(false);
+  });
+});
+
 describe("isNested", () => {
   it("is true only when the parent is in the same list", () => {
     const parent = item("parent", "2026-02-01T00:00:00Z");
@@ -123,5 +199,89 @@ describe("isNested", () => {
     expect(isNested(child, [parent, child, orphan])).toBe(true);
     expect(isNested(orphan, [parent, child, orphan])).toBe(false);
     expect(isNested(parent, [parent, child, orphan])).toBe(false);
+  });
+});
+
+describe("sessionGroups", () => {
+  const shape = (groups: ReturnType<typeof sessionGroups>) =>
+    groups.map((g) => [g.projectPath, g.rows.map((r) => r.item.sessionId)] as const);
+  const paths = (groups: ReturnType<typeof sessionGroups>) =>
+    groups.map((g) => g.projectPath);
+
+  it("gathers each project's sessions into one run, in the project list's order", () => {
+    const items = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-03-01T00:00:00Z", null, "/b"),
+      item("a2", "2026-02-01T00:00:00Z", null, "/a"),
+    ];
+
+    // `/a` leads because the project list says so, even though `/b` holds the
+    // newest session — and `a2` joins `a1` rather than sitting between the two
+    // projects where plain recency would put it.
+    expect(shape(sessionGroups(items, [project("/a"), project("/b")]))).toEqual([
+      ["/a", ["a2", "a1"]],
+      ["/b", ["b1"]],
+    ]);
+  });
+
+  it("holds the group order still while a session works", () => {
+    // The whole reason the order is the project list's: a reply to any session
+    // used to lift its project over the others, moving every heading under the
+    // reader's eye mid-turn.
+    const projects = [project("/a"), project("/b")];
+    const before = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-02-01T00:00:00Z", null, "/b"),
+    ];
+    const after = [
+      item("a1", "2026-01-01T00:00:00Z", null, "/a"),
+      item("b1", "2026-09-01T00:00:00Z", null, "/b"),
+    ];
+
+    expect(paths(sessionGroups(before, projects))).toEqual(
+      paths(sessionGroups(after, projects)),
+    );
+  });
+
+  it("puts a project nobody attached after the ones that are", () => {
+    // A detached project still has sessions to draw; it just has no place in
+    // the list that orders the rest.
+    const items = [
+      item("loose", "2026-03-01T00:00:00Z", null, "/loose"),
+      item("known", "2026-01-01T00:00:00Z", null, "/a"),
+    ];
+
+    expect(paths(sessionGroups(items, [project("/a")]))).toEqual(["/a", "/loose"]);
+  });
+
+  it("keeps a spawned session under its parent's project", () => {
+    // A fork can run in another repo, and following its own path would file the
+    // child under a second heading with no parent above it.
+    const items = [
+      item("parent", "2026-02-01T00:00:00Z", null, "/a"),
+      item("child", "2026-01-01T00:00:00Z", "parent", "/b"),
+    ];
+
+    expect(shape(sessionGroups(items))).toEqual([["/a", ["parent", "child"]]]);
+  });
+
+  it("opens no group for a project with no session", () => {
+    // Headings come from the rows present, so nothing here can draw one for a
+    // project that has no work in the list.
+    expect(sessionGroups([]).length).toBe(0);
+    expect(
+      shape(sessionGroups([item("only", "2026-01-01T00:00:00Z", null, "/a")])),
+    ).toEqual([["/a", ["only"]]]);
+  });
+
+  it("leaves a single-project list in the order it already had", () => {
+    // What keeps the ⌘⇧↑/↓ walk unchanged under a project filter.
+    const items = [
+      item("old", "2026-01-01T00:00:00Z"),
+      item("new", "2026-03-01T00:00:00Z"),
+      item("mid", "2026-02-01T00:00:00Z"),
+    ];
+
+    expect(ids(sortSessions(items))).toEqual(ids(sessionRows(items).map((r) => r.item)));
   });
 });

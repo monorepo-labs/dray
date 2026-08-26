@@ -1,7 +1,8 @@
 use crate::{
     attachments,
     events::{
-        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ImageRef, PermissionBehavior,
+        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ImageRef, MessageSender,
+        PermissionBehavior,
     },
     git,
     harness::{
@@ -14,10 +15,10 @@ use crate::{
     },
     models::{find_model, resolve_effort, Effort, Model, ModelId},
     store::{
-        append_session_event, append_session_index_item, delete_session, get_session_index_item,
-        list_session_events, relocate_session_to_project, resolve_worktree_name, set_session_status,
-        touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot,
-        SessionStatus,
+        append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
+        delete_session, get_session_index_item, list_session_events, relocate_session_to_project,
+        resolve_unclaimed_worktree_name, set_session_status, touch_session_index_item,
+        worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -77,6 +78,11 @@ pub struct QueuedMessage {
     /// what the composer gets back on a cancel is what the user typed.
     pub text: String,
     pub attachment_paths: Vec<String>,
+    /// Held with the prompt rather than looked up at flush: a relayed message
+    /// can wait out a long turn, and the sending session may be renamed or
+    /// deleted before the boundary that delivers it.
+    #[serde(default)]
+    pub from: Option<MessageSender>,
 }
 
 /// Held prompts, oldest first. Shared with the stdout task, which is where the
@@ -314,11 +320,21 @@ impl SessionManager {
         branch: Option<&str>,
         use_worktree: bool,
         worktree_name: Option<&str>,
+        // Where the worktree starts from, already resolved to a git ref by the
+        // caller — the orchestration socket turns a session id into one, and
+        // nothing below here knows sessions. `None` is the ordinary case and
+        // hands the tree to `claude -w`, which forks it from `origin/<default>`.
+        base_ref: Option<&str>,
         is_new_session: bool,
         // Set only for a session created over the orchestration socket. The
         // composer never has one, and it is recorded rather than acted on —
         // the depth cap reads it back off the index on the *next* create.
         parent_session_id: Option<&str>,
+        // The session that relayed this prompt, for a message arriving over the
+        // orchestration socket. `None` everywhere else: the composer's prompts
+        // are the user's own, and a `user_message` with a sender is drawn
+        // differently.
+        from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
         let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
@@ -326,7 +342,7 @@ impl SessionManager {
 
         if is_new_session {
             let worktree_name = if use_worktree {
-                Some(resolve_worktree_name(cwd, worktree_name)?)
+                Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
             } else {
                 None
             };
@@ -340,9 +356,34 @@ impl SessionManager {
             // `None` when the user didn't touch it, and the repo is still on
             // some branch worth recording. Non-repos report `None` and stay that
             // way.
+            //
+            // Ahead of the worktree below, though it reads the project root and
+            // `worktree add` never moves that HEAD: it is one more fallible step
+            // that would otherwise sit inside the window the rollback has to
+            // cover, and the shortest window is the one least able to go wrong.
             let branch = match branch {
                 Some(b) => Some(b.to_string()),
                 None => git::list_branches(cwd).await?.current,
+            };
+
+            // A base ref is the one case Dray makes the tree itself. The harness
+            // cannot be told where to fork from — `-w` resolves the default
+            // branch and fetches `origin/<it>`, and its flag surface exposes no
+            // base at all — so the tree is created here and the child is spawned
+            // *into* it with no `-w`. Refused for a session with no worktree,
+            // which would mean checking a ref out over whatever the reader has
+            // in the project root.
+            //
+            // Ahead of the index write, unlike the spawn below: a base git
+            // cannot resolve has left nothing behind at all and the caller is
+            // getting the error.
+            let owned_worktree = match (base_ref, &worktree_name) {
+                (Some(base), Some(name)) => {
+                    git::create_worktree(cwd, name, base).await?;
+                    true
+                }
+                (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
+                (None, _) => false,
             };
 
             // Indexed before the process spawns, so a session that fails to
@@ -360,7 +401,28 @@ impl SessionManager {
                 permission_mode,
                 parent_session_id,
             );
-            append_session_index_item(item.clone()).await?;
+
+            // The one failure that has to undo the tree, and the row that just
+            // failed to be written is exactly why: removal is offered from a
+            // session's own row, so an orphan here is one nothing in the app can
+            // ever reach and `git worktree remove` by hand is the only recovery.
+            // The spawn below is deliberately *not* covered — by then the row
+            // exists, and deleting the session already takes the tree with it.
+            //
+            // Only a tree Dray made. A `-w` one does not exist yet, and the
+            // failed create above left nothing to undo.
+            if let Err(e) = append_session_index_item(item.clone()).await {
+                if owned_worktree {
+                    // Logged, not propagated: the caller has to see what
+                    // actually failed, not how the tidy-up went.
+                    if let Err(undo) =
+                        git::remove_worktree(cwd, &session_cwd, item.branch.as_deref()).await
+                    {
+                        eprintln!("could not roll back {session_cwd}: {undo}");
+                    }
+                }
+                return Err(e);
+            }
 
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.
@@ -373,15 +435,26 @@ impl SessionManager {
             crate::title::spawn_title_generation(session_id, prompt, cwd, app);
 
             // Taken before the child exists, so nothing it does can end up
-            // inside its own baseline. A worktree has no directory to snapshot
-            // yet — the CLI creates the tree after launch — so that case
-            // resolves the fork point the tree will start from instead. Slightly
-            // approximate: the CLI fetches `origin/<default>` first, so an
-            // upstream commit landing in between would read as this turn's work.
-            let baseline = if worktree_name.is_some() {
-                git::base_ref_tree(cwd).await
+            // inside its own baseline. A worktree the CLI has yet to create has
+            // no directory to snapshot, so that case resolves the fork point the
+            // tree will start from instead — slightly approximate, since the CLI
+            // fetches `origin/<default>` first and an upstream commit landing in
+            // between would read as this turn's work. A tree created above has
+            // none of that: it is on disk and clean, so its snapshot is exact.
+            let baseline = match (owned_worktree, worktree_name.is_some()) {
+                (false, true) => git::base_ref_tree(cwd).await,
+                _ => git::snapshot_tree(&session_cwd).await,
+            };
+
+            // A tree we made is a directory that already exists and a checkout
+            // already on the right commit, so the child starts in it and is told
+            // nothing about worktrees at all. Every other creation spawns at the
+            // project root, because the directory `-w` is about to make cannot
+            // be `chdir`ed into before it exists.
+            let (spawn_cwd, spawn_worktree) = if owned_worktree {
+                (session_cwd.as_str(), None)
             } else {
-                git::snapshot_tree(&session_cwd).await
+                (cwd, worktree_name.as_deref())
             };
 
             let mut session = Session::init(
@@ -390,15 +463,16 @@ impl SessionManager {
                 &model_spec,
                 effort,
                 permission_mode,
-                cwd,
+                spawn_cwd,
                 &session_cwd,
-                worktree_name.as_deref(),
+                spawn_worktree,
                 is_new_session,
+                None,
                 app,
             )
             .await?;
             session
-                .send_msg(prompt, attachment_paths, baseline, app)
+                .send_msg(prompt, attachment_paths, baseline, from, app)
                 .await?;
             // The prompt event is synthesized by `send_msg`, so read the log
             // back rather than returning empty — otherwise the frontend's first
@@ -465,8 +539,9 @@ impl SessionManager {
         // resuming in the wrong directory is both silent and destructive. It is
         // also where the baseline gets snapshotted, so a stale value would
         // diff the wrong tree.
-        let session_cwd = match get_session_index_item(session_id).await? {
-            Some(item) => item.cwd,
+        let indexed = get_session_index_item(session_id).await?;
+        let session_cwd = match &indexed {
+            Some(item) => item.cwd.clone(),
             None => cwd.to_string(),
         };
 
@@ -499,11 +574,11 @@ impl SessionManager {
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
                 if tool_in_flight {
-                    s.queue_and_flush(prompt, attachment_paths, app).await;
+                    s.queue_and_flush(prompt, attachment_paths, from, app).await;
                     return Ok(SendOutcome::default());
                 }
 
-                let queued = s.queue_msg(prompt, attachment_paths).await;
+                let queued = s.queue_msg(prompt, attachment_paths, from).await;
                 return Ok(SendOutcome {
                     snapshot: None,
                     queued: Some(queued),
@@ -521,34 +596,124 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, baseline, app).await?;
+            s.send_msg(prompt, attachment_paths, baseline, from, app).await?;
             return Ok(SendOutcome::default());
         }
 
         touch_session_index_item(session_id, model, effort, permission_mode).await?;
 
-        let baseline = git::snapshot_tree(&session_cwd).await;
+        // A fork that hasn't spawned yet. The app's half happened when the user
+        // asked for it — log copied, entry written — and this is the spawn that
+        // carries out the CLI's, after which the session resumes like any other.
+        let fork_from = indexed.as_ref().and_then(|i| i.fork_from.clone());
 
-        // The worktree already exists, so no `-w` — passing it again would try
-        // to recreate the tree.
+        // A fork into a *new* worktree is the one resume whose tree does not
+        // exist yet, so it needs the creation treatment: `-w` to make the tree,
+        // the project root to spawn in because a missing directory cannot be
+        // `chdir`ed into, and the fork point as a baseline because there is no
+        // tree to snapshot. Every other resume runs in a directory already there.
+        let pending_worktree = fork_from
+            .as_ref()
+            .and(indexed.as_ref())
+            .and_then(|i| i.worktree_name.clone());
+
+        let (spawn_cwd, baseline) = match (&pending_worktree, &indexed) {
+            (Some(_), Some(item)) => (
+                item.project_path.clone(),
+                git::base_ref_tree(&item.project_path).await,
+            ),
+            _ => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
+        };
+
         let mut session = Session::init(
             session_id,
             harness,
             &model_spec,
             effort,
             permission_mode,
+            &spawn_cwd,
             &session_cwd,
-            &session_cwd,
-            None,
+            pending_worktree.as_deref(),
             is_new_session,
+            fork_from.as_deref(),
             app,
         )
         .await?;
+
+        // After the spawn, so a child that fails to start leaves the instruction
+        // standing and the next send forks again. Cleared before the prompt goes
+        // out for the opposite reason: from here the CLI owns a session under
+        // this id, and forking the parent a second time would abandon it.
+        if fork_from.is_some() {
+            clear_fork_from(session_id).await?;
+        }
+
         session
-            .send_msg(prompt, attachment_paths, baseline, app)
+            .send_msg(prompt, attachment_paths, baseline, from, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome::default())
+    }
+
+    /// Copies a session onto a new id, to be continued separately from the one
+    /// it came from. `worktree` puts the fork in a tree of its own rather than
+    /// leaving it in the parent's directory.
+    ///
+    /// Nothing spawns here. The CLI's fork only happens on a spawn, and spawning
+    /// one to sit idle would cost a child process per fork and a turn's wait
+    /// before the row appeared — so this writes the app's half now and leaves
+    /// [`fork_from`](crate::store::SessionIndexItem::fork_from) as the
+    /// instruction for the first send. The copied log is what the fork replays
+    /// meanwhile, so it opens reading exactly like its parent.
+    ///
+    /// Refused while the parent is working. The CLI forks by reading the
+    /// parent's transcript, which a live child is still appending to, so a fork
+    /// taken mid-turn can inherit half of one.
+    pub async fn fork(
+        &self,
+        session_id: &str,
+        fork_id: &str,
+        worktree: bool,
+    ) -> Result<SessionSnapshot> {
+        let parent = get_session_index_item(session_id)
+            .await?
+            .with_context(|| format!("unknown session {session_id}"))?;
+
+        if let Some(s) = self.sessions.lock().await.get(session_id) {
+            if s.status.lock().await.is_busy() {
+                bail!("wait for the session to finish before forking it");
+            }
+        }
+
+        // Resolved against the project rather than the parent's own name, so a
+        // fork of a fork can't collide with the tree it came from — and against
+        // the index as well as disk, since a fork's tree does not exist until
+        // its first send.
+        let worktree_name = if worktree {
+            Some(resolve_unclaimed_worktree_name(&parent.project_path, None).await?)
+        } else {
+            None
+        };
+
+        let events = copy_session_log(session_id, fork_id).await?;
+
+        // The parent never got a conversation off the ground — indexed, then its
+        // spawn failed — so the CLI has no transcript under that id to fork
+        // from. Refused here, where it can be said plainly; left to the first
+        // send it would come back as the CLI's own "no conversation found".
+        // Checked after the copy because that read is what answers it, and it
+        // writes nothing when there is nothing to write.
+        if events.is_empty() {
+            bail!("this session has no conversation to fork yet");
+        }
+
+        let item = parent.fork(fork_id, worktree_name.as_deref());
+        append_session_index_item(item.clone()).await?;
+
+        Ok(SessionSnapshot {
+            index_item: item,
+            events,
+        })
     }
 
     /// Stops everything the session is doing: the turn in flight, and every
@@ -772,6 +937,7 @@ impl Session {
         session_cwd: &str,
         worktree_name: Option<&str>,
         is_new_session: bool,
+        fork_from: Option<&str>,
         app: &AppHandle,
     ) -> Result<Session> {
         if let Harness::ClaudeCode = harness {
@@ -784,6 +950,7 @@ impl Session {
                 session_cwd,
                 worktree_name,
                 is_new_session,
+                fork_from,
                 app,
             )
             .await
@@ -804,6 +971,7 @@ impl Session {
         prompt: &str,
         attachment_paths: &[String],
         baseline: Option<String>,
+        from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<()> {
         deliver_prompt(
@@ -812,6 +980,7 @@ impl Session {
             attachment_paths,
             baseline,
             false,
+            from,
             &self.seq,
             &self.events,
             &self.stdin,
@@ -831,12 +1000,18 @@ impl Session {
     /// Holds a prompt typed during a running turn. Nothing is written or
     /// persisted here — [`flush_queued`] does both once the turn reaches a
     /// boundary, which is what leaves a cancel possible until then.
-    pub async fn queue_msg(&self, prompt: &str, attachment_paths: &[String]) -> QueuedMessage {
+    pub async fn queue_msg(
+        &self,
+        prompt: &str,
+        attachment_paths: &[String],
+        from: Option<MessageSender>,
+    ) -> QueuedMessage {
         let message = QueuedMessage {
             id: Uuid::now_v7().to_string(),
             session_id: self.id.clone(),
             text: prompt.to_string(),
             attachment_paths: attachment_paths.to_vec(),
+            from,
         };
         self.queued.lock().await.push(message.clone());
         message
@@ -857,8 +1032,14 @@ impl Session {
     ///
     /// Through the queue rather than written directly, so a prompt already
     /// waiting goes out ahead of this one instead of being overtaken.
-    pub async fn queue_and_flush(&self, prompt: &str, attachment_paths: &[String], app: &AppHandle) {
-        self.queue_msg(prompt, attachment_paths).await;
+    pub async fn queue_and_flush(
+        &self,
+        prompt: &str,
+        attachment_paths: &[String],
+        from: Option<MessageSender>,
+        app: &AppHandle,
+    ) {
+        self.queue_msg(prompt, attachment_paths, from).await;
         flush_queued(
             &self.id,
             &self.queued,
@@ -1109,6 +1290,7 @@ async fn deliver_prompt(
     attachment_paths: &[String],
     baseline: Option<String>,
     queued: bool,
+    from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -1134,6 +1316,7 @@ async fn deliver_prompt(
             .collect(),
         baseline,
         queued,
+        from,
     };
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),
@@ -1228,6 +1411,7 @@ pub async fn flush_queued(
             &message.attachment_paths,
             None,
             true,
+            message.from,
             seq,
             events,
             stdin,
