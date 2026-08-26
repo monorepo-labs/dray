@@ -143,6 +143,19 @@ fn restrict(path: &Path) -> Result<()> {
         .context("could not restrict the socket")
 }
 
+/// Which side is behind decides the cure, so the line names one command rather
+/// than leaving the reader — usually an agent, reading this as tool output — to
+/// work out which half to touch.
+fn mismatch(theirs: u32) -> String {
+    let cure = if theirs < PROTOCOL_VERSION {
+        "run `dray update`"
+    } else {
+        "update the Dray app"
+    };
+
+    format!("this dray CLI speaks protocol v{theirs}, the app speaks v{PROTOCOL_VERSION} — {cure}")
+}
+
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
 async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
@@ -157,10 +170,7 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
     let response = match serde_json::from_str::<Envelope>(&line) {
         // Answered before the request is even looked at: an old CLI against a
         // new app must be told to upgrade, not handed a guess at what it meant.
-        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(format!(
-            "this dray CLI speaks protocol v{}, the app speaks v{PROTOCOL_VERSION} — update one of them",
-            envelope.v
-        )),
+        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(mismatch(envelope.v)),
         Ok(envelope) => match dispatch(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
@@ -579,5 +589,14 @@ mod tests {
         let line = r#"{"v":99,"cmd":"create_session","prompt":"hi","useWorktree":true}"#;
         let envelope: Envelope = serde_json::from_str(line).unwrap();
         assert_ne!(envelope.v, PROTOCOL_VERSION);
+    }
+
+    /// Naming the wrong half is worse than naming neither: the reader runs a
+    /// command that cannot fix what they have.
+    #[test]
+    fn the_mismatch_names_whichever_side_is_behind() {
+        assert!(mismatch(PROTOCOL_VERSION - 1).contains("dray update"));
+        assert!(mismatch(PROTOCOL_VERSION + 1).contains("update the Dray app"));
+        assert!(!mismatch(PROTOCOL_VERSION + 1).contains("dray update"));
     }
 }

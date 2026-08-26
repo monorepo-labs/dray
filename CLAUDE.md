@@ -4,19 +4,19 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Working practices
 
-**Every piece of work = Linear issue, and issue come first.** Brainstorm and plan freely, but before first edit land, create issue through Linear MCP. Work started from existing issue skip creation and use that one.
+**Product work = Linear issue, before first edit.** Feature, bug fix, UX change, refactor. Plan freely without one; create through Linear MCP before code land. Existing issue = use that one.
 
-**Status track the work:**
+**Housekeeping take no issue.** CLAUDE.md, plan note, tooling config — thing changing how we work, not what ship. Issue there = noise.
 
-- Start work → `In Progress`.
-- PR opened → `In Review`.
-- PR merged, or commit pushed straight to `main` → `Done`.
+**Description over ~1000 character open with `## TLDR for human`, closed by `---`.** One line per thing worked on, even when only one. Shorter description need none — it already scan faster than its own summary.
 
-**PR carry issue id, so Linear link two itself.** Put id in PR body (`Fixes ENG-123`) or in branch name where branch ours to name — Linear's GitHub integration connected on this workspace, and it read branch, title and body alike. Worktree session's branch = `worktree-<name>` minted by CLI, so there body = the reliable slot. Linked PR also move status on own; still set `In Review` by hand, since link can lag and duplicate move cost nothing.
+**Status:** start → `In Progress`. PR opened → `In Review`. Merged, or pushed straight to `main` → `Done`.
 
-**Every issue assign to `yogesh`.**
+**PR carry issue id so Linear link itself.** Body (`Fixes DRA-123`) or branch name — integration read both. Worktree branch = `worktree-<name>` minted by CLI, so body = reliable slot. Link move status on own but can lag, so set `In Review` by hand too.
 
-Linear MCP need auth. Not connected → say so and stop, don't carry on without issue.
+**One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
+
+Linear MCP not connected → say so and stop. No issue, no work.
 
 **Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history.
 
@@ -458,6 +458,16 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 **Three shipped pieces, one line of glue.** App serve unix socket; `dray` = standalone CLI in own crate; skill document it; and one line in [system_prompt.md](apps/desktop/src-tauri/src/harness/claude_code/system_prompt.md) name capability plus install command. Agent check for `dray`, install if missing, read skill, get on with it. **App install nothing** — it inform, agent do.
 
 **CLI deliberately not part of app.** It have to run on linux later, where no Dray app exist at all. So `apps/cli` = own crate (package `dray`, reserved name), own `cli-v*` release tag, `curl -fsSL https://www.drayhq.com/install.sh | sh`. Links neither app nor tokio: one connect, one write, one read, exit — startup instant, which matter when caller = agent shelling out.
+
+**`install.sh` resolve newest `cli-v*` tag itself, and `dray update` re-run it.** App cannot push CLI update — Tauri updater swap `.app` bundle only, and CLI not in it. So upgrade = re-running installer, which mean installer must not pin. `/releases/latest/download/` still unusable for reason pin existed: app and CLI publish into same repo, both non-prerelease, so that URL belong to whichever released last and app release there carry no `dray-*.tar.gz`. Instead ask releases API (`?per_page=100`) and take first `tag_name` starting `cli-v` — API answer newest-first, so no version sort, and `sort -V` not portable anyway. `DRAY_VERSION` stay as literal-tag override; `latest` spelled as request to resolve, not as tag.
+
+**Failed resolution refuse, never fall back.** Rate-limited or unreachable API quietly installing something ancient = exact failure being removed, so die naming `DRAY_VERSION` and releases page. `per_page=100` = other escape hatch's reason: 100 app releases between two `cli-v*` ones and resolver find nothing, which that same line cover.
+
+**`dray update` shell out to installer, not reimplement it.** Two copies of fetch-verify-swap drift on exactly step verifying what about to be executed. Set `DRAY_INSTALL_DIR` to dir `current_exe()` sit in, so upgrade land where install did rather than default back to `~/.local/bin`. Replacing running executable safe on unix — installer rename over path, running process keep inode it started from. Fetch script to temp file then `sh <file>`, **not** `curl … | sh`: pipefail not POSIX, so pipe report success when curl what failed.
+
+**Mismatch error name cure, and which cure depend on direction.** `envelope.v < PROTOCOL_VERSION` = CLI behind, say `dray update`; `>` = app behind, say update app. Naming wrong half worse than naming neither — reader run command that cannot fix what they have. Skill document `update` for same reason, pinned by test: whole point of naming command = agent reading refusal can self-heal.
+
+**`prerelease: false` hard-coded in [release-cli.yml](.github/workflows/release-cli.yml) = what keep resolver honest.** Resolver take newest `cli-v*` tag without reading flag, so prerelease CLI would go to everyone re-running installer. Beta channel = moment to teach resolver about flag, not before.
 
 **Wire types live in third crate, and that the point of split.** `crates/dray-proto` compiled into both side, so request shape cannot drift. Drifted shape here fail way [control.rs](apps/desktop/src-tauri/src/harness/claude_code/control.rs) warn about — no error, command simply stop working. No root Cargo workspace and this add none: `src-tauri` have own `.cargo/config.toml` carrying ts-rs export path, and workspace move target dir out from under it. Path dep work fine between separate cargo project.
 
