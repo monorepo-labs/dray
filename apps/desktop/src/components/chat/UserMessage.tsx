@@ -1,6 +1,6 @@
 import { Image } from "lucide-react";
 
-import Avatar from "@/components/Avatar";
+import SessionAvatar from "@/components/SessionAvatar";
 import ImageRow from "@/components/chat/ImageRow";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { shortenPath } from "@/lib/tools";
@@ -49,17 +49,17 @@ export default function UserMessage({
   return (
     <div className="flex flex-col items-end gap-1.5">
       {/* Topmost, above even the attachments: who is talking is read before
-          anything they sent. The avatar has no picture behind it — a session is
-          not an account — so it draws the title's initial, which is the same
-          letter the sidebar row starts with. */}
+          anything they sent. The mark is generated from the session's id rather
+          than fetched — a session is not an account and has no picture — so it
+          is the same shape every time this session speaks. */}
       {from && (
         <button
           type="button"
           onClick={() => onOpenSession?.(from.sessionId)}
           disabled={!onOpenSession}
-          className="flex max-w-[85%] cursor-pointer items-center gap-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
+          className="flex max-w-[85%] cursor-pointer items-center gap-1 text-ui text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
         >
-          <Avatar src={null} name={from.title} />
+          <SessionAvatar sessionId={from.sessionId} name={from.title} />
           <span className="truncate">{from.title}</span>
         </button>
       )}
