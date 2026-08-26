@@ -14,10 +14,11 @@ use crate::{
     },
     models::{find_model, resolve_effort, Effort, Model, ModelId},
     store::{
-        append_session_event, append_session_index_item, delete_session, get_session_index_item,
-        list_session_events, relocate_session_to_project, resolve_worktree_name, set_session_status,
-        touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot,
-        SessionStatus,
+        append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
+        delete_session, get_session_index_item, list_session_events, relocate_session_to_project,
+        resolve_unclaimed_worktree_name, resolve_worktree_name, set_session_status,
+        touch_session_index_item, worktree_path,
+        SessionIndexItem, SessionSnapshot, SessionStatus,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -389,6 +390,7 @@ impl SessionManager {
                 &session_cwd,
                 worktree_name.as_deref(),
                 is_new_session,
+                None,
                 app,
             )
             .await?;
@@ -460,8 +462,9 @@ impl SessionManager {
         // resuming in the wrong directory is both silent and destructive. It is
         // also where the baseline gets snapshotted, so a stale value would
         // diff the wrong tree.
-        let session_cwd = match get_session_index_item(session_id).await? {
-            Some(item) => item.cwd,
+        let indexed = get_session_index_item(session_id).await?;
+        let session_cwd = match &indexed {
+            Some(item) => item.cwd.clone(),
             None => cwd.to_string(),
         };
 
@@ -522,28 +525,121 @@ impl SessionManager {
 
         touch_session_index_item(session_id, model, effort, permission_mode).await?;
 
-        let baseline = git::snapshot_tree(&session_cwd).await;
+        // A fork that hasn't spawned yet. The app's half happened when the user
+        // asked for it — log copied, entry written — and this is the spawn that
+        // carries out the CLI's, after which the session resumes like any other.
+        let fork_from = indexed.as_ref().and_then(|i| i.fork_from.clone());
 
-        // The worktree already exists, so no `-w` — passing it again would try
-        // to recreate the tree.
+        // A fork into a *new* worktree is the one resume whose tree does not
+        // exist yet, so it needs the creation treatment: `-w` to make the tree,
+        // the project root to spawn in because a missing directory cannot be
+        // `chdir`ed into, and the fork point as a baseline because there is no
+        // tree to snapshot. Every other resume runs in a directory already there.
+        let pending_worktree = fork_from
+            .as_ref()
+            .and(indexed.as_ref())
+            .and_then(|i| i.worktree_name.clone());
+
+        let (spawn_cwd, baseline) = match (&pending_worktree, &indexed) {
+            (Some(_), Some(item)) => (
+                item.project_path.clone(),
+                git::base_ref_tree(&item.project_path).await,
+            ),
+            _ => (
+                session_cwd.clone(),
+                git::snapshot_tree(&session_cwd).await,
+            ),
+        };
+
         let mut session = Session::init(
             session_id,
             harness,
             &model_spec,
             effort,
             permission_mode,
+            &spawn_cwd,
             &session_cwd,
-            &session_cwd,
-            None,
+            pending_worktree.as_deref(),
             is_new_session,
+            fork_from.as_deref(),
             app,
         )
         .await?;
+
+        // After the spawn, so a child that fails to start leaves the instruction
+        // standing and the next send forks again. Cleared before the prompt goes
+        // out for the opposite reason: from here the CLI owns a session under
+        // this id, and forking the parent a second time would abandon it.
+        if fork_from.is_some() {
+            clear_fork_from(session_id).await?;
+        }
+
         session
             .send_msg(prompt, attachment_paths, baseline, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome::default())
+    }
+
+    /// Copies a session onto a new id, to be continued separately from the one
+    /// it came from. `worktree` puts the fork in a tree of its own rather than
+    /// leaving it in the parent's directory.
+    ///
+    /// Nothing spawns here. The CLI's fork only happens on a spawn, and spawning
+    /// one to sit idle would cost a child process per fork and a turn's wait
+    /// before the row appeared — so this writes the app's half now and leaves
+    /// [`fork_from`](crate::store::SessionIndexItem::fork_from) as the
+    /// instruction for the first send. The copied log is what the fork replays
+    /// meanwhile, so it opens reading exactly like its parent.
+    ///
+    /// Refused while the parent is working. The CLI forks by reading the
+    /// parent's transcript, which a live child is still appending to, so a fork
+    /// taken mid-turn can inherit half of one.
+    pub async fn fork(
+        &self,
+        session_id: &str,
+        fork_id: &str,
+        worktree: bool,
+    ) -> Result<SessionSnapshot> {
+        let parent = get_session_index_item(session_id)
+            .await?
+            .with_context(|| format!("unknown session {session_id}"))?;
+
+        if let Some(s) = self.sessions.lock().await.get(session_id) {
+            if s.status.lock().await.is_busy() {
+                bail!("wait for the session to finish before forking it");
+            }
+        }
+
+        // Resolved against the project rather than the parent's own name, so a
+        // fork of a fork can't collide with the tree it came from — and against
+        // the index as well as disk, since a fork's tree does not exist until
+        // its first send.
+        let worktree_name = if worktree {
+            Some(resolve_unclaimed_worktree_name(&parent.project_path).await?)
+        } else {
+            None
+        };
+
+        let events = copy_session_log(session_id, fork_id).await?;
+
+        // The parent never got a conversation off the ground — indexed, then its
+        // spawn failed — so the CLI has no transcript under that id to fork
+        // from. Refused here, where it can be said plainly; left to the first
+        // send it would come back as the CLI's own "no conversation found".
+        // Checked after the copy because that read is what answers it, and it
+        // writes nothing when there is nothing to write.
+        if events.is_empty() {
+            bail!("this session has no conversation to fork yet");
+        }
+
+        let item = parent.fork(fork_id, worktree_name.as_deref());
+        append_session_index_item(item.clone()).await?;
+
+        Ok(SessionSnapshot {
+            index_item: item,
+            events,
+        })
     }
 
     /// Stops everything the session is doing: the turn in flight, and every
@@ -767,6 +863,7 @@ impl Session {
         session_cwd: &str,
         worktree_name: Option<&str>,
         is_new_session: bool,
+        fork_from: Option<&str>,
         app: &AppHandle,
     ) -> Result<Session> {
         if let Harness::ClaudeCode = harness {
@@ -779,6 +876,7 @@ impl Session {
                 session_cwd,
                 worktree_name,
                 is_new_session,
+                fork_from,
                 app,
             )
             .await

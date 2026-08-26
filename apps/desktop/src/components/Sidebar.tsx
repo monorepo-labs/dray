@@ -22,6 +22,9 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -77,6 +80,7 @@ type SidebarProps = {
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
+  onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   showArchived: boolean;
   onToggleArchived: () => void;
@@ -163,6 +167,7 @@ export default function Sidebar({
   onSelect,
   onNewSession,
   onSetFlags,
+  onFork,
   onDelete,
   showArchived,
   onToggleArchived,
@@ -298,6 +303,7 @@ export default function Sidebar({
               marksLive={!showArchived}
               onSelect={onSelect}
               onSetFlags={onSetFlags}
+              onFork={onFork}
               onDelete={onDelete}
             />
           ))
@@ -619,6 +625,15 @@ function RowAction({
   );
 }
 
+/// The fork submenu's rows, in the order they are drawn. The number key that
+/// picks one is its position here — same rule `VIEW_TABS` accelerators follow —
+/// so reordering moves the digits with it and there is no second table to fall
+/// out of step with the labels.
+const FORKS = [
+  { label: "Fork here", worktree: false },
+  { label: "Fork in new worktree", worktree: true },
+] as const;
+
 /// The row's right-click menu. Delete confirms in place — a second surface for
 /// two words costs more than it protects, and the menu is already open under the
 /// cursor. Both steps live in one `Content` so the menu holds its position
@@ -633,20 +648,60 @@ function RowAction({
 /// `open` — the trigger's own `data-state` is what the row styles off, and there
 /// is no second copy of the flag to fall out of step with it.
 function RowMenu({
+  onFork,
+  forkDisabled,
   onDelete,
   children,
 }: {
+  onFork: (worktree: boolean) => void;
+  /// The session is working. The CLI forks by reading its transcript, which a
+  /// live child is still appending to, so a fork taken now can inherit half a
+  /// turn. The backend refuses it too — this only saves the trip.
+  forkDisabled: boolean;
   onDelete: () => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Radix moves DOM focus onto the sub's own content only once the pointer (or
+  // an arrow key) actually enters it — hovering the trigger alone opens the
+  // submenu but leaves focus behind on the trigger. Reading `open` instead of
+  // focus location is what lets a number fire the moment the submenu is drawn,
+  // without the cursor ever crossing into it.
+  const [forkOpen, setForkOpen] = useState(false);
+  // A digit clicks the row rather than calling `onFork` directly, so closing the
+  // menu and restoring focus stay Radix's job — picking by key and picking by
+  // mouse then cannot end in different states.
+  const forkRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   return (
     <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
 
       {/* Portaled, so a click in here never reaches the row's select handler. */}
-      <ContextMenuContent className="w-56">
+      {/* Wide enough for the confirm step's two buttons, which is the widest
+          thing this menu ever holds — the width is fixed rather than fitted so
+          the frame doesn't resize under the cursor when Delete swaps them in. */}
+      {/*
+          The digit listener lives up here rather than on the sub's own content:
+          `SubContent` renders through a portal, so a handler placed there only
+          ever fires once focus — not just the open submenu — has moved inside
+          it. React still delivers the event here through the component tree
+          rather than the DOM one, so this fires the instant the submenu opens,
+          whether that happened by hover or by keyboard, and no matter which of
+          the two elements the key lands on.
+      */}
+      <ContextMenuContent
+        className="w-48"
+        onKeyDown={(e) => {
+          if (!forkOpen) return;
+          const picked = forkRefs.current[Number(e.key) - 1];
+          if (!picked) return;
+          // Holds the digit back from Radix's own typeahead, which would
+          // otherwise read it as a search letter and jump focus instead.
+          e.preventDefault();
+          picked.click();
+        }}
+      >
         {confirming ? (
           <>
             {/* No title in the copy: the menu opens on the row, which stays on
@@ -673,12 +728,37 @@ function RowMenu({
           </>
         ) : (
           <>
-            {/* Inert until forking exists. Disabled rather than absent, so the
-                menu's shape doesn't change when it lands. */}
-            <ContextMenuItem disabled className="text-ui">
-              <GitBranchPlus />
-              Fork
-            </ContextMenuItem>
+            {/* A submenu because the two forks differ in where the copy
+                *runs*, not in what it copies — both carry the whole
+                conversation. Flattening them into two top-level items would put
+                the rarer choice beside Delete on every row. */}
+            <ContextMenuSub onOpenChange={setForkOpen}>
+              <ContextMenuSubTrigger
+                disabled={forkDisabled}
+                className="text-ui"
+              >
+                <GitBranchPlus />
+                Fork
+              </ContextMenuSubTrigger>
+
+              {/* Sized by its own rows. Nothing swaps in here, so there is
+                  no second layout to hold a width for. */}
+              <ContextMenuSubContent>
+                {FORKS.map((fork, i) => (
+                  <ContextMenuItem
+                    key={fork.label}
+                    ref={(el) => {
+                      forkRefs.current[i] = el;
+                    }}
+                    className="text-ui"
+                    onSelect={() => onFork(fork.worktree)}
+                  >
+                    {fork.label}
+                    <Kbd className="ml-auto">{i + 1}</Kbd>
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
 
             {/* `preventDefault` holds the menu open — an item select closes it by
                 default, which would take the confirm step down with it. */}
@@ -710,6 +790,7 @@ function SessionRow({
   marksLive = true,
   onSelect,
   onSetFlags,
+  onFork,
   onDelete,
 }: {
   item: SessionIndexItem;
@@ -729,6 +810,7 @@ function SessionRow({
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => Promise<void>;
+  onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
@@ -739,7 +821,11 @@ function SessionRow({
   }, [active]);
 
   return (
-    <RowMenu onDelete={() => void onDelete(item.sessionId)}>
+    <RowMenu
+      onFork={(worktree) => void onFork(item.sessionId, worktree)}
+      forkDisabled={status === "in_progress"}
+      onDelete={() => void onDelete(item.sessionId)}
+    >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
       <div

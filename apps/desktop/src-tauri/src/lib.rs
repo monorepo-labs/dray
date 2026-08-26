@@ -331,6 +331,29 @@ async fn delete_session(
     manager.delete(session_id).await.map_err(|e| e.to_string())
 }
 
+/// Copies a session onto `fork_id`, to be carried on separately from the one it
+/// came from. `worktree` gives the fork a tree of its own rather than leaving it
+/// in the parent's directory.
+///
+/// The id comes from the caller for the same reason a new session's does: this
+/// app chooses session ids and the CLI adopts them, and `--fork-session` honours
+/// `--session-id` like any other spawn.
+///
+/// Returns what the fork replays — the parent's log, already copied — so the
+/// frontend can open it without a second read.
+#[tauri::command]
+async fn fork_session(
+    session_id: &str,
+    fork_id: &str,
+    worktree: bool,
+    manager: State<'_, SessionManager>,
+) -> Result<SessionSnapshot, String> {
+    manager
+        .fork(session_id, fork_id, worktree)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Stops the in-flight turn without killing the session — the CLI aborts its
 /// tools and streaming, ends the turn, and stays alive for the next prompt.
 #[tauri::command]
@@ -494,6 +517,7 @@ pub fn run() {
             push_branch,
             set_session_flags,
             delete_session,
+            fork_session,
             worktree_disposition,
             remove_session_worktree,
             mark_session_idle,

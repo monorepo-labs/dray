@@ -442,6 +442,29 @@ const handleNewSession = () => {
   setBranch(branches?.current ?? null);
 };
 
+// Puts the composer's controls back to what the session was started with. Every
+// setter here is the raw state setter, never the prefs-writing wrapper: these
+// values are the session's, not the user's choice, and moving between sessions
+// must not rewrite the defaults that `handleNewSession` reads back.
+//
+// Takes the item rather than an id because a fork's row does not reach
+// `sessionIndexItems` until the render after it is made, and it needs this on
+// the way in like any other session being opened.
+//
+// Project, branch, and the worktree flag aren't restored — the composer hides
+// all three once a session exists, and they'd only mislead the next new chat.
+const restoreSessionControls = (item: SessionIndexItem) => {
+  // Sessions indexed before the model was recorded read back as "unknown".
+  const restored = item.model === "unknown" ? DEFAULT_MODEL : item.model;
+  setModelId(restored);
+  // The index stores one model/effort pair, so it can only seed that model's
+  // entry; the rest of the map falls back to per-model defaults.
+  if (item.effort) {
+    setEffortByModel((prev) => ({ ...prev, [restored]: item.effort! }));
+  }
+  setPermissionModeState(item.permissionMode);
+};
+
 const handleSelectSessionIndexItem = async (sessionId: string) => {
   setSelectedSessionId(sessionId);
 
@@ -457,26 +480,10 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     markSessionRead(sessionId);
   }
 
-  // Restores what this session was started with. Every setter here is the raw
-  // state setter, never the prefs-writing wrapper: these values are the session's,
-  // not the user's choice, and clicking through the sidebar must not rewrite the
-  // defaults that `handleNewSession` reads back.
   const indexItem = sessionIndexItems.find((i) => i.sessionId === sessionId);
   if (indexItem) {
-    // Sessions indexed before the model was recorded read back as "unknown".
-    const restored =
-      indexItem.model === "unknown" ? DEFAULT_MODEL : indexItem.model;
-    setModelId(restored);
-    // The index stores one model/effort pair, so it can only seed that model's
-    // entry; the rest of the map falls back to per-model defaults.
-    if (indexItem.effort) {
-      setEffortByModel((prev) => ({ ...prev, [restored]: indexItem.effort! }));
-    }
-    setPermissionModeState(indexItem.permissionMode);
+    restoreSessionControls(indexItem);
   }
-
-  // Project, branch, and the worktree flag aren't restored — the composer hides
-  // all three once a session exists, and they'd only mislead the next new chat.
 
   if (sessions.some((s) => s.sessionId === sessionId)) {
     return;
@@ -581,6 +588,40 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
   // already reached the reader through the error banner, and the card retires
   // itself rather than claiming something that didn't happen.
   return true;
+};
+
+// Copies a session onto a new id so it can be carried on in two directions at
+// once. The id is minted here for the same reason a new session's is — this app
+// chooses session ids and the CLI adopts them.
+//
+// Selected on arrival, since forking is asking to work in the copy. Nothing
+// spawns yet: the backend leaves the CLI's own fork for the first send, and the
+// snapshot it returns is the parent's copied log, so the new session opens
+// reading exactly like the one it came from.
+const forkSession = async (sessionId: string, worktree: boolean) => {
+  const forkId = crypto.randomUUID();
+
+  let snapshot: SessionSnapshot;
+  try {
+    snapshot = await invoke<SessionSnapshot>("fork_session", {
+      sessionId,
+      forkId,
+      worktree,
+    });
+  } catch (e) {
+    setError(String(e));
+    return;
+  }
+
+  setError(null);
+  upsertSession(snapshot);
+  // A fork is never archived, so it belongs to the active list alone — pushed
+  // unconditionally it would show up under the archived filter too.
+  if (!showArchived) {
+    setSessionIndexItems((prev) => [...prev, snapshot]);
+  }
+  setSelectedSessionId(snapshot.sessionId);
+  restoreSessionControls(snapshot);
 };
 
 // Removes the session everywhere it's held, backend first: the row must not
@@ -1154,6 +1195,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, deleteSession, removeWorktree};
 
 }

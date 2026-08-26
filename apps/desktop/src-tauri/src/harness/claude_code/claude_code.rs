@@ -42,6 +42,9 @@ pub async fn init(
     session_cwd: &str,
     worktree_name: Option<&str>,
     is_new_session: bool,
+    // The session to fork from, on the one spawn that carries out a fork. See
+    // [`SessionIndexItem::fork_from`](crate::store::SessionIndexItem::fork_from).
+    fork_from: Option<&str>,
     app: &AppHandle,
 ) -> Result<Session> {
     let mut args = vec![
@@ -75,7 +78,15 @@ pub async fn init(
     // broken rather than unasked.
     args.extend(["--permission-prompt-tool", "stdio"]);
 
-    if is_new_session {
+    // Three ways in, and the fork is the only one naming two ids: it resumes the
+    // parent's conversation but records it under this session's own id. Verified
+    // against v2.1.246 — `--fork-session` honours `--session-id` rather than
+    // minting one of its own, which is what lets the app choose the id here the
+    // same way it does for a new session, and the CLI writes the fork a complete
+    // standalone transcript holding the parent's history.
+    if let Some(parent) = fork_from {
+        args.extend(["--resume", parent, "--fork-session", "--session-id", session_id]);
+    } else if is_new_session {
         args.extend(["--session-id", session_id]);
     } else {
         args.extend(["--resume", session_id]);

@@ -774,7 +774,15 @@ permissionMode: ApprovalPolicy,
 /**
  * Defaulted so index entries written before this field parse as `Idle`.
  */
-status: SessionStatus, created: string, modified: string, archived: boolean, pinned: boolean, };
+status: SessionStatus, 
+/**
+ * An instruction, not a record of lineage: the session this one was forked
+ * from, set until the CLI has actually forked. The fork is lazy — copying
+ * this app's own log and index entry is instant, while the CLI's half only
+ * happens on a spawn — so the first send resumes the parent with
+ * `--fork-session` and clears this. Every send after is an ordinary resume.
+ */
+forkFrom: string | null, created: string, modified: string, archived: boolean, pinned: boolean, };
 
 /**
  * Session-level facts, known at startup.
@@ -826,7 +834,15 @@ permissionMode: ApprovalPolicy,
 /**
  * Defaulted so index entries written before this field parse as `Idle`.
  */
-status: SessionStatus, created: string, modified: string, archived: boolean, pinned: boolean, };
+status: SessionStatus, 
+/**
+ * An instruction, not a record of lineage: the session this one was forked
+ * from, set until the CLI has actually forked. The fork is lazy — copying
+ * this app's own log and index entry is instant, while the CLI's half only
+ * happens on a spawn — so the first send resumes the parent with
+ * `--fork-session` and clears this. Every send after is an ordinary resume.
+ */
+forkFrom: string | null, created: string, modified: string, archived: boolean, pinned: boolean, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

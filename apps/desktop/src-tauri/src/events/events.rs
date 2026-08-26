@@ -398,6 +398,20 @@ pub enum AgentEventPayload {
     Unrecognized,
 }
 
+impl AgentEventPayload {
+    /// Every archived picture this payload points at. Both arms hold paths under
+    /// `~/.dray/attachments/<session-id>/`, so anything moving a log between
+    /// sessions has to repoint them — see
+    /// [`copy_session_log`](crate::store::copy_session_log).
+    pub fn images_mut(&mut self) -> &mut [ImageRef] {
+        match self {
+            Self::UserMessage { images, .. } => images,
+            Self::ToolCallCompleted { result, .. } => &mut result.images,
+            _ => &mut [],
+        }
+    }
+}
+
 /// One answer the user can give to a [permission
 /// request](AgentEventPayload::PermissionRequested).
 ///
