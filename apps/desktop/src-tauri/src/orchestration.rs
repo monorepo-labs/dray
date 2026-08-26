@@ -8,9 +8,9 @@
 //! composer reaches, so a session created here is not a second kind of session.
 //!
 //! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock`, one
-//! request per connection. Access control is the socket's `0600` mode: nothing
-//! outside the user's own account can connect, and nothing on the network can
-//! reach it at all.
+//! request per connection. Nothing on the network can reach it at all, and
+//! access control is the containing directory's `0700` — see
+//! [`serve`](serve) for why the socket's own mode cannot be the boundary.
 
 use crate::{
     events::ApprovalPolicy,
@@ -59,9 +59,18 @@ const MAX_WALK: usize = 64;
 pub async fn serve(app: AppHandle) -> Result<()> {
     let path = dray_proto::default_socket_path().context("could not resolve the socket path")?;
 
-    if let Some(dir) = path.parent() {
-        tokio::fs::create_dir_all(dir).await.ok();
-    }
+    // Creates `~/.dray` *and narrows it to `0700`*, which is what actually
+    // guards this socket. `bind` applies the process umask, so under a
+    // permissive one the socket lands world-writable and stays that way until
+    // `restrict` runs a moment later — a window another local account can
+    // connect through and reach session creation unauthenticated. Measured:
+    // umask 022 gives 0755, umask 000 gives 0777.
+    //
+    // A directory cannot have that window. Connecting needs search permission
+    // on every directory in the path, so `0700` here settles it before the
+    // socket exists at all. The chmod below stays as a second line rather than
+    // the only one.
+    store::get_home_app_dir().await?;
 
     // A socket file outlives the process that made it — a crash or a SIGKILL
     // leaves one behind, and binding onto it fails with "address in use". The
@@ -94,9 +103,9 @@ pub async fn serve(app: AppHandle) -> Result<()> {
     }
 }
 
-/// `0600`. The socket is the whole authentication story, so this is not
-/// optional hardening — bound at the default mode, any account on the machine
-/// could create sessions.
+/// `0600` on the socket itself. Defence in depth behind the `0700` directory,
+/// which is the boundary that holds from before the socket exists — this one
+/// cannot, because `bind` has already applied the umask by the time it runs.
 fn restrict(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 

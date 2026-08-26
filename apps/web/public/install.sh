@@ -46,6 +46,17 @@ need() {
 
 need uname
 need tar
+
+# `shasum` on macOS, `sha256sum` on most linux. Required, not optional: an
+# archive this script is about to make executable and run has to be the one the
+# release published.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+  die "sha256sum or shasum is required to verify the download."
+fi
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
@@ -68,6 +79,28 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 say "Downloading dray ($TARGET)…"
 fetch "$URL" "$TMP/dray.tar.gz" || die "could not download $URL"
+fetch "$URL.sha256" "$TMP/dray.tar.gz.sha256" || die "could not download the checksum for $URL"
+
+# Before unpacking, not after: everything past this point treats the archive as
+# trusted, and the last step runs a binary out of it.
+#
+# The checksum is published alongside the archive rather than derived from it,
+# so this catches a truncated download or a tampered mirror. It is not a
+# signature and does not pretend to be — an attacker who can replace the release
+# asset can replace this file too. Signing is the next step up and wants a key
+# with somewhere safe to live.
+EXPECTED=$(cut -d' ' -f1 < "$TMP/dray.tar.gz.sha256")
+ACTUAL=$(sha256 "$TMP/dray.tar.gz")
+
+[ -n "$EXPECTED" ] || die "the published checksum was empty; refusing to install."
+
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  die "checksum mismatch — refusing to install.
+    expected $EXPECTED
+    got      $ACTUAL"
+fi
+
+say "Checksum verified."
 
 tar -xzf "$TMP/dray.tar.gz" -C "$TMP" || die "could not unpack the download"
 [ -f "$TMP/dray" ] || die "the archive did not contain a dray binary"

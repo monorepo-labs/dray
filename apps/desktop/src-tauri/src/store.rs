@@ -117,7 +117,31 @@ pub async fn get_home_app_dir() -> Result<PathBuf> {
     }
 
     fs::create_dir_all(&path).await?;
+    restrict_to_owner(&path).await;
+
     Ok(path)
+}
+
+/// Narrows the app directory to the owner alone.
+///
+/// Two things depend on it. Everything under here is private by content —
+/// transcripts hold whole files the agent read and wrote — and the default
+/// `0755` left all of it readable by any other local account.
+///
+/// It is also the orchestration socket's real authentication boundary.
+/// Connecting to a unix socket needs search permission on every directory in
+/// its path, so a `0700` parent settles the question *before the socket
+/// exists* — where the socket's own mode cannot, since `bind` applies the
+/// process umask and a permissive one leaves a window between bind and chmod.
+///
+/// Best-effort: a directory that cannot be narrowed is worth carrying on with,
+/// since the alternative is an app that refuses to start.
+async fn restrict_to_owner(path: &PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+        eprintln!("[app dir permissions err] {e}");
+    }
 }
 
 /// `~/.dray/sessions`, creating it if needed.
