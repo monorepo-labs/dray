@@ -1813,6 +1813,38 @@ mod tests {
         fs::remove_dir_all(&dir).await.ok();
     }
 
+    /// `send_msg` undoes the tree when the index write that follows it fails,
+    /// because removal is offered from a session's own row and an orphan with
+    /// no row is one nothing in the app can reach. That rollback is this pair,
+    /// so the pair has to close: no directory, no branch, no registration.
+    #[tokio::test]
+    async fn a_created_worktree_is_removable_again() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let path = create_worktree(at, "rolled-back", "HEAD").await.unwrap();
+
+        let deleted_branch = remove_worktree(at, &path, Some("worktree-rolled-back"))
+            .await
+            .expect("a tree we made a moment ago is ours to remove");
+
+        // Unlocked, so this needs none of the unlock dance a `-w` tree does —
+        // only the CLI locks trees, and only a `-p` run fails to release one.
+        assert!(deleted_branch, "the branch outlived its worktree");
+        assert!(!Path::new(&path).exists());
+
+        let list = git(at, &["worktree", "list", "--porcelain"]).await.unwrap();
+        assert!(!list.contains("rolled-back"), "registration left behind");
+
+        // And the name is free again, which is what makes the rollback complete
+        // rather than merely tidy.
+        create_worktree(at, "rolled-back", "HEAD")
+            .await
+            .expect("a rolled-back name must not be burned");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
     #[tokio::test]
     async fn a_detached_head_is_no_branch() {
         let dir = scratch_repo().await;

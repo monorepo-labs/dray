@@ -352,6 +352,20 @@ impl SessionManager {
                 None => cwd.to_string(),
             };
 
+            // Read back rather than taken from the caller: the picker sends
+            // `None` when the user didn't touch it, and the repo is still on
+            // some branch worth recording. Non-repos report `None` and stay that
+            // way.
+            //
+            // Ahead of the worktree below, though it reads the project root and
+            // `worktree add` never moves that HEAD: it is one more fallible step
+            // that would otherwise sit inside the window the rollback has to
+            // cover, and the shortest window is the one least able to go wrong.
+            let branch = match branch {
+                Some(b) => Some(b.to_string()),
+                None => git::list_branches(cwd).await?.current,
+            };
+
             // A base ref is the one case Dray makes the tree itself. The harness
             // cannot be told where to fork from — `-w` resolves the default
             // branch and fetches `origin/<it>`, and its flag surface exposes no
@@ -360,10 +374,9 @@ impl SessionManager {
             // which would mean checking a ref out over whatever the reader has
             // in the project root.
             //
-            // Ahead of the index write, unlike the spawn below: a session whose
-            // process fails to start is still worth a row, since its transcript
-            // and its worktree exist, while a base git cannot resolve has left
-            // nothing behind at all and the caller is getting the error.
+            // Ahead of the index write, unlike the spawn below: a base git
+            // cannot resolve has left nothing behind at all and the caller is
+            // getting the error.
             let owned_worktree = match (base_ref, &worktree_name) {
                 (Some(base), Some(name)) => {
                     git::create_worktree(cwd, name, base).await?;
@@ -371,15 +384,6 @@ impl SessionManager {
                 }
                 (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
                 (None, _) => false,
-            };
-
-            // Read back rather than taken from the caller: the picker sends
-            // `None` when the user didn't touch it, and the repo is still on
-            // some branch worth recording. Non-repos report `None` and stay that
-            // way.
-            let branch = match branch {
-                Some(b) => Some(b.to_string()),
-                None => git::list_branches(cwd).await?.current,
             };
 
             // Indexed before the process spawns, so a session that fails to
@@ -397,7 +401,28 @@ impl SessionManager {
                 permission_mode,
                 parent_session_id,
             );
-            append_session_index_item(item.clone()).await?;
+
+            // The one failure that has to undo the tree, and the row that just
+            // failed to be written is exactly why: removal is offered from a
+            // session's own row, so an orphan here is one nothing in the app can
+            // ever reach and `git worktree remove` by hand is the only recovery.
+            // The spawn below is deliberately *not* covered — by then the row
+            // exists, and deleting the session already takes the tree with it.
+            //
+            // Only a tree Dray made. A `-w` one does not exist yet, and the
+            // failed create above left nothing to undo.
+            if let Err(e) = append_session_index_item(item.clone()).await {
+                if owned_worktree {
+                    // Logged, not propagated: the caller has to see what
+                    // actually failed, not how the tidy-up went.
+                    if let Err(undo) =
+                        git::remove_worktree(cwd, &session_cwd, item.branch.as_deref()).await
+                    {
+                        eprintln!("could not roll back {session_cwd}: {undo}");
+                    }
+                }
+                return Err(e);
+            }
 
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.
