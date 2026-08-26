@@ -56,10 +56,12 @@ pub enum Request {
 #[serde(rename_all = "camelCase")]
 pub struct CreateSession {
     pub prompt: String,
-    /// The repo the session runs in. The CLI fills this from `git rev-parse
-    /// --show-toplevel` when `--project` is absent, so a call from a terminal
-    /// lands in the repo it was made from; `None` falls back to the parent
-    /// session's project, and with neither the server refuses.
+    /// The repo the session runs in — the main worktree, which the CLI fills
+    /// from `git worktree list` when `--project` is absent, so a call from a
+    /// terminal lands in the repo it was made from and a call from inside a
+    /// linked worktree still names the repo rather than that tree. `None` falls
+    /// back to the parent session's project, and with neither the server
+    /// refuses.
     #[serde(default)]
     pub project_path: Option<String>,
     /// `None` inherits the parent session's model, or the app's default with no

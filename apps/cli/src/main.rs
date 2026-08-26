@@ -415,12 +415,26 @@ fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
         return Some(path.to_string_lossy().into_owned());
     }
 
-    git_toplevel()
+    repo_root(Path::new("."))
 }
 
-fn git_toplevel() -> Option<String> {
+/// The repo `dir` belongs to — its **main** worktree, not whichever linked one
+/// we happen to be standing in.
+///
+/// `rev-parse --show-toplevel` answers the linked worktree, and that is what an
+/// agent running in a Dray worktree session was putting on the wire as the new
+/// session's project. The app then computed a `cwd` of
+/// `<that worktree>/.claude/worktrees/<name>`, which `claude -w` never creates —
+/// it resolves the repo for itself — so Changes, commit and PR all read a
+/// directory that does not exist.
+///
+/// `worktree list` puts the main worktree first whatever you run it from, and
+/// that is what `project_path` has always meant: the grouping key worktree
+/// sessions list under.
+fn repo_root(dir: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .args(["worktree", "list", "--porcelain"])
         .output()
         .ok()?;
 
@@ -428,8 +442,26 @@ fn git_toplevel() -> Option<String> {
         return None;
     }
 
-    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    (!path.is_empty()).then_some(path)
+    main_worktree(&String::from_utf8(output.stdout).ok()?)
+}
+
+/// The first record's path, or `None` for a bare repo — nothing is checked out
+/// there, so it is no place to run a session, and `None` sends the app to the
+/// calling session's own project instead.
+///
+/// Not `-z`: that needs git 2.36, and anything older fails the command outright
+/// and answers nothing. The line format is only ambiguous for a repo root with
+/// a newline in its path.
+fn main_worktree(porcelain: &str) -> Option<String> {
+    let mut lines = porcelain.lines();
+    let path = lines.next()?.strip_prefix("worktree ")?;
+
+    // Records are separated by a blank line, so this reads the first one alone.
+    if lines.take_while(|l| !l.is_empty()).any(|l| l == "bare") {
+        return None;
+    }
+
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 #[cfg(test)]
@@ -505,5 +537,102 @@ mod tests {
         assert!(SKILL.starts_with("---\n"), "skill needs YAML frontmatter");
         assert!(SKILL.contains("\nname: dray\n"));
         assert!(SKILL.contains("\ndescription: "));
+    }
+
+    #[test]
+    fn a_bare_repo_is_no_project() {
+        assert_eq!(main_worktree("worktree /srv/repo.git\nbare\n"), None);
+    }
+
+    #[test]
+    fn only_the_first_record_is_read() {
+        // `bare` on a later record would be a repo that has no main worktree
+        // at all, but reading past the blank line is how a second record's
+        // attribute gets mistaken for the first one's.
+        let porcelain = "worktree /a\nHEAD abc\nbranch refs/heads/main\n\nworktree /b\nbare\n";
+        assert_eq!(main_worktree(porcelain).as_deref(), Some("/a"));
+    }
+
+    #[test]
+    fn nothing_at_all_is_no_project() {
+        assert_eq!(main_worktree(""), None);
+        assert_eq!(main_worktree("HEAD abc\n"), None);
+    }
+
+    /// The one that matters, and it needs a real linked worktree: the whole
+    /// defect was a git subcommand answering differently depending on which
+    /// directory it ran in, which no string fixture can show.
+    #[test]
+    fn resolving_from_inside_a_worktree_answers_the_repo() {
+        let Some(repo) = scratch_repo() else {
+            return;
+        };
+
+        let tree = repo.join(".claude").join("worktrees").join("child");
+        git(&repo, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+
+        let root = repo.to_string_lossy().into_owned();
+        assert_eq!(repo_root(&repo).as_deref(), Some(root.as_str()));
+        assert_eq!(repo_root(&tree).as_deref(), Some(root.as_str()));
+
+        // The reading this replaced, kept as the reason the test exists.
+        assert_eq!(
+            show_toplevel(&tree).as_deref(),
+            Some(tree.to_string_lossy().as_ref())
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_plain_directory_is_no_project() {
+        let dir = std::env::temp_dir().join(format!("dray-clitest-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(repo_root(&dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A throwaway repo with one commit, canonicalized because git prints real
+    /// paths and macOS hands out `/var/…` symlinks into `/private/var/…`.
+    /// `None` when there is no usable git, which is not a failure worth failing
+    /// the suite over.
+    fn scratch_repo() -> Option<PathBuf> {
+        let dir = std::env::temp_dir().join(format!("dray-clitest-{}", std::process::id()));
+        // A run that failed before its cleanup would otherwise leave a repo
+        // here whose `child` worktree already exists.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok()?;
+        let dir = std::fs::canonicalize(&dir).ok()?;
+
+        if !git(&dir, &["init", "-q", "."]) {
+            return None;
+        }
+        git(&dir, &["config", "user.email", "t@example.com"]);
+        git(&dir, &["config", "user.name", "Test"]);
+        std::fs::write(dir.join("keep.txt"), "a\n").ok()?;
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+
+        Some(dir)
+    }
+
+    fn git(at: &Path, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .current_dir(at)
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    fn show_toplevel(at: &Path) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .current_dir(at)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .ok()?;
+
+        Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
     }
 }
