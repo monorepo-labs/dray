@@ -444,19 +444,38 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-/// Marks a dev build so it can't be mistaken for the installed app. Gated on
-/// `import.meta.env.DEV`, which Vite folds to a constant — the badge and this
-/// component are dropped from a production bundle entirely.
-export function DevBadge({ className }: { className?: string }) {
+/// What the dev badge says for a given branch.
+///
+/// On `main` it stays bare: that is the common case, and naming the default
+/// branch is a word the reader skips every time to reach the one that matters.
+/// A worktree's branch is already `worktree-<name>`, so the prefix goes and the
+/// badge names the tree the way the sidebar and `dray ls` do — stripped after
+/// the `main` test, or a tree named `main` would read as no branch at all.
+export function devBadgeLabel(branch: string | null): string {
+  if (branch === null || branch === "" || branch === "main") return "Dev";
+  return `Dev · ${branch.replace(/^worktree-/, "")}`;
+}
+
+/// Marks a dev build so it can't be mistaken for the installed app, and names
+/// the checkout it runs from — with several worktrees open, two dev builds are
+/// otherwise identical.
+///
+/// Gated on `import.meta.env.DEV`, which Vite folds to a constant, so this
+/// component and the branch it reads both drop out of a production bundle.
+///
+/// Muted, and at the sidebar's bottom edge: it marks the build rather than
+/// offering anything to act on, so it belongs with the standing information and
+/// not beside the app's name, and the orange it wore made the corner's quietest
+/// fact its loudest. One line — a long branch truncates rather than pushing the
+/// row, with `title` restoring it.
+export function DevBadge() {
   return (
-    <span
-      className={cn(
-        "rounded bg-orange-500/15 px-1.5 py-0.5 font-mono text-[10px] leading-none font-medium tracking-wide text-orange-500 uppercase",
-        className,
-      )}
+    <div
+      title={__DEV_BRANCH__ ?? undefined}
+      className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
-      Dev
-    </span>
+      {devBadgeLabel(__DEV_BRANCH__)}
+    </div>
   );
 }
 
@@ -551,7 +570,6 @@ export default function Sidebar({
         )}
         data-tauri-drag-region="deep"
       >
-        {import.meta.env.DEV && <DevBadge className="mr-auto" />}
         {/* The toggle holds the strip's outer edge in both layouts and settings
             sit inboard of it, so the one control also drawn in the app header
             never changes which end of the row it is at. */}
@@ -770,6 +788,10 @@ export default function Sidebar({
         manual={updateManual}
         onInstall={onInstallUpdate}
       />
+
+      {/* Under the update row, and last in the column: both are standing
+          information, and this is the half nobody is waiting on. */}
+      {import.meta.env.DEV && <DevBadge />}
     </aside>
   );
 }
