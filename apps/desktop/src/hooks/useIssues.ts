@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+
+import {
+  issueGeneration,
+  newIssueGeneration,
+  subscribeIssueGeneration,
+} from "@/lib/issue";
 
 import type {
   Issue,
@@ -47,7 +53,12 @@ const keyOf = (query: IssueQuery) =>
     query.settled,
   ]);
 
-function remember(key: string, issues: Issue[]) {
+function remember(key: string, issues: Issue[], generation: number) {
+  // A read issued before the connection changed must not put its answer back
+  // after `forgetIssues` took it out — and above all must not re-stamp it fresh,
+  // which would tell every later reader the old key's answer is current.
+  if (generation !== issueGeneration()) return;
+
   cache.set(key, issues);
   fetchedAt.set(key, Date.now());
 
@@ -77,7 +88,9 @@ const detailFetchedAt = new Map<string, number>();
 /// fills it much faster.
 const MAX_DETAILS = 24;
 
-function rememberDetail(identifier: string, detail: IssueDetail) {
+function rememberDetail(identifier: string, detail: IssueDetail, generation: number) {
+  if (generation !== issueGeneration()) return;
+
   detailCache.set(identifier, detail);
   detailFetchedAt.set(identifier, Date.now());
 
@@ -114,6 +127,11 @@ export function forgetIssues() {
   fetchedAt.clear();
   detailCache.clear();
   detailFetchedAt.clear();
+  // Last, and it is what makes the clearing stick: a read already in flight is
+  // holding the generation it started under, so from here its write is refused.
+  // It also wakes every mounted hook, which would otherwise keep drawing a body
+  // read with a key that has since been revoked.
+  newIssueGeneration();
 }
 
 /// What `invoke` rejected with, as the backend meant it.
@@ -179,11 +197,15 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
     let cancelled = false;
     setLoading(true);
 
+    // Captured before the request goes out, not read when it lands: that is the
+    // whole of the guard.
+    const reading = issueGeneration();
+
     const run = () => {
       invoke<Issue[]>("list_issues", { query, limit: PAGE_LIMIT })
         .then((next) => {
           if (cancelled) return;
-          remember(key, next);
+          remember(key, next, reading);
           setIssues(next);
           setUnavailable(null);
         })
@@ -308,6 +330,26 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
   // a session that is streaming.
   const key = issues.map((issue) => issue.identifier).join(",");
 
+  // The tracker's own id for each link, where it has one. Rebuilt on the same
+  // key rather than held in state: it is a lookup table for the read below, and
+  // nothing on screen is drawn from it.
+  const idFor = useMemo(() => {
+    const byIdentifier = new Map<string, string>();
+    for (const issue of issues) {
+      // A blind link writes the identifier into both fields, and an id that is
+      // not the tracker's own names nothing on its side — passing it would cost
+      // a lookup that can only 404 before the fallback runs.
+      if (issue.id && issue.id !== issue.identifier) byIdentifier.set(issue.identifier, issue.id);
+    }
+    return byIdentifier;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  // Subscribed rather than only read, so a connection changing under a mounted
+  // panel re-runs the read below. Without it the tab kept drawing a body that
+  // was fetched with a key since revoked.
+  const connection = useSyncExternalStore(subscribeIssueGeneration, issueGeneration);
+
   // Carries the key it was built for, and anything read under another key is
   // dropped *during render* rather than in the effect. The effect runs after
   // paint, so state alone left one frame of the previous issue's description
@@ -348,11 +390,17 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
     let cancelled = false;
     setLoading(true);
 
+    const reading = issueGeneration();
+
     Promise.all(
       wanted.map((identifier) =>
-        invoke<IssueDetail>("get_issue", { identifier })
+        // The tracker's own id travels with the identifier where the link has
+        // one. It is the stable half: an issue moved to another team renumbers,
+        // and a lookup by the recorded spelling then answers "no such issue" for
+        // work that is very much still there.
+        invoke<IssueDetail>("get_issue", { identifier, id: idFor.get(identifier) ?? null })
           .then((detail) => {
-            rememberDetail(identifier, detail);
+            rememberDetail(identifier, detail, reading);
             return detail;
           })
           .catch((e) => {
@@ -376,7 +424,7 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [key, active, generation]);
+  }, [key, active, generation, connection, idFor]);
 
   return {
     details: current.details,
@@ -395,6 +443,12 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
         detailCache.delete(identifier);
         detailFetchedAt.delete(identifier);
       }
+      // The whole generation, not just these identifiers: an upload that failed
+      // to fetch is cached under its own URL in another module, and Refresh is
+      // the reader asking for exactly that again. It also refuses the write of
+      // any read still in flight, which would otherwise re-stamp what was just
+      // dropped.
+      newIssueGeneration();
       setGeneration((n) => n + 1);
     }, [key]),
   };

@@ -83,7 +83,7 @@ type SidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onOpenSettings: () => void;
-  onSelect: (sessionId: string) => Promise<void>;
+  onSelect: (sessionId: string) => void;
   onNewSession: () => void;
   /// Opens the issues page in the main column. It is not a session, so it does
   /// not move the selection — coming back from it lands on the session that was
@@ -1328,7 +1328,7 @@ function SessionRow({
   /// Something is still refreshing this row's mark. False in the archived view,
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
-  onSelect: (sessionId: string) => Promise<void>;
+  onSelect: (sessionId: string) => void;
   /// This row has a parent in the same list, so 'Detach from parent' is a real
   /// offer. Kept apart from `depth` only because a cyclic index draws a row at
   /// the top level that still has a link worth cutting.

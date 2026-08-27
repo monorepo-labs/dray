@@ -603,13 +603,24 @@ function App() {
     if (!selectedSessionId) setPanelOpen(false);
   }, [selectedSessionId]);
 
+  // Every way of arriving at a session, so none of them can forget to leave the
+  // issues page. The two sidebar buttons closed it and the chords beside them
+  // did not, which made ⌘N and ⌘⇧↑/↓ look inert: they moved the selection under
+  // a column still full of issues, and the change only showed up on the way
+  // back. The page itself is left as it was — its filters and its scroll come
+  // back with it — so this is a navigation, not a dismissal.
+  const goToSession = (go: () => void) => {
+    setIssuesOpen(false);
+    go();
+  };
+
   const toggleSidebar = () => setCollapsed((prev) => !prev);
   useHotkey("b", toggleSidebar);
-  useHotkey("n", handleNewSession);
+  useHotkey("n", () => goToSession(handleNewSession));
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("ArrowUp", () => stepSession(-1), { shift: true });
-  useHotkey("ArrowDown", () => stepSession(1), { shift: true });
+  useHotkey("ArrowUp", () => goToSession(() => stepSession(-1)), { shift: true });
+  useHotkey("ArrowDown", () => goToSession(() => stepSession(1)), { shift: true });
   // ⌘E for the right pane against ⌘B for the left.
   //
   // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:
@@ -705,16 +716,10 @@ function App() {
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
-          onSelect={async (sessionId) => {
-            // A session is what the column shows now. The page is left as it
-            // was — its filters and its scroll come back with it.
-            setIssuesOpen(false);
-            await handleSelectSessionIndexItem(sessionId);
-          }}
-          onNewSession={() => {
-            setIssuesOpen(false);
-            handleNewSession();
-          }}
+          onSelect={(sessionId) =>
+            goToSession(() => void handleSelectSessionIndexItem(sessionId))
+          }
+          onNewSession={() => goToSession(handleNewSession)}
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
           onDetach={detachSession}
@@ -735,13 +740,13 @@ function App() {
             // Settling the open session leaves nothing to look at but the
             // unsettle bar, so it goes back to the empty composer instead.
             if (flags.archived === true && sessionId === selectedSessionId) {
-              handleNewSession();
+              goToSession(handleNewSession);
             } else if (flags.archived === false) {
               // Unsettling only happens from the settled list, and the row
               // just left it — follow it back to where it landed, onto the
               // row itself.
               if (showArchived) setShowArchived(false);
-              void handleSelectSessionIndexItem(sessionId);
+              goToSession(() => void handleSelectSessionIndexItem(sessionId));
             }
           }}
           onFork={forkSession}
@@ -1025,7 +1030,7 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) => void handleSelectSessionIndexItem(id)}
+      onSelect={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a

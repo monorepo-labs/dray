@@ -108,6 +108,19 @@ pub struct SendOutcome {
     /// `Some` when a turn was already running, so the prompt is held rather
     /// than sent. The frontend draws it as pending and can still take it back.
     pub queued: Option<QueuedMessage>,
+    /// Every issue the session is linked to now, as written.
+    ///
+    /// Answered on **every** path — created, live, queued and resumed — because
+    /// a `#DRA-53` is expanded and recorded on every one of them, and the
+    /// frontend has no other way to learn what a prompt just linked. Without it
+    /// a tag typed into an existing session persisted in Rust and reached the
+    /// panel only on a reselect or a restart: the Issue tab went on drawing the
+    /// session's old links while the index on disk held the new ones.
+    ///
+    /// The whole list rather than what this send added, for [`store::
+    /// link_session_issue`]'s reason — re-tagging *replaces* an entry, so what
+    /// changed is not a set the caller can apply on its own.
+    pub issues: Vec<IssueRef>,
 }
 
 /// Drives [`SessionStatus`] from the mapped event stream plus the user's own
@@ -512,6 +525,7 @@ impl SessionManager {
             // Returned so the frontend learns the resolved worktree name and
             // the backend-truncated title rather than guessing either.
             return Ok(SendOutcome {
+                issues: item.issues.clone(),
                 snapshot: Some(SessionSnapshot {
                     index_item: item,
                     events,
@@ -576,9 +590,20 @@ impl SessionManager {
         // says what the session is about, and the panel's tab should not wait
         // on a boundary to appear. Failures are logged and dropped — the link
         // is a record, and losing one must not cost the send.
+        //
+        // What each write answered with is kept, because that is what goes back
+        // to the frontend: re-tagging *replaces* an entry rather than appending
+        // one, so the list as written is not something the caller could work out
+        // from `issues` alone. A session nothing was tagged on answers with the
+        // links it already had, so every path can report the same fact.
+        let mut linked = indexed
+            .as_ref()
+            .map(|item| item.issues.clone())
+            .unwrap_or_default();
         for issue in &issues {
-            if let Err(e) = link_session_issue(session_id, issue.clone()).await {
-                eprintln!("[issue link err] {e:#}");
+            match link_session_issue(session_id, issue.clone()).await {
+                Ok(next) => linked = next,
+                Err(e) => eprintln!("[issue link err] {e:#}"),
             }
         }
 
@@ -613,13 +638,17 @@ impl SessionManager {
                 if tool_in_flight {
                     s.queue_and_flush(prompt, attachment_paths, &issues, from, app)
                         .await;
-                    return Ok(SendOutcome::default());
+                    return Ok(SendOutcome {
+                        issues: linked,
+                        ..Default::default()
+                    });
                 }
 
                 let queued = s.queue_msg(prompt, attachment_paths, &issues, from).await;
                 return Ok(SendOutcome {
                     snapshot: None,
                     queued: Some(queued),
+                    issues: linked,
                 });
             }
 
@@ -636,7 +665,10 @@ impl SessionManager {
             let baseline = git::snapshot_tree(&session_cwd).await;
             s.send_msg(prompt, attachment_paths, &issues, baseline, from, app)
                 .await?;
-            return Ok(SendOutcome::default());
+            return Ok(SendOutcome {
+                issues: linked,
+                ..Default::default()
+            });
         }
 
         touch_session_index_item(session_id, model, effort, permission_mode).await?;
@@ -691,7 +723,10 @@ impl SessionManager {
             .send_msg(prompt, attachment_paths, &issues, baseline, from, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
-        Ok(SendOutcome::default())
+        Ok(SendOutcome {
+            issues: linked,
+            ..Default::default()
+        })
     }
 
     /// Copies a session onto a new id, to be continued separately from the one

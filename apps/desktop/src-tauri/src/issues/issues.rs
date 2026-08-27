@@ -407,10 +407,16 @@ pub async fn read_key(tracker: IssueTracker) -> Option<String> {
 
 /// Writes the file whole at `0600`, temp file included.
 ///
-/// The mode is set on the **temp** file before anything is written into it, not
-/// on the final one after the rename: `fs::write` creates at the process umask,
-/// so setting it afterwards leaves a window in which the key sits on disk
-/// world-readable. Narrow, and avoidable for one extra call.
+/// The mode rides the **create**, on the temp file, rather than being set after
+/// the write or on the final file after the rename. `fs::write` creates at the
+/// process umask, so every other order leaves a window in which the key sits on
+/// disk world-readable — a `chmod` after the write closes a wide window and
+/// leaves a narrow one, where `OpenOptions::mode` leaves none at all: the file
+/// never exists with a wider mode for a single byte to be written into.
+///
+/// `mode` applies only to a file this call creates, which is what the
+/// `create_new` beside it guarantees. A temp file left behind by a crashed
+/// write could otherwise be one somebody else made, at whatever mode they chose.
 async fn write_credentials(next: &HashMap<String, String>) -> Result<(), String> {
     write_credentials_at(&credentials_path().await?, next).await
 }
@@ -425,20 +431,34 @@ async fn write_credentials_at(
 
     let body = serde_json::to_string_pretty(next).map_err(|e| e.to_string())?;
 
-    tokio::fs::write(&tmp, &body)
+    // Cleared first, so `create_new` below is answering "did this call make the
+    // file" rather than failing over one a crashed write left behind.
+    let _ = tokio::fs::remove_file(&tmp).await;
+
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // `mode` is inherent on tokio's own `OpenOptions` under unix — no ext trait
+    // to import, and none to forget.
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options
+        .open(&tmp)
         .await
         .map_err(|e| format!("could not write the credentials file: {e}"))?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) =
-            tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).await
-        {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            return Err(format!("could not secure the credentials file: {e}"));
-        }
+    let written = async {
+        use tokio::io::AsyncWriteExt;
+        file.write_all(body.as_bytes()).await?;
+        file.sync_all().await
     }
+    .await;
+
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("could not write the credentials file: {e}"));
+    }
+    drop(file);
 
     if let Err(e) = tokio::fs::rename(&tmp, path).await {
         // Or the next write inherits a stale temp file holding an old key.
@@ -569,12 +589,71 @@ pub fn parse_identifier(text: &str) -> Option<String> {
 /// said. The reverse — refusing the prompt — would make an issue tracker a
 /// dependency of typing.
 ///
+/// **Best effort does not extend to losing a named issue.** A tag the reader
+/// wrote is *in the prompt already*, so an unresolved one costs its title and
+/// nothing else. One arriving through `--issue` is not: dropping it left the
+/// model a prompt with no mention of the work at all, and answered identically
+/// to success — the caller asked for a session about `DRA-53` and got one about
+/// nothing. So a named issue that could not be resolved is appended bare and
+/// linked bare, exactly as `dray issue link` writes one. Absent metadata is an
+/// ordinary state here, not an error.
+///
 /// Sequential rather than concurrent: a prompt carries a handful of tags at
 /// most, and one at a time keeps the order they were written in.
-pub async fn expand_tags(prompt: &str, named: &[String]) -> (String, Vec<IssueRef>) {
-    let tagged = issue_tags(prompt);
+/// A link with the identifier and nothing else — what is written down when the
+/// tracker could not be asked, and what `dray issue link` writes when its caller
+/// passes no `--title`. `tag_text` drops the trailing space for one of these and
+/// `issueUrl` reads the empty address as none, so it draws as coloured text
+/// rather than a button opening nowhere.
+fn bare_ref(identifier: String) -> IssueRef {
+    IssueRef {
+        tracker: IssueTracker::Linear,
+        id: identifier.clone(),
+        identifier,
+        title: String::new(),
+        url: String::new(),
+    }
+}
 
-    let mut wanted: Vec<(String, bool)> = tagged.iter().map(|id| (id.clone(), true)).collect();
+pub async fn expand_tags(prompt: &str, named: &[String]) -> (String, Vec<IssueRef>) {
+    let wanted = wanted_tags(prompt, named);
+
+    if wanted.is_empty() {
+        return (prompt.to_string(), Vec::new());
+    }
+
+    // `None` is ordinary: nobody has connected a tracker. The named issues below
+    // still have to reach the prompt, so this is not a return.
+    let key = read_key(IssueTracker::Linear).await;
+
+    let mut resolved = Vec::with_capacity(wanted.len());
+    for (tag, _) in &wanted {
+        resolved.push(match &key {
+            // No id to try: a tag is a spelling, and the whole point of this
+            // call is to find out what it names.
+            Some(key) => match linear::get_issue(key, tag, None).await {
+                Ok(detail) => Some(detail.issue.to_ref()),
+                Err(e) => {
+                    eprintln!("[issue tag {tag}] {e:?}");
+                    None
+                }
+            },
+            None => None,
+        });
+    }
+
+    apply_tags(prompt, &wanted, resolved)
+}
+
+/// Every issue this prompt is about, each paired with whether the text already
+/// names it. Text first, in the order it was written; anything `--issue` named
+/// and the text did not, after.
+fn wanted_tags(prompt: &str, named: &[String]) -> Vec<(String, bool)> {
+    let mut wanted: Vec<(String, bool)> = issue_tags(prompt)
+        .into_iter()
+        .map(|id| (id, true))
+        .collect();
+
     for identifier in named {
         // Through the same parse the text goes through: a caller may write
         // `#DRA-53` or `dra-53`, and both have to reach the issue the picker
@@ -586,28 +665,37 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> (String, Vec<IssueRe
         }
     }
 
-    if wanted.is_empty() {
-        return (prompt.to_string(), Vec::new());
-    }
+    wanted
+}
 
-    let Some(key) = read_key(IssueTracker::Linear).await else {
-        return (prompt.to_string(), Vec::new());
-    };
-
-    let mut resolved = Vec::new();
+/// Builds the prompt the model is given and the links recorded beside it, from
+/// whatever the tracker managed to answer.
+///
+/// Split from the read above so the rule is testable without a key and without
+/// a network: what happens when nothing resolves is exactly the case worth
+/// pinning, and it is the one a test process cannot reach by asking Linear.
+fn apply_tags(
+    prompt: &str,
+    wanted: &[(String, bool)],
+    resolved: Vec<Option<IssueRef>>,
+) -> (String, Vec<IssueRef>) {
+    let mut links = Vec::new();
     let mut appended = Vec::new();
 
-    for (tag, in_text) in wanted {
-        match linear::get_issue(&key, &tag).await {
-            Ok(detail) => {
-                let reference = detail.issue.to_ref();
-                if !in_text {
-                    appended.push(tag_text(&reference));
-                }
-                resolved.push(reference);
-            }
-            Err(e) => eprintln!("[issue tag {tag}] {e:?}"),
+    for ((tag, in_text), found) in wanted.iter().zip(resolved) {
+        let reference = match found {
+            Some(reference) => reference,
+            // A tag the reader typed is already in the text and already says
+            // what it says, so an unresolved one is left alone. A named one has
+            // nothing in the text at all, so it goes in bare.
+            None if *in_text => continue,
+            None => bare_ref(tag.clone()),
+        };
+
+        if !*in_text {
+            appended.push(tag_text(&reference));
         }
+        links.push(reference);
     }
 
     let text = if appended.is_empty() {
@@ -616,7 +704,7 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> (String, Vec<IssueRe
         format!("{prompt}\n\n{}", appended.join("\n"))
     };
 
-    (text, resolved)
+    (text, links)
 }
 
 // ── commands ─────────────────────────────────────────────────────────────────
@@ -705,11 +793,19 @@ pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, 
 }
 
 /// One issue, opened — description and comments included.
+///
+/// `id` is optional because the caller does not always have one: the panel is
+/// drawing a link that already carries the tracker's own id, while the page is
+/// opening a row it just read. Passing it is what keeps an issue readable after
+/// it moves team and its identifier renumbers.
 #[tauri::command]
-pub async fn get_issue(identifier: String) -> Result<IssueDetail, IssueUnavailable> {
+pub async fn get_issue(
+    identifier: String,
+    id: Option<String>,
+) -> Result<IssueDetail, IssueUnavailable> {
     let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
-    linear::get_issue(&key, &identifier).await
+    linear::get_issue(&key, &identifier, id.as_deref()).await
 }
 
 /// A file uploaded to an issue, fetched with the stored key.
@@ -790,6 +886,47 @@ mod tests {
     /// but the owner can read it. Worth a test because the failure is silent —
     /// a key written at the process umask sits there world-readable and behaves
     /// identically in every other respect.
+    #[test]
+    fn a_named_issue_reaches_the_prompt_even_when_nothing_resolves() {
+        let wanted = wanted_tags("do the thing", &["DRA-53".into()]);
+        // No tracker connected, a revoked key, an unreachable Linear — every
+        // one of them arrives here as `None`, and this is the case that used to
+        // drop the issue and answer identically to success.
+        let (text, issues) = apply_tags("do the thing", &wanted, vec![None]);
+
+        assert!(text.contains("#DRA-53"), "the tag is missing from {text:?}");
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].identifier, "DRA-53");
+        // Bare — an identifier and no more, exactly as `dray issue link` writes
+        // one with no `--title`.
+        assert!(issues[0].title.is_empty());
+        assert!(issues[0].url.is_empty());
+    }
+
+    #[test]
+    fn a_tag_the_reader_typed_is_left_where_it_is() {
+        let prompt = "look at #DRA-53 please";
+        let wanted = wanted_tags(prompt, &[]);
+        let (text, issues) = apply_tags(prompt, &wanted, vec![None]);
+
+        // Already in the text, so nothing is appended and nothing is doubled.
+        assert_eq!(text, prompt);
+        // And nothing is recorded: the tag says what it says without a link
+        // behind it, where a named issue would have been lost entirely.
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn a_named_issue_the_text_already_names_is_not_appended_twice() {
+        let prompt = "look at #DRA-53 please";
+        let wanted = wanted_tags(prompt, &["dra-53".into()]);
+
+        // One entry, not two: `--issue` naming what the text already names is
+        // the same issue, however it was spelled.
+        assert_eq!(wanted, vec![("DRA-53".to_string(), true)]);
+        assert_eq!(apply_tags(prompt, &wanted, vec![None]).0, prompt);
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn the_credentials_file_is_owner_only() {

@@ -297,12 +297,27 @@ const handleSendMsg = async (
     // an ordinary `user_message` and retires it below. The status is already
     // `in_progress` and stays that way — the turn it was queued onto is the one
     // still running.
+    // Applied on every path below, queued included. A `#DRA-53` is expanded
+    // and recorded whether the prompt is sent or held, so the panel's Issue tab
+    // must not wait on a boundary — or on a reselect — to show what the session
+    // is now about. The backend answers with the list *as written*, because
+    // re-tagging replaces an entry rather than appending one.
+    const applySentIssues = () => {
+      setSessionIndexItems((prev) =>
+        prev.map((i) => (i.sessionId === sessionId ? { ...i, issues: outcome.issues } : i)),
+      );
+      setSessions((prev) =>
+        prev.map((s) => (s.sessionId === sessionId ? { ...s, issues: outcome.issues } : s)),
+      );
+    };
+
     if (outcome.queued) {
       const queued = outcome.queued;
       setQueuedBySession((prev) => ({
         ...prev,
         [sessionId]: [...(prev[sessionId] ?? []), queued],
       }));
+      applySentIssues();
       return;
     }
 
@@ -329,6 +344,7 @@ const handleSendMsg = async (
           : i,
       ),
     );
+    applySentIssues();
   } catch (e) {
     // A rejected invoke means the turn never started, so nothing will arrive to
     // clear the status — release it here rather than leaving the composer stuck.

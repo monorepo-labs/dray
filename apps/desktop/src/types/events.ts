@@ -969,7 +969,22 @@ snapshot: SessionSnapshot | null,
  * `Some` when a turn was already running, so the prompt is held rather
  * than sent. The frontend draws it as pending and can still take it back.
  */
-queued: QueuedMessage | null, };
+queued: QueuedMessage | null, 
+/**
+ * Every issue the session is linked to now, as written.
+ *
+ * Answered on **every** path — created, live, queued and resumed — because
+ * a `#DRA-53` is expanded and recorded on every one of them, and the
+ * frontend has no other way to learn what a prompt just linked. Without it
+ * a tag typed into an existing session persisted in Rust and reached the
+ * panel only on a reselect or a restart: the Issue tab went on drawing the
+ * session's old links while the index on disk held the new ones.
+ *
+ * The whole list rather than what this send added, for [`store::
+ * link_session_issue`]'s reason — re-tagging *replaces* an entry, so what
+ * changed is not a set the caller can apply on its own.
+ */
+issues: Array<IssueRef>, };
 
 export type SessionIndexItem = { sessionId: string, harness: Harness, 
 /**

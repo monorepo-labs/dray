@@ -606,9 +606,17 @@ pub async fn set_session_flags(
 
 /// Records an issue against a session, answering with the list as written.
 ///
-/// An issue already linked is *replaced* rather than appended, keyed on the
-/// tracker's own id: re-tagging is how a stale title gets refreshed, and the
-/// alternative is one issue drawn twice under two spellings of its name.
+/// An issue already linked is *replaced* rather than appended: re-tagging is how
+/// a stale title gets refreshed, and the alternative is one issue drawn twice
+/// under two spellings of its name.
+///
+/// Matched on the tracker's own id **or** the human identifier, within a
+/// tracker — the same reading [`unlink_session_issue`] takes, and for a sharper
+/// reason. The two write different things into `id`: a resolved link carries
+/// Linear's UUID, while one written blind (`dray issue link`, or a tag no key
+/// could be found for) carries the identifier itself. Keyed on `id` alone,
+/// `DRA-53` linked blind and `DRA-53` resolved a moment later are two rows for
+/// one issue. Neither spelling can collide with the other — one is a UUID.
 ///
 /// `modified` is left alone for [`set_session_flags`]'s reason — it orders the
 /// sidebar, and tagging must not jump the row to the top of it.
@@ -620,11 +628,11 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
         bail!("no such session: {session_id}");
     };
 
-    match item
-        .issues
-        .iter_mut()
-        .find(|linked| linked.id == issue.id && linked.tracker == issue.tracker)
-    {
+    match item.issues.iter_mut().find(|linked| {
+        linked.tracker == issue.tracker
+            && (linked.id == issue.id
+                || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
+    }) {
         Some(existing) => *existing = issue,
         None => item.issues.push(issue),
     }

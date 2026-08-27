@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { Download, File } from "lucide-react";
 
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { formatBytes } from "@/lib/format";
+import { issueGeneration, subscribeIssueGeneration } from "@/lib/issue";
 import { cn } from "@/lib/utils";
 import type { IssueAsset } from "@/types/events";
 
@@ -19,24 +20,46 @@ import type { IssueAsset } from "@/types/events";
 /// a `data:` URL, and only then is there something a `src` can point at.
 ///
 /// Cached per URL across mounts, `null` included. A description is re-rendered
-/// on every keystroke in the page's search box and on every panel refresh, and
-/// each of those would otherwise re-download every screenshot in it.
-const cache = new Map<string, IssueAsset | null>();
+/// on every keystroke in the page's search box, and each of those would
+/// otherwise re-download every screenshot in it.
+///
+/// **A failure is cached too, and only the generation gets it back.** Not
+/// caching one is worse than it looks — a fetch that failed would be retried on
+/// every render of the description holding it, which is a retry per keystroke.
+/// But a `null` kept forever is a screenshot that a reconnect and a Refresh can
+/// both fail to recover, and the reader is left pressing a button that provably
+/// does nothing. So every entry carries the connection generation it was read
+/// under, and one from an older generation is a miss: connecting a key, and
+/// pressing Refresh, each bump it.
+type Cached = { generation: number; asset: IssueAsset | null };
+
+const cache = new Map<string, Cached>();
 const inFlight = new Map<string, Promise<IssueAsset | null>>();
 
+/// The entry for `url` if one was read under the generation now current.
+function cached(url: string): Cached | undefined {
+  const entry = cache.get(url);
+  return entry && entry.generation === issueGeneration() ? entry : undefined;
+}
+
 function load(url: string): Promise<IssueAsset | null> {
-  const cached = cache.get(url);
-  if (cached !== undefined) return Promise.resolve(cached);
+  const entry = cached(url);
+  if (entry) return Promise.resolve(entry.asset);
 
   // Deduped, because one description can name the same image twice and React
   // may mount both halves in the same frame.
   const running = inFlight.get(url);
   if (running) return running;
 
+  // Captured before the request goes out. A read that started under the old key
+  // is written under the old key, so it is a miss for every later reader rather
+  // than an answer standing in for one nobody has asked for yet.
+  const generation = issueGeneration();
+
   const request = invoke<IssueAsset>("fetch_issue_asset", { url })
     .catch(() => null)
     .then((asset) => {
-      cache.set(url, asset);
+      cache.set(url, { generation, asset });
       inFlight.delete(url);
       return asset;
     });
@@ -46,12 +69,17 @@ function load(url: string): Promise<IssueAsset | null> {
 }
 
 function useAsset(url: string): { asset: IssueAsset | null; loading: boolean } {
-  const [asset, setAsset] = useState<IssueAsset | null>(() => cache.get(url) ?? null);
-  const [loading, setLoading] = useState(() => !cache.has(url));
+  const [asset, setAsset] = useState<IssueAsset | null>(() => cached(url)?.asset ?? null);
+  const [loading, setLoading] = useState(() => !cached(url));
+
+  // Subscribed, not read once: a reconnect or a Refresh has to reach a card
+  // already on screen, which is the one showing "Unavailable".
+  const generation = useSyncExternalStore(subscribeIssueGeneration, issueGeneration);
 
   useEffect(() => {
-    if (cache.has(url)) {
-      setAsset(cache.get(url) ?? null);
+    const entry = cached(url);
+    if (entry) {
+      setAsset(entry.asset);
       setLoading(false);
       return;
     }
@@ -67,7 +95,7 @@ function useAsset(url: string): { asset: IssueAsset | null; loading: boolean } {
     return () => {
       live = false;
     };
-  }, [url]);
+  }, [url, generation]);
 
   return { asset, loading };
 }

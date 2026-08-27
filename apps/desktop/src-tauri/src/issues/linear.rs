@@ -118,7 +118,26 @@ query($filter:IssueFilter,$first:Int!){
  }}}
 "#;
 
-/// One issue, opened.
+/// The same issue by its stable id, which is what a link records.
+///
+/// Tried first wherever one is held, because the identifier is not stable:
+/// moving an issue to another team renumbers it, `DRA-53` becomes `ENG-12`, and
+/// a lookup by the recorded spelling then answers "no such issue" for work that
+/// is very much still there. The UUID survives that move.
+const ISSUE_BY_ID: &str = r#"
+query($id:String!){
+ issue(id:$id){
+  id identifier title url priority updatedAt description
+  state{name type color}
+  assignee{name avatarUrl}
+  labels(first:10){nodes{name color}}
+  team{key}
+  project{name}
+  comments(first:50){nodes{body createdAt url user{name avatarUrl}}}
+ }}
+"#;
+
+/// One issue, opened by its human identifier.
 ///
 /// Looked up by team key and number rather than by handing the identifier to
 /// `issue(id:)`: that argument is the UUID, and whether it also resolves a
@@ -144,15 +163,23 @@ query($key:String!,$number:Float!){
 /// to it. The key travels to Linear or nowhere.
 const UPLOADS_HOST: &str = "uploads.linear.app";
 
-/// Whether `url` is one of Linear's own uploads, host-exactly.
+/// Whether `url` is one of Linear's own uploads, over HTTPS, host-exactly.
 ///
 /// Compared against the parsed host rather than by `starts_with` on the string:
 /// `https://uploads.linear.app.evil.test/x` passes a prefix test and is not
 /// Linear, and that is the whole point of the check.
+///
+/// The scheme is half of it, and the half that is easy to leave out. A host
+/// check alone accepts `http://uploads.linear.app/…`, and that request carries
+/// the key in cleartext for anyone on the path to read — an issue description is
+/// text somebody else wrote, so naming the right host over the wrong scheme is
+/// one line of markdown away. Rejected rather than upgraded to HTTPS: rewriting
+/// a URL somebody else supplied to make it acceptable is a guess about what they
+/// meant, and Linear's own uploads are HTTPS.
 pub fn is_upload(url: &str) -> bool {
     reqwest::Url::parse(url)
         .ok()
-        .and_then(|parsed| parsed.host_str().map(|host| host == UPLOADS_HOST))
+        .map(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some(UPLOADS_HOST))
         .unwrap_or(false)
 }
 
@@ -203,13 +230,24 @@ pub async fn fetch_asset(
         .filter(|mime| !mime.is_empty())
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    let body = response
-        .bytes()
+    // Streamed rather than `.bytes()`, and that is the cap actually being
+    // enforced. The advertised length above is a courtesy — a server may send
+    // none, or send one that lies — and `.bytes()` drains the whole body into
+    // memory *before* anything could reject it, so a file with no
+    // `Content-Length` was read in full however large it was. Same reading
+    // `cat-file --batch-check` exists for on the git side: refuse on the way in,
+    // not after.
+    let mut body: Vec<u8> = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| IssueUnavailable::Offline(e.to_string()))?;
-
-    if body.len() as u64 > max_bytes {
-        return Err(IssueUnavailable::Other("that file is too large".into()));
+        .map_err(|e| IssueUnavailable::Offline(e.to_string()))?
+    {
+        if body.len() as u64 + chunk.len() as u64 > max_bytes {
+            return Err(IssueUnavailable::Other("that file is too large".into()));
+        }
+        body.extend_from_slice(&chunk);
     }
 
     Ok(IssueAsset {
@@ -279,8 +317,37 @@ pub async fn list_issues(
     Ok(issues)
 }
 
-/// One issue by identifier (`DRA-53`), with its description and comments.
-pub async fn get_issue(key: &str, identifier: &str) -> Result<IssueDetail, IssueUnavailable> {
+/// One issue, with its description and comments.
+///
+/// `id` is the stable id off a link that was resolved once, and it is tried
+/// first: the identifier renumbers when an issue moves team, so a session linked
+/// to `DRA-53` that has since become `ENG-12` reads as an issue that no longer
+/// exists. The identifier is the fallback and not the other way round because it
+/// is the *only* thing a blind link carries — `dray issue link DRA-53` writes the
+/// identifier into both fields, so an `id` that is not a UUID names nothing on
+/// Linear's side and is skipped rather than asked about.
+///
+/// A UUID lookup that comes back empty falls through to the identifier too. The
+/// two disagree only for a link written against an issue since deleted, which is
+/// a corner worth answering with whatever is live rather than with nothing.
+pub async fn get_issue(
+    key: &str,
+    identifier: &str,
+    id: Option<&str>,
+) -> Result<IssueDetail, IssueUnavailable> {
+    if let Some(id) = id.filter(|id| is_stable_id(id)) {
+        match query(key, ISSUE_BY_ID, json!({ "id": id })).await {
+            Ok(data) => {
+                if let Some(node) = data.get("issue").filter(|node| !node.is_null()) {
+                    return read_detail(node, identifier);
+                }
+            }
+            // Not fatal: the identifier below is a second way to ask the same
+            // question, and answering it beats reporting the first attempt.
+            Err(e) => eprintln!("[issue {identifier}] by id: {e:?}"),
+        }
+    }
+
     let (team, number) = split_identifier(identifier).ok_or_else(|| {
         IssueUnavailable::Other(format!("{identifier} is not an issue identifier"))
     })?;
@@ -292,7 +359,20 @@ pub async fn get_issue(key: &str, identifier: &str) -> Result<IssueDetail, Issue
         .cloned()
         .ok_or_else(|| IssueUnavailable::Other(format!("No issue {identifier}")))?;
 
-    let issue = map_issue(&node)
+    read_detail(&node, identifier)
+}
+
+/// Whether `id` is Linear's own id rather than an identifier a blind link wrote
+/// into the same field. A UUID and a `DRA-53` cannot be confused for each other,
+/// which is the property `unlink_session_issue` already leans on.
+fn is_stable_id(id: &str) -> bool {
+    id.len() == 36
+        && id.split('-').map(str::len).eq([8, 4, 4, 4, 12])
+        && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+fn read_detail(node: &Value, identifier: &str) -> Result<IssueDetail, IssueUnavailable> {
+    let issue = map_issue(node)
         .ok_or_else(|| IssueUnavailable::Other(format!("Could not read {identifier}")))?;
 
     Ok(IssueDetail {
@@ -305,7 +385,7 @@ pub async fn get_issue(key: &str, identifier: &str) -> Result<IssueDetail, Issue
             .map(str::trim)
             .filter(|body| !body.is_empty())
             .map(str::to_string),
-        comments: map_comments(&node),
+        comments: map_comments(node),
     })
 }
 
@@ -630,6 +710,20 @@ mod tests {
         assert!(!is_upload("https://api.linear.app/graphql"));
         assert!(!is_upload("/relative/path.png"));
         assert!(!is_upload("not a url"));
+        // Right host, wrong scheme: that request would put the key on the wire
+        // in cleartext.
+        assert!(!is_upload("http://uploads.linear.app/a/b/c.png"));
+    }
+
+    #[test]
+    fn only_a_uuid_is_worth_asking_linear_about() {
+        // What a resolved link records.
+        assert!(is_stable_id("9c1a7f2e-0b64-4c3a-9f1d-7e5b2a8c4d61"));
+        // What a blind `dray issue link DRA-53` writes into the same field.
+        assert!(!is_stable_id("DRA-53"));
+        assert!(!is_stable_id(""));
+        // Right shape, wrong alphabet — a lookup on this can only 404.
+        assert!(!is_stable_id("9c1a7f2e-0b64-4c3a-9f1d-7e5b2a8c4dzz"));
     }
 
     #[test]

@@ -163,3 +163,43 @@ export function groupIssues(issues: Issue[]): IssueGrouping[] {
     issues: issues.filter((issue) => issue.state.kind === group.key),
   })).filter((group) => group.issues.length > 0);
 }
+
+/// Which connection every cached issue read belongs to.
+///
+/// Bumped whenever the answer to "who are we, and what may we read" changes: a
+/// key connected, a key disconnected, a reader pressing Refresh. Every issue
+/// cache in the app — lists, opened bodies, fetched uploads — is stamped with
+/// the generation it was read under, and a read that started under an older one
+/// is refused rather than written.
+///
+/// It is the counter `usePrMarks` already keeps, for the same reason and against
+/// the same failure. Clearing a cache is not enough on its own: a read issued
+/// *before* the clear lands after it and puts the entry straight back, and the
+/// damaging half is not the stale row but the stamp beside it, which tells every
+/// later reader the answer is current and suppresses the read that would correct
+/// it.
+let reads = 0;
+
+const listeners = new Set<() => void>();
+
+/// The generation a read starting now belongs to. Captured before the request
+/// goes out and checked again before anything is written.
+export function issueGeneration(): number {
+  return reads;
+}
+
+/// Invalidates every issue read in the app, and answers with the generation that
+/// replaces them.
+export function newIssueGeneration(): number {
+  reads += 1;
+  for (const listener of listeners) listener();
+  return reads;
+}
+
+/// For `useSyncExternalStore`, so a hook holding an answer read under the old
+/// generation re-reads rather than sitting on it until something else happens to
+/// remount it.
+export function subscribeIssueGeneration(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}

@@ -403,7 +403,7 @@ If it come back: commit = `add -A -- <paths>` then `commit -m … -- <paths>`, b
 
 **Own file, not field on `settings.json`, for two reason that both bite.** Settings rewritten by every analytics toggle and read on launch path where parse failure fall back to defaults — which would silently *forget* key. And `get_settings` hand that struct to frontend, which credential must never ride along with.
 
-**Mode set on temp file before anything written into it**, not on final one after rename: `fs::write` create at process umask, so setting it afterward leave window where key sit world-readable. Narrow, avoidable for one call, and pinned by test — failure silent otherwise, since world-readable key behave identically in every other respect.
+**Mode ride the *create*, on temp file** — not set after write, not on final file after rename. `fs::write` create at process umask, so every other order leave window where key sit world-readable: chmod after write close wide window and leave narrow one, where `OpenOptions::mode` leave none at all, since file never exist at wider mode for single byte to be written into. `create_new` beside it because `mode` apply only to file this call create, and temp file left by crashed write could be somebody else's at whatever mode they chose. Pinned by test — failure silent otherwise, since world-readable key behave identically in every other respect.
 
 Personal API key not OAuth, deliberately: Linear OAuth want client secret, secret want server to hold it, so that = drayhq.com work. Key path want neither. Connect form = where OAuth button land if that change.
 
@@ -424,6 +424,8 @@ First version appended "Linked issues" block after prompt and stripped it back o
 Description still not injected, and that separate call: agent have tracker's own MCP server and fetch what it want in shape it want, where description pasted in = wall of text at top of every prompt, stale moment somebody edit issue, and paid for again on every follow-up. Session may be started against three issue at once, so three tag beat three paragraph.
 
 **Resolution best effort, always.** Unreachable Linear, revoked key, tag naming issue that not exist — all leave tag as text, record no link, say nothing. Send must never fail because issue tracker down: that make tracker dependency of typing.
+
+**Best effort stop short of losing named issue.** Tag reader typed already *in* prompt, so unresolved one cost its title and nothing else. One arriving through `--issue` not: dropping it left model prompt with no mention of work at all, and **answered identically to success** — same test that earn protocol bump. So named issue that resolve to nothing get appended bare (`#DRA-53`) and linked bare, exactly as `dray issue link` write one. `wanted_tags` and `apply_tags` split out from read for this: what happen when nothing resolve = case worth pinning, and it one test process cannot reach by asking Linear.
 
 **One tagging rule per side of bridge.** Everything app send tag in prompt *text* — composer picker being only route — so `send_msg` command pass empty issue list always. CLI's `--issue` = other caller and name them outright, because flag not prose. Both merge inside `expand_tags`, deduplicated, and named-not-in-text one get their `#ID Title` appended so both caller end at same shape.
 
@@ -449,13 +451,17 @@ Absent metadata = **ordinary, not error**: bare identifier still usable link. `t
 
 **Upload sit behind same auth API do, which why webview cannot fetch either.** `<img src>` resolve to 401 and browser draw its own broken box — reading as "Dray cannot show this" rather than "this need key". `fetch_issue_asset` put key on that request and hand back `data:` URL; only then is there something `src` can point at. `csp: null` in tauri.conf, so `data:` need no scope entry.
 
+**Scheme checked with host, and it half easiest to leave out.** Host check alone accept `http://uploads.linear.app/…`, and that request carry key in cleartext for anyone on path — description = text somebody else wrote, so right host over wrong scheme = one line of markdown away. Rejected not upgraded: rewriting URL somebody else supplied to make it acceptable = guess about what they meant, and Linear's own uploads are HTTPS.
+
 **Host checked exactly, and that not defensive.** Description = text somebody else wrote, and it name URL this fetch get handed — so without check, issue could name any host and have app post credential to it. Compared on **parsed host**, never prefix: `uploads.linear.app.evil.test` pass `starts_with` and is not Linear. Stated twice (Rust `is_upload` decide where key go, [IssuePanel](apps/desktop/src/components/IssuePanel.tsx)'s copy decide what get drawn as asset), pinned on Rust side.
 
 **Image open full size in transcript's own lightbox.** Earn its place here more than there: pane = third of window, so screenshot of screen unreadable at only width it can be given. **One image per lightbox**, not description's whole set — these spread through prose rather than gathered in row, so there no set arrow would step through.
 
 **Image render as image, everything else as file card.** Card = icon, name, size, download glyph on hover — whole row = control, so glyph = hint about what click do not second target. Fallback one direction only: anything webview won't draw (unknown format, SVG, failed fetch) *become* card, since file somebody can download beat grey box. `onError` = second net under mime check, because mime can say `image/svg+xml` and still not render.
 
-**Size capped before body read.** `content_length` checked first so oversized file refused rather than read into memory then rejected — same reading `cat-file --batch-check` exist for on git side; arrived length capped again, for server that send none. Asset cached per URL across mount, `null` included: description re-render on every keystroke in search box, and each would otherwise re-download every screenshot in it.
+**Failed upload cached too, and only generation get it back.** Not caching one worse than it look — failed fetch retried on every render of description holding it, which = retry per keystroke in search box. But `null` kept forever = screenshot reconnect and Refresh both fail to recover, leaving reader pressing button that provably do nothing. So entry carry generation, and older one = miss.
+
+**Size capped before body read, and body *streamed* to that cap.** `content_length` checked first so oversized file refused rather than read into memory then rejected — same reading `cat-file --batch-check` exist for on git side. But advertised length = courtesy: server may send none, or send one that lie, and `.bytes()` drain whole body into memory *before* anything could reject it. So chunk loop stop at cap, which = cap actually being enforced. Asset cached per URL across mount, `null` included: description re-render on every keystroke in search box, and each would otherwise re-download every screenshot in it.
 
 **Panel read Linear's API with stored key. MCP nowhere near it.** Two channel answering two question and they never touch: key fill *this app's* screens (description, attachment, comment, status), MCP let *agent* read same issue in its own turn. That why connect form say MCP out loud — reader who set up one and not other otherwise find out from model working off one-line title.
 
@@ -489,6 +495,8 @@ Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per d
 
 **Toggle drawn only once something open to close.** Nothing on that page can *open* pane — row do that — so toggle at rest = control with one dead state. ⌘E close pick for same reason, and ⌘R follow session rule: pane win where open, list otherwise.
 
+**Every route to a session go through one helper.** `goToSession` in `App` close page then navigate, and chord, sidebar row, New Task, notice card and settle-then-follow all take it. Two sidebar button closed page and chord beside them did not, which made ⌘N and ⌘⇧↑/↓ read as **inert**: they moved selection under column still full of issues, and change only showed up on way back. Page itself left as it was — filter and scroll come back with it — so this navigation, not dismissal.
+
 **No Start button, and removing it was the fix not the gap.** It create session, so it must name project — and page workspace-wide, so button either guess which repo work belong in or grow picker of own beside every row. Tagging with `#` in composer already start work against issue, from place that know which project it in.
 
 **Two chip, everything else behind one control.** Assigned / Created = two question worth one press: what mine to do, what did I ask for. Team and project narrow *within* whichever chip on, so they sit in menu — more control across header = more thing to read past on every visit to change none of them. Team or project list with **one entry not offered at all**, and menu with neither **hidden outright**: filter whose only option = one you already have = control that cannot do anything, and this solo tool often pointed at single team. Trigger lit while anything on, so list narrowed on previous visit say so rather than read as empty workspace.
@@ -517,6 +525,8 @@ Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per d
 
 **Cache short-circuit must clear `loading` itself.** Only path that clear it without request having finished — cancelled read never reach own `finally`. Backspacing to already-cached query cancel in-flight read for longer one then short-circuit, so spinner turned forever with nothing behind it until some later read happened to end.
 
+**One generation counter over every issue cache** ([issue.ts](apps/desktop/src/lib/issue.ts)). Bumped whenever answer to "who are we, what may we read" change — key connected, key disconnected, reader pressing Refresh. List, opened body and fetched upload each stamp entry with generation it was read under, and read that start under older one **refused rather than written**. Same counter `usePrMarks` keep, against same failure: clearing cache not enough on own, since read issued *before* clear land after it and put entry straight back — and damaging half not stale row but **stamp**, which tell every later reader answer current and suppress read that would correct it. Also `useSyncExternalStore`d, so hook holding answer read under old key re-read rather than sit on it until something remount it.
+
 **Reads cached module-level, keyed on whole query, capped at 12.** Same bargain `useChanges` make: switching chip, opening page, coming back from session all hit cache, and 60s freshness window decide whether refetch run underneath. Failed read **change nothing** — no entry written, no stamp — so blip leave last good list on screen. `forgetIssues()` = one escape hatch, called from both integration write.
 
 **Refresh forget, then bump — and bump alone must never gate cache.** `generation` re-arm effect; `forgetIssues()` beside it = what make read actually happen, since effect's rule = "fetch what not fresh". Counter only ever go up, so reading it as "don't use cache" left every later chip flip and every later visit to page refetching for rest of session.
@@ -534,6 +544,12 @@ Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per d
 **GraphQL fail with 200 and zero exit**, same trap `gh` document — `errors` checked before `data`, and auth failure recognised both by status *and* by sentence, since Linear report bad key as ordinary GraphQL error too.
 
 **Issue looked up by team key and number, not by handing identifier to `issue(id:)`.** That argument = UUID; whether it also resolve human identifier = convenience nothing in schema promise. Filter on two halves exactly as precise and documented.
+
+**Send answer with links as written, every path.** Created, live, queued, resumed — `#DRA-53` expanded and recorded on all four, and frontend have no other way to learn what prompt just linked. Without it tag typed into existing session persisted in Rust and reached panel only on reselect or restart: Issue tab went on drawing old links while index on disk held new. Whole list not delta, for `link_session_issue`'s reason — re-tag *replace* entry, so what changed = not set caller could work out from its own request.
+
+**Link matched on tracker id *or* identifier, within tracker — both directions.** Two writer put different things in `id`: resolved link carry Linear's UUID, blind one (`dray issue link`, or tag no key could resolve) carry identifier itself. Keyed on `id` alone, `DRA-53` linked blind and `DRA-53` resolved moment later = two row for one issue. Unlink already read it this way; link now match same.
+
+**Detail read by UUID first, identifier as fallback.** Identifier not stable — issue moved to another team renumber, `DRA-53` become `ENG-12` — so lookup by recorded spelling answer "no such issue" for work very much still there. UUID survive move. Fallback not other way round because identifier = *only* thing blind link carry, so `id` that not UUID name nothing Linear-side and skipped rather than asked about (`is_stable_id`). Empty UUID answer fall through too.
 
 **Link = copy, not pointer.** `IssueRef` hold identifier, title, url, tracker id — so sidebar and prompt need no network call, and row still draw with tracker unreachable. It go stale (retitled issue keep old words until panel read it back), which right way round. Re-tagging **replace** entry with same id rather than append, so stale title refresh instead of issue drawn twice.
 
