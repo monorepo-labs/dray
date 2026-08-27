@@ -642,9 +642,15 @@ export default function Sidebar({
                     marksLive={!showArchived}
                     nested={isNested(item, items)}
                     // A row drawn under Pinned below the top is there because
-                    // its parent is — `splitPinned` only carries a nest whole,
-                    // so nothing reaches depth in this group on its own flag.
-                    inheritsPin={group.kind === "pinned" && depth > 0}
+                    // its parent is — `splitPinned` only carries a nest whole.
+                    // Unless it holds a pin of its own as well: that flag is
+                    // real and outlives the ancestor's, so hiding the action
+                    // there would strand it, and the row would come back pinned
+                    // for no reason the reader could see once the ancestor was
+                    // unpinned.
+                    inheritsPin={
+                      group.kind === "pinned" && depth > 0 && !item.pinned
+                    }
                     onSelect={onSelect}
                     onSetFlags={onSetFlags}
                     onFork={onFork}
@@ -1188,10 +1194,12 @@ function SessionRow({
   /// offer. Kept apart from `depth` only because a cyclic index draws a row at
   /// the top level that still has a link worth cutting.
   nested?: boolean;
-  /// This row is in the Pinned group through an ancestor, not through its own
-  /// flag. Its own flag then decides nothing on screen — the row stays where it
-  /// is either way — so the pin action is dropped rather than left offering a
-  /// verb that moves nothing.
+  /// This row is in the Pinned group through an ancestor *and* carries no pin
+  /// of its own. Pinning it would then decide nothing on screen — the row stays
+  /// where it is either way — so the action is dropped rather than left
+  /// offering a verb that moves nothing and leaves a flag behind. A row holding
+  /// its own pin keeps the action whatever its ancestor does: that flag is the
+  /// one thing there the reader can still be surprised by later.
   inheritsPin?: boolean;
   onSetFlags: (
     sessionId: string,

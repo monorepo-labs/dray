@@ -418,6 +418,18 @@ describe("sessionGroups", () => {
     expect(groups[1].rows[0].opens).toBe(false);
   });
 
+  it("draws a pinned child of a pinned parent once, still nested", () => {
+    // Both are pinned-side, so the child must not be lifted out beside its
+    // parent — and it must not be emitted twice for holding a pin of its own.
+    const groups = sessionGroups([
+      pin("parent", "2026-02-01T00:00:00Z"),
+      pin("child", "2026-01-01T00:00:00Z", "parent"),
+    ]);
+
+    expect(shape(groups)).toEqual([["Pinned", ["parent", "child"]]]);
+    expect(groups[0].rows.map((r) => r.depth)).toEqual([0, 1]);
+  });
+
   it("keeps a pinned session out of its project's group even in another repo", () => {
     // Pinned spans projects, which is why it can hold no path of its own.
     const items = [
