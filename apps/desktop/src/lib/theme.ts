@@ -58,8 +58,20 @@ function theme(name: ThemeName): Theme | undefined {
   return THEMES.find((t) => t.id === name);
 }
 
-/// Whether this theme stays layered once there is nothing behind the window.
-export function keepsGlassInFullscreen(name: ThemeName): boolean {
+/// Whether the app stays layered once there is nothing behind the window.
+///
+/// Two ways to answer no, and the mode is the blunter one. **Light is always flat in
+/// fullscreen**, whatever the theme: a light palette's veil is *black*, and windowed
+/// that reads as depth because the desktop is genuinely showing through it. Fullscreen
+/// there is nothing behind, so the same veil is a grey smudge on a light page — and a
+/// light palette has far less room below its page colour than a dark one has above
+/// its own, so the smudge is all it can be.
+///
+/// `flatInFullscreen` is the per-theme half, for a dark palette whose backdrop is not
+/// worth layering over. Both are facts about the palette rather than tastes about the
+/// window, which is why neither is a setting.
+export function keepsGlassInFullscreen(name: ThemeName, mode: ResolvedMode): boolean {
+  if (mode === "light") return false;
   return !theme(name)?.flatInFullscreen;
 }
 

@@ -18,9 +18,8 @@ const VIBRANT = document.documentElement.dataset.vibrancy !== undefined;
 /// but the space's own black, so `data-vibrancy` comes off unconditionally — the
 /// material would go flat grey and read as the theme washing out. What is left is
 /// whether the surfaces stay layered over the theme's own backdrop or the app goes
-/// fully opaque, and **the theme answers that**, not the reader: it depends entirely
-/// on whether that theme's backdrop is worth layering over, which is a fact about the
-/// palette rather than a taste about the window.
+/// fully opaque, and **the palette answers that**, not the reader — see
+/// `keepsGlassInFullscreen`, which weighs the mode and the theme in that order.
 ///
 /// The invariant this guarantees, which App.css leans on: vibrancy is never present
 /// without transparency. Two veils can therefore never stack, because the pair that
@@ -29,20 +28,23 @@ const VIBRANT = document.documentElement.dataset.vibrancy !== undefined;
 /// Takes `fullscreen` rather than calling [useFullscreen](./useFullscreen.ts) itself
 /// so the app keeps one resize listener.
 export function useGlass(fullscreen: boolean) {
-  const { theme } = useTheme();
+  const { theme, resolvedMode } = useTheme();
 
   useEffect(() => {
     const el = document.documentElement;
 
     // Stamped pre-paint and true for every windowed launch, so this only ever
-    // takes it away — for a flat-in-fullscreen theme in fullscreen, where one
-    // frame of glass is the cost of not being able to ask the OS about
-    // fullscreen before the first paint.
-    if (!fullscreen || keepsGlassInFullscreen(theme)) el.dataset.transparency = "";
-    else delete el.dataset.transparency;
+    // takes it away — in fullscreen, for light mode or a flat-in-fullscreen
+    // theme. One frame of glass is the cost of not being able to ask the OS
+    // about fullscreen before the first paint.
+    if (!fullscreen || keepsGlassInFullscreen(theme, resolvedMode)) {
+      el.dataset.transparency = "";
+    } else {
+      delete el.dataset.transparency;
+    }
 
     if (!VIBRANT) return;
     if (fullscreen) delete el.dataset.vibrancy;
     else el.dataset.vibrancy = "";
-  }, [fullscreen, theme]);
+  }, [fullscreen, theme, resolvedMode]);
 }

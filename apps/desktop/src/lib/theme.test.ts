@@ -39,11 +39,20 @@ describe("keepsGlassInFullscreen", () => {
   // keeps its layering by saying nothing, so the failure mode of forgetting is a
   // theme that looks right rather than one that goes flat with no clue why.
   it("is on for a theme that says nothing", () => {
-    expect(keepsGlassInFullscreen("catppuccin")).toBe(true);
+    expect(keepsGlassInFullscreen("catppuccin", "dark")).toBe(true);
   });
 
   it("is off for the one theme that opts out", () => {
-    expect(keepsGlassInFullscreen("default")).toBe(false);
+    expect(keepsGlassInFullscreen("default", "dark")).toBe(false);
+  });
+
+  // Light outranks the theme's own answer, and this is the test that says so: a
+  // light veil is black, and in fullscreen there is nothing behind it for the
+  // darkening to read as. Written against the themes that opt *in*, or it would
+  // pass on `flatInFullscreen` alone and prove nothing.
+  it("is off in light whatever the theme says", () => {
+    expect(keepsGlassInFullscreen("catppuccin", "light")).toBe(false);
+    expect(keepsGlassInFullscreen("gruvbox", "light")).toBe(false);
   });
 });
 
