@@ -27,7 +27,6 @@ import RightPanel, {
   type PanelTab,
 } from "@/components/RightPanel";
 import Sidebar, {
-  DevBadge,
   SidebarToggle,
   filterSessions,
   sortSessions,
@@ -647,8 +646,11 @@ function App() {
                 fullscreen ? "-ml-1" : "pl-(--traffic-lights-w)",
               )}
             >
+              {/* No dev badge beside it: the badge lives at the sidebar's
+                  bottom edge now and shows nothing while the sidebar is
+                  collapsed, the same bargain `UpdateRow` makes — neither is
+                  urgent enough to earn a second home in this header. */}
               <SidebarToggle onToggle={toggleSidebar} collapsed />
-              {import.meta.env.DEV && <DevBadge className="ml-1" />}
             </div>
           )}
 

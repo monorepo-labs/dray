@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { configDefaults, defineConfig, type Plugin } from "vitest/config";
@@ -41,9 +42,35 @@ function fileIcons(): Plugin {
   return { name: "dray-file-icons", buildStart: stage };
 }
 
+/// The branch this dev server was started on, for the dev badge to name.
+///
+/// Read here rather than over the Tauri bridge so `define` can fold it to a
+/// constant and it drops out of a production bundle with the badge that reads
+/// it — same reason the icon staging above runs at config load, one build step
+/// and no runtime spawn. The cost is that it is fixed when the server starts,
+/// so switching branches under a running `pnpm tauri dev` leaves the badge
+/// stale until restart.
+///
+/// `null` outside a repository, and for a detached HEAD, where git answers
+/// with the word `HEAD` rather than a name.
+function devBranch(): string | null {
+  try {
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: url("."),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return branch === "" || branch === "HEAD" ? null : branch;
+  } catch {
+    return null;
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss(), fileIcons()],
+
+  define: { __DEV_BRANCH__: JSON.stringify(devBranch()) },
 
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
