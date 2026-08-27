@@ -89,7 +89,9 @@ cd apps/desktop && pnpm tauri dev
 
 That = real entry point — build and run Rust app, start Vite via `beforeDevCommand`. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/scripts/tauri.mjs)) merging `tauri.dev.conf.json` into `dev` subcommand only, so dev app carry own name and icon and `build` untouched. Tauri CLI merge extra config only when named on command line, and pick up no dev-flavoured config on own — hence shim, not config convention.
 
-- `pnpm dev` — frontend only, port 1420 (`strictPort: true`, so busy port = hard failure). `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
+**Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim probe upward from 1420, hand winner to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Merged in order, so port land over dev flavour. Busy 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running — ordinary case with several session open. `strictPort: true` **stay** on Vite side and should: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve. Probe bind wildcard not `localhost`, since server holding only `[::1]` leave `127.0.0.1` free and one-family probe answer "yes" for port dev server then fail to take.
+
+- `pnpm dev` — frontend only, port 1420 unless `DRAY_DEV_PORT` say otherwise (`strictPort: true`, so busy port = hard failure — nothing picking port for it here). `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (253: parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.

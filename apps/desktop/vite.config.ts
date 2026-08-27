@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// Set by `scripts/tauri.mjs`, which is the only place that can know the port
+// before either server starts. Absent under a bare `pnpm dev`.
+const devPort = Number(process.env.DRAY_DEV_PORT) || 1420;
 
 const url = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
@@ -63,16 +66,22 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // 2. tauri and vite have to agree on one port, so `scripts/tauri.mjs` picks a
+  //    free one and hands it to both — this side through the env, tauri's own
+  //    through `build.devUrl`. `strictPort` stays: the port is already known to
+  //    be free, and letting Vite move off it would leave Tauri loading a URL
+  //    nothing is serving. 1420 is only the fallback for `pnpm dev` on its own.
   server: {
-    port: 1420,
+    port: devPort,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          // Alongside the server's own, so a second dev build's HMR socket
+          // doesn't land on the first one's page.
+          port: devPort + 1,
         }
       : undefined,
     watch: {
