@@ -821,6 +821,9 @@ fn user_message(text: String) -> AgentEventPayload {
     AgentEventPayload::UserMessage {
         text,
         images: vec![],
+        // Nothing to link: a tag is resolved where a prompt is *sent*, and this
+        // one arrived off the wire rather than being one this app issued.
+        issues: vec![],
         // No baseline: only a prompt the app itself sent has a snapshot behind
         // it, taken at the moment it was sent. A user line arriving from the
         // CLI is one this app never issued, so there is no "before" to name.

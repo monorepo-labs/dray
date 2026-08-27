@@ -46,6 +46,34 @@ export function resetTime(iso: string): string {
   return `${time} on ${date}`;
 }
 
+/// Calendar days for a list you read down rather than watch — "Today",
+/// "Yesterday", then "Aug 23".
+///
+/// Deliberately not [relativeTime]. That one counts elapsed time, which is the
+/// right reading for a session that moved four minutes ago and the wrong one
+/// for an issue: "20m" and "1d" invite arithmetic, and nobody looking at a
+/// backlog wants to work out which afternoon "2d" was. A calendar day is the
+/// unit the tracker itself uses and the unit the reader thinks in.
+export function calendarDay(iso: string): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return "";
+
+  const days = daysApart(new Date(at), new Date());
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+
+  const date = new Date(at);
+  // The year only once it stops being obvious. Within this year it is noise on
+  // every row; across one it is the only thing that tells them apart.
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
 function daysApart(from: Date, to: Date): number {
   const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   return Math.round((midnight(to) - midnight(from)) / 86_400_000);

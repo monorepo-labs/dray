@@ -4,6 +4,7 @@ import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
 import FileMentionMenu from "@/components/composer/FileMentionMenu";
+import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
 import SlashCommandMenu from "@/components/composer/SlashCommandMenu";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,8 +17,10 @@ import {
 import { useDraft } from "@/hooks/useDraft";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
+import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import { applyIssue, issueSpan } from "@/lib/issue";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import {
   applyCommand,
@@ -27,7 +30,7 @@ import {
   slashQuery,
 } from "@/lib/slash";
 import { cn } from "@/lib/utils";
-import type { FileMatch, QueuedMessage, SlashCommand } from "@/types/events";
+import type { FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
 
 type ChatInputProps = {
   /// `attachmentPaths` is what the tray held, as absolute paths. The backend
@@ -42,6 +45,10 @@ type ChatInputProps = {
   /// worktree session mentions paths inside its tree — the CLI resolves `@path`
   /// against the directory it was spawned in, and those are the same one.
   cwd?: string | null;
+  /// An issue tracker is connected, so `#` opens a picker. Drawn in the
+  /// placeholder and nowhere else — the picker itself simply finds nothing
+  /// without one.
+  issuesConnected?: boolean;
   /// Interrupts the running turn. Reachable while `busy` and the box is empty —
   /// with something typed the same button sends, since a prompt written during a
   /// turn is queued onto it rather than refused.
@@ -137,6 +144,7 @@ export default function ChatInput({
   onSend,
   commands = [],
   cwd = null,
+  issuesConnected = false,
   onStop,
   onCancelQueued,
   queuedCount = 0,
@@ -204,6 +212,12 @@ export default function ChatInput({
   const mention = mentionSpan(message, caret);
   const files = useFileSearch(cwd, mention?.query ?? null);
 
+  // The third of the same shape, and mutually exclusive with the other two for
+  // the same reason: the caret sits in exactly one token, and a token opening
+  // with `#` is neither one opening with `@` nor a command at position zero.
+  const issue = issueSpan(message, caret);
+  const issues = useIssueSearch(issue?.query ?? null);
+
   // Flattened in render order, so arrowing through the list and drawing it
   // can't disagree about which row an index names.
   const commandMatches = useMemo(() => groups.flatMap((group) => group.items), [groups]);
@@ -211,8 +225,9 @@ export default function ChatInput({
   // Only the count is shared between the two pickers — the lists themselves stay
   // separate all the way to the pick, so nothing has to be narrowed back out of
   // a union that `mention` already decided.
-  const rowCount = mention ? files.length : commandMatches.length;
-  const menuOpen = !dismissed && rowCount > 0 && (query !== null || mention !== null);
+  const rowCount = mention ? files.length : issue ? issues.length : commandMatches.length;
+  const menuOpen =
+    !dismissed && rowCount > 0 && (query !== null || mention !== null || issue !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
   // its end — and an undefined row only shows up as a crash on the keystroke
@@ -222,10 +237,11 @@ export default function ChatInput({
   // Keyed on the query text rather than on the span, which is a fresh object
   // every keystroke and would reset the selection on a bare cursor move.
   const mentionQuery = mention?.query ?? null;
+  const issueQuery = issue?.query ?? null;
   useEffect(() => {
     setActiveIndex(0);
-    if (query === null && mentionQuery === null) setDismissed(false);
-  }, [query, mentionQuery]);
+    if (query === null && mentionQuery === null && issueQuery === null) setDismissed(false);
+  }, [query, mentionQuery, issueQuery]);
 
   const pickCommand = (command: SlashCommand) => {
     const next = applyCommand(message, command.name);
@@ -243,12 +259,27 @@ export default function ChatInput({
     textareaRef.current?.focus();
   };
 
+  const pickIssue = (picked: Issue) => {
+    if (!issue) return;
+
+    const next = applyIssue(message, issue, picked.identifier, picked.title);
+    pendingCaretRef.current = next.caret;
+    setMessage(next.text);
+    textareaRef.current?.focus();
+  };
+
   /// The keyboard's way into whichever list is drawn. A click calls the same
-  /// two functions directly, so the two routes cannot diverge.
+  /// functions directly, so the two routes cannot diverge.
   const pickRow = (index: number) => {
     if (mention) {
       const file = files[index];
       if (file) pickFile(file);
+      return;
+    }
+
+    if (issue) {
+      const picked = issues[index];
+      if (picked) pickIssue(picked);
       return;
     }
 
@@ -583,6 +614,15 @@ export default function ChatInput({
                 placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
               />
+            ) : issue ? (
+              <IssueMentionMenu
+                issues={issues}
+                activeIndex={active}
+                onPick={pickIssue}
+                onHover={setActiveIndex}
+                placement={isNewTask ? "below" : "above"}
+                bare={isNewTask}
+              />
             ) : (
               <SlashCommandMenu
                 groups={groups}
@@ -633,7 +673,16 @@ export default function ChatInput({
                   const mirror = mirrorRef.current;
                   if (mirror) mirror.scrollTop = e.currentTarget.scrollTop;
                 }}
-                placeholder={isNewTask ? "Describe a task. @files. /skills and commands." : "Send follow-up"}
+                // Names `#` only where it would do something. An unconnected
+                // reader offered a tag they cannot use learns the app is
+                // missing a feature rather than that they haven't set one up.
+                placeholder={
+                  isNewTask
+                    ? issuesConnected
+                      ? "Describe a task. #issues. @files. /skills and commands."
+                      : "Describe a task. @files. /skills and commands."
+                    : "Send follow-up"
+                }
                 onChange={(e) => {
                   setMessage(e.currentTarget.value);
                   setCaret(e.currentTarget.selectionStart);

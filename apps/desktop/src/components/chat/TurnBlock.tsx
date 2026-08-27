@@ -193,6 +193,11 @@ function renderItem(
 function userProps(turn: Turn) {
   const payload = turn.prompt?.payload;
   return payload?.type === "user_message"
-    ? { text: payload.text, images: payload.images, from: payload.from }
+    ? {
+        text: payload.text,
+        images: payload.images,
+        issues: payload.issues,
+        from: payload.from,
+      }
     : { text: "" };
 }

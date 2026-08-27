@@ -84,6 +84,12 @@
      they have to be told apart at a glance rather than read as one run. Same
      lightness and chroma, so neither outranks the other. */
   --accent-mention: oklch(0.82 0.13 230);
+  /* An issue tag. The third token that can share one sentence with the other
+     two (`/review #DRA-53 @src/lib/issue.ts`), so it takes the same lightness
+     and chroma and a hue as far from both as the wheel allows — violet, which
+     is also what every issue tracker's own links are, so the tag reads as one
+     before it is read as a word. */
+  --accent-issue: oklch(0.82 0.13 310);
 
   /* The merge button, and nothing else. GitHub's own green rather than the
      app's emerald: this is the one control that acts on GitHub, and matching
@@ -141,6 +147,7 @@
   --color-accent-thinking: var(--accent-thinking);
   --color-accent-command: var(--accent-command);
   --color-accent-mention: var(--accent-mention);
+  --color-accent-issue: var(--accent-issue);
   --color-accent-merge: var(--accent-merge);
   --color-accent-merge-hover: var(--accent-merge-hover);
   --color-accent-merge-foreground: var(--accent-merge-foreground);

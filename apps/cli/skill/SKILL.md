@@ -45,6 +45,42 @@ Options:
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's. |
 | `--harness <name>` | `claude_code`. Defaults to the current session's. |
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
+| `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
+
+### Tagging a session with its issue
+
+```bash
+dray new --issue DRA-53 "Add the issue panel described in DRA-53"
+dray issue link <session-id> DRA-53 --title "Add the issue panel" --url https://linear.app/acme/issue/DRA-53
+dray issue link <session-id> DRA-53 DRA-54
+dray issue unlink <session-id> DRA-54
+```
+
+A tagged session shows an **Issue** tab in the user's panel, and its prompt gains
+one line per issue: the identifier and the title, nothing else.
+
+`dray issue link` **writes down what you give it and asks the tracker nothing.**
+So pass `--title` and `--url` — you have just read the issue and they cost you
+nothing, where without them the tag is a bare `#DRA-53` that links nowhere. They
+describe one issue, so name one issue when you use them.
+
+That line is deliberately thin. **Read the issue yourself** through the tracker's
+own MCP server — `linear-server` for Linear — which is where the description,
+the comments, the links and the current status live. The line in the prompt is an
+address, not a briefing.
+
+If that MCP server is not connected, say so rather than guessing: you have the
+title and the identifier and nothing behind them. `claude mcp list` says which
+servers are reachable.
+
+`--issue`, and a `#DRA-53` written into a prompt, are the other half and they
+*do* need the user to have connected a tracker in Dray — that is where the title
+is looked up. If they have not, the tag stays plain text, the session still runs,
+and nothing fails. Report it rather than working around it.
+
+You can also write `#DRA-53` straight into a prompt — `dray new`, `dray send`, or
+the user's own composer. Dray resolves the tag and links it exactly as `--issue`
+does.
 
 ### Each session gets its own worktree
 
@@ -168,6 +204,10 @@ nothing was sent, so retrying after the fix is safe.
 
 ## Limits
 
+- **Dray does not write to the tracker.** Tagging records the link on the
+  session and nothing else: no status change, no comment, no attachment. If the
+  user wants the issue moved or commented on, do it through the tracker's own
+  MCP server.
 - **No reading transcripts.** You can create, list and message. You cannot read
   what another session said — ask it to send you a summary instead.
 - **Two levels deep.** A session you create may create sessions of its own; those

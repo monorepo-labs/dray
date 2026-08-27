@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     events::{now_rfc3339, AgentEvent, ApprovalPolicy},
+    issues::IssueRef,
     models::{Effort, ModelId},
     session::Harness,
 };
@@ -81,6 +82,15 @@ pub struct SessionIndexItem {
     /// this one is cleared the moment the CLI carries the fork out.
     #[serde(default)]
     pub fork_from: Option<String>,
+    /// The issues this session's work is against, newest link last.
+    ///
+    /// A list because one session really does carry several — three tags in one
+    /// prompt is the case this was built for — and a copy rather than an id,
+    /// so the panel's tab and the sidebar's row can be drawn with the tracker
+    /// unreachable. `serde(default)` so entries written before the field read
+    /// as untagged rather than failing the whole index.
+    #[serde(default)]
+    pub issues: Vec<IssueRef>,
     /// The session whose agent created this one, for a session created over the
     /// orchestration socket rather than by a person in the composer. `Some` is
     /// also what the depth guard reads: a session that was itself spawned may
@@ -262,6 +272,7 @@ impl SessionIndexItem {
             effort,
             permission_mode,
             status: SessionStatus::default(),
+            issues: Vec::new(),
             fork_from: None,
             parent_session_id: parent_session_id.map(str::to_string),
             created: now.clone(),
@@ -309,6 +320,10 @@ impl SessionIndexItem {
             effort: self.effort,
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
+            // Inherited: a fork continues the same conversation, so it is
+            // against the same work. Tagging one afterwards leaves the other
+            // alone — the copy is a session, not a view of its source.
+            issues: self.issues.clone(),
             fork_from: Some(self.session_id.clone()),
             // Inherited, so the copy sits exactly where the original does: the
             // sidebar draws it beside its source under the same parent, not
@@ -587,6 +602,71 @@ pub async fn set_session_flags(
     write_session_index(&sessions).await?;
 
     Ok(Some(updated))
+}
+
+/// Records an issue against a session, answering with the list as written.
+///
+/// An issue already linked is *replaced* rather than appended: re-tagging is how
+/// a stale title gets refreshed, and the alternative is one issue drawn twice
+/// under two spellings of its name.
+///
+/// Matched on the tracker's own id **or** the human identifier, within a
+/// tracker — the same reading [`unlink_session_issue`] takes, and for a sharper
+/// reason. The two write different things into `id`: a resolved link carries
+/// Linear's UUID, while one written blind (`dray issue link`, or a tag no key
+/// could be found for) carries the identifier itself. Keyed on `id` alone,
+/// `DRA-53` linked blind and `DRA-53` resolved a moment later are two rows for
+/// one issue. Neither spelling can collide with the other — one is a UUID.
+///
+/// `modified` is left alone for [`set_session_flags`]'s reason — it orders the
+/// sidebar, and tagging must not jump the row to the top of it.
+pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec<IssueRef>> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        bail!("no such session: {session_id}");
+    };
+
+    match item.issues.iter_mut().find(|linked| {
+        linked.tracker == issue.tracker
+            && (linked.id == issue.id
+                || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
+    }) {
+        Some(existing) => *existing = issue,
+        None => item.issues.push(issue),
+    }
+
+    let linked = item.issues.clone();
+    write_session_index(&sessions).await?;
+
+    Ok(linked)
+}
+
+/// Removes one link, matched on the tracker's own id *or* the human
+/// identifier.
+///
+/// Both, because the two callers hold different things: the panel has the whole
+/// [`IssueRef`] and passes its id, while a person at the CLI types `DRA-53`.
+/// Neither spelling can collide with the other — one is a UUID.
+///
+/// A key the session never carried is not an error: the caller asked for it to
+/// be gone, and it is.
+pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<IssueRef>> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        bail!("no such session: {session_id}");
+    };
+
+    item.issues
+        .retain(|linked| linked.id != key && !linked.identifier.eq_ignore_ascii_case(key));
+    let linked = item.issues.clone();
+
+    write_session_index(&sessions).await?;
+
+    Ok(linked)
 }
 
 /// Drops one session from the index and deletes its `.jsonl` log. Returns
@@ -1327,6 +1407,7 @@ mod tests {
             event(AgentEventPayload::UserMessage {
                 text: "look at this".into(),
                 images: vec![image("/home/.dray/attachments/parent/a.png")],
+                issues: vec![],
                 baseline: None,
                 queued: false,
                 from: None,

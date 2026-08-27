@@ -10,7 +10,8 @@
 
 use clap::{Args, Parser, Subcommand};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
+    encode_line, CreateSession, Envelope, IssueInput, LinkIssues, ListSessions, Request, Response,
+    SendMessage,
     SessionSummary,
 };
 use std::ffi::OsStr;
@@ -52,6 +53,9 @@ enum Command {
     Ls(Ls),
     /// Send a message into a session that already exists.
     Send(Send),
+    /// Tag a session with the issue its work is against.
+    #[command(subcommand)]
+    Issue(IssueCommand),
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Manage the Claude Code skill that documents this CLI.
@@ -88,6 +92,10 @@ struct New {
     /// origin/<default>.
     #[arg(long, value_name = "SESSION|REF")]
     from: Option<String>,
+
+    /// The issue this work is against, like DRA-53. Repeat for several.
+    #[arg(long = "issue", value_name = "ISSUE")]
+    issues: Vec<String>,
 }
 
 #[derive(Args)]
@@ -124,6 +132,32 @@ struct Ls {
 }
 
 #[derive(Subcommand)]
+enum IssueCommand {
+    /// Tag a session with one or more issues.
+    Link(IssueLinkArgs),
+    /// Remove issues from a session. The issues themselves are untouched.
+    Unlink(IssueLinkArgs),
+}
+
+#[derive(Args)]
+struct IssueLinkArgs {
+    /// The session, as printed by `dray ls`.
+    session_id: String,
+
+    /// Issue identifiers, like DRA-53.
+    #[arg(required = true, value_name = "ISSUE")]
+    identifiers: Vec<String>,
+
+    /// The issue's title, so the tag reads as more than an identifier.
+    #[arg(long, value_name = "TITLE")]
+    title: Option<String>,
+
+    /// The issue's web address, so the tag becomes a link.
+    #[arg(long, value_name = "URL")]
+    url: Option<String>,
+}
+
+#[derive(Subcommand)]
 enum SkillCommand {
     /// Write the skill to ~/.claude/skills/dray/, where Claude Code finds it.
     Install,
@@ -144,6 +178,8 @@ fn run() -> Result<(), String> {
         Command::New(args) => new(args),
         Command::Ls(args) => ls(args),
         Command::Send(args) => send_message(args),
+        Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
+        Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
@@ -158,6 +194,7 @@ fn new(args: New) -> Result<(), String> {
         harness: args.harness,
         parent_session_id: parent_session_id(),
         from: args.from,
+        issues: args.issues,
     });
 
     match send(request)? {
@@ -180,6 +217,53 @@ fn new(args: New) -> Result<(), String> {
                     None => String::new(),
                 }
             );
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(&other)),
+    }
+}
+
+/// Tags or untags a session, printing what it carries afterwards.
+///
+/// The whole list rather than what changed, because that is what the app
+/// answers with — and a caller that tagged three issues wants to see three,
+/// not to reconcile a diff against what it believed.
+fn link_issues(args: IssueLinkArgs, unlink: bool) -> Result<(), String> {
+    // One title belongs to one issue. Refused rather than applied to all of
+    // them or silently to the first: both are a wrong link that reads exactly
+    // like a right one, which is the failure this whole protocol is arranged
+    // to avoid.
+    if args.identifiers.len() > 1 && (args.title.is_some() || args.url.is_some()) {
+        return Err("--title and --url describe one issue, so name one".into());
+    }
+
+    let issues = args
+        .identifiers
+        .into_iter()
+        .map(|identifier| IssueInput {
+            identifier,
+            title: args.title.clone(),
+            url: args.url.clone(),
+        })
+        .collect();
+
+    let request = Request::LinkIssues(LinkIssues {
+        session_id: args.session_id,
+        issues,
+        unlink,
+    });
+
+    match send(request)? {
+        Response::Linked { issues } => {
+            if issues.is_empty() {
+                eprintln!("No issues on this session.");
+                return Ok(());
+            }
+
+            for issue in issues {
+                println!("{}: {}", issue.identifier, issue.title);
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -222,6 +306,7 @@ fn unexpected(response: &Response) -> String {
         Response::Created { .. } => "a create",
         Response::Listed { .. } => "a list",
         Response::Sent { .. } => "a send",
+        Response::Linked { .. } => "an issue link",
         Response::Error { .. } => "an error",
     };
     format!("the app answered {kind} to a different command — versions may disagree")
@@ -317,8 +402,7 @@ fn scratch_dir() -> Result<PathBuf, String> {
 
     let path = std::env::temp_dir().join(format!("dray-update-{}", std::process::id()));
 
-    std::fs::create_dir(&path)
-        .map_err(|e| format!("could not create {}: {e}", path.display()))?;
+    std::fs::create_dir(&path).map_err(|e| format!("could not create {}: {e}", path.display()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| format!("could not restrict {}: {e}", path.display()))?;
 
@@ -406,7 +490,8 @@ fn install_skill() -> Result<(), String> {
         .join("skills")
         .join("dray");
 
-    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
 
     let path = dir.join("SKILL.md");
     std::fs::write(&path, SKILL).map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -450,7 +535,9 @@ fn send(request: Request) -> Result<Response, String> {
 /// spawns; absent when a person runs this in their own terminal, which is
 /// ordinary rather than an error.
 fn parent_session_id() -> Option<String> {
-    std::env::var("DRAY_SESSION_ID").ok().filter(|v| !v.is_empty())
+    std::env::var("DRAY_SESSION_ID")
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 /// `--project` if given, else the repo the current directory sits in.
@@ -519,6 +606,30 @@ mod tests {
     #[test]
     fn the_command_tree_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    /// The title belongs to one issue. Applying it to all of them, or silently
+    /// to the first, is a wrong link that reads exactly like a right one.
+    #[test]
+    fn metadata_describes_one_issue() {
+        let args = Cli::try_parse_from([
+            "dray", "issue", "link", "s1", "DRA-53", "DRA-54", "--title", "One",
+        ])
+        .unwrap();
+
+        let Command::Issue(IssueCommand::Link(args)) = args.command else {
+            panic!("expected an issue link");
+        };
+
+        assert!(link_issues(args, false).is_err());
+    }
+
+    /// A bare identifier is still a usable link — the tag just reads `#DRA-53`
+    /// with nothing after it. Refusing one would make the flags mandatory in
+    /// everything but name.
+    #[test]
+    fn identifiers_alone_are_accepted() {
+        assert!(Cli::try_parse_from(["dray", "issue", "link", "s1", "DRA-53", "DRA-54"]).is_ok());
     }
 
     #[test]

@@ -1,11 +1,14 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
 
 import SessionAvatar from "@/components/SessionAvatar";
 import ImageRow from "@/components/chat/ImageRow";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { stripSenderPrefix } from "@/lib/relay";
 import { shortenPath } from "@/lib/tools";
-import type { ImageRef, MessageSender } from "@/types/events";
+import { cn } from "@/lib/utils";
+import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
@@ -29,14 +32,25 @@ import type { ImageRef, MessageSender } from "@/types/events";
 /// The line the backend writes into the prompt for the receiving agent is taken
 /// back off here, since the row above already says who is talking — safe to
 /// mute precisely because the field, not the prose, is what draws it.
+///
+/// An issue tag is the one coloured run that is also a *link*: it opens the
+/// issue in the tracker, where the reader can act on it rather than only read
+/// it. The URL comes off the event's own `issues` and never out of the text, so
+/// a tag naming an issue that never resolved stays coloured and inert instead
+/// of becoming a link to nowhere.
 export default function UserMessage({
   text,
   images = [],
+  issues = [],
   from = null,
   onOpenSession,
 }: {
   text: string;
   images?: ImageRef[];
+  /// What this prompt was tagged with. Not drawn — the tags are already in the
+  /// sentence — but it is where a tag's link comes from, since a URL recovered
+  /// from prose would be a guess.
+  issues?: IssueRef[];
   /// The session that relayed this, or `null` for a prompt the user typed.
   from?: MessageSender | null;
   /// Opens the sending session. Absent where nothing can navigate, which draws
@@ -99,6 +113,37 @@ export default function UserMessage({
                   <span key={i} className={SEGMENT_COLOR.mention} title={segment.text.slice(1)}>
                     @{name}
                   </span>
+                );
+              }
+
+              if (segment.kind === "issue") {
+                const identifier = parseIdentifier(segment.text.slice(1));
+                const url = identifier ? issueUrl(issues, identifier) : null;
+
+                // Inert without a link, which is the resting state of a tag
+                // whose issue never resolved — a button that opens nothing is
+                // worse than a word that was never one.
+                if (!url) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.issue}>
+                      {segment.text}
+                    </span>
+                  );
+                }
+
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    title={`Open ${identifier} in ${new URL(url).hostname}`}
+                    // Underlined on hover rather than at rest: the colour
+                    // already sets it apart from the sentence, and a permanent
+                    // underline through a prompt reads as a correction.
+                    className={cn(SEGMENT_COLOR.issue, "cursor-pointer hover:underline")}
+                    onClick={() => void openUrl(url)}
+                  >
+                    {segment.text}
+                  </button>
                 );
               }
 
