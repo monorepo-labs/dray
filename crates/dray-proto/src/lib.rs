@@ -442,7 +442,10 @@ mod tests {
     fn linking_round_trips_and_says_which_way_it_goes() {
         let line = serde_json::to_string(&Envelope::new(Request::LinkIssues(LinkIssues {
             session_id: "abc".into(),
-            identifiers: vec!["DRA-1".into(), "DRA-2".into()],
+            issues: vec![
+                IssueInput { identifier: "DRA-1".into(), ..Default::default() },
+                IssueInput { identifier: "DRA-2".into(), ..Default::default() },
+            ],
             unlink: true,
         })))
         .unwrap();
@@ -452,7 +455,7 @@ mod tests {
         let Request::LinkIssues(link) = back.request else {
             panic!("wrong variant");
         };
-        assert_eq!(link.identifiers.len(), 2);
+        assert_eq!(link.issues.len(), 2);
         assert!(link.unlink);
     }
 
@@ -461,7 +464,7 @@ mod tests {
     #[test]
     fn a_link_with_no_direction_adds() {
         let request: Request = serde_json::from_str(
-            r#"{"cmd":"link_issues","sessionId":"a","identifiers":["DRA-1"]}"#,
+            r#"{"cmd":"link_issues","sessionId":"a","issues":[{"identifier":"DRA-1"}]}"#,
         )
         .unwrap();
 
