@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ThinkingOrb } from "thinking-orbs";
 
+import Orb from "@/components/Orb";
 import { compactTokens } from "@/lib/format";
 
 /// "Thinking" is one of these rather than a label the harness switches on. It is
@@ -27,10 +27,9 @@ export default function WorkingIndicator({
   return (
     <div className="flex items-center gap-2" aria-live="polite">
       {/* 20 and 64 are separately tuned designs rather than one scaled to the
-          other, so 20 is the only inline-with-text option. `theme` is pinned
-          because the orb's `auto` looks for `data-theme="dark|light"`, and this
-          app stamps a palette name (`shadcn`, `midnight`) there instead. */}
-      <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden />
+          other, so 20 is the only inline-with-text option. Mode comes from
+          `Orb`, which is the whole reason that wrapper exists. */}
+      <Orb state="listening" size={20} aria-hidden />
 
       <span className="shimmer-text text-chat">{label}</span>
 

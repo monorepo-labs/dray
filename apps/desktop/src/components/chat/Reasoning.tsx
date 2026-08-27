@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { ThinkingOrb } from "thinking-orbs";
+import Orb from "@/components/Orb";
 
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export default function Reasoning({
           onClick={() => setOpen((prev) => !prev)}
           className="group/think flex items-center gap-1.5 text-chat text-muted-foreground"
         >
-          <ThinkingOrb state="composing" size={20} theme="dark" aria-hidden />
+          <Orb state="composing" size={20} aria-hidden />
           <span>Thinking</span>
           {long && (
             <ChevronRight

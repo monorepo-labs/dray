@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import { ThinkingOrb } from "thinking-orbs";
+import Orb from "@/components/Orb";
 
 import type { SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -36,7 +36,7 @@ export default function SubagentRow({
           than settling into a resting pose — a still orb next to a finished run
           reads as something that stalled. Same size and pinned theme as
           `WorkingIndicator`, which is the other place it appears inline. */}
-      {!run.done && <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden />}
+      {!run.done && <Orb state="listening" size={20} aria-hidden />}
 
       <span
         className={cn(

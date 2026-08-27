@@ -1,4 +1,4 @@
-import { ThinkingOrb } from "thinking-orbs";
+import Orb from "@/components/Orb";
 
 /// Shown while the CLI rewrites the conversation into a summary, between
 /// `context_compaction_started` and `context_compacted`. It earns a live
@@ -12,7 +12,7 @@ export default function CompactingIndicator() {
           a third distinct activity next to `working` and `weaving`. Theme
           pinned for the same reason as there: the orb's `auto` expects
           `data-theme="dark|light"` and this app stamps a palette name. */}
-      <ThinkingOrb state="shaping" size={20} theme="dark" aria-hidden />
+      <Orb state="shaping" size={20} aria-hidden />
 
       <span className="shimmer-text text-chat">Compacting context</span>
     </div>
