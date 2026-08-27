@@ -5,6 +5,7 @@ import LinkDialog from "@/components/chat/LinkDialog";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
+import { REHYPE_PLUGINS } from "@/lib/markdownPlugins";
 import { cn } from "@/lib/utils";
 
 type MarkdownProps = {
@@ -61,6 +62,7 @@ function MarkdownImpl({ children, streaming = false, className }: MarkdownProps)
       isAnimating={streaming}
       plugins={plugins}
       controls={CONTROLS}
+      rehypePlugins={REHYPE_PLUGINS}
       linkSafety={LINK_SAFETY}
       shikiTheme={shikiTheme}
       lineNumbers={false}
