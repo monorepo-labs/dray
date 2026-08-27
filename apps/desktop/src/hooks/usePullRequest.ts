@@ -97,7 +97,11 @@ export function prTabVisible(prs: PullRequest[], error: PrUnavailable | null): b
 export type PrAction =
   | { kind: "merge"; method: MergeMethod }
   | { kind: "reopen" }
-  | { kind: "ready" };
+  | { kind: "ready" }
+  /// Carries the branch rather than letting the backend look it up, so the ref
+  /// deleted is the exact string the row named — this is the one action here
+  /// where hitting the wrong branch cannot be undone from this window.
+  | { kind: "delete_branch"; branch: string };
 
 type State = {
   /// Every PR opened from this branch, open ones first. Usually one, sometimes
@@ -290,6 +294,9 @@ export function usePullRequest(
       try {
         if (action.kind === "merge") {
           await invoke("merge_pr", { cwd, number, method: action.method });
+        } else if (action.kind === "delete_branch") {
+          // Takes no number: it deletes a ref, and the PR only ever named it.
+          await invoke("delete_branch", { cwd, branch: action.branch });
         } else {
           const command = action.kind === "reopen" ? "reopen_pr" : "mark_pr_ready";
           await invoke(command, { cwd, number });

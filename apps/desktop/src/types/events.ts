@@ -664,6 +664,12 @@ export type PullRequest = { number: number, title: string, url: string,
  */
 state: string, isDraft: boolean, author: string, baseRefName: string, headRefName: string, 
 /**
+ * Whether that branch is still on the remote. `headRefName` survives the
+ * branch itself — a merged PR keeps naming the branch it came from — so
+ * the name cannot answer this and `headRef` going null is what does.
+ */
+headRefExists: boolean, 
+/**
  * `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub is still working
  * the merge out — which it starts doing lazily, on being asked.
  */

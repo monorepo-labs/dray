@@ -7,6 +7,7 @@
 //! an error, since this is a side view and never the reason the app is open.
 
 use anyhow::Result;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, process::Stdio, sync::OnceLock};
 use tokio::{process::Command, sync::Mutex};
@@ -95,6 +96,10 @@ pub struct PullRequest {
     pub author: String,
     pub base_ref_name: String,
     pub head_ref_name: String,
+    /// Whether that branch is still on the remote. `headRefName` survives the
+    /// branch itself — a merged PR keeps naming the branch it came from — so
+    /// the name cannot answer this and `headRef` going null is what does.
+    pub head_ref_exists: bool,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub is still working
     /// the merge out — which it starts doing lazily, on being asked.
     pub mergeable: String,
@@ -156,7 +161,7 @@ const QUERY: &str = r#"
 query($owner:String!,$repo:String!,$branch:String!){
  repository(owner:$owner,name:$repo){
   pullRequests(headRefName:$branch,first:20,orderBy:{field:CREATED_AT,direction:DESC}){nodes{
-   number title url state isDraft baseRefName headRefName mergeable mergeStateStatus reviewDecision updatedAt
+   number title url state isDraft baseRefName headRefName headRef{name} mergeable mergeStateStatus reviewDecision updatedAt
    additions deletions changedFiles
    author{login avatarUrl}
    comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
@@ -443,6 +448,12 @@ struct RawPr {
     base_ref_name: String,
     #[serde(default)]
     head_ref_name: String,
+    /// Null once the branch is deleted, and only then — the one field on the
+    /// node that tells a branch still there from one already gone. Only its
+    /// presence is read: GraphQL needs a selection under it, but the name it
+    /// would carry is `head_ref_name`, which outlives the ref.
+    #[serde(default)]
+    head_ref: Option<IgnoredAny>,
     #[serde(default)]
     mergeable: String,
     #[serde(default)]
@@ -681,6 +692,7 @@ impl RawPr {
             author: login(&self.author),
             base_ref_name: self.base_ref_name,
             head_ref_name: self.head_ref_name,
+            head_ref_exists: self.head_ref.is_some(),
             mergeable: self.mergeable,
             merge_state_status: self.merge_state_status,
             review_decision: self.review_decision.filter(|d| !d.is_empty()),
@@ -1130,6 +1142,29 @@ async fn merged_state(cwd: &str, number: u64) -> Option<bool> {
     Some(value.get("state")?.as_str()? == "MERGED")
 }
 
+/// Deletes the head branch from the remote, and nothing else.
+///
+/// The local branch and the worktree holding it belong to the settle flow,
+/// which already deletes both; the remote ref is the one thing nothing owned.
+/// Keeping the halves apart also sidesteps `git branch -D` refusing a branch
+/// some worktree still has checked out — the same refusal that keeps
+/// [`merge_pr`] from passing `--delete-branch`.
+///
+/// The REST endpoint rather than `git push --delete`: this takes no working
+/// tree, so it deletes the branch of a session whose checkout has already gone.
+/// A ref that is already deleted answers 422 rather than success, so the button
+/// is gated on `head_ref_exists` instead of this call being safe to repeat.
+#[tauri::command]
+pub async fn delete_branch(cwd: String, branch: String) -> Result<(), String> {
+    let (owner, repo) = repo_slug(&cwd).await?;
+
+    // `refs/heads/<branch>` is a path here, so a branch name carrying slashes
+    // needs no escaping — `fix/thing` addresses the ref it names.
+    let path = format!("repos/{owner}/{repo}/git/refs/heads/{branch}");
+
+    gh(&cwd, &["api", "-X", "DELETE", &path]).await.map(|_| ())
+}
+
 /// Reopens a PR closed elsewhere. There is no `close_pr` beside it on purpose:
 /// this panel exists to get work landed, and abandoning a PR is a decision with
 /// a discussion attached to it, which happens on GitHub.
@@ -1411,6 +1446,42 @@ mod tests {
     fn diff_counts_come_through() {
         let pr = parse();
         assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
+    }
+
+    /// `headRefName` outlives the branch — a merged PR goes on naming the one
+    /// it came from — so only `headRef` going null says the ref is gone.
+    /// Verified against the live API: deleting the branch flipped `headRef` to
+    /// null and left `headRefName` exactly as it was.
+    #[test]
+    fn head_ref_says_whether_the_branch_is_still_there() {
+        let out = |head_ref: &str| {
+            format!(
+                r#"{{"data":{{"repository":{{"pullRequests":{{"nodes":[
+                  {{"number":1,"headRefName":"fix/thing","headRef":{head_ref}}}]}}}}}}}}"#
+            )
+        };
+
+        let live = read_prs(&out(r#"{"name":"fix/thing"}"#)).expect("parses");
+        assert!(live[0].head_ref_exists);
+        assert_eq!(live[0].head_ref_name, "fix/thing");
+
+        let deleted = read_prs(&out("null")).expect("parses");
+        assert!(!deleted[0].head_ref_exists);
+        // The name survives, which is what lets the row go on naming it.
+        assert_eq!(deleted[0].head_ref_name, "fix/thing");
+    }
+
+    /// Absence has to read as *gone*, not as there. The button is the one
+    /// destructive thing on this pane, and a shape we failed to get back would
+    /// otherwise draw it over a branch that may not exist — a click answered
+    /// with a 422. Under-offering costs a trip to GitHub; over-offering costs
+    /// an error on work already landed.
+    #[test]
+    fn a_missing_head_ref_field_reads_as_gone() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+            {"number":1,"headRefName":"fix/thing"}]}}}}"#;
+        let prs = read_prs(out).expect("parses");
+        assert!(!prs[0].head_ref_exists);
     }
 
     /// The sidebar's query carries the branch and the draft flag, and a draft

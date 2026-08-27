@@ -612,6 +612,7 @@ pub fn run() {
             github::prs_for_branch,
             github::pr_marks,
             github::merge_pr,
+            github::delete_branch,
             github::reopen_pr,
             github::mark_pr_ready,
             quit::confirm_quit,
