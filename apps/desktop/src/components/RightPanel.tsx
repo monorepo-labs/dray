@@ -115,13 +115,16 @@ export function PanelToggle({
 
 /// Which body the right panel is showing. This is the set, not the order —
 /// see `tabOrder`.
-export const PANEL_TABS = ["changes", "subagents", "pr"] as const;
+export const PANEL_TABS = ["changes", "subagents", "pr", "issue"] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
 const LABELS: Record<PanelTab, string> = {
   changes: "Changes",
   subagents: "Subagents",
+  // Singular, and not "Linear": the panel is about the work's issue whoever
+  // tracks it, and a session usually carries one.
+  issue: "Issue",
   // Not "Pull Request": the short form is what anyone working on one calls it,
   // and the long one is the widest label in a row of three.
   pr: "PR",
@@ -143,9 +146,14 @@ const LABELS: Record<PanelTab, string> = {
 /// The PR tab is absent entirely for a session that has no PR to show — see
 /// `prTabVisible`. A tab whose only content is "there is nothing here" is one
 /// the eye has to skip past on every session that will never have one.
-export function tabOrder({ pr }: { pr: boolean }): readonly PanelTab[] {
-  if (!pr) return ["changes", "subagents"];
-  return ["pr", "changes", "subagents"] as const;
+export function tabOrder({ pr, issue }: { pr: boolean; issue: boolean }): readonly PanelTab[] {
+  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  // Immediately before Subagents wherever it is drawn, so the row's order is
+  // the same one ⌘⇧[ steps whether or not a session has an issue on it.
+  if (issue) tabs.push("issue");
+  tabs.push("subagents");
+
+  return tabs;
 }
 
 type RightPanelProps = {
@@ -160,11 +168,27 @@ type RightPanelProps = {
   counts?: Partial<Record<PanelTab, number>>;
   /// There is a pull request tab to draw at all — see `prTabVisible`.
   pr?: boolean;
+  /// This session is tagged with at least one issue. Absent otherwise, for the
+  /// PR tab's reason: a tab whose only content is "there is nothing here" is one
+  /// the eye skips past on every session that will never have one.
+  issue?: boolean;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
   /// Absent for a tab with nothing to re-read.
   refresh?: { onRefresh: () => void; loading: boolean } | null;
+  /// A word in the top strip in place of the tab row.
+  ///
+  /// For a pane with one thing in it and no second thing to switch to. A row of
+  /// one tab is a control that cannot do anything, and the keycaps beside it
+  /// name a chord that would step between one place and itself — but an empty
+  /// strip is worse than either, since it reads as chrome that failed to load.
+  /// So the row keeps its height, loses its controls, and says what the pane is.
+  ///
+  /// It also loses its bottom rule. That line separates a row of *controls* from
+  /// what they act on; over a heading belonging to the thing underneath it, it
+  /// cuts a title off its own body.
+  heading?: string;
   children: React.ReactNode;
 };
 
@@ -198,7 +222,9 @@ export default function RightPanel({
   onTabChange,
   counts,
   pr = false,
+  issue = false,
   refresh,
+  heading,
   children,
 }: RightPanelProps) {
   return (
@@ -211,41 +237,54 @@ export default function RightPanel({
       )}
     >
       <div
-        className="flex h-(--titlebar-h) shrink-0 items-center gap-0.5 border-b border-border px-2"
+        className={cn(
+          "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 px-2",
+          !heading && "border-b border-border",
+        )}
         data-tauri-drag-region="deep"
       >
-        {tabOrder({ pr }).map((value) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => onTabChange(value)}
-            className={cn(
-              "rounded-md px-2 py-1 text-ui transition-colors",
-              tab === value
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {LABELS[value]}
-            {!!counts?.[value] && (
-              <span className="ml-1 text-muted-foreground">{counts[value]}</span>
-            )}
-          </button>
-        ))}
+        {heading ? (
+          // Padded to sit where a tab's label would, so the pane's first line
+          // lands on the same baseline whichever frame it is wearing.
+          <span className="px-2 py-1 text-ui font-medium">{heading}</span>
+        ) : (
+          <>
+            {tabOrder({ pr, issue }).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onTabChange(value)}
+                className={cn(
+                  "rounded-md px-2 py-1 text-ui transition-colors",
+                  tab === value
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {LABELS[value]}
+                {!!counts?.[value] && (
+                  <span className="ml-1 text-muted-foreground">{counts[value]}</span>
+                )}
+              </button>
+            ))}
 
-        {/* Beside the tabs rather than at the far end, and with no label: next
-            to the thing it acts on, the caps read as belonging to the row
-            without a word saying so. Drawn at all — rather than hidden in a
-            tooltip the way the rest of the app's shortcuts are — because a
-            chord for a row of two or three tabs is one nobody goes looking for.
+            {/* Beside the tabs rather than at the far end, and with no label:
+                next to the thing it acts on, the caps read as belonging to the
+                row without a word saying so. Drawn at all — rather than hidden
+                in a tooltip the way the rest of the app's shortcuts are —
+                because a chord for a row of two or three tabs is one nobody
+                goes looking for.
 
-            Three caps, not four: `[ ]` is one key with two ends rather than two
-            alternatives, so splitting it reads as a chord wanting both. */}
-        <KbdGroup className="ml-1.5 shrink-0 opacity-50">
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          <Kbd>⇧</Kbd>
-          <Kbd>[ ]</Kbd>
-        </KbdGroup>
+                Three caps, not four: `[ ]` is one key with two ends rather than
+                two alternatives, so splitting it reads as a chord wanting
+                both. */}
+            <KbdGroup className="ml-1.5 shrink-0 opacity-50">
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>⇧</Kbd>
+              <Kbd>[ ]</Kbd>
+            </KbdGroup>
+          </>
+        )}
 
         {/* Gone entirely on Subagents, which has nothing to re-read. It reserved
             its width back when the keycaps sat to its right and would have slid

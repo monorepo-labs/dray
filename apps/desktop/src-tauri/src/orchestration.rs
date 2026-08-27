@@ -15,14 +15,15 @@
 
 use crate::{
     events::{ApprovalPolicy, MessageSender},
+    issues::{self, IssueRef, IssueTracker},
     models::{default_model, find_model, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
 };
 use anyhow::{bail, Context, Result};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, ListSessions, Request, Response, SendMessage,
-    SessionSummary, MAX_LINE, PROTOCOL_VERSION,
+    encode_line, CreateSession, Envelope, IssueLink, LinkIssues, ListSessions, Request, Response,
+    SendMessage, SessionSummary, MAX_LINE, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
@@ -216,7 +217,72 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
         Request::CreateSession(create) => create_session(create, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
         Request::SendMessage(send) => send_message(send, app).await,
+        Request::LinkIssues(link) => link_issues(link).await,
     }
+}
+
+/// Tags a session that already exists, or untags it.
+///
+/// **Written down as given, with nothing asked of the tracker.** A link is a
+/// local record — this session is about that work — so making it depend on a
+/// reachable Linear and a stored key meant it could fail for reasons that have
+/// nothing to do with what it records. The caller is an agent that has just
+/// read the issue through the tracker's own MCP server and holds the title and
+/// the URL already; asking a second system for what the caller has in hand is a
+/// round trip whose only contribution is a way to fail.
+///
+/// Every issue is applied in turn and the *whole* resulting list comes back, so
+/// a caller sees what the session carries rather than a diff it has to apply to
+/// what it believed. One that fails stops the run: a partial tagging reported
+/// as a success is the shape of failure this protocol exists to avoid, and the
+/// ones already applied are on the session the answer names.
+async fn link_issues(link: LinkIssues) -> Result<Response> {
+    if link.issues.is_empty() {
+        bail!("name at least one issue, like DRA-53");
+    }
+
+    // An unknown session is answered before anything is written, so a typo in
+    // the id cannot half-apply a list.
+    store::get_session_index_item(&link.session_id)
+        .await?
+        .with_context(|| format!("no session {}", link.session_id))?;
+
+    let mut linked = Vec::new();
+    for input in &link.issues {
+        let identifier = issues::parse_identifier(&input.identifier)
+            .with_context(|| format!("{} is not an issue identifier", input.identifier))?;
+
+        linked = if link.unlink {
+            store::unlink_session_issue(&link.session_id, &identifier).await?
+        } else {
+            store::link_session_issue(
+                &link.session_id,
+                IssueRef {
+                    tracker: IssueTracker::Linear,
+                    // No tracker call, so no stable tracker id to record. The
+                    // identifier stands in: `unlink_session_issue` already
+                    // matches on either, so a link made here is removable by
+                    // the panel's button and by `dray issue unlink` alike.
+                    id: identifier.clone(),
+                    identifier,
+                    title: input.title.clone().unwrap_or_default(),
+                    url: input.url.clone().unwrap_or_default(),
+                },
+            )
+            .await?
+        };
+    }
+
+    Ok(Response::Linked {
+        issues: linked
+            .into_iter()
+            .map(|issue| IssueLink {
+                identifier: issue.identifier,
+                title: issue.title,
+                url: issue.url,
+            })
+            .collect(),
+    })
 }
 
 async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Response> {
@@ -284,6 +350,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             &session_id,
             &create.prompt,
             &[],
+            &create.issues,
             harness,
             model,
             effort,
@@ -469,6 +536,9 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
         .send_msg(
             &target.session_id,
             &prompt,
+            &[],
+            // None named: a relayed message carries whatever it tags in its own
+            // text, and must not re-aim the session it arrives at.
             &[],
             target.harness,
             target.model,

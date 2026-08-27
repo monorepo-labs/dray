@@ -33,8 +33,21 @@ use std::path::PathBuf;
 /// half is behind so the reader — usually an agent, reading it as tool output —
 /// runs the cure that applies rather than the one that doesn't.
 ///
-/// v2 added `CreateSession::from`.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v2 added `CreateSession::from`. v3 added `CreateSession::issues` and
+/// [`Request::LinkIssues`], for the same test: an app that ignored `issues`
+/// would start the session with no issue linked and no line in its prompt
+/// saying what the work is against, and answer identically to a success — so
+/// the session runs, works on the wrong thing or on nothing, and reports back
+/// that it is done.
+///
+/// v4 reshaped [`LinkIssues`]: `identifiers: Vec<String>` became
+/// [`IssueInput`], carrying the title and URL the caller already has. The old
+/// shape made the *app* resolve each identifier against the tracker, so a link
+/// — a local record, on a session, about work — needed the network to be up and
+/// a key to be stored. The field is renamed rather than extended so the two
+/// shapes cannot be confused on the wire: an old app handed the new one finds
+/// no `identifiers` and refuses, which is the loud failure wanted here.
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -79,6 +92,7 @@ pub enum Request {
     CreateSession(CreateSession),
     ListSessions(ListSessions),
     SendMessage(SendMessage),
+    LinkIssues(LinkIssues),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -119,6 +133,52 @@ pub struct CreateSession {
     /// business learning how a session's branch is named.
     #[serde(default)]
     pub from: Option<String>,
+    /// Issue identifiers (`DRA-53`) the new session's work is against.
+    ///
+    /// Resolved by the app, not here: the CLI holds no key and has no business
+    /// learning what a tracker is. Each one becomes a link on the session and a
+    /// line in the prompt — identifier and title, nothing more, since the agent
+    /// has the tracker's own MCP server for the rest.
+    #[serde(default)]
+    pub issues: Vec<String>,
+}
+
+/// Tagging a session that already exists — or untagging it.
+///
+/// One request with a flag rather than two, because the halves differ by a
+/// single word and every field is otherwise the same.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkIssues {
+    pub session_id: String,
+    pub issues: Vec<IssueInput>,
+    /// Remove these links instead of adding them. Only `identifier` is read.
+    #[serde(default)]
+    pub unlink: bool,
+}
+
+/// One issue to tag a session with, as the caller already knows it.
+///
+/// **The app writes this down and asks the tracker nothing.** A link is a local
+/// record — this session is about that work — and making it depend on a
+/// reachable tracker meant a link could fail for reasons that have nothing to
+/// do with what it records. The caller is an agent that has just read the issue
+/// through the tracker's own MCP server, so it has the title and the URL in
+/// hand; asking a second system for what the caller already holds is a round
+/// trip that can only introduce a way to fail.
+///
+/// `title` and `url` are optional because a bare identifier is still a usable
+/// link: the tag reads `#DRA-53` with no title after it, and stays plain text
+/// rather than becoming a link to nowhere.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueInput {
+    /// As a person writes it; case is the app's to normalize.
+    pub identifier: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// A prompt sent into a session that already exists.
@@ -173,6 +233,9 @@ pub enum Response {
         base_ref: Option<String>,
     },
     Listed { sessions: Vec<SessionSummary> },
+    /// Every issue the session carries *after* the change, so the caller sees
+    /// the result rather than a diff it has to apply to what it believed.
+    Linked { issues: Vec<IssueLink> },
     /// `queued` when the target had a turn in flight, so the prompt is held
     /// until it reaches a boundary rather than being dropped or interrupting.
     Sent { queued: bool },
@@ -210,6 +273,19 @@ pub struct SessionSummary {
     /// from the composer or from a terminal, and for one since detached.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+}
+
+/// One issue a session is tagged with, as the CLI prints it.
+///
+/// A deliberate subset of the app's own `IssueRef`, for [`SessionSummary`]'s
+/// reason: that type carries ts-rs derives and a tracker enum, neither of which
+/// this side has any use for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueLink {
+    pub identifier: String,
+    pub title: String,
+    pub url: String,
 }
 
 /// Where to reach the app: `DRAY_ENDPOINT` if set, else the socket under the
@@ -325,7 +401,7 @@ mod tests {
         })))
         .unwrap();
 
-        assert_eq!(line["v"], 2);
+        assert_eq!(line["v"], PROTOCOL_VERSION);
         assert!(PROTOCOL_VERSION >= 2, "from must not travel under v1");
     }
 
@@ -345,6 +421,54 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(base_ref, None);
+    }
+
+    /// Same test `from` earned its bump on: an app that ignored these would
+    /// start a session against no issue at all and answer like a success.
+    #[test]
+    fn issues_travel_on_the_create_at_the_version_that_added_them() {
+        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
+            prompt: "do it".into(),
+            issues: vec!["DRA-53".into()],
+            ..Default::default()
+        })))
+        .unwrap();
+
+        assert_eq!(line["issues"][0], "DRA-53");
+        assert!(PROTOCOL_VERSION >= 3, "issues must not travel under v2");
+    }
+
+    #[test]
+    fn linking_round_trips_and_says_which_way_it_goes() {
+        let line = serde_json::to_string(&Envelope::new(Request::LinkIssues(LinkIssues {
+            session_id: "abc".into(),
+            identifiers: vec!["DRA-1".into(), "DRA-2".into()],
+            unlink: true,
+        })))
+        .unwrap();
+        assert!(line.contains(r#""cmd":"link_issues""#));
+
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::LinkIssues(link) = back.request else {
+            panic!("wrong variant");
+        };
+        assert_eq!(link.identifiers.len(), 2);
+        assert!(link.unlink);
+    }
+
+    /// Absent reads as *adding*, which is the direction that cannot be
+    /// destructive — the one worth having as a default.
+    #[test]
+    fn a_link_with_no_direction_adds() {
+        let request: Request = serde_json::from_str(
+            r#"{"cmd":"link_issues","sessionId":"a","identifiers":["DRA-1"]}"#,
+        )
+        .unwrap();
+
+        let Request::LinkIssues(link) = request else {
+            panic!("wrong variant");
+        };
+        assert!(!link.unlink);
     }
 
     #[test]

@@ -50,3 +50,10 @@ notify-rust = { version = "4.18", features = ["preview-macos-un"] }
 # app key is compiled in from `APTABASE_KEY`; an absent key leaves the plugin
 # registered and inert, which is what dev builds run with. See analytics.rs.
 tauri-plugin-aptabase = "1.0.0"
+# Linear's GraphQL API, and the only service this app talks to directly — `gh`
+# and `claude` are reached by spawning them instead. `rustls` rather than the
+# platform TLS so a Linux build needs no OpenSSL. See issues/linear.rs.
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+] }

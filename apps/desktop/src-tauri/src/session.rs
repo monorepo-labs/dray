@@ -13,12 +13,13 @@ use crate::{
         },
         Harness::ClaudeCode,
     },
+    issues::{self, IssueRef},
     models::{find_model, resolve_effort, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
-        delete_session, get_session_index_item, list_session_events, relocate_session_to_project,
-        resolve_unclaimed_worktree_name, set_session_status, touch_session_index_item,
-        worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
+        delete_session, get_session_index_item, link_session_issue, list_session_events,
+        relocate_session_to_project, resolve_unclaimed_worktree_name, set_session_status,
+        touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -83,6 +84,12 @@ pub struct QueuedMessage {
     /// deleted before the boundary that delivers it.
     #[serde(default)]
     pub from: Option<MessageSender>,
+    /// Resolved when the prompt was typed, not at flush, for `from`'s reason:
+    /// a held prompt can wait out a long turn, and re-reading the tracker at
+    /// the boundary would put a network call — and its failure — inside the
+    /// flush.
+    #[serde(default)]
+    pub issues: Vec<IssueRef>,
 }
 
 /// Held prompts, oldest first. Shared with the stdout task, which is where the
@@ -310,6 +317,11 @@ impl SessionManager {
         // Absolute paths of what the composer had attached. Re-read here rather
         // than uploaded: the frontend holds a thumbnail, not bytes.
         attachment_paths: &[String],
+        // Issues named outright rather than tagged in the text: `dray new
+        // --issue`, and the issues page starting a session from a row. Merged
+        // with the prompt's own `#` tags, which is why one list arrives here
+        // and not two.
+        issue_ids: &[String],
         harness: Harness,
         model: ModelId,
         effort: Option<Effort>,
@@ -339,6 +351,16 @@ impl SessionManager {
     ) -> Result<SendOutcome> {
         let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
         let effort = resolve_effort(&model_spec, effort);
+
+        // Resolved once for every path below — created, live, queued and
+        // resumed alike — so a `#DRA-53` means the same thing whichever one the
+        // prompt takes. The prompt comes back with any *named* issue appended as
+        // a tag, so from here `prompt` is what the model will actually be given
+        // and the transcript will actually draw. Best effort by design: an
+        // unreachable tracker leaves the text as it was and costs nothing else.
+        // See [`issues::expand_tags`].
+        let (prompt, issues) = issues::expand_tags(prompt, issue_ids).await;
+        let prompt = prompt.as_str();
 
         if is_new_session {
             let worktree_name = if use_worktree {
@@ -388,7 +410,7 @@ impl SessionManager {
 
             // Indexed before the process spawns, so a session that fails to
             // start is still visible rather than vanishing without a trace.
-            let item = SessionIndexItem::new(
+            let mut item = SessionIndexItem::new(
                 session_id,
                 harness,
                 &session_cwd,
@@ -401,6 +423,10 @@ impl SessionManager {
                 permission_mode,
                 parent_session_id,
             );
+            // Written with the entry rather than linked after it: the row
+            // appears before the child spawns, and a tab that arrived a beat
+            // later would be one more thing moving while the first turn starts.
+            item.issues = issues.clone();
 
             // The one failure that has to undo the tree, and the row that just
             // failed to be written is exactly why: removal is offered from a
@@ -472,7 +498,7 @@ impl SessionManager {
             )
             .await?;
             session
-                .send_msg(prompt, attachment_paths, baseline, from, app)
+                .send_msg(prompt, attachment_paths, &issues, baseline, from, app)
                 .await?;
             // The prompt event is synthesized by `send_msg`, so read the log
             // back rather than returning empty — otherwise the frontend's first
@@ -545,6 +571,17 @@ impl SessionManager {
             None => cwd.to_string(),
         };
 
+        // Recorded before the prompt goes out, and before the queue branch
+        // below returns: a tag on a prompt held behind a running turn still
+        // says what the session is about, and the panel's tab should not wait
+        // on a boundary to appear. Failures are logged and dropped — the link
+        // is a record, and losing one must not cost the send.
+        for issue in &issues {
+            if let Err(e) = link_session_issue(session_id, issue.clone()).await {
+                eprintln!("[issue link err] {e:#}");
+            }
+        }
+
         if let Some(s) = sessions_guard.get_mut(session_id) {
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
@@ -574,11 +611,12 @@ impl SessionManager {
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
                 if tool_in_flight {
-                    s.queue_and_flush(prompt, attachment_paths, from, app).await;
+                    s.queue_and_flush(prompt, attachment_paths, &issues, from, app)
+                        .await;
                     return Ok(SendOutcome::default());
                 }
 
-                let queued = s.queue_msg(prompt, attachment_paths, from).await;
+                let queued = s.queue_msg(prompt, attachment_paths, &issues, from).await;
                 return Ok(SendOutcome {
                     snapshot: None,
                     queued: Some(queued),
@@ -596,7 +634,8 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, baseline, from, app).await?;
+            s.send_msg(prompt, attachment_paths, &issues, baseline, from, app)
+                .await?;
             return Ok(SendOutcome::default());
         }
 
@@ -649,7 +688,7 @@ impl SessionManager {
         }
 
         session
-            .send_msg(prompt, attachment_paths, baseline, from, app)
+            .send_msg(prompt, attachment_paths, &issues, baseline, from, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome::default())
@@ -970,6 +1009,7 @@ impl Session {
         &mut self,
         prompt: &str,
         attachment_paths: &[String],
+        issues: &[IssueRef],
         baseline: Option<String>,
         from: Option<MessageSender>,
         app: &AppHandle,
@@ -978,6 +1018,7 @@ impl Session {
             &self.id,
             prompt,
             attachment_paths,
+            issues,
             baseline,
             false,
             from,
@@ -1004,6 +1045,7 @@ impl Session {
         &self,
         prompt: &str,
         attachment_paths: &[String],
+        issues: &[IssueRef],
         from: Option<MessageSender>,
     ) -> QueuedMessage {
         let message = QueuedMessage {
@@ -1012,6 +1054,7 @@ impl Session {
             text: prompt.to_string(),
             attachment_paths: attachment_paths.to_vec(),
             from,
+            issues: issues.to_vec(),
         };
         self.queued.lock().await.push(message.clone());
         message
@@ -1036,10 +1079,11 @@ impl Session {
         &self,
         prompt: &str,
         attachment_paths: &[String],
+        issues: &[IssueRef],
         from: Option<MessageSender>,
         app: &AppHandle,
     ) {
-        self.queue_msg(prompt, attachment_paths, from).await;
+        self.queue_msg(prompt, attachment_paths, issues, from).await;
         flush_queued(
             &self.id,
             &self.queued,
@@ -1288,6 +1332,10 @@ async fn deliver_prompt(
     session_id: &str,
     prompt: &str,
     attachment_paths: &[String],
+    // Already resolved against the tracker by the caller. Appended to the text
+    // the child is given, so the transcript keeps showing exactly what the
+    // model was told — the same rule a non-image attachment's `@path` follows.
+    issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
     from: Option<MessageSender>,
@@ -1302,9 +1350,11 @@ async fn deliver_prompt(
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
     let prepared = attachments::prepare(session_id, prompt, attachment_paths).await?;
+    let text = prepared.text;
 
     let payload = AgentEventPayload::UserMessage {
-        text: prepared.text.clone(),
+        text: text.clone(),
+        issues: issues.to_vec(),
         images: prepared
             .images
             .iter()
@@ -1343,11 +1393,11 @@ async fn deliver_prompt(
     // shape every fixture captures, kept rather than always sending the
     // one-element block array it is sugar for.
     let content = if prepared.images.is_empty() {
-        json!(prepared.text)
+        json!(text)
     } else {
         let mut blocks = Vec::new();
-        if !prepared.text.is_empty() {
-            blocks.push(json!({"type": "text", "text": prepared.text}));
+        if !text.is_empty() {
+            blocks.push(json!({"type": "text", "text": text}));
         }
         for image in &prepared.images {
             blocks.push(json!({
@@ -1409,6 +1459,7 @@ pub async fn flush_queued(
             session_id,
             &message.text,
             &message.attachment_paths,
+            &message.issues,
             None,
             true,
             message.from,

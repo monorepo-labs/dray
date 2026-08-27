@@ -391,6 +391,160 @@ If it come back: commit = `add -A -- <paths>` then `commit -m … -- <paths>`, b
 
 **Selected file derived, never stored.** `find(path) ?? files[0]` — file that stop being changed can't leave pane pointing at nothing, and first-by-position right here where turn panel refuse it: diff have own pane, so opening one hide nothing.
 
+## Issues
+
+**Surface say "issue", implementation say Linear, and only one row say both.** Vocabulary live in [issues/issues.rs](apps/desktop/src-tauri/src/issues/issues.rs), wire in [linear.rs](apps/desktop/src-tauri/src/issues/linear.rs). Second tracker = module plus variant on `IssueTracker`, not rename of every panel — which why `IssueRef` carry tracker even while there one. Word "Linear" reach reader in exactly two place: connect form, where it name what key being asked for, and failure Linear itself caused.
+
+**Connection workspace-wide, no project ↔ team mapping.** Repo bound to nothing; picker and page read what connected user assigned. Mapping = thing to add when it earn itself, not thing to guess at now.
+
+**Key live in `~/.dray/credentials.json` at `0600`, account cache in `settings.json`.** Two read together: credentials say whether key exist, settings say whose it is, and cached account with no key behind it read as **disconnected** — key *is* connection.
+
+**Keychain tried first and retreated from, deliberately.** macOS tie grant to exact binary that asked, so every rebuild = new application to ACL and grant never stick — authorization dialog several times an hour on any machine where app being *built*. Signing with stable Developer ID settle it for shipped build and do nothing for anyone working on app. Cost of retreat worth stating: key readable by anything running as user, where keychain entry not. What make it tolerable = company it keep — `~/.dray` already `0700` and hold every transcript, which = every file agent read or wrote on this machine. Read-only tracker key not most sensitive thing in that directory by wide margin, and `gh`/`npm`/`aws` make same trade.
+
+**Own file, not field on `settings.json`, for two reason that both bite.** Settings rewritten by every analytics toggle and read on launch path where parse failure fall back to defaults — which would silently *forget* key. And `get_settings` hand that struct to frontend, which credential must never ride along with.
+
+**Mode set on temp file before anything written into it**, not on final one after rename: `fs::write` create at process umask, so setting it afterward leave window where key sit world-readable. Narrow, avoidable for one call, and pinned by test — failure silent otherwise, since world-readable key behave identically in every other respect.
+
+Personal API key not OAuth, deliberately: Linear OAuth want client secret, secret want server to hold it, so that = drayhq.com work. Key path want neither. Connect form = where OAuth button land if that change.
+
+**Connect live on issues page, disconnect in settings, and split not arbitrary.** Page = surface with nothing to show without key, so field that fix it belong there and empty state *is* form. Settings row draw only when something connected — row offering to connect thing reader never seen = row they cannot judge, and second form = second place for one slot. Two error sentence that name cure therefore point at page, never at dialog.
+
+**Disconnect ask first**, arming confirm that replace button — same shape sidebar's delete and PR panel's merge use. Key not recoverable from here: taking it back mean finding Linear's own settings page and minting new one, which = long way to be sent by button pressed on way to somewhere else.
+
+**Linear's mark drawn in exactly two place**, connect heading and settings row ([LinearIcon](apps/desktop/src/components/LinearIcon.tsx)) — same two place word "Linear" reach reader, and for same reason. `currentColor` not brand purple: both sit in row of muted chrome, and single saturated logo = loudest thing on surface whose job is to be quiet.
+
+**Validated before saved.** Key stored untried = one reader find out about next time they open picker, by which point they left form and failure look like feature broken. `verify` also answer identity, which what row draw.
+
+**Write to either side forget every cached issue.** `useIntegrations`' `connect`/`disconnect` call `forgetIssues()`, and it correctness not speed: every cached answer was read with old key, `not_connected` failure page's empty state drawn from included — so without it, connecting leave reader looking at form they just filled in.
+
+**Tag carry title itself, and that why there no block underneath.** `#DRA-53 Add issue tracker integration` = whole shape, everywhere: picked from composer's `#` menu, typed by hand, or appended by CLI's `--issue` (`tag_text` in Rust, `issueTag` in [issue.ts](apps/desktop/src/lib/issue.ts), pinned both side). Title being *in text* = what make feature cheap — model read it, transcript paint it, and composer's overlay stay in register with textarea underneath because nothing painted that isn't really there.
+
+First version appended "Linked issues" block after prompt and stripped it back off bubble. Both gone: block restated what tag already say, and strip = pattern match that fail silently the day block get reworded.
+
+Description still not injected, and that separate call: agent have tracker's own MCP server and fetch what it want in shape it want, where description pasted in = wall of text at top of every prompt, stale moment somebody edit issue, and paid for again on every follow-up. Session may be started against three issue at once, so three tag beat three paragraph.
+
+**Resolution best effort, always.** Unreachable Linear, revoked key, tag naming issue that not exist — all leave tag as text, record no link, say nothing. Send must never fail because issue tracker down: that make tracker dependency of typing.
+
+**One tagging rule per side of bridge.** Everything app send tag in prompt *text* — composer picker being only route — so `send_msg` command pass empty issue list always. CLI's `--issue` = other caller and name them outright, because flag not prose. Both merge inside `expand_tags`, deduplicated, and named-not-in-text one get their `#ID Title` appended so both caller end at same shape.
+
+**`dray issue link` write down what it given and ask tracker nothing.** Link = local record — this session about that work — so making it need reachable Linear and stored key meant it could fail for reason nothing to do with what it record. Caller = agent that just read issue through tracker's own MCP, so it hold title and url already; asking second system for what caller have in hand = round trip whose only contribution = way to fail. Hence `IssueInput { identifier, title?, url? }` on wire, and `--title`/`--url` on CLI.
+
+Absent metadata = **ordinary, not error**: bare identifier still usable link. `tag_text` drop trailing space (`#DRA-53`), `issueUrl` read empty url as none so tag stay text rather than button opening nowhere. Both stated twice — Rust and [issue.ts](apps/desktop/src/lib/issue.ts) — same reason every other tag rule is.
+
+**`--title` and `--url` describe one issue, so several identifier + either = refusal.** Applying one title to all, or silently to first, = wrong link reading exactly like right one.
+
+**Resolution still live, on other route.** `expand_tags` run in *app* on send and do read Linear, because `#DRA-53` in prose carry no title with it. So two route: prose resolved, CLI blind. `issues::link` and `link_issue` command existed as third route nothing took and were removed with it.
+
+**v4 = `LinkIssues.identifiers` → `issues`.** Field renamed not extended, so two shape cannot be confused on wire: old app handed new one find no `identifiers` and refuse, which = loud failure wanted here.
+
+**Tag shape stated twice and tested twice.** Rust `issue_tags`/`parse_identifier` decide what get *linked*; [issue.ts](apps/desktop/src/lib/issue.ts)'s `parseIdentifier` and `highlightSegments` decide what get *painted*. Neither can call other — one run before prompt sent, one after — so rule = team key plus number, `#` must open word, and bracketing punctuation (`(#DRA-53)`) count as opening it. Drift show as word coloured like address that link nothing, or reverse. `#fff` and markdown heading both stay prose, both direction pinned.
+
+**Composer's placeholder name `#` only while connected.** Unconnected reader offered tag they cannot use learn app missing feature rather than that they haven't set one up. Picker itself need no such gate — it simply find nothing.
+
+**Every user-facing string collected in [COPY-ISSUES.md](apps/desktop/COPY-ISSUES.md)**, grouped by surface with reason beside each. Reword there and here together, or doc become second copy free to disagree with screen.
+
+**Tag in sent bubble = button, and link come from event not from text.** `issueUrl` look identifier up in `user_message.issues`, so what open = url tracker itself gave at send time. Tag whose issue never resolved — unreachable tracker, identifier that don't exist — stay coloured text rather than becoming link to nowhere. Tooltip name host off that url (`Open DRA-53 in linear.app`), so self-hosted tracker name itself.
+
+**Upload live *in* description, and drawn there — not listed beside it.** Linear put both in description's markdown: image as `![](…)`, file as `[name](…)`, both pointing at `uploads.linear.app`. So there no attachment list to build — override `img` and `a` on that one `Markdown` and leave everything else exactly as it was, since ordinary link in issue = ordinary link and rewriting it take app's own link dialog off it.
+
+**Upload sit behind same auth API do, which why webview cannot fetch either.** `<img src>` resolve to 401 and browser draw its own broken box — reading as "Dray cannot show this" rather than "this need key". `fetch_issue_asset` put key on that request and hand back `data:` URL; only then is there something `src` can point at. `csp: null` in tauri.conf, so `data:` need no scope entry.
+
+**Host checked exactly, and that not defensive.** Description = text somebody else wrote, and it name URL this fetch get handed — so without check, issue could name any host and have app post credential to it. Compared on **parsed host**, never prefix: `uploads.linear.app.evil.test` pass `starts_with` and is not Linear. Stated twice (Rust `is_upload` decide where key go, [IssuePanel](apps/desktop/src/components/IssuePanel.tsx)'s copy decide what get drawn as asset), pinned on Rust side.
+
+**Image open full size in transcript's own lightbox.** Earn its place here more than there: pane = third of window, so screenshot of screen unreadable at only width it can be given. **One image per lightbox**, not description's whole set — these spread through prose rather than gathered in row, so there no set arrow would step through.
+
+**Image render as image, everything else as file card.** Card = icon, name, size, download glyph on hover — whole row = control, so glyph = hint about what click do not second target. Fallback one direction only: anything webview won't draw (unknown format, SVG, failed fetch) *become* card, since file somebody can download beat grey box. `onError` = second net under mime check, because mime can say `image/svg+xml` and still not render.
+
+**Size capped before body read.** `content_length` checked first so oversized file refused rather than read into memory then rejected — same reading `cat-file --batch-check` exist for on git side; arrived length capped again, for server that send none. Asset cached per URL across mount, `null` included: description re-render on every keystroke in search box, and each would otherwise re-download every screenshot in it.
+
+**Panel read Linear's API with stored key. MCP nowhere near it.** Two channel answering two question and they never touch: key fill *this app's* screens (description, attachment, comment, status), MCP let *agent* read same issue in its own turn. That why connect form say MCP out loud — reader who set up one and not other otherwise find out from model working off one-line title.
+
+**Panel row order = priority, identifier, status, title.** Same left-to-right issues page read in, so two surface scan alike. Priority lead because it one fixed-width mark and ragged left edge read as disorder; title last since it only part giving way to truncation. Priority drawn even before detail land (`none`), so row don't reflow when read arrive.
+
+**Issues pane say "Details" where tab row would be (`heading`).** One thing in it and nothing to switch to, so row of one tab = control that cannot do anything and keycap beside it name chord stepping between one place and itself — but *empty* strip worse than either, reading as chrome that failed to load. So row keep height, lose control, say what pane is. Strip cannot simply collapse: it what clear titlebar, and without it pane's first row sit level with traffic lights on far side.
+
+**And it lose its bottom rule.** That line separate row of *controls* from what they act on; over heading belonging to thing underneath it, it cut title off own body.
+
+**⌘E only ever close there.** Nothing for it to reopen — row = what pick issue — so toggle that could open have to guess which one, and last pick rarely one wanted on way back. Closing = half with unambiguous meaning.
+
+**Guard live on chord, not only on `handleTogglePanel`.** ⌘E bind **raw** `togglePanel` deliberately — `handleTogglePanel` pick tab on way open, right for button reader aimed at and wrong for chord that draw nothing. So guard put in that function alone = button honour it while chord sail past into pane not on screen. Same for ⌘1/⌘2: view tab row not drawn there, so switching invisible tab look like nothing happening then show up as wrong view on way back.
+
+**Panel tab = `issue`, drawn immediately before Subagents, hidden with no link.** Rows drawn from session's own `IssueRef`s, so tab exist moment prompt tag one and need no read to wait on; detail (description, status, comments) fetched per identifier and fill in. Description drawn here where PR panel deliberately leave PR body out, and difference = who wrote it: PR body = reader's own text restating diff beside it, issue description = somebody else's and whole reason tab exist.
+
+**MCP = one sentence in connect form, and no check anywhere.** Key fill *Dray's* screens and give agent nothing; agent reading issue in full, or moving one, want Linear's MCP server. Said in empty state where somebody already setting this up, linked to Linear's own docs, and said **once**.
+
+Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per directory 5 min, and drew notice in issue panel — wrong place twice over: reader open that panel to read *issue*, not audit own tooling, and by time session tagged the moment to say it long past. Cost was better part of ten second per uncached read, for line that belong in setup. Whole module deleted; `git log` hold it if health check ever earn a surface of its own.
+
+**Right pane hidden while page up, and preference kept.** `panelShown = panelOpen && !issuesOpen` — two different question, and folding them = bug: page fill main column, so pane left open beside it went on describing session reader had *left*, with nothing on screen saying whose changes and whose PR those were. Everything that draw or read read `panelShown`; `panelOpen` stay standing preference, so coming back restore pane as it was. ⌘E no-op there too — toggling thing not on screen flip preference reader cannot see effect of.
+
+**Header name page while it up.** `SessionHeader` take `standIn`, and `App` pass `"Issues"`: page fill main column but = not session and never become one, so header otherwise sit at "New session" over list of issues — naming thing reader not looking at.
+
+**Issues page = sidebar row under New task, main column view.** Not session, so opening it **keep selection** — session reader was in still there coming back, and page hidden not unmounted so its filters and scroll survive trip. Sidebar's *highlight* still go though (`selectedSessionId={issuesOpen ? null : …}`): column showing issues, so lit row name session nowhere on screen. Two different question, and folding them cost trip back. Row drawn whether or not tracker connected: page's own empty state = where connecting offered, and row that appear only after you found settings dialog can only be found by people who not need it.
+
+**Page read, and clicking row open it in pane beside list.** Row opened tracker in browser first, and that = trip taken for something app already had: pane draw description, people, attachment and conversation off *same key* list was read with. Linear stay one click away — pane's own row carry button — but it second thing offered, not first. Dray still write to tracker nowhere at all: no status move, no comment, no attachment, and skill say so out loud, because agent assuming otherwise tell user their issue moved when nothing of sort happened.
+
+**Pane describe whatever main column show, and that one rule cover both case.** Session on screen → session's panel; issues page → picked issue. Same `RightPanel` frame, one tab, `onTabChange` no-op — second panel component = second set of chrome to keep in step. Also *why* session's pane hidden on that page: left up it went on describing changes and PR belonging to work reader had left.
+
+**Picked issue held as whole row, not identifier.** List already read every field header draw, so pane complete before own detail read land — same bargain session panel make with session's links. `useSessionIssues` serve both, since a page pick = one-element link list.
+
+**Toggle drawn only once something open to close.** Nothing on that page can *open* pane — row do that — so toggle at rest = control with one dead state. ⌘E close pick for same reason, and ⌘R follow session rule: pane win where open, list otherwise.
+
+**No Start button, and removing it was the fix not the gap.** It create session, so it must name project — and page workspace-wide, so button either guess which repo work belong in or grow picker of own beside every row. Tagging with `#` in composer already start work against issue, from place that know which project it in.
+
+**Two chip, everything else behind one control.** Assigned / Created = two question worth one press: what mine to do, what did I ask for. Team and project narrow *within* whichever chip on, so they sit in menu — more control across header = more thing to read past on every visit to change none of them. Team or project list with **one entry not offered at all**, and menu with neither **hidden outright**: filter whose only option = one you already have = control that cannot do anything, and this solo tool often pointed at single team. Trigger lit while anything on, so list narrowed on previous visit say so rather than read as empty workspace.
+
+**Settled half = second read, asked for only on expand.** Done and Cancelled header always drawn and always start closed; opening either fire one `list_issues` with `settled: true`. `IssueQuery.settled` = which *half* to read, not flag widening single read — backend answer complement (`state.type` `in` vs `nin`), so page never pull whole workspace back to fill two group it drew collapsed. No load-more: one capped page, and cap named rather than paged. Header carry **no count until loaded** — zero there = claim, not blank, hence `loaded` on hook separate from `issues.length`. Priority sort skipped on that half: priority on closed issue = fact about decision already taken, and sorting by it bury thing that just landed.
+
+**Grouped by state *kind*, not by state name.** Name = per-team prose ("Shipping", "In Review", "Icebox"), so grouping on it turn list spanning three team into dozen heading for what really same few state. Kind = fixed six-way vocabulary, which what make grouping stable across whole workspace. Order = In Progress, Triage, Todo, Backlog, Done, Cancelled, Other — order work move through, which also order attention should reach it in. Order *within* bucket left exactly as arrived, since backend already sorted by priority and re-sorting = second opinion on same question.
+
+**Search bar carry no fill and no border, glyph instead.** It one control always in same place, so it need no edge to be found — and filled field above borderless list draw box round least interesting third of page. Magnifier do work border was doing: say "type here" without enclosing anything. Override need **`dark:bg-transparent` as well as `bg-transparent`** — base `Input` carry `dark:bg-input/30`, more specific rule, which win; plain override therefore read as removed in source while fill still on screen.
+
+**Refresh sit far right, not among chip, and ⌘R reach it.** It act on whole page where chip narrow it, so in that row it read as third chip. Chord = same one right panel use and `App` pick between them (`issuesOpen` win, since page = what reader looking at). Page hand its `refresh` up through ref not state: handle re-made every hook run, and state there = render of whole app per keystroke in search box.
+
+**Group gap = hair, not band.** Two collapsed header a row apart read as adrift, and `mb-4` between them left more space than either header occupy. Gap only have to say "different bucket".
+
+**Status glyph on heading, never on row.** Row already gathered under heading that carry one, so second copy per row say what row's own position just said. Heading also carry **no fill** — tinted band across page draw box round quietest line on it — and group separated by gap instead.
+
+**Priority glyph on every row including "none".** Glyph appearing on only some row shift every title beside it, and ragged left edge read as disorder not information. Linear draw no-priority as three flat dash for exactly this reason: column same width on every row, and *height* of bars = signal.
+
+**Glyph set = Linear's own paths, redrawn** ([IssueStateIcon](apps/desktop/src/components/IssueStateIcon.tsx)). Two vocabulary reader arriving from tracker already know by shape — part-filled ring = progress, rising bars = priority — and lucide stand-in for either = second vocabulary to learn for no gain. Shape from **kind**, colour from **state's own** where caller have one (panel, picker); heading name kind, so it fall back to Linear's default per kind. Ring wedge computed from fraction rather than stroke-dasharray: dashed stroke read as dotted outline at 14px.
+
+**Row's hover hint sit before project, avatar and date.** Nothing else on row say click leave app, so hint name it — and placed there it take its width from title, which truncate, so marks on right stay put instead of sliding sideways under cursor.
+
+**Date = "Today", "Yesterday", then "Aug 23"** (`calendarDay`, [format.ts](apps/desktop/src/lib/format.ts)). Deliberately not `relativeTime` next to it: that count elapsed time, right for session that moved four minutes ago and wrong for issue — "20m" and "1d" invite arithmetic, and nobody reading backlog want to work out which afternoon "2d" was. Calendar day = unit tracker itself use. Year appended only past this year, and comparison count **midnights not hours**, so 11pm yesterday read as Yesterday at 1am.
+
+**Debounce gate on there being text, not on there being cache to protect.** First version gated on both, which debounced nothing that matter: every keystroke make key nothing cached under, so every one take un-debounced path and fire own request — exact run debounce exist to collapse. 300ms here against picker's 200ms, since this = box whole phrase get typed into.
+
+**Cache short-circuit must clear `loading` itself.** Only path that clear it without request having finished — cancelled read never reach own `finally`. Backspacing to already-cached query cancel in-flight read for longer one then short-circuit, so spinner turned forever with nothing behind it until some later read happened to end.
+
+**Reads cached module-level, keyed on whole query, capped at 12.** Same bargain `useChanges` make: switching chip, opening page, coming back from session all hit cache, and 60s freshness window decide whether refetch run underneath. Failed read **change nothing** — no entry written, no stamp — so blip leave last good list on screen. `forgetIssues()` = one escape hatch, called from both integration write.
+
+**Refresh forget, then bump — and bump alone must never gate cache.** `generation` re-arm effect; `forgetIssues()` beside it = what make read actually happen, since effect's rule = "fetch what not fresh". Counter only ever go up, so reading it as "don't use cache" left every later chip flip and every later visit to page refetching for rest of session.
+
+**Opened issue cached separately, keyed by identifier, capped at 24.** List cache cannot serve it — one hold row, other hold whole body with description and comments — and two read on different rhythm, so second map beside first rather than second use of it. Cap higher because key = *one issue* not one whole query, so reader working through handful fill it faster. Without it panel re-downloaded description on every tab switch, every reselect, and every second visit to row on page: "reading the issue…" over text already read. Only identifier past freshness window asked for, so session tagged with three issues and two of them just read cost one request. `forgetIssues()` clear both map — key that changed make every cached answer meaningless whichever shape it in.
+
+**Cached answer picked *during render*, not in effect.** `useEffect` run after paint, so state alone left one frame of previous issue's description under new issue's title — most visible on page, where picking row = key change and nothing else. Hence `Read` carry key it was built for and mismatch resolved off cache in render.
+
+**`loading` stay "a read is out", unmasked by what already cached.** Every reader of it per-issue and each draw own body when it have one, so session holding one cached issue and one still arriving need it true — else second row read as unreadable rather than pending. Refresh **forget then bump**: effect's own rule = "fetch what not fresh", and dropping stamp what make that rule answer yes.
+
+**Filters live in `useIssues`, not in view.** Default = assigned to me, unfinished, priority order. `IssuePriority` = enum not Linear's `0..4` integer, because `0` = *no* priority and ordering by wire number put least urgent issue at top of page. Sorted in Rust after read, since Linear order by `createdAt`/`updatedAt` and nothing else — API order asked for as tiebreak inside level. `IssueScope` = `Assigned`/`Created`/`All` and it what chip write; `assignee.isMe`/`creator.isMe` = filter Linear take, no user id lookup needed.
+
+**`Issue` and `IssueDetail` separate types, not one with empty fields.** List query ask for no description and no comments; struct carrying them anyway hand panel issue whose body silently missing. Every field read out of `Value` field-by-field, `map_model_usage`'s reason: schema Linear extend must cost one absent field, never whole list failing to deserialize and leaving page empty.
+
+**GraphQL fail with 200 and zero exit**, same trap `gh` document — `errors` checked before `data`, and auth failure recognised both by status *and* by sentence, since Linear report bad key as ordinary GraphQL error too.
+
+**Issue looked up by team key and number, not by handing identifier to `issue(id:)`.** That argument = UUID; whether it also resolve human identifier = convenience nothing in schema promise. Filter on two halves exactly as precise and documented.
+
+**Link = copy, not pointer.** `IssueRef` hold identifier, title, url, tracker id — so sidebar and prompt need no network call, and row still draw with tracker unreachable. It go stale (retitled issue keep old words until panel read it back), which right way round. Re-tagging **replace** entry with same id rather than append, so stale title refresh instead of issue drawn twice.
+
+**Unlink match tracker id *or* human identifier.** Two caller hold different things: panel have whole ref and pass id, person at CLI type `DRA-53`. Neither spelling collide — one = UUID.
+
+**Fork inherit links; relayed message carry none.** Fork continue same conversation so it against same work. `dray send`'s prompt tag whatever its own text tag and must not re-aim session it arrive at.
+
+**Protocol at v4.** v3 = `issues` and `LinkIssues`; v4 = that request's reshape, above.
+
+**v3 bump for `issues` and `LinkIssues`.** Same test `from` earned bump on: old app ignoring `issues` start session against no issue, with no line in prompt saying what work about, and answer **identically to success**. Wrong work that look like right work = what earn bump.
+
 ## Handing work back
 
 **Composer hide row of end-of-turn action behind itself.** [HandoffRow](apps/desktop/src/components/composer/HandoffRow.tsx) sit above composer card, clipped to sliver, open on hover. Buttons = Commit, Commit & push, Push/Publish branch, Create PR, Draft PR.
@@ -745,7 +899,9 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Gear share titlebar strip with sidebar toggle, and order swap in fullscreen.** Strip `justify-end` normally (clearing traffic lights), `justify-start` in fullscreen (they gone). Toggle also drawn in app header when sidebar collapsed, so it must hold strip's outer edge in both layouts and never change which end it at; gear have no second home and move instead.
 
-**Row shape = `SettingRow`**, label and reason left, control right. Two rules it encode: description **not optional** — it where "why is this off by default" live — and setting that cannot apply on this platform **disabled, not hidden**, since row that vanish read as setting app forgot and sentence under it = only place reason can be said.
+**Row shape = `SettingRow`**, label and control on top line, reason full width beneath. Side by side was first shape and it broke on widest control: two button push sentence into third of dialog, where four word take three line and row height jump every time control change. Description = prose and want measure; control = fixed thing and want edge to sit against.
+
+Two rules it encode: description **not optional** — it where "why is this off by default" live — and setting that cannot apply on this platform **disabled, not hidden**, since row that vanish read as setting app forgot and sentence under it = only place reason can be said.
 
 **Analytics row = two sentence: what it for, what it never touch.** Second one = row's whole job. "Analytics" read as behavioural tracking to most people, and for tool that watch you work on own code, saying plainly conversation and activity not collected = part worth space. Deliberately **not** itemised — listing every field read as something to be wary of rather than something to skim, which why row don't name ping, version or OS one by one.
 
@@ -1008,7 +1164,9 @@ Several things deliberately unfinished — don't mistake for bugs:
   and sidebar draw no link between the two. Both wanted a field each if it ever
   earn one; neither is missing machinery.
 
-- **Handoff row have no Revert, no Amend, no Stash.** Each destroy or rewrite work, and button that send prompt for one = button whose blast radius decided by model. Reader can still type it.
+- **Dray never write to issue tracker.** Tag record link on session and nothing else — no status move, no comment, no attachment linking session or PR back to issue. Every one = write, and write want rule for when it fire; reader can ask agent instead, which have tracker's MCP.
+- **No issue-side project mapping.** Connection workspace-wide, so picker and page never narrowed by which repo session run in. Filter row cover it by hand. Repo ↔ team mapping = field on `Project` if it earn one.
+- - **Handoff row have no Revert, no Amend, no Stash.** Each destroy or rewrite work, and button that send prompt for one = button whose blast radius decided by model. Reader can still type it.
 
 - **Repo view read, commit and push — no fetch, no pull, no discard.** Ahead count against *last known* upstream, so branch someone else pushed to read as level until push itself fail. Discard-changes and stage-hunk deliberately absent: both destroy work.
 

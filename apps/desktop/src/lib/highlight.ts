@@ -6,10 +6,11 @@
 /// textarea, and the same text echoed back into the transcript. Colouring a word
 /// while typing that goes plain once sent — or the reverse — reads as a bug in
 /// whichever surface the reader noticed second.
+import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseSlashCommand } from "@/lib/slash";
 
 export type Segment = {
-  kind: "text" | "command" | "mention";
+  kind: "text" | "command" | "mention" | "issue";
   text: string;
 };
 
@@ -21,6 +22,7 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   text: "",
   command: "text-accent-command",
   mention: "text-accent-mention",
+  issue: "text-accent-issue",
 };
 
 /// A mention split into the part worth reading and the part that is only there
@@ -63,11 +65,22 @@ export function highlightSegments(text: string): Segment[] {
   }
 
   for (; i < text.length; i += 1) {
-    if (text[i] !== "@") continue;
-    // Must open a word, which is what keeps an email address plain. Note this
-    // also holds at `i === plainFrom` right after a command, where the previous
-    // character is the last of the command name rather than a space.
-    if (i > 0 && !SPACE.test(text[i - 1])) continue;
+    const opener = text[i];
+    if (opener !== "@" && opener !== "#") continue;
+    // Must open a word, which is what keeps an email address and a `#fff`
+    // colour plain. Note this also holds at `i === plainFrom` right after a
+    // command, where the previous character is the last of the command name
+    // rather than a space.
+    //
+    // Bracketing punctuation counts as opening one — `(#DRA-53)` is a tag in a
+    // sentence — and only for a tag, because that is the rule the backend
+    // links by. A mention is left as strict as it was: the CLI parses `@path`
+    // out of the prompt itself, so widening it here would paint mentions the
+    // harness will not read.
+    const previous = i > 0 ? text[i - 1] : " ";
+    const opensWord =
+      SPACE.test(previous) || (opener === "#" && OPENERS.includes(previous));
+    if (!opensWord) continue;
 
     let end = i + 1;
     while (end < text.length && !SPACE.test(text[end])) end += 1;
@@ -76,11 +89,29 @@ export function highlightSegments(text: string): Segment[] {
     // colour arrives with the path rather than flashing on the `@` itself.
     if (end === i + 1) continue;
 
-    if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
-    segments.push({ kind: "mention", text: text.slice(i, end) });
+    let kind: Segment["kind"];
+    let stop = end;
 
-    plainFrom = end;
-    i = end - 1;
+    if (opener === "@") {
+      kind = "mention";
+    } else {
+      // A tag is coloured only where it is a real identifier, because that is
+      // exactly what will be linked — `#fff` at the start of a line, or a
+      // markdown heading's word, must read as the prose they are. The scan
+      // stops at the number's end rather than the token's, so the comma in
+      // `#DRA-53,` stays plain like the sentence it belongs to.
+      const identifier = parseIdentifier(text.slice(i + 1, end));
+      if (!identifier) continue;
+
+      kind = "issue";
+      stop = i + 1 + identifier.length;
+    }
+
+    if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
+    segments.push({ kind, text: text.slice(i, stop) });
+
+    plainFrom = stop;
+    i = stop - 1;
   }
 
   if (plainFrom < text.length) {

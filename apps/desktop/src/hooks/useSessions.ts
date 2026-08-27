@@ -13,7 +13,7 @@ import {
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 // Only for a session indexed before the model was recorded, which reads back as
 // "unknown". Everything else seeds from the user's stored prefs.
@@ -608,6 +608,31 @@ const setSessionFlags = async (
           : s,
       ),
     );
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Applies whatever a link write answered with to both copies of the session.
+//
+// Two copies, for `setSessionFlags`' reason: the sidebar reads the index items
+// and the open transcript holds its own flattened copy, which is what the panel
+// and its tab are drawn from. Leaving either behind shows an issue that is no
+// longer linked, or hides one that is.
+const applyIssues = (sessionId: string, issues: IssueRef[]) => {
+  setSessionIndexItems((prev) =>
+    prev.map((i) => (i.sessionId === sessionId ? { ...i, issues } : i)),
+  );
+  setSessions((prev) =>
+    prev.map((s) => (s.sessionId === sessionId ? { ...s, issues } : s)),
+  );
+};
+
+// Removes one. `key` is the tracker's own id from the row that was clicked; the
+// backend also accepts the human identifier, which is what the CLI passes.
+const unlinkIssue = async (sessionId: string, key: string) => {
+  try {
+    applyIssues(sessionId, await invoke<IssueRef[]>("unlink_issue", { sessionId, key }));
   } catch (e) {
     setError(String(e));
   }
@@ -1324,6 +1349,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, detachSession, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

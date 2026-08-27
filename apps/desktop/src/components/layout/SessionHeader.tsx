@@ -5,6 +5,11 @@ import type { SessionSnapshot } from "@/types/events";
 
 type SessionHeaderProps = {
   session: SessionSnapshot | null;
+  /// What the main column is showing, when it is not a session. The issues page
+  /// fills that column but is not a session and never becomes one, so the
+  /// header would otherwise sit at "New session" while a list of issues is on
+  /// screen — naming a thing the reader is not looking at.
+  standIn?: string | null;
   /// What `sessionBranch` made of this session, handed in rather than worked
   /// out again here: `App` has git's own reading of HEAD to give it, and a
   /// header naming one branch while the PR tab looks up another is the whole
@@ -20,11 +25,16 @@ type SessionHeaderProps = {
 /// No tooltip on it. It fired on every hover of a title that was not clipped,
 /// which is most of them, and repeated back text already on screen — the one
 /// thing the app's tooltip rule says a tooltip must not do.
-export default function SessionHeader({ session, branch, className }: SessionHeaderProps) {
-  if (!session) {
+export default function SessionHeader({
+  session,
+  branch,
+  standIn,
+  className,
+}: SessionHeaderProps) {
+  if (standIn || !session) {
     return (
       <div className={cn("min-w-0", className)}>
-        <span className="text-ui text-muted-foreground">New session</span>
+        <span className="text-ui text-muted-foreground">{standIn ?? "New session"}</span>
       </div>
     );
   }

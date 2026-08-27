@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { Streamdown, type LinkSafetyConfig, type ThemeInput } from "streamdown";
+import { Streamdown, type Components, type LinkSafetyConfig, type ThemeInput } from "streamdown";
 
 import LinkDialog from "@/components/chat/LinkDialog";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
@@ -13,6 +13,10 @@ type MarkdownProps = {
   /// True while deltas are still arriving, so incomplete blocks render as
   /// prose instead of flickering through half-parsed markdown.
   streaming?: boolean;
+  /// Element overrides, for a caller whose markdown holds something this
+  /// renderer cannot resolve on its own — an issue description, whose images
+  /// and files sit behind the tracker's auth and have to be fetched with a key.
+  components?: Components;
   className?: string;
 };
 
@@ -46,7 +50,7 @@ const LINK_SAFETY: LinkSafetyConfig = {
 
 /// Streamdown is built on the same shadcn tokens as the rest of the app, so it
 /// inherits the palette; only typography scale is ours to set.
-function MarkdownImpl({ children, streaming = false, className }: MarkdownProps) {
+function MarkdownImpl({ children, streaming = false, components, className }: MarkdownProps) {
   // Shiki takes a [light, dark] pair and picks by the `.dark` class our theme
   // already sets, so this needs no mode of its own — only the user's pick.
   const { pair } = useCodeTheme();
@@ -61,6 +65,7 @@ function MarkdownImpl({ children, streaming = false, className }: MarkdownProps)
       mode={streaming ? "streaming" : "static"}
       isAnimating={streaming}
       plugins={plugins}
+      components={components}
       controls={CONTROLS}
       rehypePlugins={REHYPE_PLUGINS}
       linkSafety={LINK_SAFETY}

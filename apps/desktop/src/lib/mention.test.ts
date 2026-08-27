@@ -131,12 +131,68 @@ describe("highlightSegments", () => {
     expect(highlightSegments("look at @")).toEqual([{ kind: "text", text: "look at @" }]);
   });
 
+  it("marks an issue tag", () => {
+    expect(highlightSegments("start on #DRA-53 today")).toEqual([
+      { kind: "text", text: "start on " },
+      { kind: "issue", text: "#DRA-53" },
+      { kind: "text", text: " today" },
+    ]);
+  });
+
+  /// All three can share one sentence, which is why the three colours are
+  /// chosen far apart in hue — and why this case is pinned.
+  it("marks a command, a mention and a tag together", () => {
+    expect(highlightSegments("/review #DRA-53 @src/lib/issue.ts")).toEqual([
+      { kind: "command", text: "/review" },
+      { kind: "text", text: " " },
+      { kind: "issue", text: "#DRA-53" },
+      { kind: "text", text: " " },
+      { kind: "mention", text: "@src/lib/issue.ts" },
+    ]);
+  });
+
+  /// The tag stops at the number, so the punctuation after it stays part of the
+  /// sentence rather than being painted as an address.
+  it("stops a tag at the end of its number", () => {
+    expect(highlightSegments("see #DRA-53, then stop")).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "issue", text: "#DRA-53" },
+      { kind: "text", text: ", then stop" },
+    ]);
+  });
+
+  /// Bracketed is still a tag, because the backend links it — the overlay and
+  /// the link have to agree about what a tag is, or a word is painted as an
+  /// address that nothing resolves, or the reverse.
+  it("marks a bracketed tag", () => {
+    expect(highlightSegments("see (#DRA-53) first")).toEqual([
+      { kind: "text", text: "see (" },
+      { kind: "issue", text: "#DRA-53" },
+      { kind: "text", text: ") first" },
+    ]);
+  });
+
+  /// A colour and a heading are prose. Painting either would promise a link
+  /// that nothing is going to make.
+  it("leaves a hash that is not an identifier plain", () => {
+    expect(highlightSegments("border #fff please")).toEqual([
+      { kind: "text", text: "border #fff please" },
+    ]);
+    expect(highlightSegments("# Heading")).toEqual([{ kind: "text", text: "# Heading" }]);
+    expect(highlightSegments("channel#DRA-1")).toEqual([
+      { kind: "text", text: "channel#DRA-1" },
+    ]);
+  });
+
   it("concatenates back to the original", () => {
     roundTrips("/review @src/lib/slash.ts and @src/lib/mention.ts please");
     roundTrips("ping me@example.com");
     roundTrips("@a @b @c");
     roundTrips("");
     roundTrips("/compact");
+    roundTrips("/review #DRA-53 @src/lib/issue.ts");
+    roundTrips("see (#DRA-53), and #fff, and #DRA-9.");
+    roundTrips("#");
   });
 });
 

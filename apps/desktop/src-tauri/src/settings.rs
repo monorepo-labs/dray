@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{fs, sync::Mutex};
 use ts_rs::TS;
 
-use crate::store::get_home_app_dir;
+use crate::{issues::TrackerAccount, store::get_home_app_dir};
 
 /// Serializes writers. The file is rewritten whole, so a concurrent writer
 /// would drop the other's field — same bargain `projects.json` makes.
@@ -30,6 +30,15 @@ pub struct AppSettings {
     /// [`read`].
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
+    /// Who the stored issue-tracker key belongs to.
+    ///
+    /// The account, never the key — that lives in `credentials.json` beside
+    /// this, and never rides the struct handed to the frontend. This is only
+    /// what saves a round trip to draw a name in the settings row. It is
+    /// therefore not the connection: an account here with no key behind it
+    /// reads as disconnected. See [`crate::issues::get_integrations`].
+    #[serde(default)]
+    pub linear_account: Option<TrackerAccount>,
 }
 
 fn enabled_by_default() -> bool {
@@ -40,6 +49,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             analytics_enabled: enabled_by_default(),
+            linear_account: None,
         }
     }
 }
@@ -90,6 +100,7 @@ pub async fn read() -> AppSettings {
 fn opted_out() -> AppSettings {
     AppSettings {
         analytics_enabled: false,
+        linear_account: None,
     }
 }
 
@@ -186,6 +197,7 @@ mod tests {
         let dir = tempdir();
         let off = AppSettings {
             analytics_enabled: false,
+            linear_account: None,
         };
 
         write_to(&dir, &off).await.unwrap();

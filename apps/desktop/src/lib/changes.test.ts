@@ -18,7 +18,15 @@ function prompt(baseline: string | null): AgentEvent {
     ts: "2026-08-11T00:00:00Z",
     turnId: null,
     subagent: null,
-    payload: { type: "user_message", text: "hi", images: [], baseline, queued: false, from: null },
+    payload: {
+      type: "user_message",
+      text: "hi",
+      images: [],
+      issues: [],
+      baseline,
+      queued: false,
+      from: null,
+    },
     raw: null,
   } as AgentEvent;
 }

@@ -46,6 +46,17 @@ export type AgentEventPayload = { "type": "turn_started" } & SessionInfo | { "ty
  */
 head: string | null, } | { "type": "settings_changed" } & Settings | { "type": "user_message", text: string, images: Array<ImageRef>, 
 /**
+ * The issues this prompt was tagged with, resolved against the tracker
+ * as it was sent.
+ *
+ * A field rather than something to be parsed back out of `text`, for
+ * the reason `from` below gives: the block appended to the prompt is
+ * prose, and a transcript that recovered it with a pattern would fail
+ * silently the first time the wording moved. The bubble rebuilds the
+ * exact string from *these* and drops it only if the text ends with it.
+ */
+issues: Array<IssueRef>, 
+/**
  * The working tree as it stood when this prompt was sent, as a git
  * tree id — the "before" side the changes panel diffs against.
  *
@@ -209,7 +220,17 @@ export type AppSettings = {
  * as. A file that exists and cannot be parsed reads the other way — see
  * [`read`].
  */
-analyticsEnabled: boolean, };
+analyticsEnabled: boolean, 
+/**
+ * Who the stored issue-tracker key belongs to.
+ *
+ * The account, never the key — that lives in `credentials.json` beside
+ * this, and never rides the struct handed to the frontend. This is only
+ * what saves a round trip to draw a name in the settings row. It is
+ * therefore not the connection: an account here with no key behind it
+ * reads as disconnected. See [`crate::issues::get_integrations`].
+ */
+linearAccount: TrackerAccount | null, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -422,6 +443,175 @@ export type Harness = "claude_code" | "codex";
 export type HookPhase = "started" | "finished";
 
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
+
+/**
+ * What the settings dialog draws. `None` is a tracker nobody has connected.
+ */
+export type IntegrationsView = { linear: TrackerAccount | null, };
+
+/**
+ * One row in a list, and everything a row draws.
+ *
+ * Distinct from [`IssueDetail`] rather than one type with empty fields: a list
+ * read does not ask for descriptions or comments, and a struct that carries
+ * them anyway hands the panel an issue whose body is silently missing.
+ */
+export type Issue = { tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
+/**
+ * Team key (`DRA`) — what the identifier is built from, so a row filtered
+ * across teams still says which one it belongs to.
+ */
+team: string | null, project: string | null, updatedAt: string, };
+
+/**
+ * A file uploaded to an issue, fetched with the stored key.
+ *
+ * **The whole reason this command exists.** Linear's uploads live behind the
+ * same auth the API does, so the `<img src>` in a description resolves to a
+ * 401 and the webview draws its broken-image box — which reads as "Dray cannot
+ * show this" rather than "this needs a key". Fetching here and handing back a
+ * `data:` URL is what makes an image in an issue an image on screen.
+ *
+ * Bytes rather than a signed URL because Linear issues none, and `data:`
+ * rather than a local file because these are read once and thrown away.
+ */
+export type IssueAsset = { 
+/**
+ * `image/png`, `text/plain`… as the server reported it.
+ */
+mime: string, 
+/**
+ * `data:<mime>;base64,…`, ready to put in a `src` or an `href`.
+ */
+dataUrl: string, bytes: number, };
+
+export type IssueComment = { author: IssuePerson, body: string, createdAt: string, url: string | null, };
+
+/**
+ * One issue, opened. The panel's read.
+ */
+export type IssueDetail = { 
+/**
+ * Markdown, as the tracker holds it. `None` for an issue nobody wrote one
+ * for, which the panel says plainly rather than drawing an empty box.
+ */
+description: string | null, comments: Array<IssueComment>, tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
+/**
+ * Team key (`DRA`) — what the identifier is built from, so a row filtered
+ * across teams still says which one it belongs to.
+ */
+team: string | null, project: string | null, updatedAt: string, };
+
+/**
+ * The filter row's options, read once per connection rather than per keystroke.
+ */
+export type IssueFilters = { teams: Array<IssueGroup>, projects: Array<IssueGroup>, };
+
+export type IssueGroup = { id: string, name: string, };
+
+export type IssueLabel = { name: string, color: string, };
+
+export type IssuePerson = { name: string, 
+/**
+ * `None` for an account with no picture, which the panel draws as an
+ * initial rather than as a gap — same bargain the PR panel makes.
+ */
+avatar: string | null, };
+
+/**
+ * Linear's five levels, by name rather than by its `0..4` integer — where `0`
+ * is *no* priority and therefore sorts nothing like a number.
+ */
+export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
+
+/**
+ * What the issues page can narrow to, and what the picker asks with.
+ */
+export type IssueQuery = { 
+/**
+ * Free text. Matched against title and identifier; an empty query is the
+ * resting state and lists rather than searches.
+ */
+text: string | null, scope: IssueScope, 
+/**
+ * Linear team id.
+ */
+teamId: string | null, projectId: string | null, 
+/**
+ * Which half of the workspace to read: the unfinished issues, or the done
+ * and cancelled ones.
+ *
+ * Two reads rather than one flag that widens a single read, because the
+ * settled half is most of a workspace and is nearly always dead weight —
+ * so the page draws its groups collapsed and asks for them only when one
+ * is opened. Splitting it here rather than filtering client-side is what
+ * makes that possible: a read that never happens costs nothing, and the
+ * two answers cache under separate keys.
+ */
+settled: boolean, };
+
+/**
+ * What a session records about an issue it is working on.
+ *
+ * Deliberately a *copy*, not a pointer: the title and the URL are what the
+ * sidebar and the prompt block need, and re-reading the tracker to draw a row
+ * would put a network call behind a session opening. It goes stale — a
+ * retitled issue keeps the old words here until the panel reads it back — and
+ * that is the right way round, since the alternative is a row that cannot be
+ * drawn while the workspace is unreachable.
+ */
+export type IssueRef = { tracker: IssueTracker, 
+/**
+ * The tracker's own stable id, which survives a move between teams where
+ * `identifier` does not.
+ */
+id: string, 
+/**
+ * What a person calls it: `DRA-53`.
+ */
+identifier: string, title: string, url: string, };
+
+/**
+ * Whose issues to list.
+ *
+ * The tracker's own two answers to "my issues", and a third for looking past
+ * them. Deliberately not a pair of booleans: assigned *and* created is a
+ * question nobody asks, and two flags can express it.
+ */
+export type IssueScope = "assigned" | "created" | "all";
+
+export type IssueState = { name: string, kind: IssueStateKind, 
+/**
+ * The tracker's own colour, so a status reads the same here as it does in
+ * the app the reader also has open.
+ */
+color: string, };
+
+/**
+ * Where an issue has got to, folded from the tracker's own vocabulary.
+ *
+ * Linear reports a workflow state's `type`, which is this set exactly — the
+ * state's *name* is per-team prose ("In Review", "Shipping") and belongs on
+ * screen, not in a match arm.
+ */
+export type IssueStateKind = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "other";
+
+/**
+ * Who tracks the issue. One variant today; it is on the wire and on disk so a
+ * session linked to a Linear issue stays readable once there are two.
+ */
+export type IssueTracker = "linear";
+
+/**
+ * Why there is nothing to show.
+ *
+ * Typed for [`PrUnavailable`](crate::github::PrUnavailable)'s reason: the
+ * frontend acts differently on each. `NotConnected` is the resting state of an
+ * app nobody has connected — an empty state pointing at settings, never an
+ * error — where `Unauthorized` means a key that has been revoked or rotated
+ * and is the one the reader has to do something about.
+ */
+export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthorized" } | { "kind": "offline", "detail": string } | { "kind": "other", "detail": string };
 
 /**
  * Shared with the harness parsers rather than duplicated — the wire shape
@@ -750,7 +940,14 @@ text: string, attachmentPaths: Array<string>,
  * can wait out a long turn, and the sending session may be renamed or
  * deleted before the boundary that delivers it.
  */
-from: MessageSender | null, };
+from: MessageSender | null, 
+/**
+ * Resolved when the prompt was typed, not at flush, for `from`'s reason:
+ * a held prompt can wait out a long turn, and re-reading the tracker at
+ * the boundary would put a network call — and its failure — inside the
+ * flush.
+ */
+issues: Array<IssueRef>, };
 
 export type RateLimit = { usedPercent: number | null, windowMinutes: number | null, 
 /**
@@ -827,6 +1024,16 @@ status: SessionStatus,
  */
 forkFrom: string | null, 
 /**
+ * The issues this session's work is against, newest link last.
+ *
+ * A list because one session really does carry several — three tags in one
+ * prompt is the case this was built for — and a copy rather than an id,
+ * so the panel's tab and the sidebar's row can be drawn with the tracker
+ * unreachable. `serde(default)` so entries written before the field read
+ * as untagged rather than failing the whole index.
+ */
+issues: Array<IssueRef>, 
+/**
  * The session whose agent created this one, for a session created over the
  * orchestration socket rather than by a person in the composer. `Some` is
  * also what the depth guard reads: a session that was itself spawned may
@@ -896,6 +1103,16 @@ status: SessionStatus,
  * this one is cleared the moment the CLI carries the fork out.
  */
 forkFrom: string | null, 
+/**
+ * The issues this session's work is against, newest link last.
+ *
+ * A list because one session really does carry several — three tags in one
+ * prompt is the case this was built for — and a copy rather than an id,
+ * so the panel's tab and the sidebar's row can be drawn with the tracker
+ * unreachable. `serde(default)` so entries written before the field read
+ * as untagged rather than failing the whole index.
+ */
+issues: Array<IssueRef>, 
 /**
  * The session whose agent created this one, for a session created over the
  * orchestration socket rather than by a person in the composer. `Some` is
@@ -1037,6 +1254,11 @@ images: Array<ImageRef>, };
  * for correctness, and [`ToolType::Other`] must always render acceptably.
  */
 export type ToolType = "shell" | "file_read" | "file_edit" | "search" | "web" | "mcp" | "subagent_spawn" | "other";
+
+/**
+ * The connected account, as the settings row draws it.
+ */
+export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: string, orgName: string, };
 
 /**
  * How a turn ended. Claude Code reports this as `is_error` on its result

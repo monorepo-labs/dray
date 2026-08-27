@@ -22,6 +22,8 @@ pub mod git;
 pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
+#[path = "issues/issues.rs"]
+pub mod issues;
 #[path = "models/models.rs"]
 pub mod models;
 pub mod notifications;
@@ -62,6 +64,11 @@ async fn send_msg(
             session_id,
             prompt,
             &attachment_paths,
+            // Nothing named: everything the app sends tags its issues in the
+            // prompt text, picker and issues page alike, so there is one rule
+            // on this side of the bridge. `--issue` on the CLI is the other
+            // caller, and it names them because a flag is not prose.
+            &[],
             harness,
             model,
             effort,
@@ -609,6 +616,14 @@ pub fn run() {
             notifications::notify_session,
             updater::check_update,
             updater::install_update,
+            issues::get_integrations,
+            issues::connect_linear,
+            issues::disconnect_linear,
+            issues::list_issues,
+            issues::get_issue,
+            issues::fetch_issue_asset,
+            issues::list_issue_filters,
+            issues::unlink_issue,
             github::prs_for_branch,
             github::pr_marks,
             github::merge_pr,

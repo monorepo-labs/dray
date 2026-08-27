@@ -71,6 +71,7 @@ export default function EventRow({
         <UserMessage
           text={payload.text}
           images={payload.images}
+          issues={payload.issues}
           from={payload.from}
           onOpenSession={onOpenSession}
         />

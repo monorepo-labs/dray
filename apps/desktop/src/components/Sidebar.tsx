@@ -4,6 +4,7 @@ import {
   CheckCheck,
   ChevronDown,
   CircleDashed,
+  CircleDot,
   GitBranchPlus,
   Unlink,
   Inbox,
@@ -84,6 +85,14 @@ type SidebarProps = {
   onOpenSettings: () => void;
   onSelect: (sessionId: string) => Promise<void>;
   onNewSession: () => void;
+  /// Opens the issues page in the main column. It is not a session, so it does
+  /// not move the selection — coming back from it lands on the session that was
+  /// open before.
+  onOpenIssues: () => void;
+  /// The issues page is the thing on screen, so the row draws as the current
+  /// one. Read here rather than derived from the selection, which the page
+  /// deliberately leaves alone.
+  issuesOpen: boolean;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -491,6 +500,8 @@ export default function Sidebar({
   onToggleCollapsed,
   onSelect,
   onNewSession,
+  onOpenIssues,
+  issuesOpen,
   onSetFlags,
   onFork,
   onDelete,
@@ -603,11 +614,27 @@ export default function Sidebar({
           </KbdGroup>
         </Button>
 
+        {/* Under New Task, because it is the other way a task starts — an
+            issue is a task somebody already wrote down. Drawn whether or not a
+            tracker is connected: the page's own empty state is where connecting
+            is offered, and a row that only appears once you have found the
+            settings dialog can only be found by people who did not need it. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onOpenIssues}
+          data-active={issuesOpen || undefined}
+          className="w-full justify-start px-1.5 text-ui data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
+        >
+          <CircleDot />
+          Issues
+        </Button>
+
         {/* The button *becomes* the field, on the same row at the same height:
             the icon holds its place, the caret lands where the label was, and
             nothing below it moves. Bare on purpose — a fill, a border or a
             focus ring here would draw a second kind of control into a strip
-            that is otherwise two buttons. The transparent border is what holds
+            that is otherwise plain buttons. The transparent border is what holds
             that promise to the pixel: every button carries one, so the icon
             would sit a pixel further out without it. */}
         {searching ? (

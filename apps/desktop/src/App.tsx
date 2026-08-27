@@ -12,6 +12,8 @@ import NoticeStack from "@/components/NoticeStack";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog from "@/components/SettingsDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
+import IssuePanel from "@/components/IssuePanel";
+import IssuesView from "@/components/IssuesView";
 import PrPanel from "@/components/PrPanel";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
@@ -47,8 +49,10 @@ import { warmHighlighter } from "@/hooks/useHighlighter";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { pushNotice } from "@/hooks/useNotices";
+import { useIntegrations } from "@/hooks/useIntegrations";
+import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
-import type { WorktreeDisposition } from "@/types/events";
+import type { Issue, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useUpdater } from "@/hooks/useUpdater";
 import { changeRange, turnChangedTree } from "@/lib/changes";
@@ -104,6 +108,7 @@ function App() {
     handleNewSession,
     setSessionFlags,
     forkSession,
+    unlinkIssue,
     detachSession,
     deleteSession,
     removeWorktree,
@@ -142,6 +147,65 @@ function App() {
   // standing preference, and reopening the app onto a repo view for every
   // session would be wrong more often than right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
+  // Whether the issues page is what the main column is showing. Not a session
+  // and not a per-session tab, so it is neither in `viewTabs` nor in the
+  // selection: it is a place the reader goes and comes back from, and the
+  // session they were in is still there when they do.
+  const [issuesOpen, setIssuesOpen] = useState(false);
+
+  /// The issues page's own refresh, so ⌘R can reach it. A ref rather than
+  /// state: the page owns the read and hands its handle up, and re-rendering
+  /// the whole app every time that handle is re-made would be a render per
+  /// keystroke in the page's search box.
+  const issuesRefreshRef = useRef<(() => void) | null>(null);
+
+  /// The issue the pane is showing while the issues page has the column.
+  ///
+  /// Kept as the whole row rather than an identifier: the list already read
+  /// every field a header draws, so the pane can be complete before its own
+  /// detail read lands — the same bargain the session panel makes with a
+  /// session's links.
+  const [pickedIssue, setPickedIssue] = useState<Issue | null>(null);
+
+  /// Whether the right pane is actually on screen, as against whether the
+  /// reader has asked for it.
+  ///
+  /// Two different questions, and conflating them was a bug worth naming: the
+  /// issues page fills the main column, so a pane left open beside it went on
+  /// describing the session the reader had *left* — its changes, its pull
+  /// request, its issue — with nothing on screen to say whose they were. The
+  /// preference is kept, so coming back restores the pane exactly as it was;
+  /// everything that draws or reads reads this instead.
+  const panelShown = panelOpen && !issuesOpen;
+
+  /// The picked issue as a link, which is the shape the panel reads.
+  ///
+  /// Memoized because it is an array: a fresh one each render would re-run the
+  /// detail read on every keystroke in the page's search box.
+  const pickedIssueRefs = useMemo(
+    () =>
+      pickedIssue
+        ? [
+            {
+              tracker: pickedIssue.tracker,
+              id: pickedIssue.id,
+              identifier: pickedIssue.identifier,
+              title: pickedIssue.title,
+              url: pickedIssue.url,
+            },
+          ]
+        : [],
+    [pickedIssue],
+  );
+
+  const pickedIssueData = useSessionIssues(pickedIssueRefs, issuesOpen && !!pickedIssue);
+
+  // Owned here rather than by any one surface: the settings row, the issues
+  // page's own connect form and the composer's placeholder all read it, and a
+  // hook per surface is a second answer to "are we connected" free to disagree
+  // with the first.
+  const integrations = useIntegrations(true);
+  const issuesConnected = !!integrations.integrations?.linear;
 
   // Not persisted: settings are opened to change something and closed again, so
   // reopening the app into them would be the app remembering the wrong half of
@@ -291,7 +355,7 @@ function App() {
   const pullRequests = usePullRequest(
     selectedSession?.cwd ?? "",
     prBranch,
-    panelOpen && (panelTab === "pr" || panelTab === null),
+    panelShown && (panelTab === "pr" || panelTab === null),
     // A pull request appearing is the moment the session stops being about the
     // turn and starts being about landing, so the pane opens onto it rather
     // than waiting to be asked. Fires at most once per PR — see `onOpened`.
@@ -340,7 +404,20 @@ function App() {
   // the next, where a PR is the state of the work.
   const defaultTab: PanelTab = hasOpenPr && hasPrTab ? "pr" : "changes";
 
-  const tabs = tabOrder({ pr: hasPrTab });
+  // Read off the *pick*, not off `activeTab`, which is derived below from the
+  // tab row this feeds. An unset pick does not count here, unlike the PR tab's:
+  // the derived default is never the issue tab, so nothing is being read unless
+  // the reader asked for it.
+  const activeTabIsIssue = panelTab === "issue";
+
+  // Straight off the index entry, which is where a link lives — so the tab is
+  // there the moment a prompt tags one, with no read to wait on.
+  const sessionIssues = selectedSession?.issues ?? [];
+  const hasIssueTab = sessionIssues.length > 0;
+
+  const issueData = useSessionIssues(sessionIssues, panelShown && activeTabIsIssue);
+
+  const tabs = tabOrder({ pr: hasPrTab, issue: hasIssueTab });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
   // still names a tab this session draws, and otherwise the derived default
@@ -354,7 +431,7 @@ function App() {
   // so a session with no PR tab cycles through two and never lands on one that
   // isn't drawn.
   const stepTab = (delta: number) => {
-    if (!panelOpen) return;
+    if (!panelShown) return;
     const from = tabs.indexOf(activeTab);
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
@@ -446,6 +523,11 @@ function App() {
   // pane *defaults* to is `activeTab`'s rule and needs no help here, and ⌘E
   // stays a plain toggle because it draws nothing and so promises nothing.
   const handleTogglePanel = () => {
+    // On the issues page the chord only ever *closes*. There is nothing for it
+    // to reopen — a row is what picks an issue — so a toggle that could open
+    // would have to guess which one, and the last pick is rarely the one wanted
+    // on the way back. Closing is the half that has an unambiguous meaning.
+    if (issuesOpen) return setPickedIssue(null);
     if (!panelOpen) {
       if (hasOpenPr && hasPrTab) setPanelTab("pr");
       else if (lastTurnChanged) setPanelTab("changes");
@@ -467,7 +549,7 @@ function App() {
     baseline,
     head,
     revision,
-    panelOpen && activeTab === "changes",
+    panelShown && activeTab === "changes",
   );
 
   // One button, so the tab decides what it re-reads. Subagents has nothing to
@@ -477,7 +559,9 @@ function App() {
       ? { onRefresh: changesData.refresh, loading: changesData.loading }
       : activeTab === "pr"
         ? { onRefresh: pullRequests.refresh, loading: pullRequests.loading }
-        : null;
+        : activeTab === "issue"
+          ? { onRefresh: issueData.refresh, loading: issueData.loading }
+          : null;
 
   // Same order the sidebar draws, so the walk matches the list even when the
   // sidebar is collapsed and there is nothing on screen to follow — project
@@ -527,7 +611,17 @@ function App() {
   useHotkey("ArrowUp", () => stepSession(-1), { shift: true });
   useHotkey("ArrowDown", () => stepSession(1), { shift: true });
   // ⌘E for the right pane against ⌘B for the left.
-  useHotkey("e", togglePanel);
+  //
+  // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:
+  // that one picks a tab on the way open, which is right for a button the
+  // reader aimed at and wrong for a chord that draws nothing and so promises
+  // nothing. Which means the issues-page guard has to be repeated here — it
+  // lived only in `handleTogglePanel` at first, so the button honoured it and
+  // the chord went straight past it to a pane that is not on screen.
+  useHotkey("e", () => {
+    if (issuesOpen) return setPickedIssue(null);
+    togglePanel();
+  });
   // ⌘⇧[ / ⌘⇧] — the browser and editor chord for stepping through tabs, so it
   // arrives already known. The shift layout reaches `key`, so the character is
   // `{` rather than `[`; the physical key rides along for the engines that
@@ -545,12 +639,20 @@ function App() {
   // every chord it matches — and the app has no Reload menu item, which on
   // macOS would swallow the key before the webview ever saw it.
   useHotkey("r", () => {
-    if (panelOpen) panelRefresh?.onRefresh();
+    // "Re-read what I am looking at", the same rule the session case follows:
+    // the pane wins where one is open, and the list has it otherwise.
+    if (issuesOpen) {
+      if (pickedIssue) return pickedIssueData.refresh();
+      return issuesRefreshRef.current?.();
+    }
+    if (panelShown) panelRefresh?.onRefresh();
   });
   // By position in the tab row, so a third view needs only a third line here.
-  // No-ops without a session, where there is no row to switch.
-  useHotkey("1", () => setViewTab("chat"));
-  useHotkey("2", () => setViewTab("changes"));
+  // No-ops without a session, where there is no row to switch — and on the
+  // issues page, where the row is not drawn: switching an invisible tab looks
+  // like nothing happening and then shows up as the wrong view on the way back.
+  useHotkey("1", () => !issuesOpen && setViewTab("chat"));
+  useHotkey("2", () => !issuesOpen && setViewTab("changes"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
@@ -582,7 +684,9 @@ function App() {
     <TooltipProvider>
     <DiffWorkerPool pair={codeThemePair}>
     <AppShell
-      centered={!selectedSession}
+      // The issues page fills the column, so the centred empty-composer state
+      // is wrong there even with no session selected.
+      centered={!selectedSession && !issuesOpen}
       sidebar={
         <Sidebar
           items={searchedSessions}
@@ -594,12 +698,25 @@ function App() {
           statusBySession={statusBySession}
           askingSessions={askingSessions}
           prFor={prMarks.prFor}
-          selectedSessionId={selectedSessionId}
+          // Cleared while the page is up. The column is showing issues, so a
+          // lit row would name a session that is nowhere on screen — and the
+          // selection itself is kept, which is what makes coming back free.
+          selectedSessionId={issuesOpen ? null : selectedSessionId}
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
-          onSelect={handleSelectSessionIndexItem}
-          onNewSession={handleNewSession}
+          onSelect={async (sessionId) => {
+            // A session is what the column shows now. The page is left as it
+            // was — its filters and its scroll come back with it.
+            setIssuesOpen(false);
+            await handleSelectSessionIndexItem(sessionId);
+          }}
+          onNewSession={() => {
+            setIssuesOpen(false);
+            handleNewSession();
+          }}
+          onOpenIssues={() => setIssuesOpen(true)}
+          issuesOpen={issuesOpen}
           onDetach={detachSession}
           onSetFlags={async (sessionId, flags) => {
             await setSessionFlags(sessionId, flags);
@@ -669,34 +786,82 @@ function App() {
           <SessionHeader
             session={selectedSession}
             branch={prBranch}
+            standIn={issuesOpen ? "Issues" : null}
             className="flex-1"
           />
 
-          {selectedSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+          {!issuesOpen && selectedSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
 
-          {selectedSession && (
-            <PanelToggle
-              onToggle={handleTogglePanel}
-              open={panelOpen}
-              changes={lastTurnChanged}
-              pr={hasOpenPr && hasPrTab}
-              draft={allDrafts}
-            />
-          )}
+          {issuesOpen
+            ? // Only once something is open to close. Nothing on this page can
+              // *open* the pane — a row does that — so a toggle drawn at rest
+              // would be a control with one dead state.
+              pickedIssue && (
+                <PanelToggle onToggle={() => setPickedIssue(null)} open changes={false} />
+              )
+            : selectedSession && (
+                <PanelToggle
+                  onToggle={handleTogglePanel}
+                  open={panelOpen}
+                  changes={lastTurnChanged}
+                  pr={hasOpenPr && hasPrTab}
+                  draft={allDrafts}
+                />
+              )}
         </header>
       }
       panel={
-        // Mounted whenever a session is, open or not — closing or switching
+        // The pane describes whatever the main column is showing. On the issues
+        // page that is an issue and never a session — which is the whole reason
+        // the session's pane is hidden there: left up, it went on describing
+        // changes and a pull request belonging to work the reader had left.
+        issuesOpen ? (
+          <RightPanel
+            open={!!pickedIssue}
+            // A word rather than a tab row: there is one thing in this pane
+            // and nothing to switch to. "Details" and not "Issue", which would
+            // name the tab this replaced and say the same thing as the pane's
+            // own contents.
+            heading="Details"
+            tab="issue"
+            onTabChange={() => {}}
+            refresh={{
+              onRefresh: pickedIssueData.refresh,
+              loading: pickedIssueData.loading,
+            }}
+          >
+            <TabBody active>
+              <IssuePanel
+                // No session, so no link to remove — the row draws its open-in-
+                // tracker button and nothing else.
+                sessionId={null}
+                issues={pickedIssueRefs}
+                onUnlink={() => {}}
+                details={pickedIssueData.details}
+                loading={pickedIssueData.loading}
+                unavailable={pickedIssueData.unavailable}
+              />
+            </TabBody>
+          </RightPanel>
+        ) : // Mounted whenever a session is, open or not — closing or switching
         // tabs only hides, so reopening shows what was already there instead of
         // refetching and re-highlighting it. `active` is what stops the hidden
         // changes tab from snapshotting the working tree in the background.
         selectedSession ? (
           <RightPanel
-            open={panelOpen}
+            open={panelShown}
             tab={activeTab}
             onTabChange={setPanelTab}
-            counts={{ subagents: subagents.length, pr: prBadgeCount(pullRequests.prs) }}
+            counts={{
+              subagents: subagents.length,
+              pr: prBadgeCount(pullRequests.prs),
+              // Only above one: a tab reading "Issue 1" says what the tab
+              // already says, and the count is news exactly when there is more
+              // than one thing behind it.
+              issue: sessionIssues.length > 1 ? sessionIssues.length : 0,
+            }}
             pr={hasPrTab}
+            issue={hasIssueTab}
             refresh={panelRefresh}
           >
             <TabBody active={activeTab === "changes"}>
@@ -715,6 +880,14 @@ function App() {
             <TabBody active={hasPrTab && activeTab === "pr"}>
               <PrPanel branch={prBranch} {...pullRequests} />
             </TabBody>
+            <TabBody active={hasIssueTab && activeTab === "issue"}>
+              <IssuePanel
+                sessionId={selectedSessionId}
+                issues={sessionIssues}
+                onUnlink={unlinkIssue}
+                {...issueData}
+              />
+            </TabBody>
           </RightPanel>
         ) : null
       }
@@ -724,7 +897,7 @@ function App() {
         // the reader can't see. Safe to unmount: the draft and the attachment
         // tray are module-level stores precisely because the composer already
         // unmounts crossing the empty state.
-        selectedSession && viewTab !== "chat" ? null : (
+        issuesOpen || (selectedSession && viewTab !== "chat") ? null : (
         <ChatInput
           onSend={handleSendMsg}
           commands={slashCommands}
@@ -735,6 +908,7 @@ function App() {
           busy={busy}
           sessionId={selectedSessionId}
           isNewTask={!selectedSession}
+          issuesConnected={issuesConnected}
           error={error}
           onDismissError={() => setError(null)}
           archived={selectedSession?.archived ?? false}
@@ -794,10 +968,26 @@ function App() {
         )
       }
     >
+      {/* Hidden rather than unmounted, like everything else in this column:
+          the list, its filters and its scroll survive a trip into a session and
+          back, which is the trip this page exists to make. */}
+      <TabBody active={issuesOpen}>
+        <IssuesView
+          active={issuesOpen}
+          picked={pickedIssue?.identifier ?? null}
+          onPick={setPickedIssue}
+          refreshRef={issuesRefreshRef}
+          connected={issuesConnected}
+          onConnect={integrations.connect}
+          connecting={integrations.busy}
+          connectError={integrations.error}
+        />
+      </TabBody>
+
       {/* Hidden rather than unmounted, the same bargain the right panel's tabs
           make: the transcript keeps its scroll position and its highlighted
           diffs, and the repo view keeps its selection and its reads. */}
-      <TabBody active={viewTab === "chat"}>
+      <TabBody active={!issuesOpen && viewTab === "chat"}>
       <Chat
         session={selectedSession}
         streamingBlock={
@@ -813,8 +1003,8 @@ function App() {
         compacting={compacting}
         queuedMessages={queuedMessages}
         working={working}
-        crowded={!collapsed && panelOpen}
-        active={viewTab === "chat"}
+        crowded={!collapsed && (panelShown || (issuesOpen && !!pickedIssue))}
+        active={!issuesOpen && viewTab === "chat"}
       />
       </TabBody>
 
@@ -822,7 +1012,7 @@ function App() {
         // Keyed by session so the selection, the sub-tab and the commit box
         // reset with it. Cheap to remount: the reads behind it are cached by
         // tree id at module level and survive the unmount.
-        <TabBody active={viewTab === "changes"}>
+        <TabBody active={!issuesOpen && viewTab === "changes"}>
           <ChangesView
             key={selectedSession.sessionId}
             cwd={selectedSession.cwd}
@@ -850,7 +1040,11 @@ function App() {
     <QuitDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
         collapses and would take ⌘, with it. */}
-    <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+    <SettingsDialog
+      open={settingsOpen}
+      onOpenChange={setSettingsOpen}
+      integrations={integrations}
+    />
     <WorktreeDialog
       prompt={worktreePrompt}
       onConfirm={(sessionId) => removeWorktree(sessionId)}

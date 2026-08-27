@@ -24,7 +24,7 @@ pub use usage::{ContextWindow, ModelUsage, RateLimit, Usage};
 
 // `Harness` is a harness concept, not an event one; it lives in `crate::harness`
 // and is used here only as a field type.
-use crate::harness::Harness;
+use crate::{harness::Harness, issues::IssueRef};
 
 /// One normalized event: an envelope (who, when, what order, which conversation)
 /// wrapping a [`payload`](Self::payload) (what happened).
@@ -116,6 +116,16 @@ pub enum AgentEventPayload {
         text: String,
         #[serde(default)]
         images: Vec<ImageRef>,
+        /// The issues this prompt was tagged with, resolved against the tracker
+        /// as it was sent.
+        ///
+        /// A field rather than something to be parsed back out of `text`, for
+        /// the reason `from` below gives: the block appended to the prompt is
+        /// prose, and a transcript that recovered it with a pattern would fail
+        /// silently the first time the wording moved. The bubble rebuilds the
+        /// exact string from *these* and drops it only if the text ends with it.
+        #[serde(default)]
+        issues: Vec<IssueRef>,
         /// The working tree as it stood when this prompt was sent, as a git
         /// tree id — the "before" side the changes panel diffs against.
         ///
@@ -851,11 +861,21 @@ mod tests {
             serde_json::from_str(r#"{"type":"user_message","text":"hi"}"#).unwrap();
         assert!(matches!(
             v,
-            // `baseline`, `queued` and `from` default too: every prompt logged
-            // before each of those existed must not fail the line.
-            AgentEventPayload::UserMessage { ref text, ref images, ref baseline, queued, ref from }
-                if text == "hi" && images.is_empty() && baseline.is_none() && !queued
-                    && from.is_none()
+            // `baseline`, `queued`, `from` and `issues` default too: every
+            // prompt logged before each of those existed must not fail the line.
+            AgentEventPayload::UserMessage {
+                ref text,
+                ref images,
+                ref baseline,
+                queued,
+                ref from,
+                ref issues,
+            } if text == "hi"
+                && images.is_empty()
+                && baseline.is_none()
+                && !queued
+                && from.is_none()
+                && issues.is_empty()
         ));
 
         let v: AgentEventPayload = serde_json::from_str(
