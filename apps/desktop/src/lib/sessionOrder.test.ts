@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { isNested, sessionGroups, sessionRows, sortSessions } from "@/components/Sidebar";
+import {
+  filterSessions,
+  isNested,
+  sessionGroups,
+  sessionRows,
+  sortSessions,
+} from "@/components/Sidebar";
 import type { Project, SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
@@ -37,6 +43,15 @@ const ids = (items: SessionIndexItem[]) => items.map((i) => i.sessionId);
 /// Only the field the grouping reads. The list's *order* is the whole of what
 /// it takes from a project, so the rest would be noise here.
 const project = (path: string) => ({ path }) as unknown as Project;
+
+/// What the heading over each run says — the project's own path, or the one
+/// word the pinned group is drawn under.
+const label = (group: ReturnType<typeof sessionGroups>[number]) =>
+  group.kind === "pinned" ? "Pinned" : group.projectPath;
+
+/// Each run as its heading and the rows drawn under it.
+const shape = (groups: ReturnType<typeof sessionGroups>) =>
+  groups.map((g) => [label(g), g.rows.map((r) => r.item.sessionId)] as const);
 
 describe("sortSessions", () => {
   it("orders top-level sessions newest first", () => {
@@ -240,12 +255,6 @@ describe("isNested", () => {
 });
 
 describe("sessionGroups", () => {
-  /// What the heading over each run says — the project's own path, or the one
-  /// word the pinned group is drawn under.
-  const label = (group: ReturnType<typeof sessionGroups>[number]) =>
-    group.kind === "pinned" ? "Pinned" : group.projectPath;
-  const shape = (groups: ReturnType<typeof sessionGroups>) =>
-    groups.map((g) => [label(g), g.rows.map((r) => r.item.sessionId)] as const);
   const paths = (groups: ReturnType<typeof sessionGroups>) => groups.map(label);
 
   it("gathers each project's sessions into one run, in the project list's order", () => {
@@ -442,5 +451,148 @@ describe("sessionGroups", () => {
       ["Pinned", ["b1", "a1"]],
       ["/a", ["a2"]],
     ]);
+  });
+});
+
+describe("filterSessions", () => {
+  /// The one field the search reads, on top of what the rows around it need to
+  /// sit in a nest and under a project.
+  const titled = (
+    sessionId: string,
+    title: string,
+    parentSessionId: string | null = null,
+    projectPath = "/repo",
+  ): SessionIndexItem =>
+    ({
+      ...item(sessionId, "2026-01-01T00:00:00Z", parentSessionId, projectPath),
+      title,
+    }) as SessionIndexItem;
+
+  /// The same row, pinned, spelled like `pin` is beside `item`.
+  const titledPin = (
+    sessionId: string,
+    title: string,
+    parentSessionId: string | null = null,
+    projectPath = "/repo",
+  ): SessionIndexItem =>
+    ({ ...titled(sessionId, title, parentSessionId, projectPath), pinned: true }) as
+      SessionIndexItem;
+
+  it("matches a substring of the title, whatever the case", () => {
+    const items = [
+      titled("a", "Fix the parser"),
+      titled("b", "PARSER rewrite"),
+      titled("c", "Sidebar search"),
+    ];
+
+    expect(ids(filterSessions(items, "parser"))).toEqual(["a", "b"]);
+    expect(ids(filterSessions(items, "PaRsEr"))).toEqual(["a", "b"]);
+    expect(ids(filterSessions(items, "search"))).toEqual(["c"]);
+  });
+
+  it("hands a blank query the same array back", () => {
+    // Identity, not just contents: the memo over this holds while nothing is
+    // being searched for, so the rows below keep the objects they were drawn
+    // from.
+    const items = [titled("a", "Fix the parser")];
+
+    expect(filterSessions(items, "")).toBe(items);
+    expect(filterSessions(items, "   ")).toBe(items);
+  });
+
+  it("ignores the whitespace around a query", () => {
+    const items = [titled("a", "Fix the parser")];
+
+    expect(ids(filterSessions(items, "  parser "))).toEqual(["a"]);
+  });
+
+  it("comes back empty when nothing matches", () => {
+    expect(filterSessions([titled("a", "Fix the parser")], "codex")).toEqual([]);
+  });
+
+  it("draws a child at the top level once its parent is filtered out", () => {
+    // The same rule an archived or deleted parent already follows: the row has
+    // to stay reachable, and a rail reaching for a parent that isn't drawn
+    // would point at nothing.
+    const items = [
+      titled("parent", "Something else"),
+      titled("child", "Fix the parser", "parent"),
+    ];
+    const found = filterSessions(items, "parser");
+
+    expect(isNested(found[0], found)).toBe(false);
+    expect(sessionRows(found).map((r) => r.depth)).toEqual([0]);
+  });
+
+  it("leaves a project heading with nothing under it undrawn", () => {
+    // Filtering happens before grouping, so a group only exists where the
+    // search left it a row.
+    const items = [
+      titled("a1", "Fix the parser", null, "/a"),
+      titled("b1", "Sidebar search", null, "/b"),
+    ];
+    const groups = sessionGroups(filterSessions(items, "parser"), [
+      project("/a"),
+      project("/b"),
+    ]);
+
+    expect(groups.map(label)).toEqual(["/a"]);
+  });
+
+  it("narrows the pinned group without emptying it out of the list", () => {
+    // A pin that matches stays where the reader put it. Moving it into its
+    // project's run under a query would say the pin had been dropped, and the
+    // one thing the group exists to say is which rows the reader chose.
+    const items = [
+      titledPin("kept", "Fix the parser", null, "/a"),
+      titledPin("gone", "Ship v2", null, "/a"),
+      titled("plain", "parser rewrite", null, "/a"),
+    ];
+    const groups = sessionGroups(filterSessions(items, "parser"));
+
+    expect(shape(groups)).toEqual([
+      ["Pinned", ["kept"]],
+      ["/a", ["plain"]],
+    ]);
+  });
+
+  it("opens no pinned group when no pin matches", () => {
+    // The heading follows the rows the same way a project's does — drawn from
+    // what is present, never from the fact that pins exist somewhere.
+    const items = [
+      titledPin("gone", "Ship v2", null, "/a"),
+      titled("plain", "parser rewrite", null, "/a"),
+    ];
+
+    expect(shape(sessionGroups(filterSessions(items, "parser")))).toEqual([
+      ["/a", ["plain"]],
+    ]);
+  });
+
+  it("draws a match whose pinned parent was filtered out under its project", () => {
+    // `splitPinned` reads pinned-ness through ancestors, and the ancestor is
+    // gone — so the row is not pinned-side any more and belongs with the rest,
+    // the same answer `sessionRows` gives it about depth.
+    const items = [
+      titledPin("parent", "Ship v2", null, "/a"),
+      titled("child", "Fix the parser", "parent", "/a"),
+    ];
+
+    expect(shape(sessionGroups(filterSessions(items, "parser")))).toEqual([
+      ["/a", ["child"]],
+    ]);
+  });
+
+  it("leaves the walk stepping exactly the rows drawn", () => {
+    // Search narrows the one array both read, so the flattened order is still
+    // the rows on screen and nothing else.
+    const items = [
+      titled("first", "parser one", null, "/a"),
+      titled("skipped", "unrelated", null, "/a"),
+      titled("second", "parser two", null, "/a"),
+    ];
+    const found = filterSessions(items, "parser");
+
+    expect(ids(sortSessions(found))).toEqual(["first", "second"]);
   });
 });

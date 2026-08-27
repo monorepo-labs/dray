@@ -26,7 +26,12 @@ import RightPanel, {
   tabOrder,
   type PanelTab,
 } from "@/components/RightPanel";
-import Sidebar, { DevBadge, SidebarToggle, sortSessions } from "@/components/Sidebar";
+import Sidebar, {
+  DevBadge,
+  SidebarToggle,
+  filterSessions,
+  sortSessions,
+} from "@/components/Sidebar";
 import SubagentPanel from "@/components/SubagentPanel";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import AppShell from "@/components/layout/AppShell";
@@ -233,6 +238,20 @@ function App() {
         ? sessionIndexItems.filter((i) => i.projectPath === projectFilter)
         : sessionIndexItems,
     [sessionIndexItems, projectFilter],
+  );
+
+  // The search narrows what is drawn, and only that — the sidebar's own row is
+  // where it is typed, but the list it filters is this one, so the ⌘⇧↑/↓ walk
+  // below steps exactly the rows on screen.
+  //
+  // Layered over `visibleSessions` rather than folded into it, deliberately: the
+  // marks and the ready-to-merge notice read that list to decide what to watch,
+  // and a session dropping out of it as a query is typed would stop its repo
+  // being polled and make the notice forget a pull request was already ready.
+  const [search, setSearch] = useState("");
+  const searchedSessions = useMemo(
+    () => filterSessions(visibleSessions, search),
+    [visibleSessions, search],
   );
 
   // The sidebar's marks: one `gh` per repo on screen rather than one per row —
@@ -465,8 +484,8 @@ function App() {
   // sidebar is collapsed and there is nothing on screen to follow — project
   // list included, since that is what orders the groups it steps through.
   const ordered = useMemo(
-    () => sortSessions(visibleSessions, projects),
-    [visibleSessions, projects],
+    () => sortSessions(searchedSessions, projects),
+    [searchedSessions, projects],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -555,7 +574,9 @@ function App() {
       centered={!selectedSession}
       sidebar={
         <Sidebar
-          items={visibleSessions}
+          items={searchedSessions}
+          search={search}
+          onSearchChange={setSearch}
           projects={projects}
           projectFilter={projectFilter}
           onProjectFilterChange={setProjectFilter}
