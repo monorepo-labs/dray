@@ -23,17 +23,51 @@ Same writing rules as CLAUDE.md: why, not what. Cut any word doing no work.
 
 Feature arrive late, so **first `pnpm tauri dev` after turning this on need manual restart** — CLI patch `Cargo.toml` when it read new config, but already-spawned app predate relinked binary, and `transparent` compile out entirely without feature. Read as "vibrancy don't work", not as stale build.
 
-Every surface above body keep opaque fill, so glass = room app sit in, not wash over text. Only body punch through, and that work because nothing else paint edge to edge: sidebar carry no fill of own, and right panel's `--sidebar` = `--background` under another name, so it must go **transparent** under vibrancy rather than tint same pixels twice (two 62% layers = 86% one). Alpha on `--background-vibrant` = whole dial.
+Only body punch through, and that work because nothing else paint edge to edge: sidebar carry no fill of own, and right panel's `--sidebar` = `--background` under another name, so it must go **transparent** rather than tint same pixels twice (two 62% layers = 86% one). Alpha on `--vibrancy-alpha` = whole dial.
 
 Two placement facts, both failure looking like taste. Attribute stamped on `<html>` in [index.html](index.html)'s pre-paint script, not on mount — React land frame or two in, long enough to watch app open opaque and turn to glass — and gated on macOS. Rule itself live on **`body`**: palette blocks (`[data-theme][data-mode]`) out-specify any `html[data-vibrancy]` selector, so `--sidebar` override on `:root` silently lose.
 
-**Fullscreen drop it, in CSS alone.** Nothing behind fullscreen window but space's own black, so material go flat grey and read as theme washing out. [useVibrancy](src/hooks/useVibrancy.ts) take `fullscreen` off `useFullscreen` and remove attribute. Native effect left applied: invisible under opaque body, and clearing it need Rust round trip on every resize to buy nothing.
+**Fullscreen drop it, in CSS alone.** Nothing behind fullscreen window but space's own black, so material go flat grey and read as theme washing out. [useGlass](src/hooks/useGlass.ts) take `fullscreen` off `useFullscreen` and remove attribute. Native effect left applied: invisible under body's own fill, and clearing it need Rust round trip on every resize to buy nothing. What dropping it now cost = only *what* surfaces layer over, see below.
 
 **Window drag need permission _and_ `deep`, and both fail silently.** `titleBarStyle: "Overlay"` mean app draw own titlebar, so `h-(--titlebar-h)` row in `App`, `Sidebar` and `RightPanel` = whole of what user can drag by.
 
 Permission first: `core:default` grant `allow-internal-toggle-maximize` but **not** `core:window:allow-start-dragging`, so it named explicitly in [capabilities/default.json](src-tauri/capabilities/default.json). Without it ACL reject every `start_dragging` call and report nothing — drag do nothing while double-click-to-maximize keep working, reading as "drag region wrong" not "permission missing". Capability compiled into binary, so change need Rust rebuild; frontend HMR show old behaviour.
 
 Then value: bare `data-tauri-drag-region` = **self only**, drag start only where pointer hit that exact element ([drag.js](https://github.com/tauri-apps/tauri) walk composed path), so every label inside row = dead strip in titlebar that look uniform. Use `"deep"` on row and put attribute nowhere else — Tauri stop walk at any clickable element (`A`, `BUTTON`, `INPUT`, `role`, `tabindex`) carrying no attribute of own, so toggles and tabs block on their own and need no opt-out. `="false"` = hard block, for element that must not drag though nothing clickable in it.
+
+## Transparency, and what surfaces sit on
+
+**Vibrancy = macOS flavour of transparency, not second one.** Everything above describe one way of answering "what is behind these surfaces", and it only ever had one answer: the desktop. That answer die in fullscreen, and outside macOS never existed — so app went flat in both, which read as theme washing out rather than as effect.
+
+Second answer = **colour theme own**. `--backdrop-top`/`--backdrop-bottom` what body paint edge to edge. Windowed on macOS they tint real desktop (`color-mix` at `--vibrancy-alpha`), everywhere else they *are* what surfaces sit on. Same layered look, no OS involved.
+
+**Windowed always translucent, and fullscreen answered by theme not by reader.** Windowed there a desktop behind window and nothing to decide. Fullscreen have nothing behind it, so whether surfaces still worth layering depend entirely on whether *that theme's backdrop* worth layering over — fact about palette, not taste about window. So `flatInFullscreen` sit on theme and setting went away. It shipped as switch for about an hour: it ask reader question belonging to theme, in dialog, about state they not in.
+
+Field = **opt-out**, and shape is rule: theme keep layering by saying nothing, so forgetting give theme that look right rather than one going flat with no clue why. Default opt out — its backdrop flat near-black, so with nothing behind fullscreen window its veils have nothing to sit on and only cost contrast.
+
+**Two stops, never one colour, and flat theme = gradient whose end agree.** One code path for both, so `body` never ask which kind of backdrop it hold. Every shipped theme flat today — both stop fall back to `--background` — so machinery currently carry no gradient. Kept anyway, because rule for one that want gradient already established and hard-won: stops must share **exactly** one lightness and differ in hue alone. Gradient carrying lightness ramp read as top of window being lit, not as depth, and that true whatever the hues.
+
+**Vibrancy selector carry `[data-transparency]`, and that where two-veils question get answered.** Token set = *same declarations* vibrancy block already carried, so both on set each token once rather than veil a veil. Gate cannot fail today — `useGlass` only add vibrancy while windowed, where transparency unconditional — and written down anyway: rule holding because of a hook = one edit from not holding.
+
+**`--composer` and `--popover` deliberately not veiled**, and each for reason already written down elsewhere in this file: composer have handoff row parked behind it, popover float over sidebar that have no fill. Both were *existing* fixes for exactly this class of problem, and token set that veil them undo both silently.
+
+**Background belong to theme, and separate axis for it was tried and removed.** Picker choosing backdrop apart from palette cannot reach `--composer` — that one must stay opaque fill — so neutral palette on tinted backdrop put grey slab along bottom edge of window, permanently. Reaching it mean backdrop axis overriding palette token, at which point two axes not independent and only thing justifying split gone. Tell was that Slate didn't have bug: it declare own `--composer`.
+
+**Two ways to write theme, one place they meet.** Derived one = `--hue` + `--chroma`: fixed lightness per rung times per-step multiplier, so theme that is one hue cost two numbers. `--chroma: 0` collapse every `calc()`, which is why Default stay exactly greys it always was (verified: identical pixels before and after). Multipliers taper at both end — chroma reading as colour at `--card` read as *fault* on near-white foreground. **Ported theme not one hue**, so it name its rungs outright instead. Both route end at same alias, and alias = what keep either honest: `--card`, `--popover` and `--composer` all `var(--surface-card)`, so theme cannot set one and forget another. Not hypothetical — earlier pass put grey composer on tinted page exactly that way.
+
+**Ported theme take surfaces and text accents, and stop there.** Catppuccin and Gruvbox name their own background, card, muted, foreground, ring, and the three accents that mark words in prose (`--accent-command`, `--accent-mention`, `--accent-thinking`) plus their own red. `--accent-merge` **not** among them: that button act on GitHub, and matching colour it have there = most of what make it recognisable as same button, so colour is the meaning and theme don't get to repaint it. Border likewise stay mode ramp's — `oklch(1 0 0 / 10%)` and its black twin work over any palette, where ported hex would have to be re-picked per theme to say same thing. Credit live in root [README](../../README.md), and test fail if ported theme ship without one.
+
+**No hardcoded `oklch(1 0 0 / N%)` in a component, ever again.** Composer card, picker frame, attachment tile and picker highlight all carried white inline, written back when dark was only mode — and every one vanished in light, silently. Highlight worst: row arrow key sat on simply stopped being marked. Cure = token that flip with mode. `--veil-*` for fill, `--hairline`/`--hairline-strong` for edge (6%/8%), `--border` for 10%. Reach for one of those; inline alpha = same bug again.
+
+**Light veil not same percentage as dark one.** Same alpha move fewer perceptual step over near-white page than over near-black. Measured on picker's own highlight: 8% black gave 19 level of separation where dark's 11.5% white give 28, so light `--veil-strong` = 10%. Pair tuned, never mirrored.
+
+**Light mode = second palette, never filter.** Rungs *reorder*, not flip: raised surface in light sit lighter than page, where in dark it sit darker, so `--surface-raised` swap side of `--surface-card`. Catppuccin show it plainest — Latte's `base` = its lightest token while Mocha's = near its darkest. Veils flip white→black in same breath, and that single thing = what make light more than inverted ramp: white veil on light page is invisible. Accents move long way down in lightness too, since 0.82 yellow on white page = highlighter mark not word.
+
+**Theme without light palette say so, and row stay drawn.** `darkOnly` = opt-out like `flatInFullscreen`, so ported theme arrive with both by saying nothing. Default set it — its light side unbuilt, not unwanted. `modeFor` force dark on write *and* on first read, because `[data-theme="default"][data-mode="light"]` match no block and app fall through to light ramp's own neutrals: legible, but not theme anyone picked and nothing on screen would say why. Settings row therefore **disabled with reason**, not hidden — vanishing row read as setting app forgot, and sentence under it = only place reason can be said.
+
+**Mode = three segment, not switch.** System/Light/Dark. Switch can only ask light-or-dark, leaving `system` reachable from nowhere — and it the one that keep following OS after being set. Drawn off `mode` as *chosen*, never `resolvedMode`, since whole point of System = it read Dark today and Light tonight. Dark-only theme disable **whole group** rather than drop its light segment: two segment where there were three read as broken control, and `system` unofferable there anyway.
+
+**`--sidebar` = `transparent` unconditionally now, not `--background` under another name.** Sidebar read as part of page, and honest way to say that = let page show through. Old way held only while every backdrop flat: against gradient, flat sidebar draw visible seam down window at x where two furthest apart.
 
 ## Transcript, cards and the right pane
 
@@ -171,11 +205,27 @@ Card also only one naming its subject, breaking `NoticeStack`'s own "verb and no
 
 **Gear in sidebar's titlebar strip, and it move in fullscreen.** Strip `justify-end` normally to clear traffic lights, `justify-start` in fullscreen where they gone. Sidebar toggle **also** drawn in app header when sidebar collapsed, so it must hold strip's outer edge in both layout and never change which end it at; gear have no second home, so gear = the one that move. Settings sit in that strip rather than filter row below, because every control in that row scope list under it and these app-wide.
 
-**Row = label and reason left, control right** (`SettingRow`). Description **not optional** — it where "why is this off by default" live, and row with bare label make reader guess. Setting that cannot apply on this platform **disabled, not hidden**: row that vanish read as setting app forgot, and sentence under it = only place reason can be said.
+**Row = label and reason left, control right** (`SettingRow`), **except where control wider than a switch — then it go under label, full width** (`stacked`). Beside-the-label take its width out of description, which then wrap to three ragged line and leave orphan, and dialog read as set of row that don't fit rather than list of setting. Under = also where picker want to be: option ranged along one edge, not pushed against far one. Description **not optional except where control show answer instead of telling it** — see theme row below; everywhere else it where "why is this off by default" live, and row with bare label make reader guess.
+
+**Dialog wider than `Dialog`'s own default** (28rem against 25rem). Default sized for question and two button; this hold prose. Setting that cannot apply on this platform **disabled, not hidden**: row that vanish read as setting app forgot, and sentence under it = only place reason can be said.
 
 **Switch one rung up from composer's own toggle** — `h-4 w-7` against its `h-3 w-5`. There track sit inside toolbar button among other 12px chrome; here it thing being pressed and have to take click on own.
 
 **Copy say what it for and what it never touch, and stop.** Analytics row = two sentence, no itemised field list. Naming every field read as something to be wary of; "analytics" alone read as behavioural tracking. Second sentence — conversation and activity never collected — carry row.
+
+**Group heading arrive with second group, not before.** One heading over only group there was = label for dialog, which `DialogTitle` already is. Separated by **space, not rules**, for reason PR panel's own sections are.
+
+**Theme picked by looking at it, not by reading label.** Swatch draw theme's own backdrop — gradient and all — because each swatch carry `data-theme`/`data-mode` itself, so palette blocks match it exactly as they match `<html>`. Follow that swatch cannot drift from theme it stand for, which table of colours in TSX could and eventually would. Square, so it read as sample of colour rather than as picture of window.
+
+**Name drawn beside swatch, never hovered for.** Colour say what theme *look* like, name say which one it is, and both wanted at once — hiding either behind tooltip make reader work for half answer. Name live **inside** button too, so accessible name = visible one rather than `aria-label` free to drift from it. Toggle of two word labels was first version and told reader nothing about what either look like; swatch alone was second and told them nothing about which was which.
+
+**Theme row = only row with no description**, and rule it break is deliberate: control *is* explanation. Sentence saying "the palette everything uses" beside two visible palettes spend words on thing reader already seen. Switch keep its description, always — switch = word and a state, and sentence under it only place "why is this off by default" can live.
+
+**Radio group = one Tab stop with arrows inside it.** `role="radiogroup"` without that = promise to screen reader that keyboard then break. Roving `tabIndex` other half, or tabbing through dialog walk palettes one at a time. Selection follow focus, right for group whose option cheap to try — here trying one *is* seeing it.
+
+**Feedback block send people out, not into a form, and it deliberately not a `SettingRow`.** Nothing there a setting — no state to read back — so label a row demand ("Get in touch") sit under heading already saying Feedback and earn nothing but third line. Sentence plus two button = whole block. Most feedback = one sentence and form more than sentence worth, so button open DM; GitHub beside it for half who would rather send fix than describe it. Both go through `openUrl`, same route PR panel and transcript links take, so link land in reader's own browser rather than turning app window into one.
+
+**`SettingRow` grew `asGroup`, and it about `htmlFor` reaching nothing.** Label only bind to labelable element, so theme's radio group have to be pointed other way — label carry id, group carry `aria-labelledby`. Switch rows unchanged.
 
 ## Update row
 

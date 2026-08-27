@@ -51,3 +51,18 @@ Tag `vX.Y.Z` for stable, `vX.Y.Z-beta.N` for beta. The version in the tag has
 to match `apps/desktop/src-tauri/tauri.conf.json`, and a stable release needs a
 matching `## X.Y.Z` section in `apps/desktop/CHANGELOG.md` — the workflow fails
 loudly on either.
+
+## Themes
+
+Two of the palettes Dray ships are ports of other people's work, used under the
+MIT licence and unchanged in intent — the colours are theirs, the token names
+are ours.
+
+| Theme        | By                                                                     |
+| ------------ | ---------------------------------------------------------------------- |
+| [Catppuccin](https://github.com/catppuccin/catppuccin) | the Catppuccin org       |
+| [gruvbox](https://github.com/morhetz/gruvbox)          | Pavel Pertsev (@morhetz) |
+
+Ports live in `apps/desktop/src/App.css`, each value commented with the name it
+carries upstream (`surface0`, `bg0_h`) so a port can be checked against its
+source rather than taken on trust.

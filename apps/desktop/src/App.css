@@ -11,67 +11,134 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Palettes are keyed on two independent attributes, `[data-theme]` × `[data-mode]`,
-   so N palettes cost 2N blocks here and nothing in the components. Only the dark
-   neutral palette exists today; a new one is a copy of this block with a new
-   `data-theme` value. `:root` carries the same values so an unstamped document
-   (theme script threw, or a stray reload) still renders legibly. */
-:root,
-[data-theme="neutral"][data-mode="dark"] {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  /* The composer card's own fill. Starts life as a copy of `--card` and exists
-     to be the one raised surface that stays a *fill* on glass: the handoff row
-     is parked behind it, so a veil there shows the buttons it is meant to hide.
-     Its own token rather than borrowing `--popover`, because the composer is
-     not a popover and the next change to floating surfaces should not have to
-     wonder whether the composer wanted it too. See the vibrancy block below. */
-  --composer: oklch(0.205 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+/* Colour is three layers, and which layer a token belongs to is the whole filing
+   system here.
+
+   1. `:root` — what neither the theme nor the mode changes, plus every **alias**.
+   2. `[data-mode="dark|light"]` — the ramp: a lightness per rung, and the veils.
+   3. `[data-theme][data-mode]` — a palette, as thirteen values.
+
+   The aliases are what keep that third block to thirteen. `--card`, `--popover` and
+   `--composer` are all `var(--surface-card)`, so a theme cannot set one and forget
+   another — which is not hypothetical: an earlier pass put a grey composer on a
+   tinted page exactly that way, and only looking at it would have caught it.
+
+   The dark ramp is *derived* — a fixed lightness per rung times a chroma the theme
+   sets at a hue it sets — so a theme that is one hue costs two numbers. Ported
+   themes are not one hue, so they name their rungs outright; both routes end at the
+   same aliases. `--chroma: 0` collapses every `calc()`, which is why Default is
+   exactly the greys it always was rather than a near-grey that rounds well.
+
+   The ramp lives on `[data-mode]` rather than on `:root` on purpose. Both selectors
+   have the same specificity, so a light document matching `:root` too would take any
+   dark token the light block happened to miss — a leak that shows up as one dark
+   card on a light page. index.html hard-codes `data-mode="dark"` in the markup as
+   well as stamping it, so there is no unstamped case for `:root` to have to cover. */
+:root {
+  --radius: 0.625rem;
+
+  /* `transparent`, not a colour, and unconditionally so. The sidebar reads as
+     part of the page rather than as a separate surface, and the honest way to
+     say that is to let the page show through — which also makes it the one
+     token that cannot disagree with a backdrop it is meant to match. */
+  --sidebar: transparent;
+
+  /* Aliases. Everything below is one token wearing several names, so a theme
+     sets the thing and every name follows. */
+  --card: var(--surface-card);
+  --popover: var(--surface-card);
+  /* The composer card's own fill, pinned to `--card` by that shared alias
+     because it exists to be the one raised surface that stays a *fill* under
+     transparency: the handoff row is parked behind it, so a veil there shows
+     the buttons it is meant to hide. Still its own name, because the composer
+     is not a popover and the next change to floating surfaces should not have
+     to wonder whether the composer wanted it too. */
+  --composer: var(--surface-card);
+  --secondary: var(--muted);
+  --accent: var(--muted);
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-ring: var(--ring);
+  /* Nothing draws a chart yet. Aliased rather than invented so a palette does
+     not carry five values it will never show. */
+  --chart-1: var(--foreground);
+  --chart-2: var(--ring);
+  --chart-3: var(--muted-foreground);
+  --chart-4: var(--muted);
+  --chart-5: var(--surface-card);
+
+  /* What the app paints edge to edge, behind every surface — the thing the
+     translucent fills composite against. Two stops rather than one colour, so a
+     flat backdrop and a gradient are the same code path: a flat theme is a
+     gradient whose ends agree, and `body` never has to ask which kind it has.
+     Belongs to the theme, deliberately — a backdrop the reader picked
+     separately could not reach `--composer`, which has to stay an opaque fill. */
+  --backdrop-top: var(--background);
+  --backdrop-bottom: var(--background);
+
+  /* The whole of the vibrancy dial. The macOS material behind the window
+     already blurs and dims what it shows, so this alone decides how much of the
+     wallpaper survives — and because it is applied to the stops above rather
+     than to a colour of its own, a theme tints the glass instead of being
+     ignored on the one platform that has any. */
+  --vibrancy-alpha: 80%;
+
+  /* The merge button, and nothing else — the one thing here that is neither the
+     theme's nor the mode's. GitHub's own green: this is the one control that
+     acts on GitHub, and matching the colour it has there is most of what makes
+     it recognisable as the same button. A ported theme does not get to repaint
+     it, because the colour is the meaning. */
+  --accent-merge: oklch(0.546 0.139 149);
+  --accent-merge-hover: oklch(0.617 0.152 149);
+  --accent-merge-foreground: oklch(0.985 0 0);
+  /* The seam in the split merge button, as a whole shadow rather than a colour
+     so the blur travels with it. Light, not dark: a dark line on a green fill
+     reads as a gap cut through the button, which is what a black-looking stroke
+     between the two halves was. The 1px blur softens it from a drawn rule into
+     an edge catching light, which is what GitHub's own divider reads as. */
+  --accent-merge-seam: inset 1px 0 1px oklch(1 0 0 / 10%);
+}
+
+/* The dark ramp, and Default's palette in the same breath — Default *is* the
+   derived ramp at hue 0 and chroma 0, so it needs no block of its own.
+
+   Multipliers taper at both ends. Chroma that reads as colour at `--card` reads as
+   a tint on the near-white foreground, and text faintly carrying the theme's hue
+   looks like a rendering fault rather than a palette. */
+[data-mode="dark"] {
+  --hue: 0;
+  --chroma: 0;
+
+  --background: oklch(0.145 calc(var(--chroma) * 0.8) var(--hue));
+  --foreground: oklch(0.985 calc(var(--chroma) * 0.12) var(--hue));
+  --surface-card: oklch(0.205 calc(var(--chroma) * 1) var(--hue));
+  /* Not part of the shadcn set. Sits between `--background` and `--card` for
+     tool-call and code chrome that must read as inset rather than as a floating
+     card — so in dark it is *below* the card and in light it is above it. */
+  --surface-raised: oklch(0.19 calc(var(--chroma) * 0.9) var(--hue));
+  --muted: oklch(0.269 calc(var(--chroma) * 1.1) var(--hue));
+  --muted-foreground: oklch(0.708 calc(var(--chroma) * 0.9) var(--hue));
+  --primary: oklch(0.922 calc(var(--chroma) * 0.25) var(--hue));
+  --primary-foreground: oklch(0.205 calc(var(--chroma) * 1) var(--hue));
+  --ring: oklch(0.556 calc(var(--chroma) * 1) var(--hue));
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  /* Same as `--background`: the sidebar reads as part of the page, not as a
-     separate surface. Kept as its own token so a future palette can diverge. */
-  --sidebar: oklch(0.145 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Hairlines, a two-step ramp beside `--border`. These edge chrome that should
+     read as a seam rather than a drawn rule — the composer card, the picker
+     frame, attachment tiles. They were written inline as white until light mode
+     arrived and a white hairline on a white page turned out to be no hairline. */
+  --hairline: oklch(1 0 0 / 6%);
+  --hairline-strong: oklch(1 0 0 / 8%);
 
-  /* `--background` with the desktop let through, for the one surface that
-     reaches the window edge. The alpha is the whole of the vibrancy dial: the
-     material behind it already blurs and dims what it shows, so this is what
-     decides how much of the wallpaper survives. Everything stacked above it —
-     cards, menus, the composer — keeps its opaque fill, so the glass reads as
-     the room the app sits in rather than as a wash over the text. */
-  --background-vibrant: oklch(0.145 0 0 / 80%);
-
-  /* Not part of the shadcn set. `--surface-raised` sits between `--background`
-     and `--card` for tool-call and code chrome that must read as inset rather
-     than as a floating card. */
-  --surface-raised: oklch(0.19 0 0);
   --accent-thinking: oklch(0.62 0.04 264);
   /* A slash command, wherever one is shown as text. Carries far more chroma
      than `--accent-thinking` because it marks a word inside a run of ordinary
@@ -91,20 +158,16 @@
      before it is read as a word. */
   --accent-issue: oklch(0.82 0.13 310);
 
-  /* The merge button, and nothing else. GitHub's own green rather than the
-     app's emerald: this is the one control that acts on GitHub, and matching
-     the colour it has there is most of what makes it recognisable as the same
-     button. The primary fill is a near-white, which on this palette read as the
-     brightest thing on the pane for its least reversible action. */
-  --accent-merge: oklch(0.546 0.139 149);
-  --accent-merge-hover: oklch(0.617 0.152 149);
-  --accent-merge-foreground: oklch(0.985 0 0);
-  /* The seam in the split merge button, as a whole shadow rather than a colour
-     so the blur travels with it. Light, not dark: a dark line on a green fill
-     reads as a gap cut through the button, which is what a black-looking stroke
-     between the two halves was. The 1px blur softens it from a drawn rule into
-     an edge catching light, which is what GitHub's own divider reads as. */
-  --accent-merge-seam: inset 1px 0 1px oklch(1 0 0 / 10%);
+  /* What a raised surface becomes under transparency: a veil rather than a
+     fill. White here, black in light — a white veil on a light page is
+     invisible, which is the single thing that makes light mode more than an
+     inverted ramp. Percentages do not carry over unchanged — the same alpha
+     moves fewer perceptual steps over a near-white page than over a near-black
+     one — so `--veil-strong` is tuned per mode; see the light block. The
+     arithmetic behind these three is in the transparency block. */
+  --veil-card: oklch(1 0 0 / 5.5%);
+  --veil-raised: oklch(1 0 0 / 4%);
+  --veil-strong: oklch(1 0 0 / 11.5%);
 
   /* Enough to lift a filled button off the surface and no more: on a dark
      palette a filled button and its background are two flat fields, and without
@@ -112,6 +175,133 @@
      spread — a shadow with an offset in x reads as a light source the rest of
      the app doesn't have. */
   --shadow-button: 0 1px 4px oklch(0 0 0 / 45%);
+}
+
+/* The light ramp. Not an inversion of the one above — a raised surface in light
+   is *lighter* than the page rather than darker, so the rungs reorder rather than
+   flip, and the accents move a long way down in lightness because a 0.82 yellow on
+   a white page is a highlighter mark rather than a word.
+
+   No theme uses this ramp on its own numbers: Default ships dark-only, and the two
+   ported themes name their own rungs. It is here so a derived light theme is
+   possible and so every alias resolves to something sane. */
+[data-mode="light"] {
+  --hue: 0;
+  --chroma: 0;
+
+  --background: oklch(0.97 calc(var(--chroma) * 0.4) var(--hue));
+  --foreground: oklch(0.22 calc(var(--chroma) * 0.5) var(--hue));
+  --surface-card: oklch(1 calc(var(--chroma) * 0.2) var(--hue));
+  --surface-raised: oklch(0.985 calc(var(--chroma) * 0.3) var(--hue));
+  --muted: oklch(0.94 calc(var(--chroma) * 0.5) var(--hue));
+  --muted-foreground: oklch(0.52 calc(var(--chroma) * 0.7) var(--hue));
+  --primary: oklch(0.28 calc(var(--chroma) * 0.5) var(--hue));
+  --primary-foreground: oklch(0.99 calc(var(--chroma) * 0.1) var(--hue));
+  --ring: oklch(0.62 calc(var(--chroma) * 0.9) var(--hue));
+  --destructive: oklch(0.55 0.2 25);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 14%);
+  --sidebar-border: oklch(0 0 0 / 8%);
+  --hairline: oklch(0 0 0 / 6%);
+  --hairline-strong: oklch(0 0 0 / 8%);
+
+  --accent-thinking: oklch(0.55 0.05 264);
+  --accent-command: oklch(0.58 0.13 75);
+  --accent-mention: oklch(0.55 0.16 245);
+
+  --veil-card: oklch(0 0 0 / 4%);
+  --veil-raised: oklch(0 0 0 / 3%);
+  /* 10%, against dark's 11.5%, because the percentages are not the whole story:
+     the same alpha over a near-white page moves fewer perceptual steps than over
+     a near-black one. Measured on the picker's own highlight — 8% black gave 19
+     levels of separation where dark's white veil gives 28. */
+  --veil-strong: oklch(0 0 0 / 10%);
+
+  /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
+     reads as dirt against near-white. */
+  --shadow-button: 0 1px 3px oklch(0 0 0 / 12%);
+}
+
+/* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
+   using the palette's own token names throughout rather than colours picked to
+   look close.
+
+   The one liberty: Dray's background is Catppuccin's `mantle` rather than `base`,
+   with `base` standing in as `--surface-raised`. Dray's ladder is tight near the
+   bottom — background, inset chrome and card sit inside one narrow band — and
+   starting at `base` leaves nothing real between it and `surface0`. Both are
+   background tokens in the palette, so nothing is invented; the whole room is one
+   rung darker than an editor using the same theme. */
+[data-theme="catppuccin"][data-mode="dark"] {
+  --background: #181825; /* mantle */
+  --surface-raised: #1e1e2e; /* base */
+  --surface-card: #313244; /* surface0 */
+  --muted: #45475a; /* surface1 */
+  --muted-foreground: #a6adc8; /* subtext0 */
+  --foreground: #cdd6f4; /* text */
+  --primary: #cdd6f4; /* text */
+  --primary-foreground: #181825; /* mantle */
+  --ring: #7f849c; /* overlay1 */
+  --destructive: #f38ba8; /* red */
+  --accent-command: #f9e2af; /* yellow */
+  --accent-mention: #89b4fa; /* blue */
+  --accent-thinking: #9399b2; /* overlay2 */
+}
+
+/* Latte's ladder runs the other way — `base` is its *lightest* token and
+   `surface0` is darker than the page — so the rungs are re-ordered rather than
+   re-tinted, which is the whole reason light is a second palette and not a filter. */
+[data-theme="catppuccin"][data-mode="light"] {
+  --background: #e6e9ef; /* mantle */
+  --surface-raised: #eff1f5; /* base */
+  --surface-card: #eff1f5; /* base */
+  --muted: #ccd0da; /* surface0 */
+  --muted-foreground: #6c6f85; /* subtext0 */
+  --foreground: #4c4f69; /* text */
+  --primary: #4c4f69; /* text */
+  --primary-foreground: #eff1f5; /* base */
+  --ring: #8c8fa1; /* overlay1 */
+  --destructive: #d20f39; /* red */
+  --accent-command: #df8e1d; /* yellow */
+  --accent-mention: #1e66f5; /* blue */
+  --accent-thinking: #8c8fa1; /* overlay1 */
+}
+
+/* Gruvbox — https://github.com/morhetz/gruvbox, MIT. The distinct one in the
+   picker, and measurably so: its background is chroma **0.000**, a true neutral,
+   with all the warmth in the cream foreground. That is why it could never have
+   been a hue-and-chroma theme — the derived ramp would tint the background to
+   match the text, which is the one thing Gruvbox does not do. */
+[data-theme="gruvbox"][data-mode="dark"] {
+  --background: #1d2021; /* bg0_h */
+  --surface-raised: #282828; /* bg0 */
+  --surface-card: #32302f; /* bg0_s */
+  --muted: #3c3836; /* bg1 */
+  --muted-foreground: #a89984; /* fg4 */
+  --foreground: #ebdbb2; /* fg1 */
+  --primary: #ebdbb2; /* fg1 */
+  --primary-foreground: #1d2021; /* bg0_h */
+  --ring: #7c6f64; /* bg4 */
+  --destructive: #fb4934; /* bright red */
+  --accent-command: #fabd2f; /* bright yellow */
+  --accent-mention: #83a598; /* bright blue */
+  --accent-thinking: #928374; /* gray */
+}
+
+[data-theme="gruvbox"][data-mode="light"] {
+  --background: #f2e5bc; /* bg0_s */
+  --surface-raised: #fbf1c7; /* bg0 */
+  --surface-card: #f9f5d7; /* bg0_h */
+  --muted: #ebdbb2; /* bg1 */
+  --muted-foreground: #7c6f64; /* fg4 */
+  --foreground: #3c3836; /* fg1 */
+  --primary: #3c3836; /* fg1 */
+  --primary-foreground: #fbf1c7; /* bg0 */
+  --ring: #7c6f64; /* fg4 */
+  --destructive: #9d0006; /* faded red */
+  --accent-command: #b57614; /* faded yellow */
+  --accent-mention: #076678; /* faded blue */
+  --accent-thinking: #928374; /* gray */
 }
 
 @theme inline {
@@ -173,6 +363,9 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-veil-strong: var(--veil-strong);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -256,60 +449,114 @@
     --traffic-lights-w: 78px;
   }
 
+  /* The one surface that reaches the window edge, and the only thing in the app
+     that paints the backdrop — the sidebar has no fill of its own and the right
+     panel's `--sidebar` is `--background` under another name, so both read
+     straight through to here. */
   body {
-    @apply bg-background text-foreground overscroll-none;
+    @apply text-foreground overscroll-none;
+    background-color: var(--background);
+    background-image: linear-gradient(
+      to bottom,
+      var(--backdrop-top),
+      var(--backdrop-bottom)
+    );
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* The desktop is behind the window, not inside it: the native material does
-     the blurring and the webview only has to get out of its way. So the body's
-     own fill is the single hole punched through the app, and it works only
-     because nothing else paints edge to edge — the sidebar has no fill of its
-     own, and the right panel's is `--background` under another name, so it has
-     to drop out entirely rather than tint the same pixels a second time.
+  /* Every rule from here down lives on `body`, and none of it is style: the
+     palette blocks above are `[data-theme][data-mode]`, two attributes, so they
+     out-specify any `html[…]` selector aimed at the same element. Overriding a
+     palette token from an `html` attribute silently loses. On `body` it isn't a
+     specificity contest at all — the palette sets the token on `<html>` and
+     these set it again one element down, where inheritance decides. */
 
-     Stamped on `<html>` in index.html, before first paint and only on macOS;
-     `useVibrancy` takes it away for the length of a fullscreen session. Kept on
-     `body` because the palette blocks above out-specify any `html[…]` selector. */
-  html[data-vibrancy] body {
-    background-color: var(--background-vibrant);
-    --sidebar: transparent;
-    /* On glass a raised surface is a veil, not a fill — a flat opaque grey laid
-       over a live material reads as a hole punched in it. 5.5% white composites
-       to `--card`'s own `oklch(0.205 0 0)` when the page underneath is opaque,
-       so message bubbles, the composer card and attachment tiles look exactly
-       as they did and only stop being slabs. One thing does change: two of
-       these nested now stack, so a tile inside the composer card reads a step
-       lighter than the card instead of vanishing into it. */
-    --card: oklch(1 0 0 / 5.5%);
+  /* Transparency: raised surfaces stop being fills and become veils, so they
+     layer over the backdrop instead of sitting on it. Present for every windowed
+     session and stamped pre-paint, so this is the app's ordinary state rather
+     than a mode; [useGlass](src/hooks/useGlass.ts) takes it away only in
+     fullscreen and only where the reader asked for that.
+
+     These are the values the vibrancy block used to carry, and that is the
+     answer to whether the two stack: they are the *same declarations*, so
+     turning both on sets each token once rather than veiling a veil. What is
+     left of vibrancy below is the body's own fill and nothing else.
+
+     The values are `--veil-*`, set by the ramp rather than written here, because
+     the colour has to flip with the mode: 5.5% *white* over a light page is
+     nothing at all. Dark's 5.5% white composites to `--card`'s own
+     `oklch(0.205 0 0)` over Default's background, so on that theme nothing moves
+     and cards only stop being slabs. Under another theme they pick its hue up,
+     which is the point — a card is one step above whatever it sits on rather
+     than a colour restated per theme. One thing does change on every theme: two
+     of these nested now stack, so a tile inside the composer card reads a step
+     lighter than the card instead of vanishing into it. */
+  html[data-transparency] body {
+    --card: var(--veil-card);
     /* `--composer` is deliberately *not* given the same treatment, and this is
        the one place that rule lives. It is the only raised surface with
        something parked behind it — the handoff row — so a veil there would show
        the buttons it exists to hide. It costs the composer its glass and buys
-       the one thing on that edge that has to be opaque. */
-    /* Same treatment for the one highlight that lands on the glass rather than
-       inside a menu: the sidebar has no fill here, so a selected session row —
-       and the panel's active tab, which shares the token — is drawn straight
-       onto the material. 11.5% white is `oklch(0.269 0 0)` over an opaque page.
-       The `/50` hover survives it: Tailwind compiles the modifier to a
-       `color-mix`, which multiplies the alpha rather than replacing it. */
-    --sidebar-accent: oklch(1 0 0 / 11.5%);
-    /* The rest of the scale, by the same arithmetic — 4% white is
-       `oklch(0.19 0 0)` over an opaque page and 11.5% is `oklch(0.269 0 0)`.
-       `--surface-raised` fills the tool-call argument and output boxes;
-       `--muted` fills keycaps, Streamdown's inline code, and every ghost
-       button's hover, so it was putting a slab under a word mid-sentence.
+       the one thing on that edge that has to be opaque.
+
+       `--popover` is left out for its own reason, also deliberate: the alert
+       and settings dialogs picked it over `--card` precisely because it stays a
+       fill. They land over the sidebar, which has no fill here, so a veil would
+       composite onto the backdrop and leave their text washed out. A floating
+       surface is not a raised one.
+
+       Both are aliases of `--surface-card` now, so naming `--card` alone here is
+       what splits them — the alias binds them in a palette and this parts them
+       on glass, which is exactly the pair of jobs each was written for. */
+    /* The one highlight that lands on the backdrop rather than inside a menu:
+       the sidebar has no fill here, so a selected session row — and the panel's
+       active tab, which shares the token — is drawn straight onto it. The `/50`
+       hover survives it: Tailwind compiles the modifier to a `color-mix`, which
+       multiplies the alpha rather than replacing it. */
+    --sidebar-accent: var(--veil-strong);
+    /* The rest of the scale. `--surface-raised` fills the tool-call argument and
+       output boxes; `--muted` fills keycaps, Streamdown's inline code, and every
+       ghost button's hover, so it was putting a slab under a word mid-sentence.
 
        Opacity modifiers come through these unharmed: `a` of a veil over the
        page composites to exactly `a` of the flat colour over the same page, so
        `bg-muted/40` in the sidebar's shortcut hint is the colour it always was.
        Only a surface with a different base underneath it — a keycap inside an
        opaque tooltip — lands a shade lighter than before. */
-    --surface-raised: oklch(1 0 0 / 4%);
-    --muted: oklch(1 0 0 / 11.5%);
+    --surface-raised: var(--veil-raised);
+    --muted: var(--veil-strong);
+  }
+
+  /* Vibrancy is the macOS flavour of transparency, not a second one — hence
+     `[data-transparency]` in the selector. The desktop is behind the window,
+     not inside it: the native material does the blurring and the webview only
+     has to get out of its way, so the body's fill is the single hole punched
+     through the app.
+
+     The gate can never fail today, because `useGlass` only ever adds vibrancy
+     while windowed and transparency is unconditional there. It is written down
+     anyway: the pair it rules out — opaque cards over a translucent body — is a
+     flat slab laid on a live material, and a rule that holds because of a hook
+     is one edit away from not holding.
+
+     The backdrop carries the alpha rather than a colour of its own, so the same
+     two stops describe both drawings of the app: windowed on macOS the theme
+     tints the real desktop, and in fullscreen or off macOS it is the surface
+     itself. Nothing about the theme changes between them, only what is behind
+     it — which is the whole reason fullscreen no longer has to go flat. */
+  html[data-vibrancy][data-transparency] body {
+    /* Only the gradient may paint here: an opaque `background-color` under it
+       would sit between the translucent stops and the material and there would
+       be nothing to see through to. */
+    background-color: transparent;
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--backdrop-top) var(--vibrancy-alpha), transparent),
+      color-mix(in oklab, var(--backdrop-bottom) var(--vibrancy-alpha), transparent)
+    );
   }
 
   /* The app owns every scroll container, so the webview must never add its own. */
@@ -372,6 +619,32 @@
      pseudo rule shows up late and never clears. `scrollbar-color` lives on the
      element and invalidates like any other property, so `:hover` just works.
      Setting it also disables the base layer's pseudo styling here. */
+  /* A swatch that *is* its theme. The element carries `data-theme`/`data-mode`
+     itself, so the palette blocks match it exactly as they match `<html>`, and
+     every token below resolves to that theme's own — which is why no table of
+     colours in the settings file can drift from the palettes it stands for.
+
+     **The two stops are re-declared here, and that is not belt-and-braces.**
+     `:root` declares `--backdrop-top: var(--background)`, which resolves *at
+     `:root`* and inherits down as an already-computed colour — so without these
+     two lines every swatch painted the document's backdrop and all three read as
+     one near-black square. Re-declaring makes them resolve against the swatch's
+     own `--background` instead. A theme that sets its own stops still wins:
+     `[data-theme][data-mode]` is unlayered, and unlayered beats `@layer
+     utilities` whatever the specificity says.
+
+     Two tokens, not one. Every theme Dray ships is dark, so the backdrop alone
+     is three near-blacks a millimetre apart — true, and useless as a picker. The
+     card wedge is what tells them apart, and it is the surface the reader is
+     about to see under every card in the app. */
+  .theme-swatch {
+    --backdrop-top: var(--background);
+    --backdrop-bottom: var(--background);
+    background-image:
+      linear-gradient(135deg, transparent 0 52%, var(--surface-card) 52% 100%),
+      linear-gradient(to bottom, var(--backdrop-top), var(--backdrop-bottom));
+  }
+
   .scrollbar-overlay {
     scrollbar-gutter: stable;
     scrollbar-width: thin;

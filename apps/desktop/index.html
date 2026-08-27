@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="neutral" data-mode="dark" class="dark">
+<html lang="en" data-theme="default" data-mode="dark" data-transparency class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,7 +8,7 @@
       // Runs before first paint so a stored theme never shows as a flash of the
       // default one. Kept in sync with src/lib/theme.ts by hand — it can't import.
       try {
-        var t = localStorage.getItem("ade.theme") || "neutral";
+        var t = localStorage.getItem("ade.theme") || "default";
         var m = localStorage.getItem("ade.mode") || "dark";
         var dark =
           m === "dark" ||
@@ -18,11 +18,17 @@
         el.dataset.mode = dark ? "dark" : "light";
         el.classList.toggle("dark", dark);
         el.style.colorScheme = dark ? "dark" : "light";
+        // Unconditional, and it reads no preference to decide it: a window is
+        // translucent, full stop. The stored setting only ever applies in
+        // fullscreen, and nothing can know it is fullscreen before first paint,
+        // so `useGlass` owns that case and this owns the ordinary one.
+        el.dataset.transparency = "";
         // The window's material is macOS-only, so the translucency that reveals
         // it is too — anywhere else it would punch a hole through to nothing.
-        // Set here rather than on mount because React lands a frame or two in,
-        // which is long enough to see the app open opaque and then turn to
-        // glass. `useVibrancy` clears it while fullscreen.
+        // It is the macOS flavour of the transparency above, not a second one:
+        // the CSS only applies it where both attributes are present. `useGlass`
+        // clears it while fullscreen, which leaves the surfaces translucent
+        // against the theme's own backdrop instead of going flat.
         if (/Mac/.test(navigator.platform)) el.dataset.vibrancy = "";
       } catch (e) {}
     </script>

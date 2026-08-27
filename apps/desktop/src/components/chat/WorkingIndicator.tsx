@@ -29,7 +29,7 @@ export default function WorkingIndicator({
       {/* 20 and 64 are separately tuned designs rather than one scaled to the
           other, so 20 is the only inline-with-text option. `theme` is pinned
           because the orb's `auto` looks for `data-theme="dark|light"`, and this
-          app stamps a palette name (`neutral`) there instead. */}
+          app stamps a palette name (`shadcn`, `midnight`) there instead. */}
       <ThinkingOrb state="listening" size={20} theme="dark" aria-hidden />
 
       <span className="shimmer-text text-chat">{label}</span>

@@ -44,7 +44,7 @@ import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { useDoubleTap } from "@/hooks/useDoubleTap";
 import { useFullscreen } from "@/hooks/useFullscreen";
-import { useVibrancy } from "@/hooks/useVibrancy";
+import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -689,7 +689,7 @@ function App() {
     handleModelChange(next.id, null);
   });
   const fullscreen = useFullscreen();
-  useVibrancy(fullscreen);
+  useGlass(fullscreen);
 
   return (
     <TooltipProvider>

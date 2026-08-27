@@ -487,7 +487,7 @@ export default function ChatInput({
             lands where the submit button's does. The label carries the textarea's
             extra `px-1` itself — inside the card those two sit on different
             edges, and matching only one of them is what reads as a shift. */}
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-2xl border border-[oklch(1_0_0/6%)] bg-card px-3 py-3">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-2xl border border-hairline bg-card px-3 py-3">
           <span className="px-1 text-composer text-muted-foreground">
             Unsettle this task to send a follow-up.
           </span>
@@ -595,7 +595,7 @@ export default function ChatInput({
           className={cn(
             "relative rounded-2xl transition-colors",
             !isNewTask &&
-              "border border-[oklch(1_0_0/6%)] bg-composer focus-within:border-[oklch(1_0_0/8%)]",
+              "border border-hairline bg-composer focus-within:border-hairline-strong",
           )}
         >
           {/* Two separate consequences of the empty state, passed separately
