@@ -7,8 +7,9 @@
 #   curl -fsSL https://www.drayhq.com/install.sh | sh
 #
 # Honours:
-#   DRAY_INSTALL_DIR   where the binary lands (default ~/.local/bin)
-#   DRAY_VERSION       a specific release tag (default: the newest cli-v* one)
+#   DRAY_INSTALL_DIR      where the binary lands (default ~/.local/bin)
+#   DRAY_VERSION          a specific release tag (default: the newest cli-v* one)
+#   DRAY_CURRENT_VERSION  the tag already installed; stop if it is the newest one
 
 set -eu
 
@@ -87,6 +88,20 @@ resolve_version() {
     | head -n 1
 }
 
+# From the binary itself rather than downloaded separately, so the skill can
+# never describe a version of the CLI other than the one installed.
+#
+# Called on the up-to-date path too: `dray update` re-running this script is the
+# only thing that rewrites the skill on disk, so stopping early must not be the
+# one route that leaves a deleted or stale one in place.
+install_skill() {
+  if "$INSTALL_DIR/dray" skill install; then
+    :
+  else
+    say "Note: the skill could not be installed. Run 'dray skill install' by hand."
+  fi
+}
+
 TARGET=$(detect_target)
 
 # `latest` is spelled as a request to resolve, not as a tag: it used to build a
@@ -100,6 +115,24 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
   [ -n "$VERSION" ] || die "could not find a dray release.
     Set DRAY_VERSION to a tag from https://github.com/$REPO/releases and re-run."
   say "Latest is $VERSION."
+
+  # Inside the resolve branch alone, so an explicit DRAY_VERSION stays what it
+  # has always been: a forced install of exactly that tag, reinstall and
+  # downgrade included.
+  #
+  # The caller supplies the tag rather than this script reading it off the
+  # binary, because the caller is the binary — `dray update` knows its own
+  # version and nothing here can ask for it without guessing which `dray` on
+  # disk is the one that ran.
+  if [ -n "${DRAY_CURRENT_VERSION:-}" ] && [ "$VERSION" = "$DRAY_CURRENT_VERSION" ]; then
+    say "dray $VERSION is already installed."
+    # Guarded here rather than inside the function: on the install path the
+    # binary was just written, so a failure there is worth the note it prints.
+    if [ -x "$INSTALL_DIR/dray" ]; then
+      install_skill
+    fi
+    exit 0
+  fi
 fi
 
 URL="https://github.com/$REPO/releases/download/$VERSION/dray-$TARGET.tar.gz"
@@ -147,13 +180,7 @@ mv "$TMP/dray" "$INSTALL_DIR/dray" 2>/dev/null || {
 
 say "Installed $INSTALL_DIR/dray"
 
-# From the binary itself rather than downloaded separately, so the skill can
-# never describe a version of the CLI other than the one just installed.
-if "$INSTALL_DIR/dray" skill install; then
-  :
-else
-  say "Note: the skill could not be installed. Run 'dray skill install' by hand."
-fi
+install_skill
 
 # `case` rather than grep, so a directory whose name contains another's does not
 # read as already present.

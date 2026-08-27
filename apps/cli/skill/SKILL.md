@@ -141,9 +141,14 @@ They can watch the sidebar.
 dray update
 ```
 
-Downloads the installer and re-runs it, landing the new binary where the current
-one sits — and rewrites this skill, which ships inside that binary. So whatever
-you are reading always describes the `dray` you actually have.
+Resolves the newest release and stops there when it is the one already running,
+so this is cheap to run and safe to run often. Otherwise it downloads the new
+binary over the current one — and rewrites this skill, which ships inside that
+binary. So whatever you are reading always describes the `dray` you actually
+have.
+
+`dray update --force` installs the newest release even when it is the one you
+have, which repairs a damaged binary.
 
 The app and this CLI ship separately, so they can drift. When they disagree about
 the protocol the app **refuses the command** — every command, not just whichever
