@@ -197,7 +197,7 @@ export default function PickerMenu<T>({
           "overflow-hidden",
           bare
             ? "text-foreground"
-            : "rounded-xl border border-[oklch(1_0_0/8%)] bg-popover text-popover-foreground shadow-md",
+            : "rounded-xl border border-hairline-strong bg-popover text-popover-foreground shadow-md",
         )}
       >
         <div
@@ -253,15 +253,20 @@ export default function PickerMenu<T>({
                     // the framed one, for the same reason the box around it is:
                     // bare has no surface, so this lands straight on the page,
                     // and `--accent`'s flat grey is a slab there once that page
-                    // is glass. 11.5% white composites to `--accent`'s own
+                    // is glass. `--veil-strong` composites to `--accent`'s own
                     // colour over an opaque page, so the two states match
                     // outside vibrancy. Framed keeps the fill — it sits on the
                     // popover, which is opaque by design.
+                    //
+                    // The token, not the 11.5% white it was written as. The two
+                    // are the same value in dark, and in light a white veil on a
+                    // white page is no highlight at all — the row the arrow keys
+                    // were sitting on simply stopped being marked.
                     className={cn(
                       "flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-ui",
                       index === activeIndex
                         ? bare
-                          ? "bg-[oklch(1_0_0/11.5%)] text-accent-foreground"
+                          ? "bg-veil-strong text-accent-foreground"
                           : "bg-accent text-accent-foreground"
                         : "text-foreground",
                     )}

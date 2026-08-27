@@ -15,7 +15,7 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { ThinkingOrb } from "thinking-orbs";
+import Orb from "@/components/Orb";
 
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -1589,10 +1589,9 @@ function SessionRow({
                 aria-label="Checks running"
               />
             ) : status === "in_progress" ? (
-              <ThinkingOrb
+              <Orb
                 state="listening"
                 size={20}
-                theme="dark"
                 aria-label="Working"
               />
             ) : (

@@ -95,7 +95,7 @@ That = real entry point — build and run Rust app, start Vite via `beforeDevCom
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (253: parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
-- `pnpm test` — frontend tests (vitest, 149, node environment, no DOM). Scoped to pure logic where being wrong invisible on screen: [streaming.ts](apps/desktop/src/lib/streaming.ts), which read same committed fixtures Rust tests do rather than keep own captures; and composer's caret arithmetic ([slash.ts](apps/desktop/src/lib/slash.ts), [mention.ts](apps/desktop/src/lib/mention.ts), [highlight.ts](apps/desktop/src/lib/highlight.ts)), where same string open picker or not depending only on cursor position. Components not tested — no DOM here.
+- `pnpm test` — frontend tests (vitest, 244, node environment, no DOM). Scoped to pure logic where being wrong invisible on screen: [streaming.ts](apps/desktop/src/lib/streaming.ts), which read same committed fixtures Rust tests do rather than keep own captures; composer's caret arithmetic ([slash.ts](apps/desktop/src/lib/slash.ts), [mention.ts](apps/desktop/src/lib/mention.ts), [highlight.ts](apps/desktop/src/lib/highlight.ts)), where same string open picker or not depending only on cursor position; and [theme.ts](apps/desktop/src/lib/theme.ts)'s coercion, where wrong direction on unrecognised stored value flatten whole app with nothing on screen saying why. Components not tested — no DOM here.
 
 ## Architecture: the event pipeline
 
@@ -909,7 +909,35 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 ## Settings
 
-**One dialog, one row so far** ([SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)). Gear in sidebar's titlebar strip, ⌘, from anywhere, and analytics opt-out = only thing in it.
+**One dialog, three group** ([SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)). Gear in sidebar's titlebar strip, ⌘, from anywhere. **Appearance** holding theme picker and mode segments, **Privacy** holding analytics opt-out, **Feedback** holding two link out through `openUrl`.
+
+**Theme carry own background, and separate axis for it was built then removed.** `--composer` must stay opaque fill (handoff row parked behind it), so backdrop picked apart from palette leave grey slab along window's bottom edge under any tinted background — and reaching it mean overriding palette token, which end the independence that justified split. Background = part of what theme *is*.
+
+**Colour = three layer, and which layer token live on = whole filing system.** `:root` hold what neither theme nor mode change, plus every **alias**; `[data-mode]` hold ramp; `[data-theme][data-mode]` hold palette. Alias = what keep third layer short and honest — `--card`, `--popover` and `--composer` all `var(--surface-card)`, so theme cannot set one and forget another.
+
+Ramp live on `[data-mode]` and **not** `:root`, deliberately: two have same specificity, so light document matching both would take any dark token light block happen to miss — leak showing up as one dark card on light page. index.html hard-code `data-mode="dark"` in markup as well as stamping it, so no unstamped case for `:root` to cover.
+
+**Two way to write theme.** Derived = `--hue` + `--chroma`, fixed lightness per rung times per-step multiplier, so single-hue theme cost two numbers; `--chroma: 0` collapse every `calc()`, which why `default` = exactly greys it always was. **Ported theme not one hue**, so `catppuccin` and `gruvbox` name their rungs outright with palette's own token name in comment beside each. Both route end at same alias.
+
+**Alias resolve where declared, and that bit swatch not palette.** `:root { --backdrop-top: var(--background) }` resolve *at `:root`* and inherit already-computed, so any **descendant** setting own `--background` still paint document's. Harmless for `--card`/`--popover`/`--composer` — palette block match same `<html>` element `:root` do — and fatal for `.theme-swatch`, where it drew three identical near-black square. Fix = re-declare both stop in `.theme-swatch`; theme setting own stop still win, since palette block unlayered and unlayered beat `@layer utilities` whatever specificity say. Backdrop = **two stops** (`--backdrop-top`/`--backdrop-bottom`), both falling back to `--background` — no shipped theme carry gradient today, machinery kept for one that will.
+
+**Ported theme take surfaces and text accent, not semantics.** `--accent-merge` stay GitHub green (colour = meaning there), border stay ramp's alpha (`oklch(1 0 0 / 10%)` and black twin work over any palette). Credit live in root [README](README.md); test fail if ported theme ship without one.
+
+**Light = second palette, not filter, and `darkOnly` = opt-out.** Rung reorder rather than flip — raised surface sit *above* card in light and below it in dark — veil flip white→black, accent drop hard in lightness. `default` set `darkOnly` because its light side unbuilt; `modeFor` force dark on write and on first read, or `[data-theme="default"][data-mode="light"]` match no block and fall through to light ramp's neutrals.
+
+**Mode = three segment, not switch, because there three answer.** System/Light/Dark; switch can only ask light-or-dark, which leave `system` reachable from nowhere — and `system` = one that keep following OS after being set, so it the answer for anyone who already told their OS once. Drawn off `mode` as **chosen**, never `resolvedMode`: whole point of System = it read Dark today and Light tonight, and control drawn from what on screen show Dark and lose distinction. Dark-only theme disable **whole group**, not drop its light segment: two segment where there were three read as broken control, and `system` unofferable there anyway since OS can resolve it light. Selected segment stay honest because `modeFor` already force dark.
+
+**Both picker share `useRovingGroup`.** `role="radiogroup"` = promise to screen reader that arrow move inside one Tab stop with selection following focus, and two copy of that = two chance for one to quietly stop keeping it. Roving `tabIndex` live at call site — without it every option own Tab stop, so tabbing dialog walk palettes one at a time.
+
+**Swatch carry its own mode, not document's.** `hasLightMode(name) ? resolvedMode : "dark"` — dark-only theme in light mode match no palette block and fall through to light ramp's neutrals, so swatch would draw light Default that clicking it don't give. Same class of bug as backdrop stops below, one layer out.
+
+**`neutral` → `shadcn` → `default`, and nothing migrate stored value.** `coerceTheme` reject unknown id and fall back to `DEFAULT_THEME`, which = same palette under current name. Pinned by test; that test = what should fail if default ever stop being that palette.
+
+**Transparency = token set, and vibrancy nest inside it.** `html[data-transparency] body` carry exactly declarations vibrancy block used to, so both on set each token once instead of veiling a veil. **Windowed = always on**, stamped pre-paint with nothing read to decide it. Fullscreen answered by **palette**, never by reader — nothing behind fullscreen window, so whether layering still worth it = fact about that backdrop. `keepsGlassInFullscreen` weigh two thing in order: **light always flat** (light veil = black, and with nothing behind it that = grey smudge, where windowed it read as depth because desktop genuinely show through), then `flatInFullscreen` for dark palette whose backdrop not worth layering over. One function, so rule testable in one place. [useGlass](apps/desktop/src/hooks/useGlass.ts) own both attribute and guarantee vibrancy ⊆ transparency. Neither attribute persisted; `ade.transparency` retired.
+
+**`useTheme` = module store, and that not tidiness.** `useGlass` read theme, so per-hook copy meant dialog set theme its own copy knew about while window kept old one's fullscreen behaviour — and stale copy's `watchSystemMode` callback re-applied old palette on next OS colour-scheme change, reverting theme while dialog still showed new one. Caught by Greptile on first pass. One store, one watcher.
+
+**Rules go on `body`, never on `html`.** Palette blocks = `[data-theme][data-mode]`, two attributes, so they out-specify any `html[…]` aimed at same element and override lose **silently**. Same trap vibrancy hit; every new attribute hit it again.
 
 **Mounted in `App`, not beside gear that open it.** Sidebar unmount whole when collapsed, so dialog living there take ⌘, with it — and that chord = one route into settings that survive collapsed sidebar. Open state not persisted: settings opened to change something and closed again, so reopening app into them = app remembering wrong half of session.
 

@@ -1,4 +1,4 @@
-import { ThinkingOrb } from "thinking-orbs";
+import Orb from "@/components/Orb";
 
 /// Standing notice that async subagents are still working — driven by the
 /// latest `background_tasks_changed` set, so it outlives the turn that spawned
@@ -32,7 +32,7 @@ export default function BackgroundTasksIndicator({
           read as different activities at a glance. Theme pinned for the same
           reason as there: the orb's `auto` expects `data-theme="dark|light"`
           and this app stamps a palette name instead. */}
-      <ThinkingOrb state="weaving" size={20} theme="dark" aria-hidden />
+      <Orb state="weaving" size={20} aria-hidden />
 
       <span className="shimmer-text text-chat">
         {count} Background Task{count === 1 ? "" : "s"}
