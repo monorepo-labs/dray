@@ -7,7 +7,7 @@ import {
   GitBranchPlus,
   Unlink,
   Inbox,
-  // Pin,
+  Pin,
   Plus,
   Search,
   Settings,
@@ -190,13 +190,65 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
   return rows;
 }
 
-/// One project's run of rows, in the order the sidebar draws them.
-export type SessionGroup = {
-  projectPath: string;
-  rows: SessionListRow[];
-};
+/// One run of rows drawn under a single heading, in the order the sidebar draws
+/// them.
+///
+/// Pinned is a kind of its own rather than another path, because it is the one
+/// group that spans projects — a path on it could only be a lie or a null, and
+/// either leaves the render guessing which sort of group it is holding.
+export type SessionGroup =
+  | { kind: "pinned"; rows: SessionListRow[] }
+  | { kind: "project"; projectPath: string; rows: SessionListRow[] };
 
-/// [`sessionRows`] gathered under the project each row's *root* belongs to.
+/// The items that draw in the Pinned group, and everything else.
+///
+/// A session is pinned-side when it *or an ancestor* is pinned, so a pinned
+/// session's children follow it out of its project's run — leaving them behind
+/// would split one nest across two headings and draw children under a parent
+/// that isn't there.
+///
+/// What falls out of that rule: the rest is closed under parentage, since
+/// nothing with a pinned ancestor can stay in it. So both halves hold whole
+/// nests, and [`sessionRows`] draws each half's own roots at depth 0 — a pinned
+/// child whose parent stayed behind reaches the Pinned group as a root, with no
+/// rail reaching for a row drawn somewhere else entirely.
+function splitPinned(
+  items: SessionIndexItem[],
+): [pinned: SessionIndexItem[], rest: SessionIndexItem[]] {
+  const byId = new Map(items.map((i) => [i.sessionId, i]));
+
+  const underPin = (item: SessionIndexItem) => {
+    // Guarded like the walk itself: a cycle in the index has to cost a strange
+    // grouping, never a hung sidebar.
+    const seen = new Set<string>();
+    let at: SessionIndexItem | undefined = item;
+    while (at && !seen.has(at.sessionId)) {
+      if (at.pinned) return true;
+      seen.add(at.sessionId);
+      at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    }
+    return false;
+  };
+
+  const pinned: SessionIndexItem[] = [];
+  const rest: SessionIndexItem[] = [];
+  for (const item of items) (underPin(item) ? pinned : rest).push(item);
+  return [pinned, rest];
+}
+
+/// [`sessionRows`] gathered under the project each row's *root* belongs to,
+/// with the reader's own pins led out into a group of their own.
+///
+/// **Pinned leads, whatever the project order says.** It is the one group built
+/// by hand, and a pick that sorted in with the rest would be no easier to find
+/// than the rows it was made out of. It spans projects besides, so there is no
+/// place in that order for it to take. A pinned session draws there and nowhere
+/// else — drawn twice, the reader has to work out which copy is the one they
+/// pinned.
+///
+/// A project filter needs nothing here: the caller narrows `items` before this
+/// sees them, so the Pinned group holds that project's pins alone and opens no
+/// group at all when it holds none.
 ///
 /// Grouped on the root rather than on the row: a spawned session hangs off its
 /// parent wherever its own `projectPath` points, and splitting one nest across
@@ -221,18 +273,21 @@ export function sessionGroups(
   items: SessionIndexItem[],
   projects: Project[] = [],
 ): SessionGroup[] {
-  const groups: SessionGroup[] = [];
-  const byPath = new Map<string, SessionGroup>();
-  let current: SessionGroup | undefined;
+  const [pinned, rest] = splitPinned(items);
 
-  for (const row of sessionRows(items)) {
+  type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
+  const groups: ProjectGroup[] = [];
+  const byPath = new Map<string, ProjectGroup>();
+  let current: ProjectGroup | undefined;
+
+  for (const row of sessionRows(rest)) {
     // Every subtree the walk emits opens with its own root, so a depth-0 row is
     // where one run ends and the next begins.
     if (row.depth === 0 || !current) {
       const path = row.item.projectPath;
       current = byPath.get(path);
       if (!current) {
-        current = { projectPath: path, rows: [] };
+        current = { kind: "project", projectPath: path, rows: [] };
         byPath.set(path, current);
         groups.push(current);
       }
@@ -243,10 +298,15 @@ export function sessionGroups(
   // Unattached sorts to the end rather than to the front, and `sort` is stable,
   // so those keep the order they were built in.
   const rank = new Map(projects.map((p, i) => [p.path, i]));
-  const place = (group: SessionGroup) =>
+  const place = (group: ProjectGroup) =>
     rank.get(group.projectPath) ?? Number.MAX_SAFE_INTEGER;
 
-  return groups.sort((a, b) => place(a) - place(b));
+  groups.sort((a, b) => place(a) - place(b));
+
+  const pinnedRows = sessionRows(pinned);
+  return pinnedRows.length
+    ? [{ kind: "pinned", rows: pinnedRows }, ...groups]
+    : groups;
 }
 
 /// The order alone, for callers that only step through it.
@@ -255,7 +315,8 @@ export function sessionGroups(
 /// comparator would let the two disagree about which row is "next" — worse when
 /// the sidebar is collapsed and nothing on screen shows the order being walked.
 /// Grouped for the same reason: the shortcut has to step past a heading the way
-/// the eye does, so it takes the same project list the headings are ordered by.
+/// the eye does, so it takes the same project list the headings are ordered by —
+/// and it steps the pins first, because that is where the eye starts too.
 export function sortSessions(
   items: SessionIndexItem[],
   projects: Project[] = [],
@@ -518,60 +579,88 @@ export default function Sidebar({
         {rowCount === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          groups.map((group, index) => (
-            <Fragment key={group.projectPath}>
-              {/* Only where the list spans projects. Under a filter the label
-                  above already names the one project every row belongs to, and
-                  a heading repeating it would be a second copy of the same
-                  fact. Name only — no icon, no count: the heading says which
-                  repo the run below it is, and anything else on it competes
-                  with the titles it introduces. Full path on hover, since two
-                  projects can share a folder name. */}
-              {projectFilter === null && (
-                <div
-                  title={group.projectPath}
-                  className={cn(
-                    "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
-                    // The first heading sits under the filter's own row, which
-                    // already carries the gap; the rest open a run and need it.
-                    index > 0 && "mt-3",
-                  )}
-                >
-                  {projectName(group.projectPath)}
-                </div>
-              )}
+          groups.map((group, index) => {
+            // A project heading is drawn only where the list spans projects:
+            // under a filter the label above already names the one project
+            // every row belongs to, and a heading repeating it would be a
+            // second copy of the same fact. Pinned is never dropped — it names
+            // a set the reader made themselves, which nothing else on screen
+            // says. Word only, no icon and no count, like the project headings
+            // it sits above.
+            const heading =
+              group.kind === "pinned"
+                ? "Pinned"
+                : projectFilter === null
+                  ? projectName(group.projectPath)
+                  : null;
 
-              {group.rows.map(({ item, depth, guides, opens }) => (
-                <SessionRow
-                  key={item.sessionId}
-                  item={item}
-                  depth={depth}
-                  guides={guides}
-                  opens={opens}
-                  status={statusBySession[item.sessionId] ?? item.status}
-                  asking={askingSessions.has(item.sessionId)}
-                  pr={prFor(item.projectPath, sessionBranch(item))}
-                  active={item.sessionId === selectedSessionId}
-                  // The settled list is a history, and the question asked of it is
-                  // "what did I finish today" — so everything older is held back
-                  // rather than filtered out. Only there: the active list is a
-                  // worklist, where an older row is still open work.
-                  faded={showArchived && !isToday(item.modified)}
-                  // Nothing refreshes marks over here: the archived view asks for
-                  // no repos, so its rows draw from a cache nothing will update.
-                  // A stale glyph is the accepted trade; a stale *spinner* is not,
-                  // since it animates a claim that something is happening now.
-                  marksLive={!showArchived}
-                  nested={isNested(item, items)}
-                  onSelect={onSelect}
-                  onSetFlags={onSetFlags}
-                  onFork={onFork}
-                  onDelete={onDelete}
-                  onDetach={onDetach}
-                />
-              ))}
-            </Fragment>
-          ))
+            return (
+              <Fragment key={group.kind === "pinned" ? "pinned" : group.projectPath}>
+                {heading !== null ? (
+                  <div
+                    // Full path on hover, since two projects can share a folder
+                    // name. Pinned has no one path to name.
+                    title={group.kind === "project" ? group.projectPath : undefined}
+                    className={cn(
+                      "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
+                      // The first heading sits under the filter's own row, which
+                      // already carries the gap; the rest open a run and need it.
+                      index > 0 && "mt-3",
+                    )}
+                  >
+                    {heading}
+                  </div>
+                ) : (
+                  // A run drawing no heading of its own still needs the break
+                  // one would have carried. Under a project filter the Pinned
+                  // group is followed by that same project's remaining rows,
+                  // and with nothing between them the whole list reads as
+                  // sitting under the Pinned heading.
+                  index > 0 && <div aria-hidden className="h-3" />
+                )}
+
+                {group.rows.map(({ item, depth, guides, opens }) => (
+                  <SessionRow
+                    key={item.sessionId}
+                    item={item}
+                    depth={depth}
+                    guides={guides}
+                    opens={opens}
+                    status={statusBySession[item.sessionId] ?? item.status}
+                    asking={askingSessions.has(item.sessionId)}
+                    pr={prFor(item.projectPath, sessionBranch(item))}
+                    active={item.sessionId === selectedSessionId}
+                    // The settled list is a history, and the question asked of it is
+                    // "what did I finish today" — so everything older is held back
+                    // rather than filtered out. Only there: the active list is a
+                    // worklist, where an older row is still open work.
+                    faded={showArchived && !isToday(item.modified)}
+                    // Nothing refreshes marks over here: the archived view asks for
+                    // no repos, so its rows draw from a cache nothing will update.
+                    // A stale glyph is the accepted trade; a stale *spinner* is not,
+                    // since it animates a claim that something is happening now.
+                    marksLive={!showArchived}
+                    nested={isNested(item, items)}
+                    // A row drawn under Pinned below the top is there because
+                    // its parent is — `splitPinned` only carries a nest whole.
+                    // Unless it holds a pin of its own as well: that flag is
+                    // real and outlives the ancestor's, so hiding the action
+                    // there would strand it, and the row would come back pinned
+                    // for no reason the reader could see once the ancestor was
+                    // unpinned.
+                    inheritsPin={
+                      group.kind === "pinned" && depth > 0 && !item.pinned
+                    }
+                    onSelect={onSelect}
+                    onSetFlags={onSetFlags}
+                    onFork={onFork}
+                    onDelete={onDelete}
+                    onDetach={onDetach}
+                  />
+                ))}
+              </Fragment>
+            );
+          })
         )}
 
         {/* Sits in the list as its last row, so it scrolls away once there are
@@ -1077,6 +1166,7 @@ function SessionRow({
   marksLive = true,
   onSelect,
   nested = false,
+  inheritsPin = false,
   onSetFlags,
   onFork,
   onDelete,
@@ -1104,6 +1194,13 @@ function SessionRow({
   /// offer. Kept apart from `depth` only because a cyclic index draws a row at
   /// the top level that still has a link worth cutting.
   nested?: boolean;
+  /// This row is in the Pinned group through an ancestor *and* carries no pin
+  /// of its own. Pinning it would then decide nothing on screen — the row stays
+  /// where it is either way — so the action is dropped rather than left
+  /// offering a verb that moves nothing and leaves a flag behind. A row holding
+  /// its own pin keeps the action whatever its ancestor does: that flag is the
+  /// one thing there the reader can still be surprised by later.
+  inheritsPin?: boolean;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -1369,14 +1466,21 @@ function SessionRow({
               specificity, so a `display` utility here silently loses.
               `pointer-events-none` keeps the invisible buttons unclickable. */}
           <div className="pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
-            {/* Pin hidden for now; the flag and its write path stay live. */}
-            {/* <RowAction
-              label={item.pinned ? "Unpin" : "Pin"}
-              active={item.pinned}
-              onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
-            >
-              <Pin />
-            </RowAction> */}
+            {/* Absent on a row that follows a pinned ancestor rather than
+                carrying the pin itself, the way 'Detach from parent' is absent
+                where there is no parent drawn: the row sits in the Pinned group
+                whichever way its own flag reads, so both verbs would move
+                nothing — and Pin would quietly leave a flag behind to surprise
+                the reader once the ancestor is unpinned. */}
+            {!inheritsPin && (
+              <RowAction
+                label={item.pinned ? "Unpin" : "Pin"}
+                active={item.pinned}
+                onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
+              >
+                <Pin />
+              </RowAction>
+            )}
 
             <RowAction
               label={item.archived ? "Unsettle" : "Settle"}
