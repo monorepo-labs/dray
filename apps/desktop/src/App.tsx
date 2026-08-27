@@ -507,6 +507,18 @@ function App() {
     }
   };
 
+  // The pane is one piece of app-wide state, so a new task would otherwise
+  // inherit whichever pane the last session left open — invisibly, since the
+  // empty composer draws none, and then mounted open the moment the first
+  // prompt creates the session. That is the one moment its reads have nothing
+  // to answer from: the repo isn't resolved yet, so the tab draws an error for
+  // a second or three before the first read lands. Keyed on the selection
+  // rather than on `handleNewSession`, so every route to the empty composer is
+  // covered — ⌘N, the sidebar's +, settling the open session, deleting it.
+  useEffect(() => {
+    if (!selectedSessionId) setPanelOpen(false);
+  }, [selectedSessionId]);
+
   const toggleSidebar = () => setCollapsed((prev) => !prev);
   useHotkey("b", toggleSidebar);
   useHotkey("n", handleNewSession);
