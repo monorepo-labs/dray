@@ -229,7 +229,7 @@ function PrRow({
               cleans up: settling a session deletes the local branch and the
               worktree, never the remote ref. Drawn on merged and closed alike,
               which is where GitHub puts it too. */}
-          {pr.state !== "OPEN" && pr.headRefExists && (
+          {pr.state !== "OPEN" && pr.headRefExists && !pr.isCrossRepository && (
             <BranchCleanup pr={pr} acting={acting} act={act} />
           )}
 
@@ -321,7 +321,9 @@ function busyLabel(kind: PrAction["kind"]): string {
 ///
 /// Only ever drawn where the branch is still on the remote (`headRefExists`),
 /// because deleting a ref twice is a 422 rather than a no-op — so the guard is
-/// the row existing, not the call being safe to repeat.
+/// the row existing, not the call being safe to repeat. And never for a fork's
+/// branch, which is not this repo's to delete; the backend refuses those too,
+/// so this decides whether to *offer* rather than whether it is allowed.
 ///
 /// The branch is named here and nowhere else on the pane: the header carries
 /// the *session's* branch, which for a PR opened from another checkout is a
@@ -357,7 +359,7 @@ function BranchCleanup({
               disabled={acting}
               onClick={() => {
                 setConfirming(false);
-                void act(pr.number, { kind: "delete_branch", branch: pr.headRefName });
+                void act(pr.number, { kind: "delete_branch" });
               }}
             >
               {acting && <Loader2 className="animate-spin" />}

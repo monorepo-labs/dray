@@ -28,6 +28,7 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
     baseRefName: "main",
     headRefName: "feature",
     headRefExists: true,
+    isCrossRepository: false,
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
     reviewDecision: null,
