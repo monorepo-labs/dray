@@ -5,6 +5,48 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.8.0
+
+### Added
+
+- **Linear issues, read-only.** An Issues page in the main column with scope
+  chips, search and groups by state; an Issue tab in the right panel carrying
+  the description, uploads, people and comments; and `#DRA-53` tags in the
+  composer that resolve on send and open the issue from the sent message.
+  Connect with a personal API key on the page itself — Dray never writes to
+  the tracker, so nothing moves status or leaves a comment. Your agent still
+  wants Linear's own MCP server to read an issue in full.
+- **Themes, and light mode.** Default (the old greys), plus Catppuccin and
+  Gruvbox as real ports. Light mode ships for both; Default stays dark-only
+  and the mode control says so. Set them in Settings, under Appearance.
+- **Search the sidebar.** The Search button becomes a field in place and
+  typing narrows the list by title. Pins, project headings and nesting all
+  hold while a query is on.
+- **A Pinned group leads the sidebar.** Pinning worked end to end and drew
+  nothing; a pinned session now leads the list whatever project it is in, and
+  its children follow it there.
+- **Delete branch on a merged or closed pull request.** Merging left the head
+  branch on the remote forever. The row is remote-only and refuses a fork's
+  branch outright.
+- **`dray update` stops when it is already current.** It used to download and
+  swap the binary every time and say nothing about being up to date. `--force`
+  still reinstalls.
+
+### Fixed
+
+- **A new task no longer opens with the wrong pane.** The right pane is
+  app-wide, so a new task inherited whichever one the last session left open
+  and drew an error the moment the first prompt created the session.
+- **`[blocked]` no longer lands in prose.** Link hardening dropped an
+  unresolvable href and then wrote the word beside it, so review badges and
+  bare relative paths in agent output both put it into the text you read.
+- **The dev build names its checkout.** Several worktrees mean several dev
+  builds that look alike, so the badge reads `Dev · <branch>` and sits at the
+  bottom of the sidebar.
+- **A busy dev port no longer fails the build.** One worktree's `pnpm tauri
+  dev` refusing to start because another's is already running was the ordinary
+  case with several sessions open; the port is now probed upward from 1420.
+
 ## 0.7.3
 
 ### Fixed
