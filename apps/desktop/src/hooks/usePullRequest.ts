@@ -97,7 +97,11 @@ export function prTabVisible(prs: PullRequest[], error: PrUnavailable | null): b
 export type PrAction =
   | { kind: "merge"; method: MergeMethod }
   | { kind: "reopen" }
-  | { kind: "ready" };
+  | { kind: "ready" }
+  /// Carries no branch. A fork's head is reported bare, so a name from here
+  /// joined to this repo addresses a branch that merely shares it — the
+  /// backend reads the head off the PR and refuses anything cross-repository.
+  | { kind: "delete_branch" };
 
 type State = {
   /// Every PR opened from this branch, open ones first. Usually one, sometimes
@@ -290,6 +294,8 @@ export function usePullRequest(
       try {
         if (action.kind === "merge") {
           await invoke("merge_pr", { cwd, number, method: action.method });
+        } else if (action.kind === "delete_branch") {
+          await invoke("delete_branch", { cwd, number });
         } else {
           const command = action.kind === "reopen" ? "reopen_pr" : "mark_pr_ready";
           await invoke(command, { cwd, number });

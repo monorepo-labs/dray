@@ -219,11 +219,19 @@ function PrRow({
 
       {open && (
         <div className="flex flex-col gap-4 pb-3">
-          {/* Nothing left to say about a merged PR: it has no action on this
-              panel, no base worth naming once the work is on it, and the header
-              already carries the merge glyph. The word "Merged" alone was a
-              whole row repeating the icon two lines above it. */}
+          {/* Nothing left to say about a merged PR's *readiness*: it has no base
+              worth naming once the work is on it, and the header already carries
+              the merge glyph. The word "Merged" alone was a whole row repeating
+              the icon two lines above it. */}
           {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} />}
+
+          {/* Its branch is another matter, and the one thing nothing else here
+              cleans up: settling a session deletes the local branch and the
+              worktree, never the remote ref. Drawn on merged and closed alike,
+              which is where GitHub puts it too. */}
+          {pr.state !== "OPEN" && pr.headRefExists && !pr.isCrossRepository && (
+            <BranchCleanup pr={pr} acting={acting} act={act} />
+          )}
 
           <Section
             title="Checks"
@@ -301,7 +309,77 @@ const BUSY = "disabled:opacity-100";
 
 /// The verb, while it is happening.
 function busyLabel(kind: PrAction["kind"]): string {
-  return { merge: "Merging…", reopen: "Reopening…", ready: "Marking ready…" }[kind];
+  return {
+    merge: "Merging…",
+    reopen: "Reopening…",
+    ready: "Marking ready…",
+    delete_branch: "Deleting…",
+  }[kind];
+}
+
+/// The head branch, and the one button that removes it.
+///
+/// Only ever drawn where the branch is still on the remote (`headRefExists`),
+/// because deleting a ref twice is a 422 rather than a no-op — so the guard is
+/// the row existing, not the call being safe to repeat. And never for a fork's
+/// branch, which is not this repo's to delete; the backend refuses those too,
+/// so this decides whether to *offer* rather than whether it is allowed.
+///
+/// The branch is named here and nowhere else on the pane: the header carries
+/// the *session's* branch, which for a PR opened from another checkout is a
+/// different string, and this is the one action where deleting the wrong one
+/// cannot be undone from this window.
+function BranchCleanup({
+  pr,
+  acting,
+  act,
+}: {
+  pr: PullRequest;
+  acting: boolean;
+  act: (number: number, action: PrAction) => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <section className="flex min-h-7 items-center gap-2 px-3">
+      <p className="min-w-0 truncate text-ui text-muted-foreground" title={pr.headRefName}>
+        <span className="text-muted-foreground/50">branch</span> {pr.headRefName}
+      </p>
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {confirming ? (
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className={BUSY}
+              disabled={acting}
+              onClick={() => {
+                setConfirming(false);
+                void act(pr.number, { kind: "delete_branch" });
+              }}
+            >
+              {acting && <Loader2 className="animate-spin" />}
+              {acting ? busyLabel("delete_branch") : "Delete branch"}
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className={BUSY}
+            disabled={acting}
+            onClick={() => setConfirming(true)}
+          >
+            Delete branch
+          </Button>
+        )}
+      </div>
+    </section>
+  );
 }
 
 const METHOD_LABEL: Record<MergeMethod, string> = {

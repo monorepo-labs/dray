@@ -7,6 +7,7 @@
 //! an error, since this is a side view and never the reason the app is open.
 
 use anyhow::Result;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, process::Stdio, sync::OnceLock};
 use tokio::{process::Command, sync::Mutex};
@@ -95,6 +96,18 @@ pub struct PullRequest {
     pub author: String,
     pub base_ref_name: String,
     pub head_ref_name: String,
+    /// Whether that branch is still on the remote. `headRefName` survives the
+    /// branch itself — a merged PR keeps naming the branch it came from — so
+    /// the name cannot answer this and `headRef` going null is what does.
+    pub head_ref_exists: bool,
+    /// Whether the head branch lives in a fork rather than in this repo.
+    ///
+    /// `head_ref_name` is bare either way — a PR from `alice/dray:feature`
+    /// reports `feature` — so the name cannot be told apart from a branch of
+    /// our own, and joining it to this repo's slug addresses a *different*
+    /// branch that merely shares its name. Unknown reads as `true`, because
+    /// the only thing this gates is a deletion.
+    pub is_cross_repository: bool,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub is still working
     /// the merge out — which it starts doing lazily, on being asked.
     pub mergeable: String,
@@ -156,7 +169,7 @@ const QUERY: &str = r#"
 query($owner:String!,$repo:String!,$branch:String!){
  repository(owner:$owner,name:$repo){
   pullRequests(headRefName:$branch,first:20,orderBy:{field:CREATED_AT,direction:DESC}){nodes{
-   number title url state isDraft baseRefName headRefName mergeable mergeStateStatus reviewDecision updatedAt
+   number title url state isDraft baseRefName headRefName headRef{name} isCrossRepository mergeable mergeStateStatus reviewDecision updatedAt
    additions deletions changedFiles
    author{login avatarUrl}
    comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
@@ -443,6 +456,16 @@ struct RawPr {
     base_ref_name: String,
     #[serde(default)]
     head_ref_name: String,
+    /// Null once the branch is deleted, and only then — the one field on the
+    /// node that tells a branch still there from one already gone. Only its
+    /// presence is read: GraphQL needs a selection under it, but the name it
+    /// would carry is `head_ref_name`, which outlives the ref.
+    #[serde(default)]
+    head_ref: Option<IgnoredAny>,
+    /// `Option` so that absent can be told from `false` and read as *fork* —
+    /// see [`PullRequest::is_cross_repository`].
+    #[serde(default)]
+    is_cross_repository: Option<bool>,
     #[serde(default)]
     mergeable: String,
     #[serde(default)]
@@ -681,6 +704,8 @@ impl RawPr {
             author: login(&self.author),
             base_ref_name: self.base_ref_name,
             head_ref_name: self.head_ref_name,
+            head_ref_exists: self.head_ref.is_some(),
+            is_cross_repository: self.is_cross_repository.unwrap_or(true),
             mergeable: self.mergeable,
             merge_state_status: self.merge_state_status,
             review_decision: self.review_decision.filter(|d| !d.is_empty()),
@@ -1130,6 +1155,70 @@ async fn merged_state(cwd: &str, number: u64) -> Option<bool> {
     Some(value.get("state")?.as_str()? == "MERGED")
 }
 
+/// Deletes a merged or closed PR's head branch from the remote, and nothing
+/// else.
+///
+/// The local branch and the worktree holding it belong to the settle flow,
+/// which already deletes both; the remote ref is the one thing nothing owned.
+/// Keeping the halves apart also sidesteps `git branch -D` refusing a branch
+/// some worktree still has checked out — the same refusal that keeps
+/// [`merge_pr`] from passing `--delete-branch`.
+///
+/// **Takes the PR, not a branch name, and that is the guard.** A fork's PR
+/// reports its head as a bare `feature`, indistinguishable from a branch of
+/// ours, so a name from the UI joined to this repo's slug can address a
+/// different branch that merely shares it — deleting our `feature` while the
+/// fork's survives. The name is therefore read back from the PR here, behind a
+/// refusal for anything cross-repository, rather than composed anywhere the
+/// two could come apart. Same seam the permission rules keep: the durable,
+/// irreversible act is resolved in Rust and the UI only names which PR.
+///
+/// Unknown counts as a fork. A shape we failed to parse must not reach a
+/// delete, so both fields fail closed.
+///
+/// The REST endpoint rather than `git push --delete`: this takes no working
+/// tree, so it deletes the branch of a session whose checkout has already gone.
+/// A ref that is already deleted answers 422 rather than success, so the button
+/// is gated on `head_ref_exists` instead of this call being safe to repeat.
+#[tauri::command]
+pub async fn delete_branch(cwd: String, number: u64) -> Result<(), String> {
+    let (owner, repo) = repo_slug(&cwd).await?;
+
+    let out = gh(
+        &cwd,
+        &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"],
+    )
+    .await?;
+
+    let branch = head_ref_to_delete(&out)?;
+
+    // `refs/heads/<branch>` is a path here, so a branch name carrying slashes
+    // needs no escaping — `fix/thing` addresses the ref it names.
+    let path = format!("repos/{owner}/{repo}/git/refs/heads/{branch}");
+
+    gh(&cwd, &["api", "-X", "DELETE", &path]).await.map(|_| ())
+}
+
+/// The branch `delete_branch` may delete, or why it may not.
+///
+/// Split out from the call so the refusal is testable without a network: it is
+/// the half that decides whether an irreversible thing happens.
+fn head_ref_to_delete(json: &str) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("could not read that pull request: {e}"))?;
+
+    if value.get("isCrossRepository").and_then(serde_json::Value::as_bool) != Some(false) {
+        return Err("that branch lives in a fork, so it is not this repository's to delete".into());
+    }
+
+    value
+        .get("headRefName")
+        .and_then(serde_json::Value::as_str)
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "that pull request reports no head branch".to_string())
+}
+
 /// Reopens a PR closed elsewhere. There is no `close_pr` beside it on purpose:
 /// this panel exists to get work landed, and abandoning a PR is a decision with
 /// a discussion attached to it, which happens on GitHub.
@@ -1411,6 +1500,81 @@ mod tests {
     fn diff_counts_come_through() {
         let pr = parse();
         assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
+    }
+
+    /// `headRefName` outlives the branch — a merged PR goes on naming the one
+    /// it came from — so only `headRef` going null says the ref is gone.
+    /// Verified against the live API: deleting the branch flipped `headRef` to
+    /// null and left `headRefName` exactly as it was.
+    #[test]
+    fn head_ref_says_whether_the_branch_is_still_there() {
+        let out = |head_ref: &str| {
+            format!(
+                r#"{{"data":{{"repository":{{"pullRequests":{{"nodes":[
+                  {{"number":1,"headRefName":"fix/thing","headRef":{head_ref}}}]}}}}}}}}"#
+            )
+        };
+
+        let live = read_prs(&out(r#"{"name":"fix/thing"}"#)).expect("parses");
+        assert!(live[0].head_ref_exists);
+        assert_eq!(live[0].head_ref_name, "fix/thing");
+        // Absent from this payload, so it reads as a fork and draws no button.
+        assert!(live[0].is_cross_repository);
+
+        let deleted = read_prs(&out("null")).expect("parses");
+        assert!(!deleted[0].head_ref_exists);
+        // The name survives, which is what lets the row go on naming it.
+        assert_eq!(deleted[0].head_ref_name, "fix/thing");
+    }
+
+    /// A fork's head is reported bare — `feature`, not `alice/dray:feature` —
+    /// so joining it to this repo's slug addresses *our* `feature` and deletes
+    /// the wrong branch while the fork's survives. Verified against the live
+    /// API on a real cross-repo PR (`cli/cli#13807`): `headRefName` came back
+    /// as a plain branch name with `headRepository` naming the fork, and
+    /// `headRef` non-null, so nothing else here would have stopped it.
+    #[test]
+    fn a_fork_branch_is_not_ours_to_delete() {
+        let out = r#"{"headRefName":"feature","isCrossRepository":true}"#;
+        let err = head_ref_to_delete(out).expect_err("a fork branch is refused");
+        assert!(err.contains("fork"), "{err}");
+    }
+
+    /// Both halves fail closed. An answer we could not parse, or one missing
+    /// the flag, must not reach a delete — this is the one irreversible thing
+    /// on the pane, and "we could not tell" is not permission.
+    #[test]
+    fn an_unreadable_answer_is_refused_rather_than_guessed() {
+        for out in [
+            r#"{"headRefName":"feature"}"#,
+            r#"{"headRefName":"feature","isCrossRepository":null}"#,
+            r#"{"isCrossRepository":false}"#,
+            r#"{"headRefName":"","isCrossRepository":false}"#,
+            "not json at all",
+        ] {
+            assert!(head_ref_to_delete(out).is_err(), "should refuse: {out}");
+        }
+    }
+
+    /// The name comes back from the PR rather than from the caller, so what is
+    /// deleted is what GitHub says the head is.
+    #[test]
+    fn a_same_repo_branch_resolves_to_its_own_name() {
+        let out = r#"{"headRefName":"fix/slash","isCrossRepository":false}"#;
+        assert_eq!(head_ref_to_delete(out).unwrap(), "fix/slash");
+    }
+
+    /// Absence has to read as *gone*, not as there. The button is the one
+    /// destructive thing on this pane, and a shape we failed to get back would
+    /// otherwise draw it over a branch that may not exist — a click answered
+    /// with a 422. Under-offering costs a trip to GitHub; over-offering costs
+    /// an error on work already landed.
+    #[test]
+    fn a_missing_head_ref_field_reads_as_gone() {
+        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+            {"number":1,"headRefName":"fix/thing"}]}}}}"#;
+        let prs = read_prs(out).expect("parses");
+        assert!(!prs[0].head_ref_exists);
     }
 
     /// The sidebar's query carries the branch and the draft flag, and a draft

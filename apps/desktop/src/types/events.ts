@@ -854,6 +854,22 @@ export type PullRequest = { number: number, title: string, url: string,
  */
 state: string, isDraft: boolean, author: string, baseRefName: string, headRefName: string, 
 /**
+ * Whether that branch is still on the remote. `headRefName` survives the
+ * branch itself — a merged PR keeps naming the branch it came from — so
+ * the name cannot answer this and `headRef` going null is what does.
+ */
+headRefExists: boolean, 
+/**
+ * Whether the head branch lives in a fork rather than in this repo.
+ *
+ * `head_ref_name` is bare either way — a PR from `alice/dray:feature`
+ * reports `feature` — so the name cannot be told apart from a branch of
+ * our own, and joining it to this repo's slug addresses a *different*
+ * branch that merely shares its name. Unknown reads as `true`, because
+ * the only thing this gates is a deletion.
+ */
+isCrossRepository: boolean, 
+/**
  * `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub is still working
  * the merge out — which it starts doing lazily, on being asked.
  */
