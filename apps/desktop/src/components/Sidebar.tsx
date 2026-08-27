@@ -641,6 +641,10 @@ export default function Sidebar({
                     // since it animates a claim that something is happening now.
                     marksLive={!showArchived}
                     nested={isNested(item, items)}
+                    // A row drawn under Pinned below the top is there because
+                    // its parent is — `splitPinned` only carries a nest whole,
+                    // so nothing reaches depth in this group on its own flag.
+                    inheritsPin={group.kind === "pinned" && depth > 0}
                     onSelect={onSelect}
                     onSetFlags={onSetFlags}
                     onFork={onFork}
@@ -1156,6 +1160,7 @@ function SessionRow({
   marksLive = true,
   onSelect,
   nested = false,
+  inheritsPin = false,
   onSetFlags,
   onFork,
   onDelete,
@@ -1183,6 +1188,11 @@ function SessionRow({
   /// offer. Kept apart from `depth` only because a cyclic index draws a row at
   /// the top level that still has a link worth cutting.
   nested?: boolean;
+  /// This row is in the Pinned group through an ancestor, not through its own
+  /// flag. Its own flag then decides nothing on screen — the row stays where it
+  /// is either way — so the pin action is dropped rather than left offering a
+  /// verb that moves nothing.
+  inheritsPin?: boolean;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -1448,13 +1458,21 @@ function SessionRow({
               specificity, so a `display` utility here silently loses.
               `pointer-events-none` keeps the invisible buttons unclickable. */}
           <div className="pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
-            <RowAction
-              label={item.pinned ? "Unpin" : "Pin"}
-              active={item.pinned}
-              onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
-            >
-              <Pin />
-            </RowAction>
+            {/* Absent on a row that follows a pinned ancestor rather than
+                carrying the pin itself, the way 'Detach from parent' is absent
+                where there is no parent drawn: the row sits in the Pinned group
+                whichever way its own flag reads, so both verbs would move
+                nothing — and Pin would quietly leave a flag behind to surprise
+                the reader once the ancestor is unpinned. */}
+            {!inheritsPin && (
+              <RowAction
+                label={item.pinned ? "Unpin" : "Pin"}
+                active={item.pinned}
+                onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
+              >
+                <Pin />
+              </RowAction>
+            )}
 
             <RowAction
               label={item.archived ? "Unsettle" : "Settle"}
