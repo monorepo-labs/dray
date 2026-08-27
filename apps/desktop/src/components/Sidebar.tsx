@@ -58,9 +58,14 @@ import type {
 } from "@/types/events";
 
 type SidebarProps = {
-  // Already scoped to `projectFilter` by the caller, so the list and the ⌘⇧↑/↓
-  // walk step through exactly the same rows.
+  // Already scoped to `projectFilter` and to `search` by the caller, so the list
+  // and the ⌘⇧↑/↓ walk step through exactly the same rows.
   items: SessionIndexItem[];
+  // The live search query. Owned by the caller, because the list it narrows is
+  // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
+  // would leave the shortcut stepping rows the sidebar no longer draws.
+  search: string;
+  onSearchChange: (query: string) => void;
   // The live status of every session the app has heard about this run. Wins over
   // the item's own field, which is only as fresh as the last list fetch.
   statusBySession: Record<string, SessionStatus>;
@@ -326,6 +331,40 @@ export function sortSessions(
   );
 }
 
+/// The rows a query leaves on screen, matched on `title` alone.
+///
+/// Applied *before* grouping, so a heading only draws where a group still holds
+/// a row, and before `sortSessions` flattens the result, so ⌘⇧↑/↓ steps exactly
+/// the rows drawn.
+///
+/// That ordering is what settles the pins too, and it needs no code of its own:
+/// [`splitPinned`] sees the narrowed list, so a pin that matches stays in the
+/// Pinned group and one that doesn't goes with every other row that didn't
+/// match. Moving a matching pin down into its project's run would say the pin
+/// had been dropped, and which rows the reader chose is the one thing that
+/// group exists to say.
+///
+/// Substring and case-insensitive, deliberately no more than that. Fuzzy
+/// matching ranks, and a ranked list cannot stay in the recency order the rails
+/// are drawn from — a child would sit under whatever scored above it rather
+/// than under its parent. The titles here are one line of the reader's own
+/// words, so a substring finds them.
+///
+/// A blank query hands the same array back, identity included, so the memo over
+/// this holds while nothing is being searched for.
+///
+/// Narrows what is already on screen: the caller passes the list `projectFilter`
+/// and the active/settled split have already scoped, and search never reaches
+/// past either.
+export function filterSessions(
+  items: SessionIndexItem[],
+  query: string,
+): SessionIndexItem[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return items;
+  return items.filter((item) => item.title.toLowerCase().includes(needle));
+}
+
 /// Whether a row has a parent to detach from, judged the same way
 /// [`sessionRows`] places it — a parent that isn't on screen means the row is
 /// drawn at the top level, so the menu item can never offer to cut a link the
@@ -423,6 +462,8 @@ export function DevBadge({ className }: { className?: string }) {
 
 export default function Sidebar({
   items,
+  search,
+  onSearchChange,
   statusBySession,
   askingSessions,
   prFor,
@@ -448,6 +489,16 @@ export default function Sidebar({
 }: SidebarProps) {
   const fullscreen = useFullscreen();
 
+  // Whether the search row is drawn as an input rather than as its button. Kept
+  // apart from the query itself: the empty input and the button look the same,
+  // so this is only about where the caret is.
+  const [searching, setSearching] = useState(false);
+
+  const closeSearch = () => {
+    setSearching(false);
+    onSearchChange("");
+  };
+
   // Recency-ordered, with agent-spawned sessions nested under the one that
   // spawned them, and each row carrying the flags its connector rails are drawn
   // from — then gathered under the project it belongs to, in the project list's
@@ -469,14 +520,18 @@ export default function Sidebar({
   }, [projects]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
-  // and saying "No tasks yet" over a filter reads as data loss.
-  const emptyText = projectFilter
-    ? showArchived
-      ? "Nothing settled in this project."
-      : "No tasks in this project."
-    : showArchived
-      ? "Nothing settled yet."
-      : "No tasks yet.";
+  // and saying "No tasks yet" over a filter reads as data loss. The query leads
+  // where there is one: it is the filter the reader is holding in their hands,
+  // where the project and the settled split were already on screen.
+  const emptyText = search.trim()
+    ? `No tasks matching "${search.trim()}".`
+    : projectFilter
+      ? showArchived
+        ? "Nothing settled in this project."
+        : "No tasks in this project."
+      : showArchived
+        ? "Nothing settled yet."
+        : "No tasks yet.";
 
   // Collapsed is nothing at all, not a rail. The toggle moves to the app header
   // in that state, which is the one row present either way.
@@ -530,15 +585,50 @@ export default function Sidebar({
           </KbdGroup>
         </Button>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled
-          className="w-full justify-start px-1.5 text-ui"
-        >
-          <Search />
-          Search
-        </Button>
+        {/* The button *becomes* the field, on the same row at the same height:
+            the icon holds its place, the caret lands where the label was, and
+            nothing below it moves. Bare on purpose — a fill, a border or a
+            focus ring here would draw a second kind of control into a strip
+            that is otherwise two buttons. The transparent border is what holds
+            that promise to the pixel: every button carries one, so the icon
+            would sit a pixel further out without it. */}
+        {searching ? (
+          <div className="flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
+            <Search className="size-3.5 shrink-0" />
+            <input
+              autoFocus
+              type="text"
+              value={search}
+              placeholder="Search"
+              aria-label="Search tasks"
+              onChange={(e) => onSearchChange(e.target.value)}
+              // Escape is the way out, and it takes the query with it: leaving
+              // a filter behind an input that has closed would hide rows with
+              // nothing on screen saying why.
+              onKeyDown={(e) => {
+                if (e.key !== "Escape") return;
+                e.preventDefault();
+                closeSearch();
+              }}
+              // Only where there is nothing to lose. Clicking away from a query
+              // that is narrowing the list is not a request to drop it.
+              onBlur={() => {
+                if (!search) setSearching(false);
+              }}
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSearching(true)}
+            className="w-full justify-start px-1.5 text-ui"
+          >
+            <Search />
+            Search
+          </Button>
+        )}
       </div>
 
       {/* The filter is where project grouping went. */}
