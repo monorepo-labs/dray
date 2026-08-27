@@ -57,6 +57,24 @@ jobs:
         working-directory: apps/cli
         run: cargo test
 
+      # `dray update` stops early when the resolved tag equals `cli-v` plus its
+      # own `CARGO_PKG_VERSION`, so the two being equal is a contract now rather
+      # than a convention. A tag pushed ahead of the crate version would ship a
+      # binary that reads as out of date forever and reinstalls on every run.
+      # Only a tag push can be checked; a dispatch run has no version to compare.
+      - name: Check the tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/cli-v')
+        working-directory: apps/cli
+        run: |
+          set -euo pipefail
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          tag="${GITHUB_REF_NAME#cli-v}"
+          echo "tag $tag, crate $crate"
+          [ "$tag" = "$crate" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match apps/cli version $crate"
+            exit 1
+          }
+
   build:
     needs: test
     strategy:

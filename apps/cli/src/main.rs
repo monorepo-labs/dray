@@ -53,7 +53,7 @@ enum Command {
     /// Send a message into a session that already exists.
     Send(Send),
     /// Upgrade this binary to the newest release.
-    Update,
+    Update(Update),
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -88,6 +88,14 @@ struct New {
     /// origin/<default>.
     #[arg(long, value_name = "SESSION|REF")]
     from: Option<String>,
+}
+
+#[derive(Args)]
+struct Update {
+    /// Install the newest release even when it is the one already running.
+    /// Reinstalls a damaged binary; `DRAY_VERSION=<tag>` downgrades.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -136,7 +144,7 @@ fn run() -> Result<(), String> {
         Command::New(args) => new(args),
         Command::Ls(args) => ls(args),
         Command::Send(args) => send_message(args),
-        Command::Update => update(),
+        Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
 }
@@ -279,7 +287,7 @@ fn print_table(sessions: &[SessionSummary]) {
     }
 }
 
-fn update() -> Result<(), String> {
+fn update(args: Update) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe
@@ -288,7 +296,8 @@ fn update() -> Result<(), String> {
 
     let scratch = scratch_dir()?;
     let script = scratch.join("install.sh");
-    let result = download(INSTALLER_URL, &script).and_then(|()| run_installer(&script, dir));
+    let result = download(INSTALLER_URL, &script)
+        .and_then(|()| run_installer(&script, dir, (!args.force).then(current_tag)));
 
     // On the failing paths too, or a refused download leaves a half-written
     // script behind every time someone retries.
@@ -316,15 +325,39 @@ fn scratch_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn run_installer(script: &Path, install_dir: &Path) -> Result<(), String> {
-    let status = std::process::Command::new("sh")
+/// The release tag this binary was built as.
+///
+/// The one fact the installer cannot work out for itself: it can see a `dray`
+/// on disk but not which of them is the process that ran it, and asking the
+/// wrong one its version is worse than not asking.
+fn current_tag() -> String {
+    format!("cli-v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// `current` is the tag to stop at — the installer resolves the newest release
+/// and exits without downloading anything when the two match. `None` forces the
+/// install through.
+fn run_installer(script: &Path, install_dir: &Path, current: Option<String>) -> Result<(), String> {
+    let mut command = std::process::Command::new("sh");
+    command
         .arg(script)
         // So the upgrade lands where the install did instead of defaulting back
         // to ~/.local/bin. Overwriting this very binary is safe on unix: the
         // installer renames over the path and this process keeps the inode it
         // started from.
-        .env("DRAY_INSTALL_DIR", install_dir)
-        .status();
+        .env("DRAY_INSTALL_DIR", install_dir);
+
+    match current {
+        // An installer too old to know this variable ignores it and installs
+        // unconditionally, which is what this command did before — so the worst
+        // a stale deploy costs is one wasted download, never a skipped upgrade.
+        Some(tag) => command.env("DRAY_CURRENT_VERSION", tag),
+        // Cleared rather than left alone: `--force` has to beat a value the
+        // caller exported, or the flag silently does nothing.
+        None => command.env_remove("DRAY_CURRENT_VERSION"),
+    };
+
+    let status = command.status();
 
     match status {
         Ok(status) if status.success() => Ok(()),
@@ -559,12 +592,36 @@ mod tests {
     }
 
     #[test]
-    fn update_takes_no_arguments() {
-        assert!(matches!(
-            Cli::parse_from(["dray", "update"]).command,
-            Command::Update
-        ));
+    fn update_checks_the_installed_version_unless_forced() {
+        let Command::Update(args) = Cli::parse_from(["dray", "update"]).command else {
+            panic!("wrong subcommand");
+        };
+        assert!(!args.force);
+
+        let Command::Update(args) = Cli::parse_from(["dray", "update", "--force"]).command else {
+            panic!("wrong subcommand");
+        };
+        assert!(args.force);
+    }
+
+    /// `--force` is the only argument. `--version` still means the top-level
+    /// flag and nothing else, so a subcommand answering it would report the
+    /// same number twice under two meanings.
+    #[test]
+    fn update_takes_no_other_arguments() {
         assert!(Cli::try_parse_from(["dray", "update", "--version"]).is_err());
+        assert!(Cli::try_parse_from(["dray", "update", "cli-v0.1.0"]).is_err());
+    }
+
+    /// The comparison is a string one against a git tag, so the shape is the
+    /// whole contract: `cli-v0.2.0` is what the release workflow pushes and
+    /// what the installer resolves out of the releases API.
+    #[test]
+    fn the_current_tag_is_shaped_like_a_release_tag() {
+        let tag = current_tag();
+        assert_eq!(tag, format!("cli-v{}", env!("CARGO_PKG_VERSION")));
+        assert!(tag.starts_with("cli-v"));
+        assert!(tag[5..].starts_with(|c: char| c.is_ascii_digit()));
     }
 
     #[test]
