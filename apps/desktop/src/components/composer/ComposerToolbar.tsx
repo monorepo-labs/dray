@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
+import HarnessSelector from "@/components/composer/HarnessSelector";
 import ModelSelector from "@/components/composer/ModelSelector";
 import PermissionSelector from "@/components/composer/PermissionSelector";
 import ProjectSelector from "@/components/composer/ProjectSelector";
@@ -14,12 +15,17 @@ import type {
   ApprovalPolicy,
   BranchList,
   Effort,
+  Harness,
   Model,
   ModelId,
   Project,
 } from "@/types/events";
 
 export type ComposerToolbarProps = {
+  /// Creation-time only, like project and branch: it decides which child runs.
+  harness: Harness;
+  onHarnessChange: (harness: Harness) => void;
+
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
@@ -66,6 +72,8 @@ export type ComposerToolbarProps = {
 /// header already shows the project and branch. Its own spacing from the card is
 /// the caller's, since only the caller knows which side of it the row sits on.
 export default function ComposerToolbar({
+  harness,
+  onHarnessChange,
   models,
   modelId,
   effort,
@@ -114,6 +122,10 @@ export default function ComposerToolbar({
           </KbdGroup>
         </TooltipContent>
       </Tooltip>
+
+      {isNewSession && (
+        <HarnessSelector value={harness} onChange={onHarnessChange} />
+      )}
 
       <ModelSelector
         models={models}

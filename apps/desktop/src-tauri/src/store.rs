@@ -886,6 +886,23 @@ pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<S
     Ok(Some(updated))
 }
 
+/// Records the id the harness knows this session by.
+///
+/// Written once, when `thread/start` answers. A session whose entry has gone —
+/// deleted while its child was starting — answers `Ok` rather than erroring:
+/// there is nothing to record it on and nothing has gone wrong.
+pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(());
+    };
+
+    item.thread_id = Some(thread_id.to_string());
+    write_session_index(&sessions).await
+}
+
 /// Caller must hold `INDEX_LOCK`: this rewrites the whole file, so a concurrent
 /// writer would drop the other's entry.
 async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {

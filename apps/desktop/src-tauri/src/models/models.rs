@@ -4,6 +4,7 @@
 //! latest Opus, so pinning a dated id here would silently freeze sessions to an
 //! old model as new ones ship.
 
+use crate::harness::Harness;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -57,6 +58,15 @@ pub enum ModelId {
     Sonnet,
     Fable,
     Haiku,
+    // Codex's. Read from a live `model/list` rather than the docs, and named
+    // in full because Codex has no moving aliases the way `opus` is one —
+    // pinning a session to `gpt-5.6-sol` is what its author meant.
+    Gpt56Sol,
+    Gpt56Terra,
+    Gpt56Luna,
+    Gpt55,
+    Gpt54,
+    Gpt54Mini,
     #[serde(other)]
     Unknown,
 }
@@ -76,6 +86,12 @@ impl ModelId {
             ModelId::Sonnet => Some("sonnet"),
             ModelId::Fable => Some("fable"),
             ModelId::Haiku => Some("haiku"),
+            ModelId::Gpt56Sol => Some("gpt-5.6-sol"),
+            ModelId::Gpt56Terra => Some("gpt-5.6-terra"),
+            ModelId::Gpt56Luna => Some("gpt-5.6-luna"),
+            ModelId::Gpt55 => Some("gpt-5.5"),
+            ModelId::Gpt54 => Some("gpt-5.4"),
+            ModelId::Gpt54Mini => Some("gpt-5.4-mini"),
             ModelId::Unknown => None,
         }
     }
@@ -90,6 +106,12 @@ impl ModelId {
             "sonnet" => Some(ModelId::Sonnet),
             "fable" => Some(ModelId::Fable),
             "haiku" => Some(ModelId::Haiku),
+            "gpt-5.6-sol" => Some(ModelId::Gpt56Sol),
+            "gpt-5.6-terra" => Some(ModelId::Gpt56Terra),
+            "gpt-5.6-luna" => Some(ModelId::Gpt56Luna),
+            "gpt-5.5" => Some(ModelId::Gpt55),
+            "gpt-5.4" => Some(ModelId::Gpt54),
+            "gpt-5.4-mini" => Some(ModelId::Gpt54Mini),
             _ => None,
         }
     }
@@ -106,6 +128,19 @@ impl ModelId {
 /// default, which is `High` for every model that has levels.
 pub fn default_model() -> ModelId {
     ModelId::Opus
+}
+
+/// The model a session starts on when nobody picked one.
+///
+/// Per-harness because a harness cannot run the other's models at all — handing
+/// Codex `opus` fails the spawn rather than falling back. Both are the strong
+/// one deliberately: this is the default for a session nobody is sitting in
+/// front of, where a weak model costs work redone by hand.
+pub fn default_model_for(harness: Harness) -> ModelId {
+    match harness {
+        Harness::ClaudeCode => ModelId::Opus,
+        Harness::Codex => ModelId::Gpt56Sol,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -154,11 +189,78 @@ pub fn claude_models() -> Vec<Model> {
     ]
 }
 
+/// The models a harness can actually run.
+///
+/// Static rather than read from `model/list`, which app-server does answer:
+/// the picker has to be built before a session exists, and there is no child to
+/// ask until one does. Worth revisiting once a spare connection is cheap.
+///
+/// `ultra` is deliberately absent from every effort list — Codex offers it on
+/// the 5.6 models and Dray's [`Effort`] has no such level. Adding one is a
+/// change to a persisted enum, so it waits for a reason beyond completeness.
+pub fn codex_models() -> Vec<Model> {
+    use Effort::*;
+
+    vec![
+        Model {
+            id: ModelId::Gpt56Sol,
+            label: "GPT-5.6-Sol".into(),
+            efforts: vec![Low, Medium, High, Xhigh, Max],
+            default_effort: Some(High),
+        },
+        Model {
+            id: ModelId::Gpt56Terra,
+            label: "GPT-5.6-Terra".into(),
+            efforts: vec![Low, Medium, High, Xhigh, Max],
+            default_effort: Some(Medium),
+        },
+        Model {
+            id: ModelId::Gpt56Luna,
+            label: "GPT-5.6-Luna".into(),
+            efforts: vec![Low, Medium, High, Xhigh, Max],
+            default_effort: Some(Medium),
+        },
+        Model {
+            id: ModelId::Gpt55,
+            label: "GPT-5.5".into(),
+            efforts: vec![Low, Medium, High, Xhigh],
+            default_effort: Some(Medium),
+        },
+        Model {
+            id: ModelId::Gpt54,
+            label: "GPT-5.4".into(),
+            efforts: vec![Low, Medium, High, Xhigh],
+            default_effort: Some(Medium),
+        },
+        Model {
+            id: ModelId::Gpt54Mini,
+            label: "GPT-5.4-Mini".into(),
+            efforts: vec![Low, Medium, High, Xhigh],
+            default_effort: Some(Medium),
+        },
+    ]
+}
+
+/// Every model this build lists, whichever harness runs it.
+pub fn models_for(harness: Harness) -> Vec<Model> {
+    match harness {
+        Harness::ClaudeCode => claude_models(),
+        Harness::Codex => codex_models(),
+    }
+}
+
 /// `None` for anything this build doesn't list, including `Unknown` read back
 /// from an older index entry — so it fails loudly at the spawn rather than
 /// silently running a different model.
+///
+/// Searches both harnesses because a model id names exactly one of them: the
+/// aliases do not overlap, so there is nothing for a harness argument to
+/// disambiguate and asking for one would only let a caller pass the wrong one.
 pub fn find_model(id: ModelId) -> Option<Model> {
-    claude_models().into_iter().find(|m| m.id == id)
+    claude_models()
+        .into_iter()
+        .chain(codex_models())
+        .find(|m| m.id == id)
 }
 
 /// The effort actually sent for `(model, requested)`. `None` means omit the

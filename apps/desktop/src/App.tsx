@@ -73,6 +73,8 @@ function App() {
     showArchived,
     setShowArchived,
     models,
+    harness,
+    setHarness,
     modelId,
     effort,
     permissionMode,
@@ -925,6 +927,8 @@ function App() {
           }
           toolbar={
             <ComposerToolbar
+              harness={harness}
+              onHarnessChange={setHarness}
               models={models}
               modelId={modelId}
               effort={effort}

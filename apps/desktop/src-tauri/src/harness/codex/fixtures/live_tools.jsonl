@@ -1,9 +1,0 @@
-{"type":"thread.started","thread_id":"019fa86d-ac65-76b3-996b-c79e0be849f0"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create `notes.txt`, list the directory, and verify the file’s contents."}}
-{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/tmp/codexprobe/notes.txt","kind":"add"}],"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/tmp/codexprobe/notes.txt","kind":"add"}],"status":"completed"}}
-{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"ls && command sed -n '1p' notes.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"ls && command sed -n '1p' notes.txt\"","aggregated_output":"notes.txt\nhello\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Created `notes.txt` containing `hello`, then ran `ls`. The directory contains:\n\n```text\nnotes.txt\n```"}}
-{"type":"turn.completed","usage":{"input_tokens":53923,"cached_input_tokens":47360,"output_tokens":136,"reasoning_output_tokens":0}}

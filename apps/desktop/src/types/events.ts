@@ -671,7 +671,7 @@ efforts: Array<Effort>, defaultEffort: Effort | null, };
  * model beats failing the whole index read and emptying the sidebar. It maps
  * to no alias, so [`find_model`] rejects it and it can't reach a spawn.
  */
-export type ModelId = "opus" | "sonnet" | "fable" | "haiku" | "unknown";
+export type ModelId = "opus" | "sonnet" | "fable" | "haiku" | "gpt56_sol" | "gpt56_terra" | "gpt56_luna" | "gpt55" | "gpt54" | "gpt54_mini" | "unknown";
 
 /**
  * What one model has consumed **for the session so far** — cumulative and

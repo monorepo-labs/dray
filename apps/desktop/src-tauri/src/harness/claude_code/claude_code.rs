@@ -41,30 +41,6 @@ const APPEND_SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 /// reports success for a pattern that matches nothing.
 const ALLOWED_TOOLS: &str = "Bash(dray:*)";
 
-/// The child's `PATH`: the inherited one with the user-bin directories put
-/// back.
-///
-/// Load-bearing rather than defensive. A bundled `.app` launched from Finder
-/// inherits launchd's `PATH` — `/usr/bin:/bin:/usr/sbin:/sbin` — so a `dray`
-/// installed to `~/.local/bin` is simply not there for the agent, and the
-/// failure reads as "the CLI is broken" rather than "the CLI is unreachable".
-/// Appended, not prepended: the user's own `PATH` should still win where the
-/// two name the same binary.
-fn agent_path() -> String {
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs: Vec<_> = std::env::split_paths(&inherited).collect();
-
-    for dir in crate::binpath::known_dirs() {
-        if !dirs.contains(&dir) {
-            dirs.push(dir);
-        }
-    }
-
-    std::env::join_paths(dirs)
-        .map(|joined| joined.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
-}
-
 /// Takes a resolved [`Model`] rather than an id: there's no way to build one
 /// outside `models`, so an unknown model can't reach the spawn and this doesn't
 /// re-validate what the caller already checked.
@@ -166,7 +142,7 @@ pub async fn init(
         // How the CLI knows which session is calling it, which is what links a
         // spawned session to its parent and what the depth cap reads.
         .env("DRAY_SESSION_ID", session_id)
-        .env("PATH", agent_path())
+        .env("PATH", crate::harness::agent_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -242,7 +218,7 @@ pub async fn init(
     Ok(Session {
         id: session_id.to_string(),
         child,
-        stdin,
+        stdin: crate::session::Transport::Lines(stdin),
         harness: ClaudeCode,
         model: model.id,
         effort,
@@ -289,7 +265,7 @@ async fn read_stdout(
         queued: &queued,
         flush_seq: &flush_seq,
         flush_events: &flush_events,
-        flush_stdin: &flush_stdin,
+        flush_transport: &crate::session::Transport::Lines(flush_stdin.clone()),
     };
 
     while let Some(line) = lines.next_line().await? {

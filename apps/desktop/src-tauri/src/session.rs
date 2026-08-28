@@ -983,6 +983,41 @@ impl SessionManager {
     }
 }
 
+/// How a session writes to its child.
+///
+/// The two harnesses do not merely encode differently — they have different
+/// shapes. Claude Code takes newline-delimited JSON and its reader shares the
+/// pipe, because an unanswerable `control_request` has to be refused from where
+/// it is read. `codex app-server` is a JSON-RPC peer, so every write goes
+/// through one queue and a send has an answer worth waiting for.
+///
+/// An enum rather than two fields with one always `None`: a session has exactly
+/// one way to write, and the compiler should say so.
+#[derive(Clone, Debug)]
+pub enum Transport {
+    Lines(Arc<Mutex<ChildStdin>>),
+    /// The thread id rides along because it is what every Codex write is
+    /// addressed to, and it is minted by the server rather than by us.
+    Rpc {
+        client: crate::harness::codex::rpc::RpcClient,
+        thread_id: String,
+    },
+}
+
+impl Transport {
+    /// The line-writing pipe, for the paths that only Claude Code has.
+    ///
+    /// An error rather than a silent no-op: reaching one of those with a Codex
+    /// session is a wiring mistake, and a control that quietly does nothing is
+    /// the failure mode `control.rs` exists to warn about.
+    pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
+        match self {
+            Transport::Lines(stdin) => Ok(stdin),
+            Transport::Rpc { .. } => bail!("this control is not wired for Codex yet"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Session {
     pub id: String,
@@ -990,7 +1025,7 @@ pub struct Session {
     /// Shared with the stdout task, which has to write back on its own: an
     /// unanswerable `control_request` must be refused from where it is read,
     /// since the CLI blocks its turn until something replies.
-    pub stdin: Arc<Mutex<ChildStdin>>,
+    pub stdin: Transport,
     pub harness: Harness,
     pub model: ModelId,
     pub effort: Option<Effort>,
@@ -1025,22 +1060,48 @@ impl Session {
         fork_from: Option<&str>,
         app: &AppHandle,
     ) -> Result<Session> {
-        if let Harness::ClaudeCode = harness {
-            claude_code::init(
-                session_id,
-                model,
-                effort,
-                permission_mode,
-                cwd,
-                session_cwd,
-                worktree_name,
-                is_new_session,
-                fork_from,
-                app,
-            )
-            .await
-        } else {
-            bail!("unsupported harness {harness:?}")
+        match harness {
+            Harness::ClaudeCode => {
+                claude_code::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    worktree_name,
+                    is_new_session,
+                    fork_from,
+                    app,
+                )
+                .await
+            }
+            Harness::Codex => {
+                // Neither is wired yet, and both fail closed rather than
+                // quietly doing something narrower. A worktree here would need
+                // `create_worktree` — Codex has no `-w` — and a fork needs
+                // `thread/fork`; a session that silently ran in the wrong tree,
+                // or that forked into the parent's own conversation, is the
+                // failure worth refusing outright.
+                if worktree_name.is_some() {
+                    bail!("Codex sessions cannot use a worktree yet");
+                }
+                if fork_from.is_some() {
+                    bail!("Codex sessions cannot be forked yet");
+                }
+
+                crate::harness::codex::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
         }
     }
 
@@ -1152,7 +1213,7 @@ impl Session {
         let model_arg = model.id.as_arg().context("model has no CLI alias")?;
 
         write_line(
-            &self.stdin,
+            self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetModel { model: model_arg }),
         )
         .await?;
@@ -1168,7 +1229,14 @@ impl Session {
     /// usually opens a follow-up turn to narrate the abort — so the status
     /// machine needs nothing special here, the resulting events drive it.
     pub async fn interrupt(&mut self) -> Result<()> {
-        write_line(&self.stdin, &ControlLine::new(ControlRequest::Interrupt)).await?;
+        // Codex answers the ack immediately and ends the turn with its own
+        // `turn/completed` carrying `interrupted`, so the reader is what
+        // reports the stop — nothing waits here for the turn to actually end.
+        if let Transport::Rpc { client, thread_id } = &self.stdin {
+            return crate::harness::codex::interrupt_turn(client, thread_id).await;
+        }
+
+        write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
 
         Ok(())
     }
@@ -1194,7 +1262,7 @@ impl Session {
     /// harness deliberately keeps quiet.
     pub async fn stop_task(&mut self, task_id: &str) -> Result<()> {
         write_line(
-            &self.stdin,
+            self.stdin.lines()?,
             &ControlLine::new(ControlRequest::StopTask { task_id }),
         )
         .await?;
@@ -1206,7 +1274,7 @@ impl Session {
     /// does have a `set_permission_mode` subtype, so this needs no respawn.
     pub async fn set_permission_mode(&mut self, mode: ApprovalPolicy) -> Result<()> {
         write_line(
-            &self.stdin,
+            self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetPermissionMode {
                 mode: mode.as_arg(),
             }),
@@ -1253,7 +1321,7 @@ impl Session {
         };
 
         write_line(
-            &self.stdin,
+            self.stdin.lines()?,
             &decision_response(request_id, &pending, &chosen),
         )
         .await?;
@@ -1314,7 +1382,7 @@ impl Session {
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
 
-        write_line(&self.stdin, &answer_response(request_id, &pending, &answers)).await?;
+        write_line(self.stdin.lines()?, &answer_response(request_id, &pending, &answers)).await?;
 
         let payload = AgentEventPayload::PermissionDecided {
             request_id: request_id.to_string(),
@@ -1392,7 +1460,7 @@ async fn deliver_prompt(
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
-    stdin: &Arc<Mutex<ChildStdin>>,
+    transport: &Transport,
     app: &AppHandle,
 ) -> Result<()> {
     let seq = seq.fetch_add(1, Relaxed);
@@ -1440,6 +1508,14 @@ async fn deliver_prompt(
 
     append_session_event(session_id, agent_event).await?;
 
+    // Codex takes a prompt as a request that opens a turn, so the write is the
+    // send rather than a line the child picks up on its own schedule. Images
+    // ride a different shape there and are not wired yet; the text still goes.
+    if let Transport::Rpc { client, thread_id } = transport {
+        return crate::harness::codex::start_turn(client, thread_id, &text).await;
+    }
+    let stdin = transport.lines()?;
+
     // A bare string is the whole content when nothing is attached — the
     // shape every fixture captures, kept rather than always sending the
     // one-element block array it is sugar for.
@@ -1483,7 +1559,7 @@ pub struct Ingest<'a> {
     pub queued: &'a QueuedMessages,
     pub flush_seq: &'a Arc<AtomicU64>,
     pub flush_events: &'a Arc<Mutex<Vec<AgentEvent>>>,
-    pub flush_stdin: &'a Arc<Mutex<ChildStdin>>,
+    pub flush_transport: &'a Transport,
 }
 
 /// Everything that happens to a mapped event, from the snapshot on a closing
@@ -1620,7 +1696,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
             ctx.queued,
             ctx.flush_seq,
             ctx.flush_events,
-            ctx.flush_stdin,
+            ctx.flush_transport,
             ctx.status,
             app,
         )
@@ -1649,7 +1725,7 @@ pub async fn flush_queued(
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
-    stdin: &Arc<Mutex<ChildStdin>>,
+    transport: &Transport,
     status: &Arc<Mutex<StatusTracker>>,
     app: &AppHandle,
 ) {
@@ -1679,7 +1755,7 @@ pub async fn flush_queued(
             message.from,
             seq,
             events,
-            stdin,
+            transport,
             app,
         )
         .await

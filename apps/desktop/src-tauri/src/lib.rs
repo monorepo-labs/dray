@@ -101,8 +101,10 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 }
 
 #[tauri::command]
-fn list_models() -> Vec<Model> {
-    models::claude_models()
+fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+    // Defaulted rather than required so a caller that predates the second
+    // harness still gets the list it always got.
+    models::models_for(harness.unwrap_or(harness::Harness::ClaudeCode))
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the

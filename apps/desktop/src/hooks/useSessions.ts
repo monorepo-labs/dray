@@ -13,7 +13,7 @@ import {
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 // Only for a session indexed before the model was recorded, which reads back as
 // "unknown". Everything else seeds from the user's stored prefs.
@@ -77,6 +77,7 @@ export function useSessions() {
     const [models, setModels] = useState<Model[]>([]);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
+    const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
     const [modelId, setModelId] = useState<ModelId>(() => prefs.modelId);
     const [effortByModel, setEffortByModel] = useState<EffortByModel>(() => prefs.effortByModel);
     const [permissionMode, setPermissionModeState] = useState<ApprovalPolicy>(() => prefs.permissionMode);
@@ -149,6 +150,14 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
     return;
   }
   setPrefs({ modelId: nextModelId });
+};
+
+// Wrapped like the rest: which agent you work in is a preference, not a
+// per-session accident. The model that comes with it is repaired by the effect
+// that fetches the new list, not guessed at here.
+const setHarness = (next: Harness) => {
+  setHarnessState(next);
+  setPrefs({ harness: next });
 };
 
 // Wrapped rather than exported raw: picking a mode is a preference, and the
@@ -295,7 +304,7 @@ const handleSendMsg = async (
       sessionId,
       prompt: message,
       attachmentPaths,
-      harness: "claude_code",
+      harness,
       model: modelId,
       effort,
       permissionMode,
@@ -471,6 +480,7 @@ const handleAnswerQuestions = async (
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
+  setHarnessState(prefs.harness);
   setModelId(prefs.modelId);
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
@@ -490,6 +500,9 @@ const handleNewSession = () => {
 // Project, branch, and the worktree flag aren't restored — the composer hides
 // all three once a session exists, and they'd only mislead the next new chat.
 const restoreSessionControls = (item: SessionIndexItem) => {
+  // The raw setter, like the rest of this function: a session's harness is the
+  // session's, and clicking through old ones must not rewrite the default.
+  setHarnessState(item.harness);
   // Sessions indexed before the model was recorded read back as "unknown".
   const restored = item.model === "unknown" ? DEFAULT_MODEL : item.model;
   setModelId(restored);
@@ -792,8 +805,14 @@ useEffect(() => {
 }, [showArchived])
 
 useEffect(() => {
-  invoke<Model[]>("list_models").then(setModels);
-}, [])
+  invoke<Model[]>("list_models", { harness }).then((list) => {
+    setModels(list);
+    // A model belongs to exactly one harness, so switching harness leaves the
+    // pick naming something the new one cannot run. Repaired here, where the
+    // real list has just landed, rather than guessed at when the toggle moved.
+    setModelId((current) => (list.some((m) => m.id === current) ? current : list[0]?.id ?? current));
+  });
+}, [harness])
 
 useEffect(() => {
   invoke<Project[]>("list_projects")
@@ -1440,6 +1459,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }
