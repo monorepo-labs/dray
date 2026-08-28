@@ -106,11 +106,10 @@ export default function SessionHeader({
               {branch}
             </button>
           </TooltipTrigger>
-          {/* The path, because it is the thing being copied and the one thing
-              here that is not already on screen. */}
-          <TooltipContent className="max-w-sm break-all">
-            {copied ? "Copied" : cwd}
-          </TooltipContent>
+          {/* What the click does, not the path itself: a branch name says
+              nothing about being a button, and a long path drawn on every
+              hover buries that. The path is on the clipboard a click later. */}
+          <TooltipContent>{copied ? "Copied" : "Click to copy the working directory"}</TooltipContent>
         </Tooltip>
       )}
     </div>
