@@ -6,8 +6,8 @@
 use crate::{
     events::{
         now_rfc3339, rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef,
-        BlockType, ContextWindow, DeltaEvent, ImageRef, ModelUsage, Question, QuestionOption,
-        SessionInfo,
+        BlockType, ContextWindow, DeltaEvent, ImageRef, ModelUsage, PermissionBehavior, Question,
+        QuestionOption, SessionInfo,
         Settings, Subagent, ToolResult, ToolType, TurnStatus, Usage,
     },
     harness::{
@@ -202,6 +202,43 @@ impl Mapper {
             // set_model, set_permission_mode. Nothing correlates ids yet.
             ClaudeCodeEvent::ControlResponse { .. } => Ok(None),
 
+            // The CLI has withdrawn a question, so the card has to go. No reply
+            // is written: the request is gone on its side, which is what makes
+            // the card's buttons dead rather than merely stale.
+            //
+            // Answering with `PermissionDecided` rather than a payload of its
+            // own because retiring a card is the one thing the frontend already
+            // knows how to do — a second route would be a second thing to keep
+            // in step with the rail and the notice.
+            ClaudeCodeEvent::ControlCancelRequest { request_id } => {
+                let Some(pending) = self
+                    .pending_permissions
+                    .lock()
+                    .expect("pending permissions mutex poisoned")
+                    .remove(&request_id)
+                else {
+                    // Already answered, or asked before this process started.
+                    // Ordinary either way: the race with the user pressing a
+                    // button is real and both orders end with no card.
+                    return Ok(None);
+                };
+
+                let session_id = self.session_id.clone().unwrap_or_default();
+                let payload = AgentEventPayload::PermissionDecided {
+                    request_id,
+                    tool_use_id: pending.tool_use_id,
+                    behavior: PermissionBehavior::Deny,
+                    label: "Withdrawn".to_string(),
+                    automatic: true,
+                };
+
+                Ok(Some(self.build(session_id, None, None, payload)))
+            }
+
+            // A liveness ping for a long-running call. The tool row already
+            // shimmers for exactly as long, so there is nothing to draw.
+            ClaudeCodeEvent::ToolProgress { .. } => Ok(None),
+
             ClaudeCodeEvent::ControlRequest {
                 request_id,
                 request,
@@ -369,6 +406,22 @@ impl Mapper {
             SystemEvent::Status { status, .. } if status.as_deref() == Some("requesting") => {
                 Ok(Some(AgentEventPayload::ModelRequestStarted))
             }
+            SystemEvent::ApiRetry {
+                attempt,
+                max_retries,
+                error_status,
+                error,
+                ..
+            } => Ok(Some(AgentEventPayload::ApiRetry {
+                attempt,
+                max_retries,
+                status: error_status,
+                // `unknown` is the harness saying it has no cause, not a cause
+                // named "unknown", and it is the majority of these lines.
+                // Dropped here so every consumer sees one absence rather than
+                // two spellings of it.
+                reason: error.filter(|e| e != "unknown"),
+            })),
             SystemEvent::CompactBoundary {
                 compact_metadata, ..
             } => {
@@ -1040,7 +1093,8 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::BackgroundTasksChanged { session_id, .. }
         | SystemEvent::ThinkingTokens { session_id, .. }
         | SystemEvent::PermissionDenied { session_id, .. }
-        | SystemEvent::CompactBoundary { session_id, .. } => session_id,
+        | SystemEvent::CompactBoundary { session_id, .. }
+        | SystemEvent::ApiRetry { session_id, .. } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -2118,4 +2172,108 @@ mod tests {
         // Not a session terminator: one result arrives per completed turn.
         assert_eq!(turns, 2);
     }
+
+    /// Both lines are verbatim captures from `~/.dray/parse_failures.jsonl`,
+    /// where they were the second-largest group. Kept exact so the field names
+    /// are pinned against the wire rather than against this test's idea of it.
+    #[test]
+    fn an_api_retry_carries_its_attempt_and_drops_an_unnamed_cause() {
+        let mut mapper = Mapper::default();
+
+        let unnamed = r#"{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":543,"error_status":null,"error":"unknown","session_id":"s","uuid":"u"}"#;
+        let named = r#"{"type":"system","subtype":"api_retry","attempt":7,"max_retries":10,"retry_delay_ms":8000,"error_status":529,"error":"overloaded","session_id":"s","uuid":"u2"}"#;
+
+        let events = map_fixture(&mut mapper, &format!("{unnamed}\n{named}"));
+        let payloads: Vec<_> = events.iter().map(|e| &e.payload).collect();
+
+        // `unknown` is the harness saying it has no cause, and it is the
+        // majority of these lines — carrying it through would put the word
+        // "unknown" on screen for most retries.
+        assert!(matches!(
+            payloads[0],
+            AgentEventPayload::ApiRetry {
+                attempt: 1,
+                max_retries: 10,
+                status: None,
+                reason: None,
+            }
+        ));
+
+        let AgentEventPayload::ApiRetry {
+            attempt,
+            max_retries,
+            status,
+            reason,
+        } = payloads[1]
+        else {
+            panic!("expected a retry");
+        };
+        assert_eq!((*attempt, *max_retries), (7, 10));
+        assert_eq!(*status, Some(529));
+        assert_eq!(reason.as_deref(), Some("overloaded"));
+    }
+
+    /// The whole of the fix: a withdrawn request has to leave the registry, or
+    /// the card stays up answering a request the CLI no longer holds.
+    #[test]
+    fn a_cancel_retires_the_request_it_names() {
+        let pending = PendingPermissions::default();
+        let mut mapper = Mapper::new(Arc::new(AtomicU64::new(0)), Arc::clone(&pending));
+
+        map_fixture(&mut mapper, include_str!("fixtures/permission_allow.jsonl"));
+
+        let request_id = pending
+            .lock()
+            .unwrap()
+            .keys()
+            .next()
+            .expect("the fixture asks once")
+            .clone();
+
+        let cancel = format!(r#"{{"type":"control_cancel_request","request_id":"{request_id}"}}"#);
+        let events = map_fixture(&mut mapper, &cancel);
+
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "the entry has to go, or the buttons answer nothing"
+        );
+
+        let [event] = &events[..] else {
+            panic!("expected one decision");
+        };
+        assert!(matches!(
+            &event.payload,
+            AgentEventPayload::PermissionDecided {
+                behavior: PermissionBehavior::Deny,
+                automatic: true,
+                ..
+            }
+        ));
+    }
+
+    /// The race with the user pressing a button is real, and both orders end
+    /// with no card — so an unknown id is ordinary, not an error.
+    #[test]
+    fn a_cancel_for_an_unknown_request_says_nothing() {
+        let mut mapper = Mapper::default();
+        let cancel =
+            r#"{"type":"control_cancel_request","request_id":"7c504efe-e476-4519-b3cc-fd5f0a1b6f7d"}"#;
+
+        assert!(map_fixture(&mut mapper, cancel).is_empty());
+    }
+
+    /// Modelled to keep it out of the failure log, not to draw anything — the
+    /// tool row already shimmers for exactly as long as the call is pending.
+    #[test]
+    fn a_tool_progress_heartbeat_parses_and_draws_nothing() {
+        let mut mapper = Mapper::default();
+        let line = r#"{"type":"tool_progress","tool_use_id":"toolu_01-heartbeat-4","tool_name":"Bash","parent_tool_use_id":"toolu_01","elapsed_time_seconds":150,"heartbeat":true,"session_id":"s","uuid":"u"}"#;
+
+        assert!(
+            parser::parse_line(line).is_ok(),
+            "a parse failure here is what filled a third of the log"
+        );
+        assert!(map_fixture(&mut mapper, line).is_empty());
+    }
 }
+

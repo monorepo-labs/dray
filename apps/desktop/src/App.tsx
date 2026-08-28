@@ -86,6 +86,7 @@ function App() {
     liveTaskIds,
     tasksBySession,
     compacting,
+    apiRetry,
     working,
     contextUsage,
     error,
@@ -987,6 +988,7 @@ function App() {
         backgroundTaskCount={backgroundTasks.length}
         liveTaskIds={liveTaskIds}
         compacting={compacting}
+        apiRetry={apiRetry}
         queuedMessages={queuedMessages}
         working={working}
         crowded={!collapsed && (panelShown || (issuesOpen && !!pickedIssue))}
