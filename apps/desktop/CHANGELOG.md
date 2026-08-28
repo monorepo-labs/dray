@@ -5,6 +5,24 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.8.1
+
+### Fixed
+
+- **A background task no longer holds the turn open.** A dev server, a
+  `Bash(run_in_background)` or a `Monitor` never ends on its own, so the
+  session sat working — Stop armed, the indicator spinning, no completion
+  notice — until you clicked Stop yourself. The turn now ends with the
+  agent's own reply, and a background subagent reporting back later opens
+  its own turn, which is what the hold was there for.
+- **A tool call caught by a child exiting no longer shimmers forever.** The
+  CLI cannot announce its own death, so the last task set stood until
+  something else replaced it.
+- **Badge images in a pull request comment sit on their line.** A severity
+  badge inside a heading dropped the title to the badge's bottom edge and
+  padded the line out. A paragraph holding nothing but an image keeps its
+  own spacing.
+
 ## 0.8.0
 
 ### Added
