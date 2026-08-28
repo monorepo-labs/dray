@@ -1,8 +1,8 @@
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
 use crate::harness::{claude_code, Harness::ClaudeCode};
 use crate::models::{Effort, Model};
-use crate::session::{flush_queued, publish_status, QueuedMessages, Session, StatusTracker};
-use crate::store::{self, append_session_event, next_seq_by_session_id};
+use crate::session::{QueuedMessages, Session, StatusTracker};
+use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
@@ -278,6 +278,20 @@ async fn read_stdout(
     // id, the seq counter), so it must outlive the loop body.
     let mut mapper = claude_code::mapper::Mapper::new(stdout_seq, pending_permissions);
 
+    // Everything past the mapper is Dray's, not Claude's, and lives in
+    // `session` so a second harness cannot grow its own persistence rules.
+    let ingest = crate::session::Ingest {
+        session_id,
+        harness: ClaudeCode,
+        session_cwd,
+        events: &events,
+        status: &status,
+        queued: &queued,
+        flush_seq: &flush_seq,
+        flush_events: &flush_events,
+        flush_stdin: &flush_stdin,
+    };
+
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
@@ -319,7 +333,7 @@ async fn read_stdout(
             record_failure(session_id, "unknown_subtype", "unmodeled system subtype", &line).await;
         }
 
-        let mut agent_event = match mapper.map(claude_event) {
+        let agent_event = match mapper.map(claude_event) {
             Ok(Some(ev)) => ev,
             Ok(None) => continue,
             Err(err) => {
@@ -328,135 +342,7 @@ async fn read_stdout(
             }
         };
 
-        // Filled here rather than in the mapper because only the session layer
-        // knows the cwd. Freezing the tree id onto the closing event is what
-        // stops an idle session's diff from absorbing everything that later
-        // touches the same checkout. ~20ms once per turn; a background
-        // subagent's writes land after this, but its report-back turn closes
-        // with its own, fresher snapshot.
-        if let AgentEventPayload::TurnCompleted { ref mut head, .. } = agent_event.payload {
-            *head = crate::git::snapshot_tree(session_cwd).await;
-        }
-
-        // Here for the same reason: only the session layer knows which session's
-        // directory the bytes belong in. Before the emit below, so the live
-        // transcript and the replayed one load the same file.
-        if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
-            crate::attachments::archive_result_images(session_id, &mut result.images).await;
-        }
-
-        // Read before the event is moved into the log below. These three are
-        // the turn's boundaries in the sense that matters here: each is a point
-        // where handing the CLI a held prompt costs nothing. A tool starting or
-        // finishing means the next tool result — where the CLI injects a
-        // buffered prompt — is still ahead, and a turn ending means there is no
-        // result left to absorb one, so the prompt opens the next turn instead.
-        //
-        // A subagent's call counts here and deliberately does not in
-        // `note_tool_call` below, because the two ask different questions.
-        // That one asks whether a main-thread result is close enough ahead to
-        // write straight through; this asks only whether handing over now is
-        // safe, and it is at any point inside a turn — a prompt written early
-        // waits in the CLI's own buffer for the same main-thread result it
-        // would have waited here for.
-        let at_boundary = matches!(
-            agent_event.payload,
-            AgentEventPayload::ToolCallStarted { .. }
-                | AgentEventPayload::ToolCallCompleted { .. }
-                | AgentEventPayload::TurnCompleted { .. }
-        );
-
-        if let Err(err) = app.emit("agent_event", &agent_event) {
-            eprintln!("[claude emit err] {err}");
-        }
-
-        // One lock for both. The tool count is fed here rather than from inside
-        // `on_event` because the subagent test needs the envelope: a subagent's
-        // tool call runs on its own thread, and its result is not a point where
-        // the CLI injects a queued prompt.
-        let next_status = {
-            let mut tracker = status.lock().await;
-            if agent_event.subagent.is_none() {
-                tracker.note_tool_call(&agent_event.payload);
-            }
-            tracker.on_event(&agent_event.payload)
-        };
-        if let Some(next) = next_status {
-            publish_status(session_id, next, app).await;
-        }
-
-        // Live-view only, never retained. Deltas are superseded by the
-        // committed event; a usage update is a running counter whose final
-        // value lands on `turn_completed` — and `thinking_tokens` alone fires
-        // dozens of times per turn, which would be most of a session's log.
-        //
-        // A permission request is here for a different reason: it is a question,
-        // and it can only be answered by the child that asked. That child does
-        // not survive a restart, so a persisted request would come back as a
-        // card whose buttons cannot work. Dropping it is what makes the stale
-        // card impossible rather than merely unlikely. Nothing is lost — the
-        // tool call it belongs to is persisted and shows the outcome either way,
-        // and a live card survives re-selection because the frontend keeps a
-        // loaded session in memory rather than re-reading it.
-        //
-        // Questions are dropped on the same reasoning, and the "nothing is lost"
-        // half holds harder there: the `AskUserQuestion` result the harness
-        // writes carries both the questions and the answers, so the transcript
-        // keeps the whole exchange without this line.
-        if matches!(
-            agent_event.payload,
-            AgentEventPayload::Delta(_)
-                | AgentEventPayload::UsageUpdate(_)
-                // Transient by the same rule: it says a request is in flight,
-                // and no request survives the process that made it. Persisting
-                // it would also be most of a busy session's log — it fires once
-                // per turn *and* once per tool result, 89 times in one capture.
-                | AgentEventPayload::ModelRequestStarted
-                | AgentEventPayload::PermissionRequested { .. }
-                | AgentEventPayload::QuestionsAsked { .. }
-                // The decision retiring a withdrawn card. Dropped for the same
-                // reason as the request it retires, and to keep one rule: the
-                // decision `Session::respond_permission` mints is emitted and
-                // never written, so persisting this one would make "was it
-                // answered" true of cancels and false of real answers.
-                | AgentEventPayload::PermissionDecided { .. }
-        ) {
-            continue;
-        }
-
-        // The data: URL a failed archive leaves behind must not reach the
-        // retained copies: it is the whole image as base64, in a log read whole
-        // on every open — the exact cost archiving exists to avoid. Stripped
-        // here rather than in the archiver because the emit above must keep it:
-        // the live transcript draws the picture either way, and only a reload
-        // pays for the failure by showing the row without it.
-        if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
-            for image in &mut result.images {
-                image.url = None;
-            }
-        }
-
-        events.lock().await.push(agent_event.clone());
-
-        if let Err(err) = append_session_event(session_id, agent_event).await {
-            eprintln!("[claude write err] {err}");
-        }
-
-        // After the boundary event is logged, so the prompt that follows it
-        // lands behind it in the file as well as by `seq`. Cheap when the queue
-        // is empty, which is nearly always.
-        if at_boundary {
-            flush_queued(
-                session_id,
-                &queued,
-                &flush_seq,
-                &flush_events,
-                &flush_stdin,
-                &status,
-                app,
-            )
-            .await;
-        }
+        crate::session::ingest(&ingest, agent_event, app).await;
     }
 
     // The child is gone and its tasks went with it. The CLI republishes the set

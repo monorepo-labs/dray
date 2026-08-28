@@ -18,6 +18,16 @@ use tokio::process::Command;
 
 static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static GH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// The `codex` shipped inside the ChatGPT desktop app.
+///
+/// Tried after every ordinary location, never before: it is an implementation
+/// detail of somebody else's bundle and Apple may move or drop it. But on a
+/// machine with that app and no separate install it is the only `codex` there
+/// is, and telling a reader who plainly has Codex that we cannot find it is the
+/// worse answer of the two.
+const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 /// The absolute path to `claude`, or the bare name as a last resort.
 ///
@@ -56,6 +66,36 @@ pub async fn gh() -> Option<PathBuf> {
     let resolved = resolve("gh").await;
     let _ = GH_PATH.set(resolved);
     GH_PATH.get().cloned().flatten()
+}
+
+/// The absolute path to `codex`, or the bare name as a last resort.
+///
+/// Falls back to the bare name like [`claude`] rather than answering `None`
+/// like [`gh`], and the difference is who asked: a Codex session is one the
+/// reader picked, so a spawn error naming the binary is the honest failure,
+/// where `gh` is optional and its absence is a sentence in a panel.
+pub async fn codex() -> PathBuf {
+    if let Some(path) = CODEX_PATH.get() {
+        return path.clone();
+    }
+
+    let resolved = match resolve("codex").await {
+        Some(path) => path,
+        None => {
+            let bundled = PathBuf::from(CHATGPT_APP_CODEX);
+            if is_executable(&bundled) {
+                bundled
+            } else {
+                PathBuf::from("codex")
+            }
+        }
+    };
+
+    let _ = CODEX_PATH.set(resolved);
+    CODEX_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("codex"))
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install

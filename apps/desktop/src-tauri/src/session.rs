@@ -11,7 +11,6 @@ use crate::{
             control::{ControlLine, ControlRequest},
             permissions::{answer_response, decision_response, PendingPermissions},
         },
-        Harness::ClaudeCode,
     },
     issues::{self, IssueRef},
     models::{find_model, resolve_effort, Effort, Model, ModelId},
@@ -1063,6 +1062,7 @@ impl Session {
     ) -> Result<()> {
         deliver_prompt(
             &self.id,
+            self.harness,
             prompt,
             attachment_paths,
             issues,
@@ -1133,6 +1133,7 @@ impl Session {
         self.queue_msg(prompt, attachment_paths, issues, from).await;
         flush_queued(
             &self.id,
+            self.harness,
             &self.queued,
             &self.seq,
             &self.events,
@@ -1271,7 +1272,7 @@ impl Session {
         let decision = AgentEvent {
             id: Uuid::now_v7().to_string(),
             session_id: self.id.clone(),
-            harness: ClaudeCode,
+            harness: self.harness,
             seq: self.seq.fetch_add(1, Relaxed),
             ts: now_rfc3339(),
             turn_id: None,
@@ -1330,7 +1331,7 @@ impl Session {
         let decision = AgentEvent {
             id: Uuid::now_v7().to_string(),
             session_id: self.id.clone(),
-            harness: ClaudeCode,
+            harness: self.harness,
             seq: self.seq.fetch_add(1, Relaxed),
             ts: now_rfc3339(),
             turn_id: None,
@@ -1377,6 +1378,9 @@ pub async fn write_line(stdin: &Arc<Mutex<ChildStdin>>, value: &impl Serialize) 
 #[allow(clippy::too_many_arguments)]
 async fn deliver_prompt(
     session_id: &str,
+    // Whose conversation this prompt joins. Recorded on the event rather than
+    // assumed, since this is the one event Dray mints itself for every harness.
+    harness: Harness,
     prompt: &str,
     attachment_paths: &[String],
     // Already resolved against the tracker by the caller. Appended to the text
@@ -1418,7 +1422,7 @@ async fn deliver_prompt(
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),
         session_id: session_id.to_string(),
-        harness: ClaudeCode,
+        harness,
         seq,
         ts: now_rfc3339(),
         // Nothing tracks turns yet; Claude Code opens one per `init`.
@@ -1463,6 +1467,167 @@ async fn deliver_prompt(
     write_line(stdin, &line).await
 }
 
+/// The handles a read loop needs once its harness has stopped being relevant.
+///
+/// Bundled rather than passed loose because [`ingest`] takes eight of them and
+/// every harness's reader holds the same set.
+pub struct Ingest<'a> {
+    pub session_id: &'a str,
+    /// Stamped on prompts flushed from the queue, which this mints itself.
+    pub harness: Harness,
+    /// The session's own tree, for the turn-end snapshot. Differs from the
+    /// spawn directory on a worktree creation.
+    pub session_cwd: &'a str,
+    pub events: &'a Arc<Mutex<Vec<AgentEvent>>>,
+    pub status: &'a Arc<Mutex<StatusTracker>>,
+    pub queued: &'a QueuedMessages,
+    pub flush_seq: &'a Arc<AtomicU64>,
+    pub flush_events: &'a Arc<Mutex<Vec<AgentEvent>>>,
+    pub flush_stdin: &'a Arc<Mutex<ChildStdin>>,
+}
+
+/// Everything that happens to a mapped event, from the snapshot on a closing
+/// turn to the queued flush at a boundary.
+///
+/// Lives here rather than in a harness because none of it is one harness's
+/// business: which payloads are persisted, when the tree is snapshotted, where
+/// a tool result's images are archived, and what counts as a boundary are all
+/// properties of Dray's own event model. With a copy per harness they would
+/// drift, and the drift would be silent — a second harness whose deltas were
+/// persisted looks exactly like one whose logs are simply larger.
+pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHandle) {
+    // Filled here rather than in the mapper because only the session layer
+    // knows the cwd. Freezing the tree id onto the closing event is what
+    // stops an idle session's diff from absorbing everything that later
+    // touches the same checkout. ~20ms once per turn; a background
+    // subagent's writes land after this, but its report-back turn closes
+    // with its own, fresher snapshot.
+    if let AgentEventPayload::TurnCompleted { ref mut head, .. } = agent_event.payload {
+        *head = crate::git::snapshot_tree(ctx.session_cwd).await;
+    }
+
+    // Here for the same reason: only the session layer knows which session's
+    // directory the bytes belong in. Before the emit below, so the live
+    // transcript and the replayed one load the same file.
+    if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
+        crate::attachments::archive_result_images(ctx.session_id, &mut result.images).await;
+    }
+
+    // Read before the event is moved into the log below. These three are
+    // the turn's boundaries in the sense that matters here: each is a point
+    // where handing the CLI a held prompt costs nothing. A tool starting or
+    // finishing means the next tool result — where the CLI injects a
+    // buffered prompt — is still ahead, and a turn ending means there is no
+    // result left to absorb one, so the prompt opens the next turn instead.
+    //
+    // A subagent's call counts here and deliberately does not in
+    // `note_tool_call` below, because the two ask different questions.
+    // That one asks whether a main-thread result is close enough ahead to
+    // write straight through; this asks only whether handing over now is
+    // safe, and it is at any point inside a turn — a prompt written early
+    // waits in the CLI's own buffer for the same main-thread result it
+    // would have waited here for.
+    let at_boundary = matches!(
+        agent_event.payload,
+        AgentEventPayload::ToolCallStarted { .. }
+            | AgentEventPayload::ToolCallCompleted { .. }
+            | AgentEventPayload::TurnCompleted { .. }
+    );
+
+    if let Err(err) = app.emit("agent_event", &agent_event) {
+        eprintln!("[emit err] {err}");
+    }
+
+    // One lock for both. The tool count is fed here rather than from inside
+    // `on_event` because the subagent test needs the envelope: a subagent's
+    // tool call runs on its own thread, and its result is not a point where
+    // the CLI injects a queued prompt.
+    let next_status = {
+        let mut tracker = ctx.status.lock().await;
+        if agent_event.subagent.is_none() {
+            tracker.note_tool_call(&agent_event.payload);
+        }
+        tracker.on_event(&agent_event.payload)
+    };
+    if let Some(next) = next_status {
+        publish_status(ctx.session_id, next, app).await;
+    }
+
+    // Live-view only, never retained. Deltas are superseded by the
+    // committed event; a usage update is a running counter whose final
+    // value lands on `turn_completed` — and `thinking_tokens` alone fires
+    // dozens of times per turn, which would be most of a session's log.
+    //
+    // A permission request is here for a different reason: it is a question,
+    // and it can only be answered by the child that asked. That child does
+    // not survive a restart, so a persisted request would come back as a
+    // card whose buttons cannot work. Dropping it is what makes the stale
+    // card impossible rather than merely unlikely. Nothing is lost — the
+    // tool call it belongs to is persisted and shows the outcome either way,
+    // and a live card survives re-selection because the frontend keeps a
+    // loaded session in memory rather than re-reading it.
+    //
+    // Questions are dropped on the same reasoning, and the "nothing is lost"
+    // half holds harder there: the `AskUserQuestion` result the harness
+    // writes carries both the questions and the answers, so the transcript
+    // keeps the whole exchange without this line.
+    if matches!(
+        agent_event.payload,
+        AgentEventPayload::Delta(_)
+            | AgentEventPayload::UsageUpdate(_)
+            // Transient by the same rule: it says a request is in flight,
+            // and no request survives the process that made it. Persisting
+            // it would also be most of a busy session's log — it fires once
+            // per turn *and* once per tool result, 89 times in one capture.
+            | AgentEventPayload::ModelRequestStarted
+            | AgentEventPayload::PermissionRequested { .. }
+            | AgentEventPayload::QuestionsAsked { .. }
+            // The decision retiring a withdrawn card. Dropped for the same
+            // reason as the request it retires, and to keep one rule: the
+            // decision `Session::respond_permission` mints is emitted and
+            // never written, so persisting this one would make "was it
+            // answered" true of cancels and false of real answers.
+            | AgentEventPayload::PermissionDecided { .. }
+    ) {
+        return;
+    }
+
+    // The data: URL a failed archive leaves behind must not reach the
+    // retained copies: it is the whole image as base64, in a log read whole
+    // on every open — the exact cost archiving exists to avoid. Stripped
+    // here rather than in the archiver because the emit above must keep it:
+    // the live transcript draws the picture either way, and only a reload
+    // pays for the failure by showing the row without it.
+    if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
+        for image in &mut result.images {
+            image.url = None;
+        }
+    }
+
+    ctx.events.lock().await.push(agent_event.clone());
+
+    if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
+        eprintln!("[write err] {err}");
+    }
+
+    // After the boundary event is logged, so the prompt that follows it
+    // lands behind it in the file as well as by `seq`. Cheap when the queue
+    // is empty, which is nearly always.
+    if at_boundary {
+        flush_queued(
+            ctx.session_id,
+            ctx.harness,
+            ctx.queued,
+            ctx.flush_seq,
+            ctx.flush_events,
+            ctx.flush_stdin,
+            ctx.status,
+            app,
+        )
+        .await;
+    }
+}
+
 /// Hands every held prompt to the child, oldest first.
 ///
 /// Called from the stdout loop on a tool call starting or finishing, or on the
@@ -1480,6 +1645,7 @@ async fn deliver_prompt(
 /// and a prompt that cannot be written is one the user can retype.
 pub async fn flush_queued(
     session_id: &str,
+    harness: Harness,
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
@@ -1504,6 +1670,7 @@ pub async fn flush_queued(
         // prompt. `None` makes `changeRange` walk past it to the real prompt.
         if let Err(err) = deliver_prompt(
             session_id,
+            harness,
             &message.text,
             &message.attachment_paths,
             &message.issues,

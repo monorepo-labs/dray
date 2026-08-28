@@ -1066,6 +1066,19 @@ status: SessionStatus,
  */
 forkFrom: string | null, 
 /**
+ * The id the harness knows this session by, where that is not our own.
+ *
+ * Claude Code adopts the id the frontend mints, so this stays `None` there
+ * and the two questions never come apart. `codex app-server` mints its own
+ * thread id and hands it back from `thread/start`, so a Codex session has
+ * two ids and this is the mapping between them.
+ *
+ * Ours stays primary — it keys the index, the log filename, the
+ * attachments directory and every `dray` address, and all of those are
+ * written *before* the child answers. This is read by resume alone.
+ */
+threadId: string | null, 
+/**
  * The issues this session's work is against, newest link last.
  *
  * A list because one session really does carry several — three tags in one
@@ -1145,6 +1158,19 @@ status: SessionStatus,
  * this one is cleared the moment the CLI carries the fork out.
  */
 forkFrom: string | null, 
+/**
+ * The id the harness knows this session by, where that is not our own.
+ *
+ * Claude Code adopts the id the frontend mints, so this stays `None` there
+ * and the two questions never come apart. `codex app-server` mints its own
+ * thread id and hands it back from `thread/start`, so a Codex session has
+ * two ids and this is the mapping between them.
+ *
+ * Ours stays primary — it keys the index, the log filename, the
+ * attachments directory and every `dray` address, and all of those are
+ * written *before* the child answers. This is read by resume alone.
+ */
+threadId: string | null, 
 /**
  * The issues this session's work is against, newest link last.
  *

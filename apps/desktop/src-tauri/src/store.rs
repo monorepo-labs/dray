@@ -82,6 +82,18 @@ pub struct SessionIndexItem {
     /// this one is cleared the moment the CLI carries the fork out.
     #[serde(default)]
     pub fork_from: Option<String>,
+    /// The id the harness knows this session by, where that is not our own.
+    ///
+    /// Claude Code adopts the id the frontend mints, so this stays `None` there
+    /// and the two questions never come apart. `codex app-server` mints its own
+    /// thread id and hands it back from `thread/start`, so a Codex session has
+    /// two ids and this is the mapping between them.
+    ///
+    /// Ours stays primary — it keys the index, the log filename, the
+    /// attachments directory and every `dray` address, and all of those are
+    /// written *before* the child answers. This is read by resume alone.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     /// The issues this session's work is against, newest link last.
     ///
     /// A list because one session really does carry several — three tags in one
@@ -257,6 +269,9 @@ impl SessionIndexItem {
         Self {
             session_id: session_id.to_string(),
             harness,
+            // Nothing has spawned yet, so no harness has minted anything. A
+            // Codex session fills this when `thread/start` answers.
+            thread_id: None,
             cwd: cwd.to_string(),
             project_path: project_path.to_string(),
             // A worktree's branch is the CLI's to name, so it's derived rather
@@ -298,6 +313,11 @@ impl SessionIndexItem {
         Self {
             session_id: session_id.to_string(),
             harness: self.harness,
+            // Deliberately not inherited. A fork is a new conversation on the
+            // harness's side too — `thread/fork` mints its own id — so carrying
+            // the parent's here would make the fork's first send resume the
+            // parent's thread and write into the conversation it copied.
+            thread_id: None,
             cwd: match worktree_name {
                 Some(name) => worktree_path(&self.project_path, name),
                 None => self.cwd.clone(),
