@@ -614,4 +614,63 @@ mod tests {
         ("multi_call_turn", MULTI_CALL_TURN),
         ("command_approval", COMMAND_APPROVAL),
     ];
+
+    /// Drives a real `codex app-server` through this module's own client.
+    ///
+    /// Ignored because it needs Codex installed and logged in, and it is the
+    /// only test here that talks to anything. It costs no model call — the
+    /// handshake and `thread/start` are both local — so run it after touching
+    /// `rpc` or the handshake, with `--ignored`.
+    ///
+    /// The fixtures cover the shapes; this covers the conversation, which a
+    /// recording cannot: whether our request ids come back, whether the
+    /// `initialized` notification is accepted, and whether the values we send
+    /// for `sandbox` and `approvalPolicy` are ones this build of Codex takes.
+    /// That last one is why this exists — a rejected value fails the spawn and
+    /// nothing else, so the first sign of it is a session that will not start.
+    #[tokio::test]
+    #[ignore = "needs codex installed and logged in"]
+    async fn handshake_against_a_live_server() {
+        let mut child = Command::new(crate::binpath::codex().await)
+            .arg("app-server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("codex should start");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let client = RpcClient::new(stdin);
+
+        tokio::spawn({
+            let client = client.clone();
+            async move {
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    client.accept(&line).await;
+                }
+            }
+        });
+
+        handshake(&client).await.expect("handshake should succeed");
+
+        let model = crate::models::find_model(crate::models::default_model_for(Codex))
+            .expect("the default Codex model should be listed");
+
+        let thread = start_thread(
+            &client,
+            &model,
+            None,
+            ApprovalPolicy::Auto,
+            std::env::temp_dir().to_str().unwrap(),
+        )
+        .await
+        .expect("thread/start should succeed");
+
+        assert!(!thread.is_empty(), "a thread id came back");
+        println!("live thread: {thread}");
+
+        let _ = child.kill().await;
+    }
 }

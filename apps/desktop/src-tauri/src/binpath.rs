@@ -11,7 +11,7 @@
 //! real time (a shell reading the user's whole rc chain), and the answer can't
 //! change while the app runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
 use tokio::process::Command;
@@ -68,34 +68,76 @@ pub async fn gh() -> Option<PathBuf> {
     GH_PATH.get().cloned().flatten()
 }
 
-/// The absolute path to `codex`, or the bare name as a last resort.
+/// The absolute path to a `codex` that can actually speak app-server.
+///
+/// Unlike [`claude`], finding *a* binary is not enough. Verified against a real
+/// machine: an old `codex-cli 0.29.0` sitting in an nvm bin directory has no
+/// `app-server` subcommand at all, so `codex app-server` is forwarded to the
+/// interactive CLI as a *prompt*. It then writes terminal escape sequences to
+/// stdout and never answers, which reaches the reader as a handshake timeout
+/// thirty seconds later — a failure that names the wrong thing entirely and
+/// looks like a broken protocol rather than a stale install.
+///
+/// So each candidate is asked what it can do before it is chosen, and the first
+/// that lists `app-server` wins. One `--help` per candidate, once per process.
 ///
 /// Falls back to the bare name like [`claude`] rather than answering `None`
-/// like [`gh`], and the difference is who asked: a Codex session is one the
-/// reader picked, so a spawn error naming the binary is the honest failure,
-/// where `gh` is optional and its absence is a sentence in a panel.
+/// like [`gh`]: a Codex session is one the reader picked, so a spawn error
+/// naming the binary is the honest failure.
 pub async fn codex() -> PathBuf {
     if let Some(path) = CODEX_PATH.get() {
         return path.clone();
     }
 
-    let resolved = match resolve("codex").await {
-        Some(path) => path,
-        None => {
-            let bundled = PathBuf::from(CHATGPT_APP_CODEX);
-            if is_executable(&bundled) {
-                bundled
-            } else {
-                PathBuf::from("codex")
-            }
-        }
-    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = search_path("codex") {
+        candidates.push(path);
+    }
+    if let Some(path) = search_known_dirs("codex") {
+        candidates.push(path);
+    }
+    if let Some(path) = login_shell_which("codex").await {
+        candidates.push(path);
+    }
+    // Last, because it belongs to somebody else's bundle — but present, because
+    // on a machine with the ChatGPT app and no separate install it is the only
+    // Codex there is.
+    candidates.push(PathBuf::from(CHATGPT_APP_CODEX));
 
-    let _ = CODEX_PATH.set(resolved);
+    let mut resolved = None;
+    for candidate in candidates {
+        if resolved.as_ref() == Some(&candidate) {
+            continue;
+        }
+        if is_executable(&candidate) && speaks_app_server(&candidate).await {
+            resolved = Some(candidate);
+            break;
+        }
+    }
+
+    let _ = CODEX_PATH.set(resolved.unwrap_or_else(|| PathBuf::from("codex")));
     CODEX_PATH
         .get()
         .cloned()
         .unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+/// Whether this `codex` has an `app-server` subcommand.
+///
+/// Asked of `--help` rather than parsed out of `--version`, because a version
+/// number is a guess about when the subcommand landed and this is the question
+/// we actually have. A binary that cannot be run at all answers `false`, which
+/// puts it behind the next candidate rather than failing the resolution.
+async fn speaks_app_server(bin: &Path) -> bool {
+    let Ok(output) = Command::new(bin)
+        .arg("--help")
+        .output()
+        .await
+    else {
+        return false;
+    };
+
+    String::from_utf8_lossy(&output.stdout).contains("app-server")
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install
