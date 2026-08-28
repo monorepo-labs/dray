@@ -1,8 +1,8 @@
 use crate::{
     attachments,
     events::{
-        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ImageRef, MessageSender,
-        PermissionBehavior,
+        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ErrorSource, ImageRef,
+        MessageSender, PermissionBehavior,
     },
     git,
     harness::{
@@ -1799,13 +1799,15 @@ pub async fn flush_queued(
         return;
     }
 
+    let mut delivered = 0;
+
     for message in batch {
         // No baseline, and this is the load-bearing half of the queued case:
         // the changes panel pairs the newest baseline with the newest head
         // after it, so a snapshot taken here would cut the running turn's
         // range in two and credit it with only the work that came after this
         // prompt. `None` makes `changeRange` walk past it to the real prompt.
-        if let Err(err) = deliver_prompt(
+        match deliver_prompt(
             session_id,
             harness,
             &message.text,
@@ -1821,7 +1823,17 @@ pub async fn flush_queued(
         )
         .await
         {
-            eprintln!("[queued flush err] {err}");
+            Ok(()) => delivered += 1,
+            Err(err) => {
+                eprintln!("[queued flush err] {err}");
+                // Drawn, not only logged. The prompt is already on screen and in
+                // the log — `deliver_prompt` writes the user's own event before
+                // the send — so silence here leaves a message sitting above a
+                // session that will never answer it, with nothing saying why.
+                // It is out of the queue for good: retrying would mean a second
+                // copy of an event already persisted.
+                report_send_failure(session_id, harness, &err.to_string(), seq, events, app).await;
+            }
         }
     }
 
@@ -1831,8 +1843,55 @@ pub async fn flush_queued(
     // second or so until `init` arrives — offering to send into a session that
     // is already working. Redundant at a tool boundary, where the session is
     // in-progress and `on_send` reports no change.
+    //
+    // Only where something actually reached the child. A batch that all failed
+    // starts no turn, and reporting one would leave the session running forever
+    // on a prompt the agent never received.
+    if delivered == 0 {
+        return;
+    }
     if let Some(next) = status.lock().await.on_send() {
         publish_status(session_id, next, app).await;
+    }
+}
+
+/// Files a prompt that could not be handed to the child as an error in the
+/// transcript, beside the message it belongs to.
+///
+/// Persisted like the prompt above it, so reopening the session still explains
+/// why that message was never answered. Not fatal: the session is intact and
+/// the next prompt may well go through — the write is what failed, not the
+/// conversation.
+async fn report_send_failure(
+    session_id: &str,
+    harness: Harness,
+    message: &str,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    app: &AppHandle,
+) {
+    let agent_event = AgentEvent {
+        id: Uuid::now_v7().to_string(),
+        session_id: session_id.to_string(),
+        harness,
+        seq: seq.fetch_add(1, Relaxed),
+        ts: now_rfc3339(),
+        turn_id: None,
+        subagent: None,
+        payload: AgentEventPayload::Error {
+            source: ErrorSource::Process,
+            message: format!("This message could not be sent: {message}"),
+            fatal: false,
+        },
+        raw: None,
+    };
+
+    if let Err(err) = app.emit("agent_event", &agent_event) {
+        eprintln!("[queued flush emit err] {err}");
+    }
+    events.lock().await.push(agent_event.clone());
+    if let Err(err) = append_session_event(session_id, agent_event).await {
+        eprintln!("[queued flush log err] {err}");
     }
 }
 
