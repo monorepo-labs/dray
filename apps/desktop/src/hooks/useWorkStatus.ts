@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -13,9 +13,10 @@ const cache = new Map<string, WorkStatus>();
 /// What is left to do with this session's work — see [handoffActions].
 ///
 /// Read on the **falling edge of a turn** and on arriving at a session, and
-/// nowhere else. Those are the two moments it can change from inside the app:
-/// the agent writes, commits and pushes during a turn, and nothing between
-/// turns moves the tree except the reader in another window. Polling for that
+/// nowhere else — every action the row draws is a prompt now, so a turn is the
+/// only thing that moves any of this from inside the app. The agent writes,
+/// commits and pushes during one, and nothing between turns moves the tree
+/// except the reader in another window. Polling for that
 /// would be several `git` spawns a second to catch something rare — the row
 /// going one turn stale is the trade, and the same one every other read in
 /// this app makes.
@@ -55,10 +56,5 @@ export function useWorkStatus(cwd: string, busy: boolean) {
     if (fell) read(cwd);
   }, [busy, cwd, read]);
 
-  // For the push button, which changes all of this without a turn happening —
-  // and whose count is the thing on screen the reader is looking at when it
-  // lands.
-  const refresh = useCallback(() => read(cwd), [cwd, read]);
-
-  return { status, refresh };
+  return { status };
 }

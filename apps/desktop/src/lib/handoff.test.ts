@@ -26,34 +26,41 @@ describe("handoffActions", () => {
     expect(ids(status({ branch: "main" }), false)).toEqual([]);
   });
 
-  // Reading across gives the two things anyone does here; reading down gives
-  // each one's longer form.
-  it("interleaves the local and remote ladders", () => {
-    expect(ids(status({ dirty: 1 }), false)).toEqual([
-      "commit",
-      "pr",
-      "commitPush",
-      "draftPr",
-    ]);
+  // The order the work moves in: commit it, then propose it.
+  it("draws the local action before the remote one", () => {
+    expect(ids(status({ dirty: 1 }), false)).toEqual(["commit", "pr"]);
   });
 
-  // One ladder shorter than the other must not leave a hole or reorder the rest.
-  it("keeps order when only one ladder has entries", () => {
-    expect(ids(status({ ahead: 2 }), false)).toEqual(["push", "pr", "draftPr"]);
+  // The row has a width: the composer shrinks with its column, and the zone
+  // that draws these is bound by nothing, so a row too wide draws over the
+  // panel beside it rather than clipping. Three is what fits.
+  it("never draws more than three buttons", () => {
+    for (const over of [
+      { dirty: 1 },
+      { ahead: 2 },
+      { upstream: null },
+      { dirty: 9, ahead: 9, upstream: null, aheadOfBase: null },
+      {},
+    ]) {
+      expect(ids(status(over), false, true).length).toBeLessThanOrEqual(3);
+    }
+  });
+
+  // Push ran git directly and was the only action that did. It went with the
+  // width, and nothing replaced it: `create a PR` pushes on the way, and a bare
+  // push is a sentence in the composer.
+  it("offers no push at all", () => {
+    for (const over of [{ ahead: 3 }, { upstream: null }, { ahead: 3, dirty: 1 }]) {
+      expect(ids(status(over), false, true)).not.toContain("push");
+    }
   });
 
   it("offers no pull request from the branch it would land on", () => {
-    expect(ids(status({ branch: "main", dirty: 2 }), false)).toEqual([
-      "commit",
-      "commitPush",
-    ]);
+    expect(ids(status({ branch: "main", dirty: 2 }), false)).toEqual(["commit"]);
   });
 
   it("offers no pull request where there is no remote to resolve one", () => {
-    expect(ids(status({ defaultBranch: null, dirty: 1 }), false)).toEqual([
-      "commit",
-      "commitPush",
-    ]);
+    expect(ids(status({ defaultBranch: null, dirty: 1 }), false)).toEqual(["commit"]);
   });
 
   // A branch level with its base and a clean tree has nothing to propose, and
@@ -65,79 +72,83 @@ describe("handoffActions", () => {
   // The trap: `ahead` counts against the *upstream*, so a branch pushed in full
   // reads zero — and that is exactly when the pull request is most wanted.
   it("offers a pull request for a fully pushed branch", () => {
-    expect(ids(status({ ahead: 0, aheadOfBase: 3 }), false)).toEqual(["pr", "draftPr"]);
+    expect(ids(status({ ahead: 0, aheadOfBase: 3 }), false)).toEqual(["pr"]);
   });
 
   // Uncommitted work is still work to propose: "create a PR" has the agent
   // commit on the way.
   it("offers a pull request for uncommitted work on an empty branch", () => {
-    expect(ids(status({ aheadOfBase: 0, dirty: 2 }), false)).toEqual([
-      "commit",
-      "pr",
-      "commitPush",
-      "draftPr",
-    ]);
+    expect(ids(status({ aheadOfBase: 0, dirty: 2 }), false)).toEqual(["commit", "pr"]);
   });
 
   // `origin/HEAD` can be a symref onto a ref that was never fetched, so the
   // count is unknowable. Over-offering costs a click; under-offering hides it.
   it("offers a pull request when the base count is unknown", () => {
-    expect(ids(status({ aheadOfBase: null }), false)).toEqual(["pr", "draftPr"]);
+    expect(ids(status({ aheadOfBase: null }), false)).toEqual(["pr"]);
   });
 
   // The panel is where an existing PR is acted on; a second button here would
   // open a duplicate against the same base.
-  it("drops the pull request buttons once one exists", () => {
-    expect(ids(status({ dirty: 1 }), true)).toEqual(["commit", "commitPush"]);
+  it("drops the pull request button once one exists", () => {
+    expect(ids(status({ dirty: 1 }), true)).toEqual(["commit"]);
   });
 
-  // With a dirty tree the commit comes first, and "Commit & push" already
-  // carries the push — a third button would be the same action twice.
-  it("does not offer push beside commit", () => {
-    expect(ids(status({ dirty: 1, ahead: 3 }), true)).toEqual([
-      "commit",
-      "commitPush",
+  // Nothing here reads `ahead` or `upstream` any more — those two only ever
+  // answered "is there anything to push", and the row no longer asks.
+  it("ignores the push counts entirely", () => {
+    expect(ids(status({ ahead: 3, upstream: null }), true, true)).toEqual([
+      "runServer",
     ]);
   });
 
-  it("offers push only once the tree is clean", () => {
-    expect(ids(status({ ahead: 3 }), true)).toEqual(["push"]);
-  });
-
-  // A branch nobody has pushed is one nobody else can see, so the offer stands
-  // even at zero ahead. `push_branch` sets the upstream itself, so this is the
-  // same action rather than a second one.
-  it("offers push for a branch with no upstream", () => {
-    const [action] = handoffActions(status({ upstream: null }), true);
-    expect(action.id).toBe("push");
-    // No count: an unpublished branch is ahead of nothing, and "Push 0" would
-    // answer a question nobody asked yet.
-    expect(action.label).toBe("Push");
-  });
-
-  it("counts the commits in the push label", () => {
-    expect(handoffActions(status({ ahead: 3 }), true)[0].label).toBe("Push 3");
-  });
-
-  // Push runs git directly; everything else asks the agent. Getting this wrong
-  // either spends a model turn on a one-liner or silently drops a click.
-  it("marks push as the only action that is not a prompt", () => {
+  // Every action asks the agent. Push was the one that ran git itself, and it
+  // owned a spinner, an error banner and a forced re-read to say so — all of it
+  // gone with the button.
+  it("makes every action a prompt", () => {
     const all = [
-      ...handoffActions(status({ dirty: 1 }), false),
-      ...handoffActions(status({ ahead: 1 }), false),
+      ...handoffActions(status({ dirty: 1 }), false, true),
+      ...handoffActions(status({ ahead: 1 }), false, true),
     ];
+    expect(all.length).toBeGreaterThan(0);
     for (const action of all) {
-      expect(action.kind).toBe(action.id === "push" ? "push" : "prompt");
+      expect(typeof action.prompt).toBe("string");
+      expect(action.prompt.length).toBeGreaterThan(0);
     }
   });
 
   // Short enough to be what the reader would have typed. A longer prompt is a
   // spec competing with the repo's own instructions about commit messages.
+  //
+  // `hasSession` is true so the row is the whole row, and `runServer` is then
+  // skipped by name rather than dodged by leaving it out: the clause that makes
+  // it longer — "in the background" — is the one clause it cannot lose, and
+  // `runServer.test.ts` pins that instead. Left to the default this rule would
+  // read as covered while quietly testing every button but the one it misses.
   it("keeps the prompts to a few words", () => {
-    for (const action of handoffActions(status({ dirty: 1 }), false)) {
-      if (action.kind !== "prompt") continue;
+    for (const action of handoffActions(status({ dirty: 1 }), false, true)) {
+      if (action.id === "runServer") continue;
       expect(action.prompt.split(" ").length).toBeLessThanOrEqual(5);
     }
+  });
+
+  // Last, never first: Commit sits where the eye lands, and a third kind of
+  // action at the head displaces the thing most often wanted.
+  it("puts run server last in the row", () => {
+    expect(ids(status({ dirty: 1 }), false, true)).toEqual(["commit", "pr", "runServer"]);
+  });
+
+  // Running a server needs no repository, so it outlives every refusal above —
+  // including the two that make the row empty.
+  it("offers run server where git offers nothing", () => {
+    expect(ids(status({ branch: null }), false, true)).toEqual(["runServer"]);
+    expect(ids(null, false, true)).toEqual(["runServer"]);
+    expect(ids(status({ branch: "main" }), false, true)).toEqual(["runServer"]);
+  });
+
+  // A prompt needs somewhere to land, and the new-task composer has no session.
+  it("offers no run server without a session", () => {
+    expect(ids(status({ dirty: 1 }), false)).not.toContain("runServer");
+    expect(ids(null, false)).toEqual([]);
   });
 
   // Every id needs a glyph in `HandoffRow`'s map, and a duplicate id in one row

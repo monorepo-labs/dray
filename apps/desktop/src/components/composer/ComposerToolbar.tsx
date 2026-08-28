@@ -6,7 +6,6 @@ import ContextMeter from "@/components/composer/ContextMeter";
 import ModelSelector from "@/components/composer/ModelSelector";
 import PermissionSelector from "@/components/composer/PermissionSelector";
 import ProjectSelector from "@/components/composer/ProjectSelector";
-import RunServerButton from "@/components/composer/RunServerButton";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -51,11 +50,6 @@ export type ComposerToolbarProps = {
   /// handed to `ChatInput` as an opaque node, so the two cannot share props.
   onAttach: () => void;
 
-  /// Sends the Run server prompt, exactly as if it had been typed. The button
-  /// owns the wording — see [RUN_SERVER_PROMPT] — so this is the same shape
-  /// `HandoffRow` hands its prompts back through.
-  onRunServer: (prompt: string) => void;
-
   /// How full the model's context is, or `null` before any turn has reported
   /// it. Sits at the far end of the row rather than among the pickers: it
   /// reports rather than sets, and nothing here changes it.
@@ -91,7 +85,6 @@ export default function ComposerToolbar({
   useWorktree,
   onToggleWorktree,
   onAttach,
-  onRunServer,
   contextUsage,
   isNewSession,
 }: ComposerToolbarProps) {
@@ -181,20 +174,12 @@ export default function ComposerToolbar({
       <PermissionSelector value={permissionMode} onChange={onPermissionModeChange} />
 
       {/* `ml-auto` rather than a spacer, so a long branch name still gets the
-          whole middle of the row and this stays pinned to the right edge. It
-          sits on the pair rather than on the meter because the meter is absent
-          until a turn has reported one, and the button must not slide left
-          across the row when the first turn lands.
-
-          Run server needs a session to send into, so it is the mirror of the
-          three pickers above: those exist only before one starts, this only
-          after. */}
-      <div className="ml-auto flex items-center gap-0.5">
-        {!isNewSession && <RunServerButton onSend={onRunServer} />}
-        {contextUsage && (
+          whole middle of the row and this stays pinned to the right edge. */}
+      {contextUsage && (
+        <div className="ml-auto">
           <ContextMeter used={contextUsage.used} max={contextUsage.max} />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

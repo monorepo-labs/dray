@@ -1,24 +1,29 @@
-import { Loader2 } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
 import { HANDOFF_ICONS } from "@/components/composer/handoffIcons";
 import type { HandoffAction } from "@/lib/handoff";
 
-/// The row of "I'm done, take it from here" actions, parked behind the composer.
+/// The row of canned prompts, parked behind the composer. Mostly they hand work
+/// back — "I'm done, take it from here" — and one, Run server, starts work
+/// instead. The name predates that second kind and is kept anyway: churning
+/// `HandoffRow`, `handoffActions` and `HandoffAction` through five files buys
+/// nothing this comment cannot say.
 ///
-/// Almost every button here **sends a prompt** — it is the reader typing
-/// "commit" without typing it. No confirm dialog and no error surface: the
-/// agent writes the message with the context it already has, and whatever goes
-/// wrong is reported in the transcript like any other tool failure. Push is the
-/// exception and runs git directly, because it has one correct implementation
-/// and nothing to decide. Which buttons exist when is [handoffActions]' rule,
-/// and it is contextual — no commit offer on a clean tree, no pull request from
-/// the branch the work lands on.
+/// Every button here **sends a prompt** — it is the reader typing "commit"
+/// without typing it. No confirm dialog and no error surface: the agent writes
+/// the message with the context it already has, and whatever goes wrong is
+/// reported in the transcript like any other tool failure. Which buttons exist
+/// when is [handoffActions]' rule, and it is contextual — no commit offer on a
+/// clean tree, no pull request from the branch the work lands on. Run server is
+/// the one exception to that: it wants a session and nothing else.
 ///
 /// It hides rather than sits, and that shape is the point. A turn that touched
 /// a file is most turns, so a row drawn on "there are changes" is a row drawn
 /// always — which is what makes every other tool's commit button noise. And the
-/// reverse of that: finishing a turn is not the same as wanting to commit.
+/// reverse of that: finishing a turn is not the same as wanting to commit. The
+/// hiding is also what lets one action be offered unconditionally, since a
+/// button nobody sees until they go looking is only ever seen by someone who
+/// wants it — at the cost that with a session open the row is never empty, so
+/// the reserve below is now permanent.
 ///
 /// **The composer is the occluder, not a clip.** The buttons sit at full height
 /// in a reserve a fraction as tall, so most of each one runs on past it and
@@ -50,26 +55,17 @@ import type { HandoffAction } from "@/lib/handoff";
 export default function HandoffRow({
   actions,
   onSend,
-  onPush,
-  pushing = false,
   disabled = false,
 }: {
   actions: HandoffAction[];
   onSend: (prompt: string) => void;
-  /// Runs the push and resolves when git has. The only action here that isn't a
-  /// prompt — see [HandoffAction].
-  onPush: () => void;
-  /// A push is in flight. The one action with no transcript to report into, so
-  /// it has to say so on the button itself: a prompt lands as a visible message
-  /// a frame later, where this would look like a click that did nothing.
-  pushing?: boolean;
   /// No session to send into. Nothing fires, but the reserve still stands — its
   /// absence would move the composer.
   disabled?: boolean;
 }) {
-  // Nothing to offer is a real state and the commonest one: a clean default
-  // branch with everything pushed. The reserve goes with it, since there is no
-  // sliver to keep room for.
+  // Near-dead now Run server is unconditional — only the new-task composer,
+  // with no session to send into, reaches it. Kept because the reserve has to
+  // go with the row: a sliver standing over nothing would open onto nothing.
   if (actions.length === 0) return null;
 
   return (
@@ -101,24 +97,17 @@ export default function HandoffRow({
         >
           {actions.map((action) => {
             const Icon = HANDOFF_ICONS[action.id];
-            const busy = action.kind === "push" && pushing;
             return (
               <Button
                 key={action.id}
                 type="button"
                 size="sm"
                 variant="secondary"
-                disabled={disabled || busy}
-                onClick={() =>
-                  action.kind === "push" ? onPush() : onSend(action.prompt)
-                }
+                disabled={disabled}
+                onClick={() => onSend(action.prompt)}
                 className="pointer-events-none group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
               >
-                {busy ? (
-                  <Loader2 className="size-3.5 animate-spin" strokeWidth={1.5} />
-                ) : (
-                  <Icon className="size-3.5" strokeWidth={1.5} />
-                )}
+                <Icon className="size-3.5" strokeWidth={1.5} />
                 {action.label}
               </Button>
             );
