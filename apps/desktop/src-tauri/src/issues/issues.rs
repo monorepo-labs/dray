@@ -589,8 +589,8 @@ pub struct ExpandedTags {
 /// The prompt as the model will see it, and every issue it is against.
 ///
 /// Two sources, one answer: the `#ABC-123` tags already in the text, and
-/// identifiers named outright — `dray new --issue`, or the issues page starting
-/// a session from a row. A named issue that is not already tagged in the text
+/// identifiers named outright — `dray new --issue`, the only caller that does.
+/// A named issue that is not already tagged in the text
 /// is **appended as a tag**, in the same `#DRA-53 Title` form the composer's
 /// picker writes, so there is one shape a tag takes and one thing the
 /// transcript has to draw. Nothing is appended for an issue the text already

@@ -335,10 +335,11 @@ impl SessionManager {
         // Absolute paths of what the composer had attached. Re-read here rather
         // than uploaded: the frontend holds a thumbnail, not bytes.
         attachment_paths: &[String],
-        // Issues named outright rather than tagged in the text: `dray new
-        // --issue`, and the issues page starting a session from a row. Merged
-        // with the prompt's own `#` tags, which is why one list arrives here
-        // and not two.
+        // Issues named outright rather than tagged in the text. `dray new
+        // --issue` is the only caller: the app sends none, since nothing in it
+        // starts a session against a row. Merged with the prompt's own `#` tags,
+        // which is why one list arrives here and not two — and naming an issue
+        // here is what *links* it, where a tag in the text only mentions.
         issue_ids: &[String],
         harness: Harness,
         model: ModelId,
