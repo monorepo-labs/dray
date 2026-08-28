@@ -8,11 +8,15 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Housekeeping take no issue.** CLAUDE.md, plan note, tooling config — thing changing how we work, not what ship. Issue there = noise.
 
+**Minor update take no issue either.** Tooltip wording, copy tweak, one-line prompt change — issue there cost more to file than change take to make. Several small thing landing in one PR = one issue at most, never one each.
+
 **Description over ~1000 character open with `## TLDR for human`, closed by `---`.** One line per thing worked on, even when only one. Shorter description need none — it already scan faster than its own summary.
 
 **Status:** start → `In Progress`. After that, leave it — GitHub integration move issue to `In Review` on PR open and `Done` on merge, so setting either by hand = noise. **Exception: work pushed straight to `main`.** No PR = nothing for integration to read, so set `Done` yourself.
 
 **PR carry issue id so Linear link itself.** Body (`Fixes DRA-123`) or branch name — integration read both. Worktree branch = `worktree-<name>` minted by CLI, so body = reliable slot. Id = what arm the whole status rule above; PR without one leave issue sitting `In Progress` forever.
+
+**PR nobody need review carry `no-review` label.** Copy tweak, doc, prompt wording, config — label keep review bot off diff with nothing to find. Add at open (`gh pr create --label no-review`), since review fire on open. Anything touching behaviour = no label.
 
 **One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
 
