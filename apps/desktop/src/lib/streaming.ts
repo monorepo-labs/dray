@@ -113,6 +113,7 @@ const TARGET_KEYS: [key: string, path: boolean][] = [
   ["query", false],
   ["url", false],
   ["description", false],
+  ["skill", false],
 ];
 
 /// Where a whole-file payload lives: `Write` calls it `content`, `NotebookEdit`

@@ -113,6 +113,15 @@ describe("streamingCall", () => {
     expect(streamingCall("Write", '{"file_path":"/a/b/part').target).toBe(null);
   });
 
+  // `args` lands first on the wire and is a paragraph on a long brief, so the
+  // preview stays on the generic label until the short key behind it closes.
+  it("names a Skill once its name has landed, not while its brief streams", () => {
+    expect(streamingCall("Skill", '{"args":"screenshot localhost:1420').target).toBe(null);
+    expect(
+      streamingCall("Skill", '{"args":"screenshot localhost:1420","skill":"agent-browser"').target,
+    ).toBe("agent-browser");
+  });
+
   it("reads nothing out of an empty prefix", () => {
     expect(streamingCall("Write", "")).toEqual({ target: null, added: null });
   });

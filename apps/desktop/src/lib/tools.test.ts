@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { isRoutineError } from "./tools";
+import { groupLabel, isRoutineError, skillBrief, streamingLabel, toolLabel, toolSummary } from "./tools";
+
+// Every input here is a real `Skill` call taken out of `~/.dray/sessions`. The
+// harness classifies the tool as `other` and leaves `title` null, so the name
+// and the brief are the whole of what the row has to work with.
+describe("a Skill call", () => {
+  it("names the skill, not the tool", () => {
+    expect(toolSummary("Skill", "other", { skill: "caveman-commit" })).toBe("caveman-commit");
+    expect(
+      toolSummary("Skill", "other", { args: "screenshot localhost:1420", skill: "agent-browser" }),
+    ).toBe("agent-browser");
+  });
+
+  it("reads as a launch in both tenses", () => {
+    expect(toolLabel("Skill", true)).toBe("Launching");
+    expect(toolLabel("Skill", false)).toBe("Launched");
+    expect(groupLabel("Skill", 2, false)).toBe("Launched 2 skills");
+    expect(streamingLabel("Skill")).toBe("Launching a skill");
+  });
+
+  it("takes the brief only where one was written", () => {
+    expect(skillBrief({ args: "screenshot localhost:1420", skill: "agent-browser" })).toBe(
+      "screenshot localhost:1420",
+    );
+    expect(skillBrief({ skill: "caveman-commit" })).toBeNull();
+    expect(skillBrief({ args: "   ", skill: "caveman-commit" })).toBeNull();
+  });
+});
+
 
 // Every string here is a real `Bash` error taken out of `~/.dray/sessions`,
 // including the "Exit code N" prefix a shell failure actually arrives with —

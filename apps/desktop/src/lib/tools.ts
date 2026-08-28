@@ -17,6 +17,10 @@ export function toolSummary(
   toolType: ToolType,
   input: JsonValue,
 ): string | null {
+  // Tool-keyed rather than field-keyed: the harness classifies `Skill` as
+  // `other`, and its only identifying field is the skill's own name.
+  if (name === "Skill") return field(input, "skill");
+
   const path = field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
   if (path) return shortenPath(path);
 
@@ -69,7 +73,16 @@ const TOOL_VERBS: Record<string, Verbs> = {
   WebFetch: ["Fetching", "Fetched", "page"],
   WebSearch: ["Searching web", "Searched web", "query"],
   AskUserQuestion: ["Asking", "Asked", "question"],
+  Skill: ["Launching", "Launched", "skill"],
 };
+
+/// The brief a `Skill` call was given — the sentence the model wrote for the
+/// skill, not an argument to it. Null where the model named a skill and left it
+/// to read its own instructions, which is the common case.
+export function skillBrief(input: JsonValue): string | null {
+  const args = field(input, "args")?.trim();
+  return args ? args : null;
+}
 
 /// The label for a single tool-call row. `pending` picks the tense — a live call
 /// reads "Reading", a settled one "Read".
@@ -172,6 +185,9 @@ export function toolArgument(input: JsonValue): string | null {
     field(input, "pattern") ??
     field(input, "query") ??
     field(input, "url") ??
+    // Field-keyed where `toolSummary` keys on the tool: the card sees raw wire
+    // input and no name, and a `skill` string names a skill whatever carries it.
+    field(input, "skill") ??
     null
   );
 }
