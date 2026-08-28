@@ -6,7 +6,7 @@ import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
 import { cn } from "@/lib/utils";
 import { countChanges, editSides, readRange } from "@/lib/diff";
-import { formatToolInput, isRoutineError, toolLabel, toolSummary } from "@/lib/tools";
+import { formatToolInput, isRoutineError, skillBrief, toolLabel, toolSummary } from "@/lib/tools";
 import type { ToolResult, ToolType } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
@@ -43,6 +43,11 @@ const EDIT_FIELDS = [
 
 // Same idea for a ranged read: the gutter already shows which lines these are.
 const READ_FIELDS = [...SUMMARY_FIELDS, "offset", "limit"];
+
+// A `Skill` call carries two fields and the row already draws both — the name in
+// the header, the brief as prose beneath it — so its argument body would be the
+// same call written out twice. Anything the tool grows later still shows.
+const SKILL_FIELDS = [...SUMMARY_FIELDS, "skill", "args"];
 
 // Long results are the norm — reads come back in the thousands of characters —
 // so expanding shows a head and the rest scrolls rather than pushing the
@@ -139,7 +144,18 @@ export default function ToolCall({
   // and the answer given, which is prose and reads as prose.
   const asked = name === "AskUserQuestion" && !rawInput;
 
-  const omit = sides ? EDIT_FIELDS : range ? READ_FIELDS : SUMMARY_FIELDS;
+  // A `Skill` call hands the skill a brief in the model's own words, so it reads
+  // as prose and not as arguments. Null is the common case — a skill named with
+  // nothing beside it — and then the row has nothing to open at all.
+  const brief = name === "Skill" && !rawInput ? skillBrief(input) : null;
+
+  const omit = sides
+    ? EDIT_FIELDS
+    : range
+      ? READ_FIELDS
+      : name === "Skill"
+        ? SKILL_FIELDS
+        : SUMMARY_FIELDS;
   const body = inert || asked ? null : rawInput ?? formatToolInput(input, omit);
 
   // A successful edit's result is boilerplate ("The file ... has been updated
@@ -147,7 +163,12 @@ export default function ToolCall({
   // read repeats its own output verbatim. Failures always show — that text is
   // the only place the reason lives.
   const echoesViewer = (sides !== null || range !== null || inert) && !failed;
-  const shownOutput = echoesViewer ? "" : output;
+
+  // A `Skill` launch answers "Launching skill: <name>", which is the row's own
+  // label and summary read back. A refusal still shows — that text is the only
+  // place the reason lives.
+  const echoesHeader = name === "Skill" && !failed;
+  const shownOutput = echoesViewer || echoesHeader ? "" : output;
   const shown =
     shownOutput.length > PREVIEW_CHARS
       ? `${shownOutput.slice(0, PREVIEW_CHARS)}…`
@@ -156,7 +177,8 @@ export default function ToolCall({
   // Output stays behind the expander regardless of length. Auto-showing short
   // results only made rows inconsistent — some opened, some didn't, with no
   // visible reason why.
-  const expandable = Boolean(body) || Boolean(shown) || sides !== null || range !== null;
+  const expandable =
+    Boolean(body) || Boolean(shown) || Boolean(brief) || sides !== null || range !== null;
 
   return (
     <div className="group/tool flex flex-col gap-1.5">
@@ -240,6 +262,12 @@ export default function ToolCall({
       {open && sides && <DiffView sides={sides} />}
 
       {open && range && <CodeView range={range} />}
+
+      {/* Unboxed and sans, for the reason an answered question is: this is a
+          sentence somebody wrote, and a code box frames prose as output. */}
+      {open && brief && (
+        <p className="whitespace-pre-wrap text-chat text-foreground/90">{brief}</p>
+      )}
 
       {open && body && (
         <pre className="overflow-x-auto rounded-md bg-surface-raised px-2.5 py-2 font-mono text-tool text-muted-foreground">
