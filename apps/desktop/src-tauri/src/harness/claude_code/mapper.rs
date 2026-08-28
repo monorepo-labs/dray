@@ -281,6 +281,12 @@ impl Mapper {
 
     /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
     /// double-assigned.
+    /// A main-thread event the app mints itself, numbered through the same
+    /// counter as the mapped lines so `seq` stays gap-free.
+    pub fn synthesize(&mut self, session_id: &str, payload: AgentEventPayload) -> AgentEvent {
+        self.build(session_id.to_string(), None, None, payload)
+    }
+
     fn build(
         &mut self,
         session_id: String,

@@ -83,6 +83,8 @@ function App() {
     useWorktree,
     busy,
     backgroundTasks,
+    liveTaskIds,
+    tasksBySession,
     compacting,
     working,
     contextUsage,
@@ -129,10 +131,13 @@ function App() {
   } = useUpdater();
 
   // Every session the app has started this run, not the open one: the install
-  // relaunches the app, so any live child is one this would kill mid-turn. A
-  // session from a previous run cannot still be running — no child survives a
-  // restart — so the live map answers this on its own.
-  const anyRunning = Object.values(statusBySession).some((s) => s === "in_progress");
+  // relaunches the app, so any live child is one this would kill mid-turn — or
+  // mid-task, since a background task outlives its turn. A session from a
+  // previous run cannot still be running — no child survives a restart — so
+  // the two live maps answer this on their own.
+  const anyRunning =
+    Object.values(statusBySession).some((s) => s === "in_progress") ||
+    Object.values(tasksBySession).some((tasks) => tasks.length > 0);
 
   const [panelOpen, setPanelOpen] = useState(false);
   // `null` is "never picked", and it is the whole of the default-tab rule.
@@ -278,10 +283,10 @@ function App() {
   // The chat derives this too, but the panel and the header count need it here
   // and the memo makes the second pass free.
   const { subagents, resultByCallId } = useMemo(
-    // Same `busy` the chat passes. Left off, a subagent's in-flight call would
-    // show in the panel as one that never finished.
-    () => buildTranscript(selectedSession?.events ?? [], busy),
-    [selectedSession?.events, busy],
+    // Same `busy` and task set the chat passes. Left off, a subagent's
+    // in-flight call would show in the panel as one that never finished.
+    () => buildTranscript(selectedSession?.events ?? [], busy, liveTaskIds),
+    [selectedSession?.events, busy, liveTaskIds],
   );
 
   // What the composer's handoff row draws itself from, and — one line down —
@@ -877,7 +882,7 @@ function App() {
                 runs={subagents}
                 selectedId={selectedSubagentId}
                 resultByCallId={resultByCallId}
-                live={busy}
+                live={busy || backgroundTasks.length > 0}
                 onSelect={setSelectedSubagentId}
                 onStopTask={handleStopTask}
               />
@@ -1005,6 +1010,7 @@ function App() {
         onAnswerQuestions={handleAnswerQuestions}
         busy={busy}
         backgroundTaskCount={backgroundTasks.length}
+        liveTaskIds={liveTaskIds}
         compacting={compacting}
         queuedMessages={queuedMessages}
         working={working}

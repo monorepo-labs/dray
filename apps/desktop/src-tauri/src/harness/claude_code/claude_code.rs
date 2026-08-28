@@ -453,6 +453,26 @@ async fn read_stdout(
         }
     }
 
+    // The child is gone and its tasks went with it. The CLI republishes the set
+    // on every change but cannot announce its own death, so the last set it
+    // published would stand on screen as work still running, with a Stop that
+    // answers success and does nothing.
+    //
+    // Emitted, never logged. The frontend reads the set off live events alone,
+    // so the log needs no closing entry — and this runs after a delete has
+    // removed the file, where an append would quietly recreate it.
+    let stranded = !status.lock().await.background_task_ids().is_empty();
+    if stranded {
+        let drained = mapper.synthesize(
+            session_id,
+            AgentEventPayload::BackgroundTasksChanged { tasks: vec![] },
+        );
+        if let Err(err) = app.emit("agent_event", &drained) {
+            eprintln!("[claude emit err] {err}");
+        }
+        status.lock().await.on_event(&drained.payload);
+    }
+
     Ok(())
 }
 

@@ -55,6 +55,9 @@ type ChatProps = {
   /// them — unlike the working indicator, which must sit where its turn's
   /// text will land.
   backgroundTaskCount?: number;
+  /// The ids of those tasks, for `buildTranscript`: a call whose task the child
+  /// still holds stays pending after its turn ends.
+  liveTaskIds?: ReadonlySet<string>;
   /// Whether a compaction is running. Sits beside the task indicator for the
   /// same reason: it belongs to the session, not to any one turn.
   compacting?: boolean;
@@ -143,6 +146,7 @@ export default function Chat({
   busy = false,
   working = null,
   backgroundTaskCount = 0,
+  liveTaskIds,
   compacting = false,
   queuedMessages = [],
   crowded = false,
@@ -165,8 +169,8 @@ export default function Chat({
   };
 
   const { events, turns, subagentById, resultByCallId, pendingAsks } = useMemo(
-    () => buildTranscript(session?.events ?? [], busy),
-    [session?.events, busy],
+    () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
+    [session?.events, busy, liveTaskIds],
   );
 
   const cards = useLingeringCards(pendingAsks);

@@ -415,3 +415,51 @@ describe("a tool call that came back with pictures", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("a call whose background task the child still holds", () => {
+  const spawn = (seq: number, callId: string, taskId: string): AgentEvent => ({
+    ...event(seq, {
+      type: "subagent_started",
+      agentId: taskId,
+      label: "Explore",
+      description: null,
+      prompt: null,
+    } as AgentEventPayload),
+    subagent: { id: callId, label: "Explore" },
+  });
+
+  /// The turn ends on its `result` now, so the session reads idle while a
+  /// background subagent still runs. Its call must not flicker to "never
+  /// finished" in the gap before the report-back turn brings its result.
+  it("stays pending after the turn ends", () => {
+    const { resultByCallId } = buildTranscript(
+      [prompt(0, "go", false), callStarted(1, "c1"), spawn(2, "c1", "t1"), completed(3)],
+      false,
+      new Set(["t1"]),
+    );
+
+    expect(resultByCallId.get("c1")).toBeUndefined();
+  });
+
+  /// A new prompt ordinarily closes the book on every open call. A task the
+  /// child still holds is the exception: the prompt proves nothing about it.
+  it("survives a later prompt too", () => {
+    const { resultByCallId } = buildTranscript(
+      [callStarted(0, "c1"), spawn(1, "c1", "t1"), completed(2), prompt(3, "next", false)],
+      true,
+      new Set(["t1"]),
+    );
+
+    expect(resultByCallId.get("c1")).toBeUndefined();
+  });
+
+  /// And with the task gone, the ordinary rule is back.
+  it("is abandoned once the task drains", () => {
+    const { resultByCallId } = buildTranscript(
+      [callStarted(0, "c1"), spawn(1, "c1", "t1"), completed(2)],
+      false,
+    );
+
+    expect(resultByCallId.get("c1")?.text).toMatch(ABANDONED);
+  });
+});
