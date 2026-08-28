@@ -645,7 +645,7 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
     let key = read_key(IssueTracker::Linear).await;
 
     let mut resolved = Vec::with_capacity(wanted.len());
-    for (tag, _) in &wanted {
+    for WantedTag { id: tag, .. } in &wanted {
         resolved.push(match &key {
             // No id to try: a tag is a spelling, and the whole point of this
             // call is to find out what it names.
@@ -663,13 +663,30 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
     apply_tags(prompt, &wanted, resolved)
 }
 
-/// Every issue this prompt is about, each paired with whether the text already
-/// names it. Text first, in the order it was written; anything `--issue` named
-/// and the text did not, after.
-fn wanted_tags(prompt: &str, named: &[String]) -> Vec<(String, bool)> {
-    let mut wanted: Vec<(String, bool)> = issue_tags(prompt)
+/// One issue this prompt is about, and how it came to be here.
+///
+/// Two flags rather than one, because they answer different questions and an
+/// issue can be both: `in_text` decides whether a tag has to be *appended*, and
+/// `named` decides whether the session gets *linked*. Folded into one, an
+/// `--issue DRA-53` on a prompt that also writes `#DRA-53` deduplicated onto the
+/// in-text entry and lost the link the caller asked for outright.
+#[derive(Debug, PartialEq)]
+struct WantedTag {
+    id: String,
+    in_text: bool,
+    named: bool,
+}
+
+/// Every issue this prompt is about. Text first, in the order it was written;
+/// anything `--issue` named and the text did not, after.
+fn wanted_tags(prompt: &str, named: &[String]) -> Vec<WantedTag> {
+    let mut wanted: Vec<WantedTag> = issue_tags(prompt)
         .into_iter()
-        .map(|id| (id, true))
+        .map(|id| WantedTag {
+            id,
+            in_text: true,
+            named: false,
+        })
         .collect();
 
     for identifier in named {
@@ -677,8 +694,16 @@ fn wanted_tags(prompt: &str, named: &[String]) -> Vec<(String, bool)> {
         // `#DRA-53` or `dra-53`, and both have to reach the issue the picker
         // would have.
         if let Some(id) = parse_identifier(identifier.trim_start_matches('#')) {
-            if !wanted.iter().any(|(seen, _)| seen == &id) {
-                wanted.push((id, false));
+            match wanted.iter_mut().find(|seen| seen.id == id) {
+                // The text names it too. One entry still, so nothing is
+                // appended twice — but naming it outright is what links it, and
+                // that intent must survive the merge.
+                Some(seen) => seen.named = true,
+                None => wanted.push(WantedTag {
+                    id,
+                    in_text: false,
+                    named: true,
+                }),
             }
         }
     }
@@ -694,25 +719,32 @@ fn wanted_tags(prompt: &str, named: &[String]) -> Vec<(String, bool)> {
 /// pinning, and it is the one a test process cannot reach by asking Linear.
 fn apply_tags(
     prompt: &str,
-    wanted: &[(String, bool)],
+    wanted: &[WantedTag],
     resolved: Vec<Option<IssueRef>>,
 ) -> ExpandedTags {
     let mut mentioned = Vec::new();
     let mut linked = Vec::new();
     let mut appended = Vec::new();
 
-    for ((tag, in_text), found) in wanted.iter().zip(resolved) {
+    for (tag, found) in wanted.iter().zip(resolved) {
         let reference = match found {
             Some(reference) => reference,
             // A tag the reader typed is already in the text and already says
-            // what it says, so an unresolved one is left alone. A named one has
-            // nothing in the text at all, so it goes in bare.
-            None if *in_text => continue,
-            None => bare_ref(tag.clone()),
+            // what it says, so an unresolved one is left alone. A named one is
+            // a link that was asked for, so it goes in bare rather than being
+            // lost — in the text already or not.
+            None if !tag.named => continue,
+            None => bare_ref(tag.id.clone()),
         };
 
-        if !*in_text {
+        // Only what the text does not already say: repeating a tag under the
+        // reader's own sentence is the same fact twice.
+        if !tag.in_text {
             appended.push(tag_text(&reference));
+        }
+        // Naming an issue outright is what links it. A `#DRA-53` in prose is a
+        // mention, whether or not `--issue` also named it.
+        if tag.named {
             linked.push(reference.clone());
         }
         mentioned.push(reference);
@@ -967,8 +999,22 @@ mod tests {
 
         // One entry, not two: `--issue` naming what the text already names is
         // the same issue, however it was spelled.
-        assert_eq!(wanted, vec![("DRA-53".to_string(), true)]);
-        assert_eq!(apply_tags(prompt, &wanted, vec![None]).prompt, prompt);
+        assert_eq!(
+            wanted,
+            vec![WantedTag {
+                id: "DRA-53".to_string(),
+                in_text: true,
+                named: true,
+            }]
+        );
+
+        let out = apply_tags(prompt, &wanted, vec![None]);
+        assert_eq!(out.prompt, prompt);
+        // And the link survives the merge. Deduplicating onto the in-text entry
+        // dropped it, so `--issue DRA-53` on a prompt that also wrote `#DRA-53`
+        // silently started a session against nothing.
+        assert_eq!(out.linked.len(), 1);
+        assert_eq!(out.linked[0].identifier, "DRA-53");
     }
 
     #[cfg(unix)]
