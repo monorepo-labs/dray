@@ -1,4 +1,8 @@
+import { useEffect, useRef, useState } from "react";
+import { Check } from "lucide-react";
+
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SessionSnapshot } from "@/types/events";
@@ -18,6 +22,9 @@ type SessionHeaderProps = {
   className?: string;
 };
 
+/// How long the button holds its confirmation, matching the notice stack's own.
+const COPIED_MS = 1400;
+
 /// One line: `project / title`, then the branch. The title is the only part
 /// that gives way to truncation, since it is the one thing here the reader
 /// wrote and can recognise from its opening words.
@@ -31,6 +38,16 @@ export default function SessionHeader({
   standIn,
   className,
 }: SessionHeaderProps) {
+  // The path that is on the clipboard, not a boolean: this header is reused
+  // across every session, so a flag left standing tells the next session its
+  // directory was copied when it was the last one's. Holding the path instead
+  // makes the check say something that stays true — including for a write that
+  // resolves after the reader has moved on.
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+
   if (standIn || !session) {
     return (
       <div className={cn("min-w-0", className)}>
@@ -42,6 +59,24 @@ export default function SessionHeader({
   // A worktree session's `cwd` is the tree, not the repo, so the project name
   // has to come off `projectPath` or every worktree reads as its own project.
   const project = basename(session.projectPath);
+
+  // The branch is what's drawn, the directory is what gets copied — a name is
+  // a thing to read, a path is a thing to paste into a terminal, and a
+  // worktree session's two differ.
+  const cwd = session.cwd;
+  const copied = copiedPath === cwd;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(cwd);
+    } catch (err) {
+      console.error("failed to copy the working directory", err);
+      return;
+    }
+    setCopiedPath(cwd);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopiedPath(null), COPIED_MS);
+  };
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>
@@ -55,10 +90,28 @@ export default function SessionHeader({
       </span>
 
       {branch && (
-        <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
-          <GitBranchIcon className="size-3.5 shrink-0" />
-          {branch}
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => void copy()}
+              aria-label={`Copy the working directory, ${cwd}`}
+              className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {copied ? (
+                <Check className="size-3.5 shrink-0" />
+              ) : (
+                <GitBranchIcon className="size-3.5 shrink-0" />
+              )}
+              {branch}
+            </button>
+          </TooltipTrigger>
+          {/* The path, because it is the thing being copied and the one thing
+              here that is not already on screen. */}
+          <TooltipContent className="max-w-sm break-all">
+            {copied ? "Copied" : cwd}
+          </TooltipContent>
+        </Tooltip>
       )}
     </div>
   );
