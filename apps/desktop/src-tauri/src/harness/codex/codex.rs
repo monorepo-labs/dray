@@ -35,13 +35,6 @@ pub mod rpc;
 
 use rpc::{Incoming, RpcClient};
 
-/// How long the opening handshake may take before we give up on the child.
-///
-/// Only the spawn-and-answer calls get one. A turn runs unbounded and its
-/// `turn/start` response is not the turn — it lands in milliseconds and says
-/// only that the turn opened.
-const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// What Codex is told this client is.
 ///
 /// Named rather than left blank because app-server records it for the
@@ -123,24 +116,28 @@ pub async fn init(
         }
     });
 
-    handshake(&client).await?;
-
-    let thread_id = if is_new_session {
-        let thread = start_thread(&client, model, effort, permission_mode, session_cwd).await?;
-        // Recorded before the first prompt, so a session whose child dies mid
-        // turn can still be resumed rather than silently starting over.
-        store::set_session_thread_id(session_id, &thread).await?;
-        thread
-    } else {
-        let recorded = store::get_session_index_item(session_id)
-            .await?
-            .and_then(|item| item.thread_id)
-            // A session created before this harness existed, or one whose
-            // `thread/start` never answered. Nothing to resume by.
-            .context("this session has no Codex thread to resume")?;
-
-        resume_thread(&client, &recorded).await?;
-        recorded
+    let thread_id = match open_thread(
+        &client,
+        session_id,
+        model,
+        effort,
+        permission_mode,
+        session_cwd,
+        is_new_session,
+    )
+    .await
+    {
+        Ok(thread_id) => thread_id,
+        Err(error) => {
+            // Everything above is post-spawn, so the child is running and about
+            // to be dropped with nobody left to talk to it. Killed rather than
+            // dropped: a `Child` is not reaped on drop, so every failed start
+            // would leave an app-server alive for the life of the app — and a
+            // handshake that timed out is exactly the child least likely to
+            // notice its stdin has gone.
+            let _ = child.kill().await;
+            return Err(error);
+        }
     };
 
     // The reader can start ingesting now: the thread exists, so every event
@@ -166,6 +163,40 @@ pub async fn init(
     })
 }
 
+/// Handshakes and opens the thread this session will run on.
+///
+/// Split out from `init` for one reason: everything in it happens after the
+/// spawn, so its caller has a child to kill on the way out.
+async fn open_thread(
+    client: &RpcClient,
+    session_id: &str,
+    model: &Model,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    session_cwd: &str,
+    is_new_session: bool,
+) -> Result<String> {
+    handshake(client).await?;
+
+    if is_new_session {
+        let thread = start_thread(client, model, effort, permission_mode, session_cwd).await?;
+        // Recorded before the first prompt, so a session whose child dies mid
+        // turn can still be resumed rather than silently starting over.
+        store::set_session_thread_id(session_id, &thread).await?;
+        return Ok(thread);
+    }
+
+    let recorded = store::get_session_index_item(session_id)
+        .await?
+        .and_then(|item| item.thread_id)
+        // A session created before this harness existed, or one whose
+        // `thread/start` never answered. Nothing to resume by.
+        .context("this session has no Codex thread to resume")?;
+
+    resume_thread(client, &recorded).await?;
+    Ok(recorded)
+}
+
 /// `initialize`, then the `initialized` notification. Every other method on the
 /// connection is rejected with "Not initialized" until both have been sent.
 async fn handshake(client: &RpcClient) -> Result<()> {
@@ -177,9 +208,7 @@ async fn handshake(client: &RpcClient) -> Result<()> {
         }
     });
 
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, client.request("initialize", params))
-        .await
-        .context("codex did not answer the handshake")??;
+    client.request("initialize", params).await?;
 
     client.notify("initialized", json!({}))
 }
@@ -204,20 +233,15 @@ async fn start_thread(
         params["effort"] = json!(effort.as_arg());
     }
 
-    let answer = tokio::time::timeout(HANDSHAKE_TIMEOUT, client.request("thread/start", params))
-        .await
-        .context("codex did not answer thread/start")??;
+    let answer = client.request("thread/start", params).await?;
 
     thread_id_from(&answer).context("thread/start answered with no thread id")
 }
 
 async fn resume_thread(client: &RpcClient, thread_id: &str) -> Result<()> {
-    tokio::time::timeout(
-        HANDSHAKE_TIMEOUT,
-        client.request("thread/resume", json!({"threadId": thread_id})),
-    )
-    .await
-    .context("codex did not answer thread/resume")??;
+    client
+        .request("thread/resume", json!({"threadId": thread_id}))
+        .await?;
 
     Ok(())
 }

@@ -22,6 +22,20 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
 use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::time::Duration;
+
+/// How long any request may go unanswered before it is given up on.
+///
+/// Every request this client sends is an *acknowledgement*: `turn/start`
+/// answers before the turn has produced anything, and `turn/interrupt` answers
+/// before the turn has actually stopped. So nothing here is ever waiting on
+/// work, and a server that has not answered inside this has stopped listening.
+///
+/// A dead child needs none of this — the pipe closes and every waiter wakes with
+/// an error. The case this covers is the child that stays alive and stops
+/// answering, where Send and Stop would otherwise hang with nothing on screen
+/// saying why.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A JSON-RPC error object, kept whole rather than flattened to a string.
 ///
@@ -103,26 +117,36 @@ impl RpcClient {
         }
     }
 
-    /// Sends a request and waits for its answer.
-    ///
-    /// No timeout here, deliberately. The one failure this cannot distinguish —
-    /// a server that will never answer — is also the one where the child has
-    /// died, and that closes the pipe, drops every pending sender, and wakes
-    /// every waiter with an error. Callers that need a bound put it on
-    /// themselves; see `codex::init`.
+    /// Sends a request and waits for its answer, up to [`REQUEST_TIMEOUT`].
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_within(method, params, REQUEST_TIMEOUT).await
+    }
+
+    /// [`Self::request`] with the bound named, so a test need not wait it out.
+    pub async fn request_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
 
-        match rx.await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => bail!("{method} failed: {err}"),
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(value))) => Ok(value),
+            Ok(Ok(Err(err))) => bail!("{method} failed: {err}"),
             // The sender was dropped without answering, which only happens when
             // the child died and took the pending map with it.
-            Err(_) => bail!("{method} was never answered — the agent exited"),
+            Ok(Err(_)) => bail!("{method} was never answered — the agent exited"),
+            // Dropped by hand: giving up on the answer has to give up the slot
+            // too, or an unresponsive server leaks one entry per attempt.
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                bail!("{method} went unanswered for {}s", timeout.as_secs())
+            }
         }
     }
 
@@ -226,6 +250,24 @@ mod tests {
             next_id: Arc::new(AtomicI64::new(1)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// A live server that stops answering is the one failure a closed pipe
+    /// cannot report: the child is alive, so nothing wakes the waiter. Without
+    /// the bound, Send and Stop hang there forever.
+    #[tokio::test]
+    async fn an_unanswered_request_gives_up_and_frees_its_slot() {
+        let client = detached();
+
+        let error = client
+            .request_within("turn/start", json!({}), Duration::from_millis(20))
+            .await
+            .expect_err("nothing is going to answer this");
+        assert!(error.to_string().contains("turn/start"));
+
+        // The slot goes with it, or one unresponsive server leaks an entry per
+        // attempt for as long as the session is open.
+        assert!(client.pending.lock().await.is_empty());
     }
 
     /// The three shapes are told apart structurally, and getting this wrong is
