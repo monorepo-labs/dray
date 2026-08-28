@@ -292,10 +292,7 @@ function App() {
   // What the composer's handoff row draws itself from, and — one line down —
   // which branch the pull requests are looked up by. Read on the same falling
   // edge as those, since a turn is what moves all of it.
-  const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
-    selectedSession?.cwd ?? "",
-    busy,
-  );
+  const { status: workStatus } = useWorkStatus(selectedSession?.cwd ?? "", busy);
 
   // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
   // read one array. `projectPath` on the item is the repo root, so a worktree
@@ -497,26 +494,6 @@ function App() {
   // answer different questions and folding them cost the button in the one case
   // it was wanted.
   const sessionHasPr = markHere?.state === "OPEN";
-
-  // The one handoff action that runs rather than asks. It reports into no
-  // transcript, so both ends are its own: the flag the button spins on, and the
-  // error banner above the composer — the same one every other backend failure
-  // reaches the reader through.
-  const [pushing, setPushing] = useState(false);
-  const push = async () => {
-    if (pushing || !selectedSession) return;
-    setPushing(true);
-    try {
-      await invoke("push_branch", { cwd: selectedSession.cwd });
-      // Straight away rather than on the next turn's edge: the count on the
-      // button is now wrong, and it is the thing the reader is looking at.
-      refreshWorkStatus();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setPushing(false);
-    }
-  };
 
   // Read off the two tree ids rather than off the panel's file list: the panel
   // pauses its reads while hidden, which is exactly when the indicator has to
@@ -942,8 +919,6 @@ function App() {
               // Straight out as a prompt, exactly as if it had been typed. A
               // turn already running queues it, like any other send.
               onSend={(prompt) => void handleSendMsg(prompt)}
-              onPush={() => void push()}
-              pushing={pushing}
               disabled={!selectedSessionId}
             />
           }

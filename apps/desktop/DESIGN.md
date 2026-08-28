@@ -161,7 +161,11 @@ Glyph sit **beside rail, ahead of title**, and take **no room when absent** — 
 
 **Hover zone and thing it move = separate element, and have to be.** With one element, box travel with buttons — so cursor that opened row sit on its edge moment it open, row shut under it and reopen, forever. Zone stay put (`-top-7 pt-7`, turning 4px target into 32px one); only inner row translate, and it translate *within* zone, so cursor never outside it. `w-fit` keep that invisible box off rest of transcript's bottom edge, where full-width strip would swallow click and text selection.
 
-**Row order interleave two ladder**: Commit, Create PR, Commit & push, Draft PR. Each ladder run plain-first then variant; reading across give two thing anyone do here, reading down give each one's longer form. Concatenated instead put both PR button at far end, where compound commit action sit between reader and thing they most often want next. `px-3` on reserve match card's own inner padding.
+**Row order = order work move in**: Commit, Create PR, Run server. `px-3` on reserve match card's own inner padding.
+
+**Row have a width, and that what set the count.** Composer `max-w-3xl` but shrink with its column, so right panel open leave it near 415px — 391px inside padding. Five labelled `size="sm"` button = ~523px, and zone `absolute w-fit` bound by nothing, so overflow don't clip: it draw **over right panel**. Four ran over too (~411px). So **Commit & push, Draft PR and Push all dropped**, leaving ~289px with room to spare. None put anything out of reach — committing leave clean tree, draft and bare push both = sentence in composer like every other button here already is, and Create PR push on the way regardless. Wrap rejected: zone's `-top-7 pt-7` cover exactly one row height, so second line open *outside* hover zone and row flicker shut. Icon-only rejected too — save ~108px and still overrun.
+
+Read that as the row's standing budget: **three button**. Fourth want re-measuring, not eyeballing.
 
 **Three fact, each a bug obvious version have:**
 
@@ -173,7 +177,7 @@ Glyph sit **beside rail, ahead of title**, and take **no room when absent** — 
 
 Inline variant — same button along toolbar row, ghost and dimmed — built as mockup and **rejected**. Permanent-but-quiet still permanent: it spend width every turn on thing wanted at end of one.
 
-Icons for `pr`/`draftPr` = same pair sidebar row and panel toggle draw, so mark and thing it lead to match everywhere.
+Icon for `pr` = same one sidebar row and panel toggle draw, so mark and thing it lead to match everywhere.
 
 Hover delay symmetric (150ms): keep cursor merely passing through from popping row open, and let one overshooting on way out come back without it having closed.
 
