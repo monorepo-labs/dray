@@ -1689,19 +1689,50 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // After the boundary event is logged, so the prompt that follows it
     // lands behind it in the file as well as by `seq`. Cheap when the queue
     // is empty, which is nearly always.
-    if at_boundary {
-        flush_queued(
-            ctx.session_id,
-            ctx.harness,
-            ctx.queued,
-            ctx.flush_seq,
-            ctx.flush_events,
-            ctx.flush_transport,
-            ctx.status,
-            app,
-        )
-        .await;
+    if !at_boundary {
+        return;
     }
+
+    // On a request/response transport the flush must not run on the read loop.
+    //
+    // Delivering a prompt there means `turn/start`, which waits for a response
+    // that only the read loop can deliver — so awaiting it here is the reader
+    // waiting on itself, and the session stops dead. Reachable, not theoretical:
+    // type while Codex is working and the next tool boundary hangs the session.
+    //
+    // Spawned rather than made fire-and-forget so the send still reports its own
+    // failure. Ordering is unaffected — the queue was drained under one lock, and
+    // `flush_queued` already logs rather than propagates.
+    if matches!(ctx.flush_transport, Transport::Rpc { .. }) {
+        let session_id = ctx.session_id.to_string();
+        let harness = ctx.harness;
+        let queued = ctx.queued.clone();
+        let seq = ctx.flush_seq.clone();
+        let events = ctx.flush_events.clone();
+        let transport = ctx.flush_transport.clone();
+        let status = ctx.status.clone();
+        let app = app.clone();
+
+        tokio::spawn(async move {
+            flush_queued(
+                &session_id, harness, &queued, &seq, &events, &transport, &status, &app,
+            )
+            .await;
+        });
+        return;
+    }
+
+    flush_queued(
+        ctx.session_id,
+        ctx.harness,
+        ctx.queued,
+        ctx.flush_seq,
+        ctx.flush_events,
+        ctx.flush_transport,
+        ctx.status,
+        app,
+    )
+    .await;
 }
 
 /// Hands every held prompt to the child, oldest first.

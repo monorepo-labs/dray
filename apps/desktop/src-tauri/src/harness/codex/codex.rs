@@ -276,18 +276,27 @@ async fn read_stdout(
     // a response still has to reach the handshake waiting on it — but mapped to
     // nothing, since there is no session for the frontend to draw them into.
     let mut ready = Some(ready);
-    let mut thread_id: Option<String> = None;
+    let mut transport: Option<Transport> = None;
 
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
 
-        if thread_id.is_none() {
+        if transport.is_none() {
             if let Some(rx) = &mut ready {
-                if let Ok(id) = rx.try_recv() {
-                    thread_id = Some(id);
-                    ready = None;
+                match rx.try_recv() {
+                    Ok(thread_id) => {
+                        transport = Some(Transport::Rpc {
+                            client: handles.client.clone(),
+                            thread_id,
+                        });
+                        ready = None;
+                    }
+                    // The sender was dropped, so the thread never opened. Stop
+                    // checking rather than polling a dead channel every line.
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => ready = None,
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
             }
         }
@@ -358,7 +367,10 @@ async fn read_stdout(
             continue;
         }
 
-        let Some(thread) = thread_id.as_deref() else {
+        // Built once the thread exists, then reused: it holds a clone of the
+        // client and the thread id, and rebuilding it per line would clone both
+        // for every delta.
+        let Some(transport) = transport.as_ref() else {
             continue;
         };
 
@@ -371,10 +383,7 @@ async fn read_stdout(
             queued: &queued,
             flush_seq: &seq,
             flush_events: &events,
-            flush_transport: &Transport::Rpc {
-                client: handles.client.clone(),
-                thread_id: thread.to_string(),
-            },
+            flush_transport: transport,
         };
 
         for agent_event in mapper.map(event) {
