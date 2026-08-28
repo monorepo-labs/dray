@@ -970,6 +970,8 @@ function App() {
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
               onAttach={() => void pickAttachments(selectedSessionId)}
+              // Straight out as a prompt, like the handoff row's own buttons.
+              onRunServer={(prompt) => void handleSendMsg(prompt)}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
             />
