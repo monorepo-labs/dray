@@ -421,6 +421,17 @@
   background: transparent !important;
 }
 
+/* An image sharing its line with text is a badge, not a picture — Greptile
+   opens every finding with one inside the heading. Streamdown gives every image
+   `my-4` and leaves it on the baseline, so the words beside it sink to the
+   badge's bottom edge and the line pads out. Only `p` and the headings are
+   named: Streamdown unwraps a paragraph holding nothing but an image, so a
+   standalone screenshot never matches this and keeps its own rhythm. */
+:is(p, h1, h2, h3, h4, h5, h6) [data-streamdown="image-wrapper"] {
+  margin-block: 0;
+  vertical-align: middle;
+}
+
 /* Reveal the copy control for the block under the cursor, not every block in a
    hovered message. */
 [data-streamdown="code-block-actions"] {
