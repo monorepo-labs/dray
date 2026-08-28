@@ -4,7 +4,11 @@ import { Button } from "@/components/ui/button";
 import { HANDOFF_ICONS } from "@/components/composer/handoffIcons";
 import type { HandoffAction } from "@/lib/handoff";
 
-/// The row of "I'm done, take it from here" actions, parked behind the composer.
+/// The row of canned prompts, parked behind the composer. Mostly they hand work
+/// back — "I'm done, take it from here" — and one, Run server, starts work
+/// instead. The name predates that second kind and is kept anyway: churning
+/// `HandoffRow`, `handoffActions` and `HandoffAction` through five files buys
+/// nothing this comment cannot say.
 ///
 /// Almost every button here **sends a prompt** — it is the reader typing
 /// "commit" without typing it. No confirm dialog and no error surface: the
@@ -13,12 +17,17 @@ import type { HandoffAction } from "@/lib/handoff";
 /// exception and runs git directly, because it has one correct implementation
 /// and nothing to decide. Which buttons exist when is [handoffActions]' rule,
 /// and it is contextual — no commit offer on a clean tree, no pull request from
-/// the branch the work lands on.
+/// the branch the work lands on. Run server is the one exception to *that*: it
+/// wants a session and nothing else.
 ///
 /// It hides rather than sits, and that shape is the point. A turn that touched
 /// a file is most turns, so a row drawn on "there are changes" is a row drawn
 /// always — which is what makes every other tool's commit button noise. And the
-/// reverse of that: finishing a turn is not the same as wanting to commit.
+/// reverse of that: finishing a turn is not the same as wanting to commit. The
+/// hiding is also what lets one action be offered unconditionally, since a
+/// button nobody sees until they go looking is only ever seen by someone who
+/// wants it — at the cost that with a session open the row is never empty, so
+/// the reserve below is now permanent.
 ///
 /// **The composer is the occluder, not a clip.** The buttons sit at full height
 /// in a reserve a fraction as tall, so most of each one runs on past it and
@@ -67,9 +76,9 @@ export default function HandoffRow({
   /// absence would move the composer.
   disabled?: boolean;
 }) {
-  // Nothing to offer is a real state and the commonest one: a clean default
-  // branch with everything pushed. The reserve goes with it, since there is no
-  // sliver to keep room for.
+  // Near-dead now Run server is unconditional — only the new-task composer,
+  // with no session to send into, reaches it. Kept because the reserve has to
+  // go with the row: a sliver standing over nothing would open onto nothing.
   if (actions.length === 0) return null;
 
   return (

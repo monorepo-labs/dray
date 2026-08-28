@@ -3,6 +3,7 @@ import {
   GitCommitHorizontal,
   GitPullRequest,
   GitPullRequestDraft,
+  Play,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -19,4 +20,5 @@ export const HANDOFF_ICONS: Record<HandoffAction["id"], LucideIcon> = {
   push: ArrowUp,
   pr: GitPullRequest,
   draftPr: GitPullRequestDraft,
+  runServer: Play,
 };

@@ -1,6 +1,12 @@
+import { RUN_SERVER_PROMPT } from "@/lib/runServer";
 import type { WorkStatus } from "@/types/events";
 
-/// One thing the reader can do with the work when a turn is over.
+/// One thing the reader can hand the session, as a button.
+///
+/// Mostly that is handing work *back* — commit it, push it, propose it — but
+/// `runServer` starts work instead, and it sits here because the bargain is the
+/// same one: a click is a prompt the reader did not have to type. A second home
+/// for that bargain would be the same button in two places.
 ///
 /// Almost all of these are **prompts**, sent verbatim as if typed, and that is
 /// the design: the agent writes the commit message with the context it just
@@ -15,7 +21,7 @@ import type { WorkStatus } from "@/types/events";
 /// make. Pushing has exactly one correct implementation and nothing to decide,
 /// so it runs directly.
 export type HandoffAction = {
-  id: "commit" | "commitPush" | "push" | "pr" | "draftPr";
+  id: "commit" | "commitPush" | "push" | "pr" | "draftPr" | "runServer";
   label: string;
 } & (
   | {
@@ -63,11 +69,39 @@ function canOpenPr(status: WorkStatus): boolean {
 /// `hasPr` comes from the sidebar's own per-repo read rather than from git:
 /// once a pull request exists, the panel is where it is acted on, and a second
 /// "Create PR" button would open a duplicate.
+///
+/// Run server is the exception to all of it: it wants a session and nothing
+/// else, so it survives both refusals below and is the one action offered
+/// unconditionally. Being parked behind the sliver is what makes that bearable.
+/// Nothing tracks whether a server is already up — the cheap signal,
+/// `tasksBySession`, answers "some background task is live" and not "this
+/// project's server is up", so gating on it would hide the button through an
+/// unrelated `Monitor` run, and a real answer is the config-and-detection
+/// feature that was deliberately dropped. On permanent display the button asks
+/// a question it cannot answer; behind the sliver only someone who went looking
+/// sees it, and going looking is wanting it.
+///
+/// The cost, accepted: with a session open the row never hides, so the empty
+/// return below is near-dead and the composer permanently carries the reserve.
 export function handoffActions(
   status: WorkStatus | null,
   hasPr: boolean,
+  hasSession = false,
 ): HandoffAction[] {
-  if (!status || status.branch === null) return [];
+  // Built ahead of the git checks rather than among the ladders, because
+  // running a server needs no repository to run in.
+  const run: HandoffAction[] = hasSession
+    ? [
+        {
+          id: "runServer",
+          label: "Run server",
+          kind: "prompt",
+          prompt: RUN_SERVER_PROMPT,
+        },
+      ]
+    : [];
+
+  if (!status || status.branch === null) return run;
 
   // Two ladders, each running plain-first then variant, and the row draws them
   // interleaved: Commit, Create PR, Commit & push, Draft PR. Reading across
@@ -124,5 +158,8 @@ export function handoffActions(
     if (local[i]) actions.push(local[i]);
     if (remote[i]) actions.push(remote[i]);
   }
-  return actions;
+  // Last, never first. The two ladders are ordered so Commit sits where the eye
+  // lands, and a third kind of action at the head displaces the thing most
+  // often wanted.
+  return [...actions, ...run];
 }

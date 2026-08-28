@@ -133,11 +133,43 @@ describe("handoffActions", () => {
 
   // Short enough to be what the reader would have typed. A longer prompt is a
   // spec competing with the repo's own instructions about commit messages.
+  //
+  // `hasSession` is true so the row is the whole row, and `runServer` is then
+  // skipped by name rather than dodged by leaving it out: the clause that makes
+  // it longer — "in the background" — is the one clause it cannot lose, and
+  // `runServer.test.ts` pins that instead. Left to the default this rule would
+  // read as covered while quietly testing four buttons out of five.
   it("keeps the prompts to a few words", () => {
-    for (const action of handoffActions(status({ dirty: 1 }), false)) {
-      if (action.kind !== "prompt") continue;
+    for (const action of handoffActions(status({ dirty: 1 }), false, true)) {
+      if (action.kind !== "prompt" || action.id === "runServer") continue;
       expect(action.prompt.split(" ").length).toBeLessThanOrEqual(5);
     }
+  });
+
+  // Last, never first: the ladders put Commit where the eye lands, and a third
+  // kind of action at the head displaces the thing most often wanted.
+  it("puts run server last in the row", () => {
+    expect(ids(status({ dirty: 1 }), false, true)).toEqual([
+      "commit",
+      "pr",
+      "commitPush",
+      "draftPr",
+      "runServer",
+    ]);
+  });
+
+  // Running a server needs no repository, so it outlives every refusal above —
+  // including the two that make the row empty.
+  it("offers run server where git offers nothing", () => {
+    expect(ids(status({ branch: null }), false, true)).toEqual(["runServer"]);
+    expect(ids(null, false, true)).toEqual(["runServer"]);
+    expect(ids(status({ branch: "main" }), false, true)).toEqual(["runServer"]);
+  });
+
+  // A prompt needs somewhere to land, and the new-task composer has no session.
+  it("offers no run server without a session", () => {
+    expect(ids(status({ dirty: 1 }), false)).not.toContain("runServer");
+    expect(ids(null, false)).toEqual([]);
   });
 
   // Every id needs a glyph in `HandoffRow`'s map, and a duplicate id in one row

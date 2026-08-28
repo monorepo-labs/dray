@@ -938,7 +938,7 @@ function App() {
           }
           handoff={
             <HandoffRow
-              actions={handoffActions(workStatus, sessionHasPr)}
+              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId)}
               // Straight out as a prompt, exactly as if it had been typed. A
               // turn already running queues it, like any other send.
               onSend={(prompt) => void handleSendMsg(prompt)}
@@ -970,8 +970,6 @@ function App() {
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
               onAttach={() => void pickAttachments(selectedSessionId)}
-              // Straight out as a prompt, like the handoff row's own buttons.
-              onRunServer={(prompt) => void handleSendMsg(prompt)}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
             />
