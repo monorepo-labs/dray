@@ -35,6 +35,16 @@ export type Working = {
   tokens: number;
 };
 
+/// A retry the harness is in the middle of. `attempt` of `maxRetries` is the
+/// whole of what is always known; the cause is named on well under half of
+/// these, so both remaining fields are ordinarily absent.
+export type ApiRetryState = {
+  attempt: number;
+  maxRetries: number;
+  status: number | null;
+  reason: string | null;
+};
+
 export type StreamingBlock = {
     index: number,
     type: "text" | "thinking" | "tool_use" | null
@@ -1361,6 +1371,34 @@ const compacting: boolean = (() => {
   return false;
 })();
 
+// The retry in flight, if the last thing that happened was one. Derived by
+// walking back rather than tracked, for the reason `compacting` is: the event
+// is persisted, so the log already answers it.
+//
+// The rule is "an `api_retry` is the newest thing here", which self-clears
+// against every way a retry can end without naming them. The harness gives no
+// closing event — a retry that works is just the request going through — so
+// anything else arriving is the proof it went through. `usage_update` is
+// skipped as the one payload that fires without meaning progress.
+//
+// Gated on `busy` like the two above: an `api_retry` at the tail of a log is
+// exactly what a session killed mid-retry leaves behind forever.
+const apiRetry: ApiRetryState | null = (() => {
+  if (!busy || !selectedSession) return null;
+  for (let i = selectedSession.events.length - 1; i >= 0; i--) {
+    const p = selectedSession.events[i].payload;
+    if (p.type === "usage_update") continue;
+    if (p.type !== "api_retry") return null;
+    return {
+      attempt: p.attempt,
+      maxRetries: p.maxRetries,
+      status: p.status,
+      reason: p.reason,
+    };
+  }
+  return null;
+})();
+
 // How full the model's context is. Derived from the log rather than tracked,
 // because both things that move it are already persisted there — a turn's own
 // occupancy, and what a compaction left behind.
@@ -1402,6 +1440,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

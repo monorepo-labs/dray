@@ -414,6 +414,12 @@ async fn read_stdout(
                 | AgentEventPayload::ModelRequestStarted
                 | AgentEventPayload::PermissionRequested { .. }
                 | AgentEventPayload::QuestionsAsked { .. }
+                // The decision retiring a withdrawn card. Dropped for the same
+                // reason as the request it retires, and to keep one rule: the
+                // decision `Session::respond_permission` mints is emitted and
+                // never written, so persisting this one would make "was it
+                // answered" true of cancels and false of real answers.
+                | AgentEventPayload::PermissionDecided { .. }
         ) {
             continue;
         }

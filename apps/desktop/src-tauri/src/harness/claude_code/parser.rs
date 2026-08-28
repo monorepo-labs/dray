@@ -90,6 +90,38 @@ pub enum ClaudeCodeEvent {
         request_id: String,
         request: ControlRequest,
     },
+    /// The CLI withdrawing a question it already asked — the tool call was
+    /// abandoned before anyone answered, so the request no longer exists on its
+    /// side.
+    ///
+    /// It names an *inbound* `request_id`, not one of ours. The two id spaces
+    /// are told apart by UUID version: every captured cancel carries a v4, the
+    /// version the CLI's own `can_use_tool` ids use, where [`ControlLine`]
+    /// mints v7. Answering one would be writing to a request that is gone.
+    ///
+    /// Unhandled, this stranded the card: `pending_permissions` is keyed by
+    /// request id and only a reply removes an entry, so the buttons stayed on
+    /// screen answering nothing and the "waiting on you" rail stayed lit.
+    ControlCancelRequest { request_id: String },
+    /// A liveness ping for a tool call that has been running a while, emitted
+    /// every 30s with `heartbeat: true` and a rising `elapsed_time_seconds`.
+    ///
+    /// Modelled only so it stops being filed as a parse failure — it was a
+    /// third of `parse_failures.jsonl`, which is a log that is only useful
+    /// while everything in it is a real gap. Nothing renders from it: the tool
+    /// row already shimmers for as long as the call is pending, so the ping
+    /// says nothing the transcript isn't showing.
+    ToolProgress {
+        tool_use_id: String,
+        tool_name: String,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+        elapsed_time_seconds: u64,
+        #[serde(default)]
+        heartbeat: bool,
+        session_id: String,
+        uuid: String,
+    },
 }
 
 /// A question from the CLI. Externally tagged on `subtype`, like the control
@@ -449,6 +481,28 @@ pub enum SystemEvent {
         tool_name: String,
         tool_use_id: String,
         message: String,
+        uuid: String,
+        session_id: String,
+    },
+    /// A model request failed and the CLI is trying it again, one line per
+    /// attempt. `attempt` counts from 1 toward `max_retries` (10 in every
+    /// capture), and it does climb — attempts of 7 and beyond appear in real
+    /// sessions, which is minutes of a turn drawing nothing.
+    ///
+    /// The cause is best-effort and usually absent: of 154 captured lines, 90
+    /// carry `error_status: null` with `error: "unknown"` and only 64 name a
+    /// status (529 `overloaded`, 500 `server_error`). So the attempt count is
+    /// the only thing always worth reporting, and anything reading these has
+    /// to treat the cause as an optional extra rather than the headline.
+    ApiRetry {
+        attempt: u32,
+        max_retries: u32,
+        #[serde(default, deserialize_with = "null_as_default")]
+        retry_delay_ms: u64,
+        #[serde(default)]
+        error_status: Option<u32>,
+        #[serde(default)]
+        error: Option<String>,
         uuid: String,
         session_id: String,
     },

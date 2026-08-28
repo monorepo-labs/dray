@@ -386,6 +386,25 @@ pub enum AgentEventPayload {
     /// A compaction is under way. Drives a live indicator and nothing else —
     /// the counts only exist once it finishes.
     ContextCompactionStarted,
+    /// A model request failed and is being tried again. Drives a live
+    /// indicator, in the same slot and for the same reason a compaction does:
+    /// the turn is genuinely open and drawing nothing, and without this the
+    /// wait is indistinguishable from a slow model.
+    ///
+    /// `attempt` of `max_retries` is the whole message. `status` and `reason`
+    /// are carried but usually absent — the harness names a cause on well
+    /// under half its retries — so a reader has to render without them.
+    ApiRetry {
+        attempt: u32,
+        max_retries: u32,
+        /// HTTP status, where the harness knew one. 529 (overloaded) and 500
+        /// are the only two observed.
+        status: Option<u32>,
+        /// The harness's own word for the cause: `overloaded`, `server_error`,
+        /// or `unknown`. The last is the majority case and says nothing, so it
+        /// is dropped on the way in rather than shown.
+        reason: Option<String>,
+    },
     /// A compaction finished, and the transcript before it no longer reaches the
     /// model. Both counts are optional so an unfamiliar wire shape still closes
     /// the indicator; the UI drops the saving rather than reporting a wrong one.

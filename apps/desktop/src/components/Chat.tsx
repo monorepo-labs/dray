@@ -4,6 +4,7 @@ import { ArrowDown } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
+import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import CompactingIndicator from "@/components/chat/CompactingIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
@@ -20,7 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useHotkey } from "@/hooks/useHotkey";
-import type { StreamingBlock, Working } from "@/hooks/useSessions";
+import type { ApiRetryState, StreamingBlock, Working } from "@/hooks/useSessions";
 import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
@@ -61,6 +62,7 @@ type ChatProps = {
   /// Whether a compaction is running. Sits beside the task indicator for the
   /// same reason: it belongs to the session, not to any one turn.
   compacting?: boolean;
+  apiRetry?: ApiRetryState | null;
   /// Prompts typed into the running turn that the app has not handed to the CLI
   /// yet. Rendered here rather than built from the log, because a held prompt is
   /// deliberately unpersisted until it is delivered.
@@ -148,6 +150,7 @@ export default function Chat({
   backgroundTaskCount = 0,
   liveTaskIds,
   compacting = false,
+  apiRetry = null,
   queuedMessages = [],
   crowded = false,
   active = true,
@@ -242,6 +245,11 @@ export default function Chat({
   // nothing, so every test above passes — but the agent is not thinking, it is
   // waiting on the compaction, and `CompactingIndicator` already says so.
   //
+  // A retry suppresses it for exactly that reason, and it matters more here:
+  // attempts run to 10, so this is the longest blank stretch a turn has, and it
+  // is the one the reader most needs a real explanation of rather than a word
+  // picked at random.
+  //
   // An open request — for consent or for an answer — suppresses it for the same
   // reason a compaction does, and now more strongly: the card renders outside
   // the turn, so the turn genuinely draws nothing and every other test passes —
@@ -254,6 +262,7 @@ export default function Chat({
     busy &&
     working &&
     !compacting &&
+    !apiRetry &&
     cards.length === 0 &&
     lastTurn &&
     !lastTurn.completed &&
@@ -519,6 +528,15 @@ export default function Chat({
           )}
 
           {compacting && <CompactingIndicator />}
+
+          {apiRetry && (
+            <ApiRetryIndicator
+              attempt={apiRetry.attempt}
+              maxRetries={apiRetry.maxRetries}
+              status={apiRetry.status}
+              reason={apiRetry.reason}
+            />
+          )}
         </div>
       </div>
 

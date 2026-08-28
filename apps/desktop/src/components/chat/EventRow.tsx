@@ -16,7 +16,10 @@ function Notice({
   tone = "muted",
   wrap = false,
 }: {
-  icon: typeof Archive;
+  /// Optional. A failed turn draws none: it carries the harness's own sentence,
+  /// which is already a whole statement, and a warning glyph in front of it
+  /// only repeats what the red says.
+  icon?: typeof Archive;
   children: React.ReactNode;
   tone?: "muted" | "destructive";
   /// Lets the text run onto a second line. Off by default — most notices are
@@ -35,7 +38,7 @@ function Notice({
       {/* A flat 4px, not an em fraction. `items-start` puts the icon's box at
           the line's top edge while its glyph sits inset within that box, so it
           reads high against the first line of text. */}
-      <Icon className={cn("size-3.5 shrink-0", wrap && "mt-1")} />
+      {Icon && <Icon className={cn("size-3.5 shrink-0", wrap && "mt-1")} />}
       <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
     </p>
   );
@@ -121,9 +124,26 @@ export default function EventRow({
       // mid-response, `aborted_tools` mid-call), but the user did it on
       // purpose — reporting their own stop back as a failure is noise.
       if (payload.stopReason?.startsWith("aborted")) return null;
+      // `finalText` is the harness's own sentence about what went wrong, and it
+      // is the only thing here worth reading: "You've hit your session limit ·
+      // resets 9:05pm", "Not logged in · Please run /login", "API Error: 529
+      // Overloaded". Several name the cure.
+      //
+      // `stopReason` deliberately never reaches the screen. With the aborts
+      // above suppressed, the only value that ever gets this far is
+      // `stop_sequence` — a wire token that says nothing to a reader, and which
+      // was being shown *instead* of the sentence next to it.
+      //
+      // `wrap` because these run long and the tail is the part worth having:
+      // "raise it at claude.ai/settings/usage", "resets 9:05pm", "run /login".
+      // Truncated, every one of them is clipped exactly where the cure starts.
+      //
+      // No icon. The sentence is already a whole statement and the red already
+      // says which kind of statement it is, so a warning glyph in front of it
+      // is the third thing on the row saying "this went wrong".
       return (
-        <Notice icon={TriangleAlert} tone="destructive">
-          Turn failed{payload.stopReason ? ` — ${payload.stopReason}` : ""}
+        <Notice tone="destructive" wrap>
+          {payload.finalText?.trim() || "Turn failed"}
         </Notice>
       );
 
