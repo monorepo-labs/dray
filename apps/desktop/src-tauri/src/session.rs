@@ -574,12 +574,19 @@ impl SessionManager {
         // the kill would destroy not just a turn in flight but every background
         // task the child is still carrying. The index still records the pick
         // below, so the next idle send is what respawns.
-        let effort_changed = !busy
-            && sessions_guard
-                .get(session_id)
-                .is_some_and(|s| s.effort != effort);
+        // Codex is in the same position for its model and its stance: the one
+        // method that would set them in place, `thread/settings/update`, is
+        // experimental, and a `turn/start` override only takes effect from the
+        // next turn. So it respawns for all three where Claude respawns for
+        // effort alone. `thread/resume` carries the conversation across it.
+        let respawn_needed = !busy
+            && sessions_guard.get(session_id).is_some_and(|s| {
+                s.effort != effort
+                    || (s.harness == Harness::Codex
+                        && (s.model != model || s.permission_mode != permission_mode))
+            });
 
-        if effort_changed {
+        if respawn_needed {
             if let Some(s) = sessions_guard.remove(session_id) {
                 s.kill().await?;
             }
@@ -663,11 +670,18 @@ impl SessionManager {
                 });
             }
 
-            if s.model != model {
-                s.set_model(&model_spec).await?;
-            }
-            if s.permission_mode != permission_mode {
-                s.set_permission_mode(permission_mode).await?;
+            // Claude's alone: both are control requests on its own channel, and
+            // Codex has neither. Reaching here with a Codex session whose pick
+            // changed means the respawn above was skipped because work was
+            // outstanding — the index still records the pick, so the next idle
+            // send applies it, exactly as it does for effort.
+            if s.harness == Harness::ClaudeCode {
+                if s.model != model {
+                    s.set_model(&model_spec).await?;
+                }
+                if s.permission_mode != permission_mode {
+                    s.set_permission_mode(permission_mode).await?;
+                }
             }
 
             // Last thing before the prompt goes down the pipe: the child is idle
