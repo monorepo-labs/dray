@@ -134,9 +134,16 @@ fails closed — nothing runs unasked — but it means a Codex session in a stan
 that asks (`auto`, `manual`, `plan`) will have its commands refused. Sessions in
 `dontAsk` or `bypassPermissions` run without asking and work fully.
 
-Also not wired: worktrees and fork for Codex (both refuse outright rather than
-running somewhere narrower), subagents, MCP tool calls, web search, images in
+Also not wired: fork for Codex (it refuses outright rather than forking into the
+parent's own conversation), subagents, MCP tool calls, web search, images in
 prompts, and changing model or permission mode mid-session.
+
+Worktrees **do** work, by a different route. Claude gets a `-w` flag and makes
+its own tree; Codex has none, so Dray creates the tree first — resolving the
+same `origin/HEAD` base the CLI would have — and starts Codex inside it. That is
+the route `dray new --from` already took, so a Codex session's tree is on disk
+and clean before the first turn, which makes its changes baseline exact rather
+than the approximation a `-w` session starts with.
 
 ## Testing it
 

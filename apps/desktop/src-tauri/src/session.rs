@@ -387,6 +387,21 @@ impl SessionManager {
         let linked_issues = &expanded.linked;
 
         if is_new_session {
+            // Codex has no `-w`, so its worktree has to be one Dray makes — the
+            // same route `--from` already takes, started where the CLI would
+            // have started it. Without this the tree is never created, and the
+            // session bails inside `Session::init` with its row already in the
+            // index: a sidebar row pointing at a directory that never existed
+            // and can never start. `HEAD` where there is no remote, matching
+            // what the CLI itself falls back to when the fetch fails.
+            let codex_base = match (harness, use_worktree, base_ref) {
+                (Harness::Codex, true, None) => {
+                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
+                }
+                _ => None,
+            };
+            let base_ref = base_ref.or(codex_base.as_deref());
+
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
             } else {
@@ -1091,14 +1106,15 @@ impl Session {
                 .await
             }
             Harness::Codex => {
-                // Neither is wired yet, and both fail closed rather than
-                // quietly doing something narrower. A worktree here would need
-                // `create_worktree` — Codex has no `-w` — and a fork needs
-                // `thread/fork`; a session that silently ran in the wrong tree,
-                // or that forked into the parent's own conversation, is the
-                // failure worth refusing outright.
+                // A worktree reaches Codex as a directory that already exists,
+                // never as a name to create: `send_msg` resolves a base and
+                // makes the tree itself, because Codex has no `-w`. A name
+                // arriving here is a caller that skipped that, and a session
+                // that silently ran in the wrong tree is the failure worth
+                // refusing outright. A fork needs `thread/fork`, and forking
+                // into the parent's own conversation is the same kind of wrong.
                 if worktree_name.is_some() {
-                    bail!("Codex sessions cannot use a worktree yet");
+                    bail!("Codex cannot create a worktree — it has to be made first");
                 }
                 if fork_from.is_some() {
                     bail!("Codex sessions cannot be forked yet");

@@ -88,7 +88,7 @@ pub async fn list_branches(cwd: &str) -> Result<BranchList> {
 /// A repo with no remote returns `None`: the CLI's last resort is the literal
 /// string `main`, which it then fails to `rev-parse`, and claiming a base that
 /// can't resolve would be worse than saying nothing.
-async fn default_base(cwd: &str) -> Option<String> {
+pub async fn default_base(cwd: &str) -> Option<String> {
     if let Some(head) = git(cwd, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
         .await
         .map(|s| s.trim().to_string())
