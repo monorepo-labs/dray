@@ -183,9 +183,16 @@ only one thing in the pane and nothing to switch to
 
 > Details
 
-**No issue tagged**
+**No issue tagged**, and barely ever seen: the tab is drawn only where a session
+has a link, so this is the frame between unlinking the last one and the tab
+going
 
-> No issue on this session. Tag one with `#` in the composer.
+> No issue on this session.
+
+It names no cure, and that is the point. A `#` in the composer is a *mention* —
+it reaches the model and draws as a button in the bubble, and records nothing.
+Linking is the agent's, through `dray issue link`, so a sentence here telling
+the reader to do it by hand would be sending them after work they never had.
 
 The status is drawn as a glyph at the head of each row and **its name appears
 nowhere** — the row already says it, and a word under the glyph saying the same

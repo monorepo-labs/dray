@@ -64,10 +64,10 @@ async fn send_msg(
             session_id,
             prompt,
             &attachment_paths,
-            // Nothing named: everything the app sends tags its issues in the
-            // prompt text, picker and issues page alike, so there is one rule
-            // on this side of the bridge. `--issue` on the CLI is the other
-            // caller, and it names them because a flag is not prose.
+            // Nothing named, ever: the app tags its issues in the prompt
+            // text, the composer's `#` picker being the only route, so there is
+            // one rule on this side of the bridge. `--issue` on the CLI is the
+            // other caller, and it names them because a flag is not prose.
             &[],
             harness,
             model,
