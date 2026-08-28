@@ -937,6 +937,20 @@ useEffect(() => {
             if (agentEvent.payload.type === "background_tasks_changed") {
               const { tasks } = agentEvent.payload;
               setTasksBySession((prev) => ({ ...prev, [agentEvent.sessionId]: tasks }));
+              // The other half of the guard in `session_status`: a turn that
+              // ended with a task still open kept its asks, since the task's
+              // subagent could be the one asking. With the set drained and no
+              // turn running, nothing is left that could answer them.
+              if (
+                tasks.length === 0 &&
+                statusBySessionRef.current[agentEvent.sessionId] !== "in_progress"
+              ) {
+                setAsksBySession((prev) =>
+                  prev[agentEvent.sessionId]?.length
+                    ? { ...prev, [agentEvent.sessionId]: [] }
+                    : prev,
+                );
+              }
             }
 
             // The agent has stopped and is waiting on the reader. Announced like
