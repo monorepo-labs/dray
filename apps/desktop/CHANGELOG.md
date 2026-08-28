@@ -7,6 +7,16 @@ second description of it. GitHub's generated commit list is appended below it.
 
 ## 0.8.1
 
+### Added
+
+- **Run server, in the composer toolbar.** Starting a session's dev server
+  meant finding its worktree path and pasting it into a terminal, once per
+  session. The button sends the prompt instead, so the server lands as a
+  background task the orb already shows and the subagent panel already stops.
+- **Click the branch in the session header to copy its directory.** That path
+  is what gets pasted into a terminal, and a worktree session's directory is
+  not the repository root the title names.
+
 ### Fixed
 
 - **A background task no longer holds the turn open.** A dev server, a
