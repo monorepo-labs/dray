@@ -303,11 +303,28 @@ async fn read_stdout(
             // ignored, which keeps the turn moving and files the gap.
             Incoming::Request { id, method, .. } => {
                 record_failure(&handles.session_id, "unsupported_request", &method, &line).await;
-                let _ = handles.client.respond_err(
-                    id,
-                    -32601,
-                    "This client cannot answer that request yet.",
-                );
+
+                // An approval gets a real decision, not a protocol error.
+                //
+                // Until the permission card is wired there is nobody to ask, and
+                // the two ways of saying so are not equivalent: a JSON-RPC error
+                // leaves it to the server what to do with a request it cannot
+                // resolve, where an explicit decline is a defined outcome that
+                // ends the item as `declined` and draws as a failed tool call.
+                // Fails closed, which is the only safe direction — the reader
+                // picked a stance that asks, and nothing may run unasked.
+                let answered = if method.contains("requestApproval") {
+                    handles
+                        .client
+                        .respond(id, json!({"decision": "decline"}))
+                } else {
+                    handles.client.respond_err(
+                        id,
+                        -32601,
+                        "This client cannot answer that request yet.",
+                    )
+                };
+                let _ = answered;
                 continue;
             }
 
