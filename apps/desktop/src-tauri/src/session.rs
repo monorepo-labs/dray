@@ -376,9 +376,15 @@ impl SessionManager {
         // a tag, so from here `prompt` is what the model will actually be given
         // and the transcript will actually draw. Best effort by design: an
         // unreachable tracker leaves the text as it was and costs nothing else.
-        // See [`issues::expand_tags`].
-        let (prompt, issues) = issues::expand_tags(prompt, issue_ids).await;
-        let prompt = prompt.as_str();
+        //
+        // Two lists, and the split is the point: `mentioned` rides the prompt
+        // event so the tag draws as a button, `linked` is written onto the
+        // session and holds only what a caller named outright. See
+        // [`issues::expand_tags`].
+        let expanded = issues::expand_tags(prompt, issue_ids).await;
+        let prompt = expanded.prompt.as_str();
+        let issues = &expanded.mentioned;
+        let linked_issues = &expanded.linked;
 
         if is_new_session {
             let worktree_name = if use_worktree {
@@ -444,7 +450,7 @@ impl SessionManager {
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.
-            item.issues = issues.clone();
+            item.issues = linked_issues.clone();
 
             // The one failure that has to undo the tree, and the row that just
             // failed to be written is exactly why: removal is offered from a
@@ -516,7 +522,7 @@ impl SessionManager {
             )
             .await?;
             session
-                .send_msg(prompt, attachment_paths, &issues, baseline, from, app)
+                .send_msg(prompt, attachment_paths, issues, baseline, from, app)
                 .await?;
             // The prompt event is synthesized by `send_msg`, so read the log
             // back rather than returning empty — otherwise the frontend's first
@@ -605,7 +611,7 @@ impl SessionManager {
             .as_ref()
             .map(|item| item.issues.clone())
             .unwrap_or_default();
-        for issue in &issues {
+        for issue in linked_issues {
             match link_session_issue(session_id, issue.clone()).await {
                 Ok(next) => linked = next,
                 Err(e) => eprintln!("[issue link err] {e:#}"),
@@ -641,7 +647,7 @@ impl SessionManager {
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
                 if tool_in_flight {
-                    s.queue_and_flush(prompt, attachment_paths, &issues, from, app)
+                    s.queue_and_flush(prompt, attachment_paths, issues, from, app)
                         .await;
                     return Ok(SendOutcome {
                         issues: linked,
@@ -649,7 +655,7 @@ impl SessionManager {
                     });
                 }
 
-                let queued = s.queue_msg(prompt, attachment_paths, &issues, from).await;
+                let queued = s.queue_msg(prompt, attachment_paths, issues, from).await;
                 return Ok(SendOutcome {
                     snapshot: None,
                     queued: Some(queued),
@@ -668,7 +674,7 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, &issues, baseline, from, app)
+            s.send_msg(prompt, attachment_paths, issues, baseline, from, app)
                 .await?;
             return Ok(SendOutcome {
                 issues: linked,
@@ -725,7 +731,7 @@ impl SessionManager {
         }
 
         session
-            .send_msg(prompt, attachment_paths, &issues, baseline, from, app)
+            .send_msg(prompt, attachment_paths, issues, baseline, from, app)
             .await?;
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome {

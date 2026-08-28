@@ -572,6 +572,20 @@ pub fn parse_identifier(text: &str) -> Option<String> {
     Some(format!("{}-{}", key.to_uppercase(), digits))
 }
 
+/// What a prompt's tags came to.
+///
+/// Two lists because a tag answers two different questions. `mentioned` is what
+/// this prompt names — it rides the `user_message` event, so the tag in the
+/// bubble draws as a button opening the tracker. `linked` is what the *session*
+/// is about, and only a caller naming an issue outright puts one there: a
+/// `#DRA-53` in prose is a mention, and "unrelated to #DRA-53" must not file the
+/// session under it forever.
+pub struct ExpandedTags {
+    pub prompt: String,
+    pub mentioned: Vec<IssueRef>,
+    pub linked: Vec<IssueRef>,
+}
+
 /// The prompt as the model will see it, and every issue it is against.
 ///
 /// Two sources, one answer: the `#ABC-123` tags already in the text, and
@@ -615,11 +629,15 @@ fn bare_ref(identifier: String) -> IssueRef {
     }
 }
 
-pub async fn expand_tags(prompt: &str, named: &[String]) -> (String, Vec<IssueRef>) {
+pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
     let wanted = wanted_tags(prompt, named);
 
     if wanted.is_empty() {
-        return (prompt.to_string(), Vec::new());
+        return ExpandedTags {
+            prompt: prompt.to_string(),
+            mentioned: Vec::new(),
+            linked: Vec::new(),
+        };
     }
 
     // `None` is ordinary: nobody has connected a tracker. The named issues below
@@ -678,8 +696,9 @@ fn apply_tags(
     prompt: &str,
     wanted: &[(String, bool)],
     resolved: Vec<Option<IssueRef>>,
-) -> (String, Vec<IssueRef>) {
-    let mut links = Vec::new();
+) -> ExpandedTags {
+    let mut mentioned = Vec::new();
+    let mut linked = Vec::new();
     let mut appended = Vec::new();
 
     for ((tag, in_text), found) in wanted.iter().zip(resolved) {
@@ -694,8 +713,9 @@ fn apply_tags(
 
         if !*in_text {
             appended.push(tag_text(&reference));
+            linked.push(reference.clone());
         }
-        links.push(reference);
+        mentioned.push(reference);
     }
 
     let text = if appended.is_empty() {
@@ -704,7 +724,11 @@ fn apply_tags(
         format!("{prompt}\n\n{}", appended.join("\n"))
     };
 
-    (text, links)
+    ExpandedTags {
+        prompt: text,
+        mentioned,
+        linked,
+    }
 }
 
 // ── commands ─────────────────────────────────────────────────────────────────
@@ -892,28 +916,48 @@ mod tests {
         // No tracker connected, a revoked key, an unreachable Linear — every
         // one of them arrives here as `None`, and this is the case that used to
         // drop the issue and answer identically to success.
-        let (text, issues) = apply_tags("do the thing", &wanted, vec![None]);
+        let out = apply_tags("do the thing", &wanted, vec![None]);
 
-        assert!(text.contains("#DRA-53"), "the tag is missing from {text:?}");
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].identifier, "DRA-53");
+        assert!(
+            out.prompt.contains("#DRA-53"),
+            "the tag is missing from {:?}",
+            out.prompt
+        );
+        assert_eq!(out.linked.len(), 1);
+        assert_eq!(out.linked[0].identifier, "DRA-53");
         // Bare — an identifier and no more, exactly as `dray issue link` writes
         // one with no `--title`.
-        assert!(issues[0].title.is_empty());
-        assert!(issues[0].url.is_empty());
+        assert!(out.linked[0].title.is_empty());
+        assert!(out.linked[0].url.is_empty());
     }
 
     #[test]
     fn a_tag_the_reader_typed_is_left_where_it_is() {
         let prompt = "look at #DRA-53 please";
         let wanted = wanted_tags(prompt, &[]);
-        let (text, issues) = apply_tags(prompt, &wanted, vec![None]);
+        let out = apply_tags(prompt, &wanted, vec![None]);
 
         // Already in the text, so nothing is appended and nothing is doubled.
-        assert_eq!(text, prompt);
+        assert_eq!(out.prompt, prompt);
         // And nothing is recorded: the tag says what it says without a link
         // behind it, where a named issue would have been lost entirely.
-        assert!(issues.is_empty());
+        assert!(out.mentioned.is_empty());
+        assert!(out.linked.is_empty());
+    }
+
+    /// The whole of what a tag in prose is: a mention. "unrelated to #DRA-53"
+    /// files the session under DRA-53 forever if this ever links again, and the
+    /// reader has no way to see it happen. Resolved so the bubble can draw a
+    /// button, and only that.
+    #[test]
+    fn a_tag_the_reader_typed_is_mentioned_but_never_linked() {
+        let prompt = "this is unrelated to #DRA-53";
+        let wanted = wanted_tags(prompt, &[]);
+        let out = apply_tags(prompt, &wanted, vec![Some(issue_ref("DRA-53", "Tracker"))]);
+
+        assert_eq!(out.prompt, prompt);
+        assert_eq!(out.mentioned.len(), 1);
+        assert!(out.linked.is_empty());
     }
 
     #[test]
@@ -924,7 +968,7 @@ mod tests {
         // One entry, not two: `--issue` naming what the text already names is
         // the same issue, however it was spelled.
         assert_eq!(wanted, vec![("DRA-53".to_string(), true)]);
-        assert_eq!(apply_tags(prompt, &wanted, vec![None]).0, prompt);
+        assert_eq!(apply_tags(prompt, &wanted, vec![None]).prompt, prompt);
     }
 
     #[cfg(unix)]

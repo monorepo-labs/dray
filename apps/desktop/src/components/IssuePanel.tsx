@@ -104,10 +104,7 @@ export default function IssuePanel({
 }) {
   if (!issues.length) {
     return (
-      <Empty>
-        No issue on this session. Tag one with <code className="text-foreground">#</code> in the
-        composer.
-      </Empty>
+      <Empty>No issue on this session.</Empty>
     );
   }
 
