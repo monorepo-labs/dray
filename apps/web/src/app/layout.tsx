@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "react-tweet/theme.css";
 import "./globals.css";
 
@@ -12,9 +13,19 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Dray: run every coding agent from one app";
+// The headline face, and only that: one weight, one file, so it costs one
+// request. Licensed per seat, not open — it stays out of the app and out of
+// body text, where Geist already does the job.
+const aeonik = localFont({
+  src: "../fonts/AeonikPro-Medium.ttf",
+  weight: "500",
+  variable: "--font-aeonik",
+  display: "swap",
+});
+
+const title = "Dray: run Claude Code and Codex in one app";
 const description =
-  "A native macOS app that drives the coding-agent CLIs you already have, on the subscription you already pay for. Claude Code today, with more harnesses coming.";
+  "Fast, feels right, runs agents in parallel — on your existing subscriptions.";
 
 // Without a base, Next emits relative og:image URLs and most crawlers drop
 // them. The domain is not known at build time, so Vercel's own is the fallback
@@ -46,7 +57,7 @@ export default function RootLayout({
     <html
       lang="en"
       data-theme="dark"
-      className={`${geistSans.variable} ${geistMono.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable}`}
     >
       <body className="font-sans">
         {children}

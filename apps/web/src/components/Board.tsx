@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { LazyVideo } from "@/components/LazyVideo";
+import { FEATURED_SRCS } from "@/lib/features";
 import { MEDIA, mediaKey } from "@/lib/media";
 
 /// The board: every capture of the app, in one masonry run.
@@ -10,7 +11,12 @@ import { MEDIA, mediaKey } from "@/lib/media";
 /// grid would have to letterbox or crop it. The layout is the part that
 /// should not need editing when the board grows.
 export function Board({ className }: { className?: string }) {
-  if (MEDIA.length === 0) return null;
+  // A clip a feature section already plays stays out of the board: the same
+  // capture twice on one page reads as padding.
+  const items = MEDIA.filter(
+    (m) => m.kind !== "video" || !FEATURED_SRCS.has(m.src),
+  );
+  if (items.length === 0) return null;
 
   return (
     <section className={className}>
@@ -23,7 +29,7 @@ export function Board({ className }: { className?: string }) {
           stay flat at 12px rather than growing with the viewport, matching
           the page shell's own flat padding. */}
       <div className="columns-1 gap-3 sm:columns-2">
-        {MEDIA.map((item, i) => (
+        {items.map((item, i) => (
           <div
             key={mediaKey(item)}
             // `bg-card` under everything so a tile occupies its space as a
@@ -51,8 +57,8 @@ export function Board({ className }: { className?: string }) {
                 // layout then picks another — the lead image downloads
                 // twice. One column inside the shell's flat `px-3` below
                 // 640px, two inside it with a 12px gutter above it, capped
-                // by the shell's own max width.
-                sizes="(max-width: 639px) calc(100vw - 24px), (max-width: 1600px) calc((100vw - 36px) / 2), 782px"
+                // by the shell's own max width (5xl = 1024px).
+                sizes="(max-width: 639px) calc(100vw - 24px), (max-width: 1024px) calc((100vw - 36px) / 2), 494px"
                 className="block h-auto w-full"
               />
             )}
