@@ -478,6 +478,8 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
 /// Not an error: nothing went wrong with the call, the process it belonged to
 /// stopped existing. Flagging it would tint the row red and spring it open on
 /// load, which is a lot of noise for "this didn't finish".
+const EMPTY_TASKS: ReadonlySet<string> = new Set();
+
 const ABANDONED: ToolResult = {
   text: "No result — the session ended before this call finished.",
   isError: false,
@@ -496,6 +498,12 @@ export function buildTranscript(
   /// the app answers and so is the call most likely to be open at a quit — but
   /// it is true of any tool call caught mid-flight.
   live = false,
+  /// Background tasks the child still holds, by task id. A call that spawned
+  /// one of these is pending whatever `live` says: the turn ends on its
+  /// `result`, but a background subagent reports back in a turn of its own, and
+  /// marking its call abandoned in between would flicker the row to "never
+  /// finished" seconds before its result lands.
+  liveTaskIds: ReadonlySet<string> = EMPTY_TASKS,
 ): {
   /// Main-thread events only, in `seq` order. Subagent work is excluded; the
   /// spawning tool call stays so the chat can show a row linking to the panel.
@@ -565,13 +573,6 @@ export function buildTranscript(
   // could still produce a result. With no child running, nothing can.
   if (!live) for (const callId of open) abandoned.add(callId);
 
-  // Applied last, and only where no real result exists. A background subagent
-  // can report back after the turn that spawned it, so a call marked here early
-  // in the walk must still lose to the result that eventually arrives.
-  for (const callId of abandoned) {
-    if (!resultByCallId.has(callId)) resultByCallId.set(callId, ABANDONED);
-  }
-
   const subagentById = new Map<string, SubagentRun>();
   for (const event of events) {
     const ref = event.subagent;
@@ -626,6 +627,18 @@ export function buildTranscript(
   // first.
   for (const run of subagentById.values()) {
     run.spawn = callById.get(run.id) ?? null;
+  }
+
+  // Applied last, and only where no real result exists. A background subagent
+  // can report back after the turn that spawned it, so a call marked above must
+  // still lose to the result that eventually arrives — and while the child
+  // still holds its task, it is not abandoned at all. After the runs are built,
+  // because the task id lives on the run and not on the call.
+  for (const callId of abandoned) {
+    if (resultByCallId.has(callId)) continue;
+    const taskId = subagentById.get(callId)?.taskId;
+    if (taskId !== null && taskId !== undefined && liveTaskIds.has(taskId)) continue;
+    resultByCallId.set(callId, ABANDONED);
   }
 
   const mainThread = events.filter((event) => !event.subagent);

@@ -126,11 +126,11 @@ pub struct SendOutcome {
 /// Drives [`SessionStatus`] from the mapped event stream plus the user's own
 /// sends.
 ///
-/// A `result` alone does not end the work: a background subagent keeps running
-/// past it, and the CLI later opens a fresh turn — an `init` with no prompt —
-/// to deliver what the subagent found. So completion takes two facts at once,
-/// no model call open and no background tasks outstanding, and whichever event
-/// clears the second fact is the one that reports it.
+/// Two axes, deliberately kept apart. The status follows the *turn*: a `result`
+/// completes it, whatever background tasks are outstanding. The task set is
+/// recorded beside it and answers one question only — whether the child can be
+/// replaced — because a subagent that reports back later opens its own turn
+/// (a promptless `init`) to do so, while a `local_bash` task may never end.
 #[derive(Debug, Default)]
 pub struct StatusTracker {
     status: SessionStatus,
@@ -164,17 +164,22 @@ impl StatusTracker {
                 self.model_call_open = true;
                 self.set(SessionStatus::InProgress)
             }
+            // A `result` ends the turn whatever tasks are outstanding. Holding
+            // the session open on them was built for a subagent that reports
+            // back later — but that report opens its own turn (`TurnStarted`
+            // above), so the hold bought nothing there and cost everything for
+            // a `local_bash` task that never ends: a dev server, a Monitor, a
+            // poll loop kept the Stop button, the indicator and the completion
+            // notice hanging until the reader clicked Stop.
             AgentEventPayload::TurnCompleted { .. } => {
                 self.model_call_open = false;
-                (self.background_tasks.is_empty())
-                    .then(|| self.set(SessionStatus::Completed))
-                    .flatten()
+                self.set(SessionStatus::Completed)
             }
+            // Recorded, never a status input. The set has its own indicator
+            // and its own per-task Stop.
             AgentEventPayload::BackgroundTasksChanged { tasks } => {
                 self.background_tasks = tasks.iter().map(|t| t.task_id.clone()).collect();
-                (tasks.is_empty() && !self.model_call_open)
-                    .then(|| self.set(SessionStatus::Completed))
-                    .flatten()
+                None
             }
             _ => None,
         }
@@ -182,18 +187,18 @@ impl StatusTracker {
 
     /// Whether anything at all is still working, background tasks included.
     ///
-    /// The safe-to-replace-the-child question, and nothing else: a session whose
-    /// turn ended while a background task runs is still `InProgress` here, and
-    /// killing that child would take the task with it.
-    pub fn is_busy(&self) -> bool {
-        self.status == SessionStatus::InProgress
+    /// The safe-to-replace-the-child question, and nothing else. Wider than the
+    /// status: a session whose turn ended reads `Completed` while a background
+    /// task still runs, and killing that child would take the task with it.
+    pub fn has_outstanding_work(&self) -> bool {
+        self.model_call_open || !self.background_tasks.is_empty()
     }
 
     /// Whether a model call is open right now, which is what decides that an
     /// arriving prompt is queued rather than sent. Read *before* `on_send`,
     /// which opens one unconditionally and would answer for itself.
     ///
-    /// Deliberately narrower than [`is_busy`](Self::is_busy). A background task
+    /// Deliberately narrower than [`has_outstanding_work`](Self::has_outstanding_work). A background task
     /// holds the session in-progress long after its turn ended, but the CLI's
     /// main thread is idle and answers a prompt straight away — verified
     /// against v2.1.232, where a prompt written with a background `sleep 300`
@@ -547,7 +552,7 @@ impl SessionManager {
             Some(s) => {
                 let tracker = s.status.lock().await;
                 (
-                    tracker.is_busy(),
+                    tracker.has_outstanding_work(),
                     tracker.turn_in_flight(),
                     tracker.tool_in_flight(),
                 )
@@ -754,7 +759,7 @@ impl SessionManager {
             .with_context(|| format!("unknown session {session_id}"))?;
 
         if let Some(s) = self.sessions.lock().await.get(session_id) {
-            if s.status.lock().await.is_busy() {
+            if s.status.lock().await.has_outstanding_work() {
                 bail!("wait for the session to finish before forking it");
             }
         }
@@ -1584,9 +1589,10 @@ mod tests {
     /// The fixture's second turn spawns a background agent: its `result`
     /// arrives while a task is outstanding, the set drains later, and the CLI
     /// opens a promptless turn to report. The trajectory pins all of it — most
-    /// importantly that the mid-flight `result` changes nothing.
+    /// importantly that the mid-flight `result` completes the turn, and that
+    /// the set draining moves nothing.
     #[test]
-    fn completion_waits_for_background_tasks_to_drain() {
+    fn a_result_completes_the_turn_whatever_tasks_are_outstanding() {
         let mut mapper = Mapper::default();
         let mut tracker = StatusTracker::default();
 
@@ -1611,11 +1617,48 @@ mod tests {
                 InProgress, // the send
                 Completed,  // turn 1: result with nothing outstanding
                 InProgress, // turn 2 opens
-                // turn 2's result is *absent*: a background task was open
-                Completed,  // the task set drains
+                Completed,  // turn 2's result, with a background task still open
+                // the task set draining is *absent*: it is not a status input
                 InProgress, // the promptless report-back turn
                 Completed,  // its result
             ]
+        );
+    }
+
+    /// The capture that settled the rule. Background Bash and Monitor both
+    /// register as `local_bash`, and a `result` lands with both still open —
+    /// so the turn completes with two tasks outstanding, and the reader is not
+    /// left clicking Stop to end a turn that already ended.
+    #[test]
+    fn a_monitor_is_a_local_bash_task_and_holds_nothing() {
+        let mut mapper = Mapper::default();
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+
+        let mut kinds = Vec::new();
+        let mut outstanding_at_result = None;
+
+        for line in include_str!("harness/claude_code/fixtures/background_bash_monitor.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            let Ok(Some(event)) = mapper.map(parser::parse_line(line).unwrap()) else {
+                continue;
+            };
+            if let AgentEventPayload::BackgroundTasksChanged { tasks } = &event.payload {
+                kinds.extend(tasks.iter().map(|t| t.task_type.clone()));
+            }
+            let next = tracker.on_event(&event.payload);
+            if matches!(event.payload, AgentEventPayload::TurnCompleted { .. }) {
+                outstanding_at_result = Some((next, tracker.background_task_ids().len()));
+            }
+        }
+
+        assert!(!kinds.is_empty() && kinds.iter().all(|k| k == "local_bash"));
+        assert_eq!(
+            outstanding_at_result,
+            Some((Some(SessionStatus::Completed), 2)),
+            "the result completes the turn with both tasks still running"
         );
     }
 
@@ -1630,14 +1673,14 @@ mod tests {
         }
     }
 
-    /// The reason the two readings exist separately. A background task holds the
-    /// session in-progress after its turn ended, and deciding to queue on *that*
-    /// left the prompt waiting on a boundary a `local_bash` task never produces
-    /// — so it sat there until the task drained, which the CLI itself never
-    /// asked for: verified against v2.1.232, a prompt written in this state is
-    /// answered in under two seconds.
+    /// The reason the two readings exist separately. A background task keeps
+    /// the child from being replaced after its turn ended, but must not hold
+    /// the turn: a `local_bash` task — dev server, Monitor, poll loop — may
+    /// never end, and the CLI's main thread is idle meanwhile (verified against
+    /// v2.1.232, a prompt written in this state is answered in under two
+    /// seconds).
     #[test]
-    fn a_background_task_holds_the_session_busy_but_not_the_turn() {
+    fn a_background_task_holds_the_child_but_not_the_turn() {
         let mut tracker = StatusTracker::default();
         tracker.on_send();
 
@@ -1657,20 +1700,25 @@ mod tests {
 
         assert_eq!(
             tracker.on_event(&turn_completed()),
-            None,
-            "the task keeps the session from completing"
+            Some(SessionStatus::Completed),
+            "the turn is over whatever the task is doing"
         );
-        assert!(tracker.is_busy(), "so the child must not be replaced");
+        assert!(
+            tracker.has_outstanding_work(),
+            "but the child must not be replaced while it carries the task"
+        );
         assert!(
             !tracker.turn_in_flight(),
-            "but the main thread is idle, so a prompt goes straight out"
+            "and the main thread is idle, so a prompt goes straight out"
         );
 
-        // Stopping it drains the set, which is what the CLI republishes.
+        // Stopping it drains the set, which is what the CLI republishes. Not a
+        // status change: the turn already ended.
         assert_eq!(
             tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] }),
-            Some(SessionStatus::Completed)
+            None
         );
+        assert!(!tracker.has_outstanding_work());
     }
 
     /// Only a finished-and-unread session clears on read; selecting a running

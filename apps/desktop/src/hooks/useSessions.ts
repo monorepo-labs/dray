@@ -97,6 +97,12 @@ export function useSessions() {
     // and the thinking deltas that drive it are transient and unpersisted, so
     // this is the only place the state lives.
     const [workingBySession, setWorkingBySession] = useState<Record<string, Working | null>>({});
+    // The background tasks each live child holds, as the CLI last published
+    // them. Live state, not read off the log: a task outlives the turn that
+    // spawned it, so `busy` can no longer say whether the log's last set is
+    // current — and a stale non-empty set survives there across a restart. Only
+    // an event this run writes here, which is what makes it honest.
+    const [tasksBySession, setTasksBySession] = useState<Record<string, BackgroundTask[]>>({});
     // sessionId → prompts typed during a running turn, oldest first, still
     // waiting for the backend to hand them to the CLI. Mirrors the queue in
     // `Session`, which is the authority; this copy exists so the composer can
@@ -758,6 +764,7 @@ const deleteSession = async (sessionId: string) => {
   setStreamingContentBlock(({ [sessionId]: _, ...rest }) => rest);
   setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
+  setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
 
   if (selectedSessionId === sessionId) {
@@ -924,6 +931,14 @@ useEffect(() => {
               setWorkingBySession((prev) => ({ ...prev, [agentEvent.sessionId]: null }));
             }
 
+            // Republished whole on every change, so the latest set replaces
+            // rather than merges. The backend mints an empty one when the child
+            // exits, which is what clears a dead child's tasks from here.
+            if (agentEvent.payload.type === "background_tasks_changed") {
+              const { tasks } = agentEvent.payload;
+              setTasksBySession((prev) => ({ ...prev, [agentEvent.sessionId]: tasks }));
+            }
+
             // The agent has stopped and is waiting on the reader. Announced like
             // a completion because it is the same kind of news — the difference
             // is that this one holds the turn until it is answered, which is why
@@ -1067,6 +1082,8 @@ const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
+const tasksBySessionRef = useRef(tasksBySession);
+tasksBySessionRef.current = tasksBySession;
 
 // And again for the archived split: `session_created` is registered once, so
 // without this it would judge every arriving session against whichever view was
@@ -1189,7 +1206,12 @@ useEffect(() => {
       // open when the turn ends is stranded rather than pending — see the
       // stranded-request note in CLAUDE.md. Dropping it here is what stops the
       // sidebar marking a dead session as waiting on the reader forever.
-      setAsksBySession((prev) => (prev[sessionId]?.length ? { ...prev, [sessionId]: [] } : prev));
+      //
+      // Unless the child still holds a background task: the turn ends on its
+      // `result` now, and a background subagent can be the one asking.
+      if (!tasksBySessionRef.current[sessionId]?.length) {
+        setAsksBySession((prev) => (prev[sessionId]?.length ? { ...prev, [sessionId]: [] } : prev));
+      }
     }
 
     // Finishing in front of the reader is read the moment it does; everything
@@ -1298,17 +1320,18 @@ const working: Working | null = busy && selectedSessionId
   ? workingBySession[selectedSessionId] ?? null
   : null;
 
-// The set is republished whole on every change, so the last one in the log *is*
-// the current set — but only while the session is live. A stale non-empty set
-// survives in the log across a restart, which is why this gates on `busy`.
-const backgroundTasks: BackgroundTask[] = (() => {
-  if (!busy || !selectedSession) return [];
-  for (let i = selectedSession.events.length - 1; i >= 0; i--) {
-    const p = selectedSession.events[i].payload;
-    if (p.type === "background_tasks_changed") return p.tasks;
-  }
-  return [];
-})();
+// Not gated on `busy`, unlike the two around it: a task outlives the turn that
+// spawned it, and that is the whole point of the set having its own indicator.
+const backgroundTasks: BackgroundTask[] = useMemo(
+  () => (selectedSessionId ? tasksBySession[selectedSessionId] ?? [] : []),
+  [tasksBySession, selectedSessionId],
+);
+// The join the transcript uses to keep a task's spawning call pending after
+// the turn ends. Memoised so the transcript memo holds while nothing changed.
+const liveTaskIds = useMemo(
+  () => new Set(backgroundTasks.map((t) => t.taskId)),
+  [backgroundTasks],
+);
 
 // Two events with nothing between them, so whichever came last says whether a
 // compaction is still running. Gated on `busy` for the same reason as the task
@@ -1365,6 +1388,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }
