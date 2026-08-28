@@ -5,6 +5,41 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.8.2
+
+### Added
+
+- **A Skill call reads as one.** The harness types it like any other tool and
+  leaves the title empty, so the row said "Skill" over raw JSON and a result
+  that only repeated the name. It now carries the skill's name in the header
+  and its brief as prose, and the name shows as soon as it lands.
+- **A retrying turn says so.** The API retries up to ten times behind a turn
+  that otherwise just looked slow. The attempt count leads, and the cause is
+  named where the wire carries one.
+
+### Changed
+
+- **Run server moved into the handoff row**, behind the composer, where the
+  other canned prompts live — the toolbar sets things, and this one acts.
+  The row is three buttons now: Commit, Create PR and Run server. Five ran
+  wider than the composer and drew over the right panel. Commit & push,
+  Draft PR and Push are a sentence in the composer like every other button
+  there already is.
+
+### Fixed
+
+- **A `#DRA-53` you typed no longer links the session to that issue.** Every
+  tag in a prompt was written onto the session, so "this is unrelated to
+  #DRA-53" filed the session under it forever. The tag still draws as a
+  button; linking is the agent's to do.
+- **A question the CLI withdraws no longer leaves its card standing.** The
+  card sat there answering nothing and the waiting mark stayed lit until the
+  session ended.
+- **A failed turn shows what went wrong.** It printed "Turn failed —
+  stop_sequence" over the harness's own sentence, which is the half worth
+  reading — "resets 9:05pm", "run /login".
+- **The branch button in the session header says what it copies.**
+
 ## 0.8.1
 
 ### Added
