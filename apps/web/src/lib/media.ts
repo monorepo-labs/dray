@@ -1,5 +1,4 @@
 import type { StaticImageData } from "next/image";
-import screenshot from "../../public/dray-preview.png";
 import commitHistory from "../../public/commit-history-dray.png";
 
 /// A tile on the board.
@@ -27,14 +26,15 @@ export type MediaItem =
 export const MEDIA: MediaItem[] = [
   {
     kind: "video",
-    src: "/app-preview.mp4",
-    poster: "/posters/app-preview-dray.jpg",
-    alt: "A full session in Dray, from prompt to reviewed diff",
+    src: "/speed-run-dray.mp4",
+    poster: "/posters/speed-run-dray.jpg",
+    alt: "A full session in Dray at speed, from prompt to reviewed diff",
   },
   {
-    kind: "image",
-    src: screenshot,
-    alt: "Dray showing a session transcript beside a per-turn diff of the files that turn changed",
+    kind: "video",
+    src: "/project-switch-dray.mp4",
+    poster: "/posters/project-switch-dray.jpg",
+    alt: "Switching between attached projects from the sidebar",
   },
   {
     kind: "video",
@@ -50,9 +50,9 @@ export const MEDIA: MediaItem[] = [
   },
   {
     kind: "video",
-    src: "/project-switch-dray.mp4",
-    poster: "/posters/project-switch-dray.jpg",
-    alt: "Switching between attached projects from the sidebar",
+    src: "/linear-integration-dray.mp4",
+    poster: "/posters/linear-integration-dray.jpg",
+    alt: "Browsing Linear issues in Dray and reading one beside the session that works on it",
   },
   {
     kind: "image",

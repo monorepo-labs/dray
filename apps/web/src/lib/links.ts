@@ -17,3 +17,13 @@ export const DOWNLOAD_SIZE = "32 MB";
 /// prerequisite rather than a footnote. `docs.claude.com/en/docs/claude-code/*`
 /// still redirects here, but this is where it lands.
 export const CLAUDE_SETUP = "https://code.claude.com/docs/en/setup";
+
+/// Where feedback goes: a DM to the person who builds it. Most visitors
+/// arrive from a tweet, so this is the channel they are already on.
+export const FEEDBACK = "https://x.com/yogesharc";
+
+export const COMPANY = "Monorepo Labs";
+
+/// What the nav shows when GitHub cannot be asked. Bump it now and then so a
+/// rate-limited render does not undercount by much.
+export const STARS_FALLBACK = 23;

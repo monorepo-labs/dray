@@ -18,6 +18,7 @@
   --radius: 0.625rem;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-aeonik);
 }
 
 html {
