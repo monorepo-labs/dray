@@ -29,9 +29,16 @@ const PICK_KEY = "ade.openWith";
 /// The window alone does nothing — see `refresh` below for what re-checks it.
 const FRESH_MS = 60_000;
 
+/// How long before a failed first read is tried again. One retry, never a poll
+/// — see the effect below.
+const RETRY_MS = 4000;
+
 let cached: ExternalApp[] | null = null;
 let readAt = 0;
 let inFlight: Promise<ExternalApp[]> | null = null;
+/// Whether the last read failed, which is what separates "the scan found
+/// nothing" from "the scan never answered". Only the second is worth retrying.
+let failed = false;
 
 function fresh() {
   return cached !== null && Date.now() - readAt < FRESH_MS;
@@ -44,10 +51,12 @@ async function load(): Promise<ExternalApp[]> {
     .then((apps) => {
       cached = apps;
       readAt = Date.now();
+      failed = false;
       return apps;
     })
     .catch((err) => {
       console.error("failed to list the apps that can open a directory", err);
+      failed = true;
       // A failed read changes nothing — no list written, no stamp — so a blip
       // leaves the last good answer on screen and the next read tries again
       // rather than certifying an empty one as fresh for a minute. The same
@@ -71,6 +80,7 @@ export function useOpenApps(key?: string) {
   const [apps, setApps] = useState<ExternalApp[]>(cached ?? []);
   const [picked, setPicked] = useLocalStorage<string | null>(PICK_KEY, null);
   const live = useRef(true);
+  const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /// Reads if the cached answer has gone stale, and does nothing if it hasn't.
   ///
@@ -95,11 +105,33 @@ export function useOpenApps(key?: string) {
   // ordinary case because `load` no-ops inside the freshness window.
   useEffect(() => {
     live.current = true;
-    refresh();
+    void load().then((next) => {
+      if (!live.current) return;
+      setApps(next);
+
+      // One retry, and only for the read whose failure cannot correct itself.
+      // A failed first read leaves no apps, and with no apps there is no button
+      // and so no menu — so on a reader who stays in the session they are in,
+      // nothing would ever ask again. Exactly one, and never a poll: a control
+      // that cannot be drawn must not turn into a standing spawn either.
+      //
+      // Gated on `failed` rather than on the list being empty, because a scan
+      // that genuinely finds nothing is an answer and retrying it is waste.
+      if (failed && !retry.current) {
+        retry.current = setTimeout(() => {
+          retry.current = null;
+          refresh();
+        }, RETRY_MS);
+      }
+    });
     return () => {
       live.current = false;
     };
   }, [refresh, key]);
+
+  // Outlives a key change deliberately — a retry armed under one session should
+  // still land after the reader switches to another.
+  useEffect(() => () => void (retry.current && clearTimeout(retry.current)), []);
 
   const pick = apps.find((app) => app.path === picked) ?? apps[0] ?? null;
 

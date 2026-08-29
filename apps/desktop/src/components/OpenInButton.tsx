@@ -70,7 +70,14 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         className,
       )}
     >
-      <Tooltip>
+      {/* Forced open while a failure is standing, and that is the difference
+          between reporting the error and filing it. Radix closes a tooltip on
+          click, so after a failed press the reader was left with a red glyph
+          and no sentence unless they moved away and hovered back — the glyph
+          says something went wrong, and `open`'s own sentence is the only thing
+          that says what to do about it. `undefined` hands control back, so
+          hover behaves normally the rest of the time. */}
+      <Tooltip open={error ? true : undefined}>
         <TooltipTrigger asChild>
           <button
             type="button"
