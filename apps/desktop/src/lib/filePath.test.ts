@@ -66,10 +66,17 @@ describe("findFilePaths", () => {
   });
 
   /// And what stops that read from eating ordinary prose. A match that already
-  /// names a file is complete, so the relative path four words later does not
-  /// cost it its link.
-  it("keeps a path that names a file, whatever follows it", () => {
+  /// names a file stops at one word, so the relative path four words later does
+  /// not cost it its link.
+  it("keeps a path that names a file, past the first word", () => {
     expect(paths("Updated /a/b/x.ts and src/foo.ts")).toEqual(["/a/b/x.ts"]);
+  });
+
+  /// A dot in the last segment is a guess — `project.v2` is a directory — so it
+  /// only ever stops the read early and never accepts a match on its own. The
+  /// word straight after a break still decides.
+  it("drops a dotted directory a space cut in half", () => {
+    expect(paths("in /Users/me/project.v2 source/file.ts here")).toEqual([]);
   });
 
   /// The other stop: a word opening with a slash is a path of its own.

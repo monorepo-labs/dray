@@ -65,10 +65,10 @@ export function findFilePaths(text: string): FilePathMatch[] {
 
 /// Whether a final segment reads as a filename rather than as a directory.
 ///
-/// A dot is the whole of it, which is enough because of *where* a truncation
-/// falls: the scan cuts at a space, and the piece before a space inside a path
-/// is a directory name. `/Users/me/My Project/a.ts` breaks after `My`, never
-/// after something ending `.ts`.
+/// A dot and nothing more, so it is a guess: `project.v2` is a directory that
+/// answers yes. It is only ever used to stop the read *early*, never to accept
+/// a match outright, which is what keeps the guess from deciding anything on
+/// its own.
 function namesAFile(path: string): boolean {
   return (path.split("/").filter(Boolean).at(-1) ?? "").includes(".");
 }
@@ -76,23 +76,25 @@ function namesAFile(path: string): boolean {
 /// Whether what follows `stop` looks like the rest of a path this scan cut in
 /// half.
 ///
-/// Read across every word to the end of the line, not just the next one: a path
-/// can hold several spaces, and `/Users/me/My Project Sub/a.ts` puts two plain
-/// words between the break and the slash that gives it away. The line is the
-/// bound, since a path does not span one.
+/// The word straight after the break decides it wherever it can, and it can
+/// twice over. One holding a slash is the rest of this path, so the match is a
+/// truncation — that holds however finished the match looks, which is what
+/// catches `/Users/me/project.v2 source/a.ts`. One *opening* with a slash is a
+/// path of its own, which tells `open /a/b now and see /c/d` from a break.
 ///
-/// Two things stop the read, and both are what keep it from eating ordinary
-/// prose. A match that already `namesAFile` is complete, so `Updated /a/b/x.ts
-/// and src/foo.ts` keeps its link rather than losing it to the relative path
-/// four words later. And a word *starting* with a slash opens a path of its
-/// own rather than continuing this one, which is what tells `open /a/b now and
-/// see /c/d` from a break.
+/// Only past that word does how the match looks matter. A path can hold several
+/// spaces, so `/Users/me/My Project Sub/a.ts` puts two plain words between the
+/// break and its giveaway slash, and the read has to cross them — but reading
+/// on from a match that already `namesAFile` would cost `Updated /a/b/x.ts and
+/// src/foo.ts` its link to a relative path four words later. So a finished-
+/// looking match stops at one word and an unfinished one reads to the end of
+/// the line, which a path does not span.
 ///
-/// What is left is not conclusive: `see /a/b and/or c` reads as truncated and
-/// is not, so that link is lost. Losing a link is the side to be wrong on,
-/// because the alternative opens a directory the reader never named.
+/// None of it is conclusive: `see /a/b and/or c` reads as truncated and is not,
+/// so that link is lost. Losing a link is the side to be wrong on, because the
+/// alternative opens a directory the reader never named.
 function continuesPath(text: string, stop: number, path: string): boolean {
-  if (namesAFile(path)) return false;
+  const finished = namesAFile(path);
 
   let at = stop;
   while (text[at] === " ") {
@@ -102,6 +104,7 @@ function continuesPath(text: string, stop: number, path: string): boolean {
     const word = text.slice(at + 1, end);
     if (word.startsWith("/")) return false;
     if (word.includes("/")) return true;
+    if (finished) return false;
 
     at = end;
   }
