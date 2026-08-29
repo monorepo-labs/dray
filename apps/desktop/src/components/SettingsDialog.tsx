@@ -1,8 +1,11 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronDown } from "lucide-react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import AppIcon from "@/components/AppIcon";
 import LinearIcon from "@/components/LinearIcon";
+import TabButton from "@/components/TabButton";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,13 +13,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useTheme } from "@/hooks/useTheme";
+import {
+  cachedApps,
+  fileOpenerChoices,
+  load,
+  OPEN_FILE_KEY,
+  pickFileOpener,
+} from "@/lib/openWith";
+import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import type { SettingsView } from "@/types/events";
+import type { ExternalApp, SettingsView } from "@/types/events";
 
 /// Where to send someone who wants to say something. Direct message rather than an
 /// issue tracker: most feedback is a sentence, and a form is more than a sentence is
@@ -56,36 +75,38 @@ export default function SettingsDialog({
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        {/* Groups separated by space, not by rules: horizontal lines across a
-            28rem dialog read as a table of contents for a page holding four
-            short lists.
-
-            Which means the space has to actually do it. Wrapped rather than left
-            to `DialogContent`'s own `gap-4`, because that gap is sized for a
-            question and its buttons: at 1rem the next heading sat closer to the
-            control above it than to its own rows, so "Privacy" read as a caption
-            on the mode segments. A group's heading has to be nearer what it
-            names than what it follows, and this is the only place that ordering
-            is set. */}
-        <div className="flex flex-col gap-7">
-          <Section title="Appearance">
-            <ThemeRow />
-            <ModeRow />
-          </Section>
-
-          {/* Brings its own heading, because it is the one group that may not be
-              drawn at all — nothing connected renders nothing, and a heading left
-              standing over that names a group the reader cannot reach. */}
-          <IssueTrackerRow {...integrations} />
-
-          <Section title="Privacy">
-            <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
-          </Section>
-
-          <Section title="Feedback">
-            <ContactBlock />
-          </Section>
-        </div>
+        <SettingsTabs>
+          {{
+            appearance: (
+              <Section>
+                <ThemeRow />
+                <ModeRow />
+              </Section>
+            ),
+            integrations: (
+              <Section>
+                <OpenFilesRow />
+                {/* Draws nothing until something is connected, which is why it
+                    carries no heading of its own — a heading left standing over
+                    nothing names a group the reader cannot reach. Connecting
+                    happens on the issues page. */}
+                <IssueTrackerRow {...integrations} />
+              </Section>
+            ),
+            about: (
+              <>
+                <Section>
+                  <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
+                </Section>
+                {/* The one block here with no label of its own, so it is the one
+                    that still wants a heading over it. */}
+                <Section title="Feedback">
+                  <ContactBlock />
+                </Section>
+              </>
+            ),
+          }}
+        </SettingsTabs>
       </DialogContent>
     </Dialog>
   );
@@ -163,6 +184,109 @@ function ThemeRow() {
           </button>
         ))}
       </div>
+    </SettingRow>
+  );
+}
+
+/// Which app a filename in the transcript opens in.
+///
+/// Finder is the default and the fallback, and it *reveals* rather than opens —
+/// which is also what the link did before this setting existed, so an
+/// uninstalled editor or a launch that fails costs the preference and never the
+/// click. The menu offers editors and Finder only: a terminal is in the panel
+/// button's list because it can be handed a directory, and handing it one file
+/// answers nothing.
+///
+/// Drawn disabled rather than hidden wherever it cannot apply, since the
+/// sentence underneath is then the only place the reason can be said. Off macOS
+/// there is no detection at all; on macOS with no editor installed there is a
+/// list of one, which is a menu that cannot change anything.
+function OpenFilesRow() {
+  const id = useId();
+  const [stored, setStored] = useLocalStorage<string | null>(OPEN_FILE_KEY, null);
+  // `null` until the first read lands, so an empty list can still mean "this
+  // machine has nothing" rather than "nobody has asked yet".
+  const [apps, setApps] = useState<ExternalApp[] | null>(() => {
+    const warm = cachedApps();
+    return warm.length ? warm : null;
+  });
+
+  /// Asks again, on mount and whenever the menu opens — an editor installed
+  /// while Dray was running is otherwise absent until a restart, and the menu
+  /// opening is the one moment the list has to be current.
+  const refresh = useCallback(() => {
+    void load().then(setApps);
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const choices = fileOpenerChoices(apps ?? []);
+  const pick = pickFileOpener(apps ?? [], stored);
+  const editors = choices.filter((app) => app.kind === "editor");
+
+  const unavailable = !IS_MAC
+    ? "Opening a file in another app is macOS-only for now."
+    : apps !== null && editors.length === 0
+      ? "No editor Dray knows about is installed, so filenames open in Finder."
+      : null;
+
+  return (
+    <SettingRow
+      id={id}
+      label="Open files with"
+      description={
+        unavailable ??
+        "Where a filename in the chat opens. Finder selects the file instead of opening it."
+      }
+    >
+      {/* Opening the menu re-reads the list — see `refresh`. */}
+      <DropdownMenu onOpenChange={(open) => open && refresh()}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            id={id}
+            variant="outline"
+            size="sm"
+            // `apps === null` is the read not having landed. Disabled rather
+            // than drawn from a guess, the same bargain the analytics switch
+            // makes — either guess is wrong for somebody.
+            disabled={apps === null || unavailable !== null}
+            className="min-w-36 justify-between font-normal"
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              {pick && <AppIcon app={pick} className="size-4" />}
+              {/* "None" rather than "Finder" where nothing was detected: off
+                  macOS the reveal is some other file manager, and naming
+                  Finder there would be a control lying about what it does. */}
+              <span className="truncate">{pick?.name ?? "None"}</span>
+            </span>
+            <ChevronDown className="size-3 shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+
+        {/* Aligned to the end because the control sits at the dialog's right
+            edge, where a start-aligned menu opens past it. */}
+        <DropdownMenuContent align="end" className="min-w-44">
+          {choices.map((app, i) => (
+            <Fragment key={app.path}>
+              {/* An inset dotted rule between the editors and Finder,
+                  `PickerMenu`'s own idiom and the same one the panel's split
+                  button uses. Finder is a different kind of answer, and a flat
+                  list of both reads as one. */}
+              {i > 0 && choices[i - 1].kind !== app.kind && (
+                <DropdownMenuSeparator className="mx-2 my-1 h-0 border-t border-dotted border-border/80 bg-transparent" />
+              )}
+              <DropdownMenuItem
+                onSelect={() => setStored(app.path)}
+                className="cursor-pointer"
+              >
+                <AppIcon app={app} className="size-4" />
+                <span className="flex-1 truncate">{app.name}</span>
+                {app.path === pick?.path && <Check className="size-3.5 shrink-0" />}
+              </DropdownMenuItem>
+            </Fragment>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </SettingRow>
   );
 }
@@ -356,8 +480,7 @@ function IssueTrackerRow({
   if (!account) return null;
 
   return (
-    <Section title="Integrations">
-      <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
         <SettingRow
           id={id}
           label="Issue tracker"
@@ -397,9 +520,8 @@ function IssueTrackerRow({
           )}
         </SettingRow>
 
-        {error && <p className="text-ui text-destructive">{error}</p>}
-      </div>
-    </Section>
+      {error && <p className="text-ui text-destructive">{error}</p>}
+    </div>
   );
 }
 
@@ -431,14 +553,105 @@ function ContactBlock() {
   );
 }
 
-/// A run of rows under a quiet heading. The heading names the group and nothing
-/// else — every row below already carries its own sentence.
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/// A run of rows, optionally under a quiet heading.
+///
+/// The heading is the exception now that the groups are tabs: the tab's own
+/// label already names what is below it, so a heading repeating it is a second
+/// copy of one word. What still earns one is a block carrying no label of its
+/// own, which is the feedback links and nothing else.
+///
+/// Untitled it is still worth being: the tab panel spaces its groups apart at
+/// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
+/// heading ends up nearer what it names than what it follows.
+function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="text-ui font-medium text-muted-foreground">{title}</h2>
+      {title && <h2 className="text-ui font-medium text-muted-foreground">{title}</h2>}
       {children}
     </section>
+  );
+}
+
+/// Set *and* order, so a group added later is one entry plus one body.
+const SETTINGS_TABS = ["appearance", "integrations", "about"] as const;
+
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+const TAB_LABELS: Record<SettingsTab, string> = {
+  appearance: "Appearance",
+  integrations: "Integrations",
+  about: "About",
+};
+
+/// The dialog's groups as a tab row, drawn as the app's tabs everywhere else.
+///
+/// One long scroll was the first shape and it stopped working at five groups:
+/// the reader who came to change one thing read past four others to find it,
+/// and every group added made that worse. Tabs across the top rather than a
+/// rail down the side, because the dialog is 28rem and a rail takes a third of
+/// that from the prose — the analytics sentence already broke across three
+/// lines at 25rem.
+///
+/// **About holds privacy and feedback**, which is the one grouping worth
+/// arguing about. Both answer what the app does with you rather than what it
+/// does for you: what is collected, and how to reach the person who wrote it.
+/// Privacy alone was too thin to be a tab and reads oddly next to Appearance.
+///
+/// Bodies are switched, not hidden, unlike the right panel's. There is no
+/// scroll position or expensive render to preserve here, and mounting all three
+/// would have the external-app scan run every time the dialog opens whichever
+/// tab the reader wanted. The pick resets on close for the same reason the
+/// dialog's own open state is not persisted.
+function SettingsTabs({ children }: { children: Record<SettingsTab, ReactNode> }) {
+  const id = useId();
+  const [tab, setTab] = useState<SettingsTab>("appearance");
+
+  const index = SETTINGS_TABS.indexOf(tab);
+  const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>
+    setTab(SETTINGS_TABS[next]),
+  );
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div
+        role="tablist"
+        aria-label="Settings"
+        onKeyDown={onKeyDown}
+        className="flex items-center gap-0.5"
+      >
+        {SETTINGS_TABS.map((value, i) => (
+          <TabButton
+            key={value}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            role="tab"
+            id={`${id}-${value}`}
+            aria-selected={tab === value}
+            aria-controls={`${id}-panel`}
+            tabIndex={tab === value ? 0 : -1}
+            active={tab === value}
+            onClick={() => setTab(value)}
+            className="cursor-pointer"
+          >
+            {TAB_LABELS[value]}
+          </TabButton>
+        ))}
+      </div>
+
+      {/* A floor rather than a fixed height: without one the dialog resizes
+          under the cursor on every tab change, which reads as the window
+          having jumped rather than as the content having changed. Sized to
+          Appearance, the tallest. */}
+      <div
+        role="tabpanel"
+        id={`${id}-panel`}
+        aria-labelledby={`${id}-${tab}`}
+        className="flex min-h-56 flex-col gap-7"
+      >
+        {children[tab]}
+      </div>
+    </div>
   );
 }
 

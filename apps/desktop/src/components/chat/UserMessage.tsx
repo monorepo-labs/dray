@@ -2,7 +2,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
 
 import SessionAvatar from "@/components/SessionAvatar";
+import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { useChatCwd } from "@/hooks/useChatCwd";
+import { absolutePath } from "@/lib/filePath";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -57,6 +60,7 @@ export default function UserMessage({
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
 }) {
+  const cwd = useChatCwd();
   const body = stripSenderPrefix(text, from);
   const segments = highlightSegments(body);
 
@@ -108,11 +112,24 @@ export default function UserMessage({
             {segments.map((segment, i) => {
               if (segment.kind === "mention") {
                 const { name } = splitMention(segment.text);
+                const raw = segment.text.slice(1);
+                // Written against the agent's own working directory, which is
+                // what the context carries. Inert without one, the same resting
+                // state an unresolved issue tag has.
+                const path = absolutePath(raw, cwd);
+
+                if (!path) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.mention} title={raw}>
+                      @{name}
+                    </span>
+                  );
+                }
 
                 return (
-                  <span key={i} className={SEGMENT_COLOR.mention} title={segment.text.slice(1)}>
+                  <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
                     @{name}
-                  </span>
+                  </FileLink>
                 );
               }
 

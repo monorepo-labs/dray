@@ -413,7 +413,7 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type ErrorSource = "harness" | "parser" | "process";
 
 /**
- * An installed app the working directory can be handed to.
+ * An installed app a path can be handed to.
  */
 export type ExternalApp = { 
 /**

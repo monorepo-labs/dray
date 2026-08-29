@@ -9,5 +9,11 @@ export default function AssistantMessage({
   text: string;
   streaming?: boolean;
 }) {
-  return <Markdown streaming={streaming}>{text}</Markdown>;
+  return (
+    // The one surface whose paths name files on this machine, so the one that
+    // draws them as something to open.
+    <Markdown streaming={streaming} linkFilePaths>
+      {text}
+    </Markdown>
+  );
 }
