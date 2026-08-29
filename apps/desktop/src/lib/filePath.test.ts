@@ -51,6 +51,25 @@ describe("findFilePaths", () => {
   it("keeps a trailing slash, since a directory opens too", () => {
     expect(paths("in /Users/me/ there")).toEqual(["/Users/me/"]);
   });
+
+  /// The scan stops at whitespace, so a path holding a space is cut in half —
+  /// and the half is a real path that can exist and open the wrong directory.
+  /// Dropped rather than guessed at.
+  it("drops a path a space cut in half", () => {
+    expect(paths("open /Users/me/My Project/file.ts now")).toEqual([]);
+  });
+
+  /// The cost of that rule, stated rather than discovered. A slash in the next
+  /// word is not conclusive, and losing a link is the side to be wrong on.
+  it("also drops one followed by a word holding a slash", () => {
+    expect(paths("see /a/b and/or c")).toEqual([]);
+    expect(paths("see /a/b and c")).toEqual(["/a/b"]);
+  });
+
+  /// A path does not span lines, so the next line is a new sentence.
+  it("is not fooled across a newline", () => {
+    expect(paths("open /a/b.ts\nthen /c/d.ts")).toEqual(["/a/b.ts", "/c/d.ts"]);
+  });
 });
 
 describe("isFilePath", () => {

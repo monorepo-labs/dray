@@ -42,18 +42,44 @@ export function findFilePaths(text: string): FilePathMatch[] {
     if (text[i] !== "/") continue;
     if (i > 0 && !OPENS_PATH.test(text[i - 1])) continue;
 
-    let end = i;
-    while (end < text.length && !/\s/.test(text[end])) end += 1;
+    let stop = i;
+    while (stop < text.length && !/\s/.test(text[stop])) stop += 1;
+
+    let end = stop;
     while (end > i && TRAILING.has(text[end - 1])) end -= 1;
 
     const path = text.slice(i, end);
     if (!isFilePath(path)) continue;
+    // A scan that stops at whitespace cuts `/Users/me/My Project/a.ts` in half,
+    // and the half is a real path — one that can exist and open the wrong
+    // directory. Nothing here can tell where the name ended, so an ambiguous
+    // run is dropped rather than guessed at.
+    if (continuesPath(text, stop)) continue;
 
     found.push({ start: i, end, path });
     i = end - 1;
   }
 
   return found;
+}
+
+/// Whether the word after `stop` looks like the rest of a path this scan just
+/// cut in half.
+///
+/// A slash in it is the whole signal, and it is not conclusive — `see /a/b
+/// and/or c` reads as a truncated path by this rule and is not one, so that
+/// link is lost. Losing a link is the side to be wrong on: the alternative is
+/// offering one that opens a directory the reader did not name.
+///
+/// One space only. A path does not span lines, so a run after a newline is the
+/// next sentence rather than the rest of this one.
+function continuesPath(text: string, stop: number): boolean {
+  if (text[stop] !== " ") return false;
+
+  let end = stop + 1;
+  while (end < text.length && !/\s/.test(text[end])) end += 1;
+
+  return text.slice(stop + 1, end).includes("/");
 }
 
 /// `raw` as something `open` can be handed, or `null` where it cannot be.
