@@ -1,5 +1,5 @@
-import { Fragment } from "react";
-import { AppWindow, Check, ChevronDown } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { AppWindow, Check, ChevronDown, TriangleAlert } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -12,6 +12,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useOpenApps } from "@/hooks/useOpenApps";
 import { cn } from "@/lib/utils";
 import type { ExternalApp } from "@/types/events";
+
+/// How long a failed launch stays on the button, matching the update check's
+/// own answered-either-way verdicts.
+const FAILED_MS = 4000;
 
 /// Hands a session's working directory to an editor, a terminal, or Finder.
 ///
@@ -32,6 +36,24 @@ import type { ExternalApp } from "@/types/events";
 export default function OpenInButton({ cwd, className }: { cwd: string; className?: string }) {
   const { apps, pick, select, open } = useOpenApps();
 
+  // `open`'s own sentence when a launch failed, held briefly on the button.
+  // The alternative was the developer console, where it told the reader
+  // nothing and left a button that looked simply unresponsive — and a bundle
+  // that has moved is exactly the failure whose cure is worth naming.
+  const [error, setError] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+
+  const handleOpen = async (app: ExternalApp) => {
+    const failure = await open(app, cwd);
+    setError(failure);
+    if (timer.current) clearTimeout(timer.current);
+    // Retires itself like the update check's own verdicts do. A launch failure
+    // is news about one press, not a state to sit in.
+    if (failure) timer.current = setTimeout(() => setError(null), FAILED_MS);
+  };
+
   if (!pick) return null;
 
   return (
@@ -50,24 +72,41 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={() => void open(pick, cwd)}
+            onClick={() => void handleOpen(pick)}
             // `pl-1` against `pr-1.5`: a 16px icon in a 24px row leaves 4px
             // above and below, so 4px is what the icon's own left edge gets
             // too. The text keeps the wider side — it is set against a divider
             // rather than against air.
-            className="flex h-6 cursor-pointer items-center gap-1.5 rounded-l-md pr-1.5 pl-1 text-ui text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            className={cn(
+              "flex h-6 cursor-pointer items-center gap-1.5 rounded-l-md pr-1.5 pl-1 text-ui transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+              error ? "text-destructive" : "text-muted-foreground",
+            )}
           >
-            {/* A rung up on the menu's own, and about as far as this goes: the
-                row is 24px, so 16 leaves 4px of air above and below. */}
-            <AppIcon app={pick} className="size-4" />
+            {error ? (
+              // The mark changes, the word does not: "Open" is still what the
+              // button does, and swapping the label as well would make the
+              // failure read as a different control having appeared.
+              <TriangleAlert className="size-4 shrink-0" />
+            ) : (
+              // A rung up on the menu's own, and about as far as this goes: the
+              // row is 24px, so 16 leaves 4px of air above and below.
+              <AppIcon app={pick} className="size-4" />
+            )}
             Open
           </button>
         </TooltipTrigger>
         {/* The app's name, which the button itself does not carry — the icon
             says which app to anyone who knows the mark and nothing to anyone
             who doesn't. The path is not repeated: it is on the header's own
-            branch button a row away, and it is the longest thing here. */}
-        <TooltipContent side="bottom">Open in {pick.name}</TooltipContent>
+            branch button a row away, and it is the longest thing here.
+
+            A failure takes the slot instead, because `open`'s own sentence is
+            the only thing that names the cure. `wrap`, since those sentences
+            run long and truncating one clips exactly where the cure starts —
+            the same reason a failed turn's notice wraps. */}
+        <TooltipContent side="bottom" className={cn(error && "max-w-xs text-wrap")}>
+          {error ?? `Open in ${pick.name}`}
+        </TooltipContent>
       </Tooltip>
 
       <DropdownMenu>

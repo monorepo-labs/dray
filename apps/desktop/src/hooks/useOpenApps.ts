@@ -13,24 +13,45 @@ import type { ExternalApp } from "@/types/events";
 /// again on every new session, which is where it is least likely to be right.
 const PICK_KEY = "ade.openWith";
 
-/// The scan is a handful of `read_dir`s and the icons are cached in Rust, so
-/// the cost here is one round trip. Held at module level anyway, because the
-/// panel this button lives in remounts on every session switch and a fresh
-/// invoke per switch buys nothing — the set of installed apps does not move
-/// while the reader clicks between sessions.
+/// How long a detection result is counted fresh.
+///
+/// A window rather than a permanent cache, and that is a correctness fix rather
+/// than a tuning knob: `list_open_apps` re-scans on every call precisely so an
+/// editor installed while Dray runs appears without a restart, and a frontend
+/// cache that never expires takes that guarantee straight back — a newly
+/// installed app would stay missing, and an app that moved would keep a stale
+/// bundle path on offer, for the life of the process.
+///
+/// 60s is the same window `useIssues` counts a read fresh for, and it is picked
+/// against the same two costs: the panel remounts on every session switch, so
+/// clicking between sessions has to be free, while installing an editor and
+/// coming back to the button has to work.
+const FRESH_MS = 60_000;
+
 let cached: ExternalApp[] | null = null;
+let readAt = 0;
 let inFlight: Promise<ExternalApp[]> | null = null;
 
+function fresh() {
+  return cached !== null && Date.now() - readAt < FRESH_MS;
+}
+
 async function load(): Promise<ExternalApp[]> {
-  if (cached) return cached;
+  if (fresh()) return cached!;
   // Several buttons mounting in one frame must not each spawn a scan.
   inFlight ??= invoke<ExternalApp[]>("list_open_apps")
     .catch((err) => {
       console.error("failed to list the apps that can open a directory", err);
-      return [] as ExternalApp[];
+      // A failed read changes nothing — no list written, no stamp — so a blip
+      // leaves the last good answer on screen and the next mount tries again.
+      // The same bargain `usePrMarks` makes with its own failed reads.
+      return cached ?? [];
     })
     .then((apps) => {
-      cached = apps;
+      if (apps !== cached) {
+        cached = apps;
+        readAt = Date.now();
+      }
       inFlight = null;
       return apps;
     });
@@ -49,7 +70,10 @@ export function useOpenApps() {
   const [picked, setPicked] = useLocalStorage<string | null>(PICK_KEY, null);
 
   useEffect(() => {
-    if (cached) return;
+    // Whatever is cached is drawn immediately; the read underneath decides
+    // whether it also needs replacing. Returning early on a *stale* cache is
+    // what stopped a newly installed app from ever appearing.
+    if (fresh()) return;
     let live = true;
     void load().then((next) => live && setApps(next));
     return () => {
@@ -70,12 +94,20 @@ export function useOpenApps() {
     [setPicked],
   );
 
+  /// Opens `path` in `app`, answering the failure rather than swallowing it.
+  ///
+  /// Returns `open`'s own sentence on failure and `null` on success. The error
+  /// has to come back here because it is the only thing that names the cure —
+  /// a bundle that moved, a directory that is gone — where the alternative is a
+  /// button that appears to do nothing at all.
   const open = useCallback(
-    async (app: ExternalApp, path: string) => {
+    async (app: ExternalApp, path: string): Promise<string | null> => {
       try {
         await invoke("open_in_app", { appPath: app.path, path });
+        return null;
       } catch (err) {
         console.error(`failed to open ${path} in ${app.name}`, err);
+        return typeof err === "string" ? err : `Could not open ${app.name}.`;
       }
     },
     [],
