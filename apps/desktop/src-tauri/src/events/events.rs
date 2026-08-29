@@ -157,6 +157,26 @@ pub enum AgentEventPayload {
         /// a thing the model can forge.
         #[serde(default)]
         from: Option<MessageSender>,
+        /// The working directory this prompt was written in, when it is not the
+        /// one the session runs in now.
+        ///
+        /// `None` is the ordinary case and means "this session's own cwd" — the
+        /// truth for every message a session logged itself, and for every
+        /// message logged before this field existed.
+        ///
+        /// Set by [`fork`](crate::store::fork_session), because a fork is the
+        /// one thing that carries a conversation into a *different* tree. An
+        /// `@mention` is written relative to the tree it was typed in, so a
+        /// copied one resolved against the fork's tree silently opens the fork's
+        /// own copy of the file rather than the one the message named. The
+        /// transcript is a record everywhere else in this app — a turn's
+        /// baseline and closing tree are both frozen — and this is the same
+        /// rule for the same reason.
+        ///
+        /// Deliberately not overwritten on a fork of a fork: the first ancestor
+        /// to record one is the tree the message was actually written in.
+        #[serde(default)]
+        cwd: Option<String>,
     },
     AssistantText {
         /// `Some` only when this content was also streamed, naming the preview
@@ -885,8 +905,9 @@ mod tests {
             serde_json::from_str(r#"{"type":"user_message","text":"hi"}"#).unwrap();
         assert!(matches!(
             v,
-            // `baseline`, `queued`, `from` and `issues` default too: every
-            // prompt logged before each of those existed must not fail the line.
+            // `baseline`, `queued`, `from`, `issues` and `cwd` default too:
+            // every prompt logged before each of those existed must not fail
+            // the line.
             AgentEventPayload::UserMessage {
                 ref text,
                 ref images,
@@ -894,9 +915,11 @@ mod tests {
                 queued,
                 ref from,
                 ref issues,
+                ref cwd,
             } if text == "hi"
                 && images.is_empty()
                 && baseline.is_none()
+                && cwd.is_none()
                 && !queued
                 && from.is_none()
                 && issues.is_empty()

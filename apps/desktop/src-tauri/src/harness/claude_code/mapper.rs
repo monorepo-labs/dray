@@ -893,6 +893,9 @@ fn user_message(text: String) -> AgentEventPayload {
         // And so is the sender: only the orchestration socket relays a prompt,
         // and it does so through the session layer, never through the CLI.
         from: None,
+        // Absent is "this session's own cwd", which a line off the wire was
+        // written against by definition. Only a fork records one.
+        cwd: None,
     }
 }
 

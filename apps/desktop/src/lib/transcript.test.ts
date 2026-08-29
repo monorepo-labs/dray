@@ -28,6 +28,7 @@ function prompt(seq: number, text: string, queued: boolean): AgentEvent {
     baseline: null,
     queued,
     from: null,
+    cwd: null,
   });
 }
 

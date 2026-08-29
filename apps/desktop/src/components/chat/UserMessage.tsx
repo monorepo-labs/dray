@@ -46,6 +46,7 @@ export default function UserMessage({
   images = [],
   issues = [],
   from = null,
+  cwd: writtenIn = null,
   onOpenSession,
 }: {
   text: string;
@@ -56,11 +57,21 @@ export default function UserMessage({
   issues?: IssueRef[];
   /// The session that relayed this, or `null` for a prompt the user typed.
   from?: MessageSender | null;
+  /// The working directory this prompt was written in, where it is not the
+  /// session's own. Only a fork records one, and it is what keeps a copied
+  /// `@mention` naming the tree it was typed in rather than the fork's own copy
+  /// of the same file.
+  cwd?: string | null;
   /// Opens the sending session. Absent where nothing can navigate, which draws
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
 }) {
-  const cwd = useChatCwd();
+  // The recorded one wins where there is one. A fork carries its parent's
+  // conversation into a different tree, so a mention resolved against the
+  // session's own cwd there would open the fork's copy of the file rather than
+  // the one this message named.
+  const sessionCwd = useChatCwd();
+  const cwd = writtenIn ?? sessionCwd;
   const body = stripSenderPrefix(text, from);
   const segments = highlightSegments(body);
 
