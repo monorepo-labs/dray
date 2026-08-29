@@ -55,6 +55,13 @@
      its own name: the composer is not a popover, and the next change to
      floating surfaces should not have to wonder whether it wanted that too. */
   --composer: var(--surface-card);
+  /* The composer's `/`, `@` and `#` picker. A popover by every other measure,
+     and it takes its own name for one reason: it is the tallest floating
+     surface in the app, so the wash that reads as glass on a menu covers a
+     third of the transcript here and reads as a smear of it. `--veil-panel`
+     under glass rather than `--veil-float`; the same fill as every other
+     surface off it. */
+  --picker: var(--surface-card);
   --secondary: var(--muted);
   --accent: var(--muted);
   --card-foreground: var(--foreground);
@@ -196,6 +203,15 @@
      frames, which is what stops the transcript showing through the words. */
   --veil-float: color-mix(in oklab, var(--surface-card) 62%, transparent);
 
+  /* Above the float, below a slab, and the difference from the number over it
+     is area. A menu is a few rows over a fixed strip of page; the picker is
+     fourteen rems of list over a live transcript, so at 62% the words behind it
+     move under the words in it and the blur that hides them reads as a smear
+     rather than as glass. Both ends were looked at on screen: 62% read as
+     blurry, 88% read as a slab, and this sits between them — the surface still
+     transmits, and nothing behind it resolves. */
+  --veil-panel: color-mix(in oklab, var(--surface-card) 76%, transparent);
+
   /* Enough to lift a filled button off the surface and no more: on a dark
      palette a filled button and its background are two flat fields, and without
      this the only thing saying "button" is the fill itself. Straight down, no
@@ -254,6 +270,9 @@
      desktop, and the same alpha reads as a washed-out surface rather than a
      glass one. */
   --veil-float: color-mix(in oklab, var(--surface-card) 74%, transparent);
+  /* Tighter than dark's 88% for the same reason this ramp's float is tighter
+     than dark's: a bright desktop through a light surface washes it out. */
+  --veil-panel: color-mix(in oklab, var(--surface-card) 84%, transparent);
 
   /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
      reads as dirt against near-white. */
@@ -418,6 +437,7 @@
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
+  --color-picker: var(--picker);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-composer: var(--composer);
@@ -572,6 +592,10 @@
        for. */
     --popover: var(--veil-float);
     --composer: var(--veil-float);
+    /* Heavier than the two above it — see `--veil-panel`. This is the one
+       floating surface tall enough that the wash reads as what is behind it
+       rather than as glass. */
+    --picker: var(--veil-panel);
     /* The one highlight that lands on the backdrop rather than inside a menu:
        the sidebar has no fill here, so a selected session row — and the panel's
        active tab, which shares the token — is drawn straight onto it. The `/50`
