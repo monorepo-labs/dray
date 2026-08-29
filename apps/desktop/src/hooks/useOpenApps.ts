@@ -67,30 +67,39 @@ async function load(): Promise<ExternalApp[]> {
 /// stops matching would silently reseat the default on the wrong app. A stored
 /// path that is no longer installed falls back to the first app in the list —
 /// an uninstalled editor should cost the default, never the button.
-export function useOpenApps() {
+export function useOpenApps(key?: string) {
   const [apps, setApps] = useState<ExternalApp[]>(cached ?? []);
   const [picked, setPicked] = useLocalStorage<string | null>(PICK_KEY, null);
   const live = useRef(true);
 
   /// Reads if the cached answer has gone stale, and does nothing if it hasn't.
   ///
-  /// Has to be callable rather than an effect dependency, because the panel
-  /// this button lives in is **mounted forever** — closing the pane and
-  /// switching tabs hide it rather than unmounting it. So a mount effect runs
-  /// exactly once for the life of the app, and a freshness window it never
-  /// re-checks expires without anything noticing: the whole point of the
-  /// window, a newly installed editor showing up, was still unreachable.
+  /// Callable rather than only an effect, because the panel this button lives
+  /// in is **mounted forever** — closing the pane and switching tabs hide it
+  /// rather than unmounting it. So a mount effect runs exactly once for the
+  /// life of the app, and a freshness window nothing re-checks expires without
+  /// anything noticing: the whole point of the window, a newly installed editor
+  /// showing up, was unreachable.
   const refresh = useCallback(() => {
     void load().then((next) => live.current && setApps(next));
   }, []);
 
+  // `key` is the caller's own "something changed" beat — the session's cwd, in
+  // practice — and it exists so a read can happen somewhere the *button* isn't.
+  //
+  // That matters for exactly one case, and it is a deadlock without it: a first
+  // read that fails leaves no apps, and with no apps there is no button, so
+  // there is no menu to open and the menu was otherwise the only later trigger.
+  // The control would be gone until restart over one failed IPC call. Keyed
+  // here it heals on the next session switch instead, and costs nothing in the
+  // ordinary case because `load` no-ops inside the freshness window.
   useEffect(() => {
     live.current = true;
     refresh();
     return () => {
       live.current = false;
     };
-  }, [refresh]);
+  }, [refresh, key]);
 
   const pick = apps.find((app) => app.path === picked) ?? apps[0] ?? null;
 

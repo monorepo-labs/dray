@@ -34,7 +34,9 @@ const FAILED_MS = 4000;
 /// an empty list means the scan itself found nothing rather than that the
 /// reader is missing an editor.
 export default function OpenInButton({ cwd, className }: { cwd: string; className?: string }) {
-  const { apps, pick, select, open, refresh } = useOpenApps();
+  // Keyed on `cwd` so a read also happens on session switch — the one trigger
+  // that survives this component rendering nothing. See `useOpenApps`.
+  const { apps, pick, select, open, refresh } = useOpenApps(cwd);
 
   // `open`'s own sentence when a launch failed, held briefly on the button.
   // The alternative was the developer console, where it told the reader
