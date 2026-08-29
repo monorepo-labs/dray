@@ -41,6 +41,64 @@ use rpc::{Incoming, RpcClient};
 /// compliance log, and an unnamed client is an unattributable one.
 const CLIENT_NAME: &str = "dray";
 
+/// The conversation every write is addressed to, and what each write restates.
+///
+/// Cloneable, and the read loop holds a clone: both halves have to agree about
+/// which turn is running, and the reader is what sees a turn the server opened
+/// for itself.
+#[derive(Clone, Debug)]
+pub struct Thread {
+    pub client: RpcClient,
+    /// Minted by the server, not chosen by us — the one id in this app that
+    /// arrives rather than being handed out.
+    pub id: String,
+    /// Restated on every `turn/start` rather than settled once at
+    /// `thread/start`, because neither of the two thread-level calls can carry
+    /// all of it. `ThreadStartParams` has no `effort` field at all — it is
+    /// accepted and silently dropped, verified against 0.148.0-alpha.21 — and a
+    /// resumed thread otherwise runs on whatever its rollout recorded, so a
+    /// session whose model or stance changed would go on running the old one
+    /// while the index reported the new. `turn/start` overrides "this turn and
+    /// subsequent turns", which is the one place that covers both.
+    ///
+    /// Fixed for the life of the child: every one of these respawns it.
+    pub settings: TurnSettings,
+    /// The turn now running, or `None` between turns.
+    ///
+    /// `turn/interrupt` takes a turn id *as well as* a thread id — a request
+    /// carrying only the thread is refused outright with `missing field
+    /// turnId`, verified live — so without this Stop reaches the server as an
+    /// error and the turn keeps going.
+    pub turn_id: Arc<Mutex<Option<String>>>,
+}
+
+/// What a turn is started with. Every field is an override that also applies to
+/// the turns after it, which is why a resume needs no separate copy of them.
+#[derive(Clone, Debug)]
+pub struct TurnSettings {
+    pub model: String,
+    pub effort: Option<&'static str>,
+    pub approval_policy: &'static str,
+    pub sandbox: &'static str,
+}
+
+impl TurnSettings {
+    fn new(model: &Model, effort: Option<Effort>, permission_mode: ApprovalPolicy) -> Result<Self> {
+        let (approval_policy, sandbox) = approval_for(permission_mode);
+
+        Ok(Self {
+            model: model
+                .id
+                .as_arg()
+                .context("model has no CLI alias")?
+                .to_string(),
+            effort: effort.map(Effort::as_arg),
+            approval_policy,
+            sandbox,
+        })
+    }
+}
+
 pub async fn init(
     session_id: &str,
     model: &Model,
@@ -51,6 +109,10 @@ pub async fn init(
     is_new_session: bool,
     app: &AppHandle,
 ) -> Result<Session> {
+    // Ahead of the spawn: a model with no alias is a refusal, and refusing
+    // after the child exists means killing one to report it.
+    let settings = TurnSettings::new(model, effort, permission_mode)?;
+
     let mut command = Command::new(crate::binpath::codex().await);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
@@ -119,9 +181,7 @@ pub async fn init(
     let thread_id = match open_thread(
         &client,
         session_id,
-        model,
-        effort,
-        permission_mode,
+        &settings,
         session_cwd,
         is_new_session,
     )
@@ -140,17 +200,23 @@ pub async fn init(
         }
     };
 
+    let thread = Thread {
+        client,
+        id: thread_id,
+        settings,
+        turn_id: Arc::new(Mutex::new(None)),
+    };
+
     // The reader can start ingesting now: the thread exists, so every event
-    // from here belongs to a session the frontend can draw.
-    let _ = ready_tx.send(thread_id.clone());
+    // from here belongs to a session the frontend can draw. It gets a clone
+    // rather than a copy of the id, so the turn it sees open is the turn Stop
+    // interrupts.
+    let _ = ready_tx.send(thread.clone());
 
     Ok(Session {
         id: session_id.to_string(),
         child,
-        stdin: Transport::Rpc {
-            client,
-            thread_id,
-        },
+        stdin: Transport::Rpc(thread),
         harness: Codex,
         model: model.id,
         effort,
@@ -170,16 +236,14 @@ pub async fn init(
 async fn open_thread(
     client: &RpcClient,
     session_id: &str,
-    model: &Model,
-    effort: Option<Effort>,
-    permission_mode: ApprovalPolicy,
+    settings: &TurnSettings,
     session_cwd: &str,
     is_new_session: bool,
 ) -> Result<String> {
     handshake(client).await?;
 
     if is_new_session {
-        let thread = start_thread(client, model, effort, permission_mode, session_cwd).await?;
+        let thread = start_thread(client, settings, session_cwd).await?;
         // Recorded before the first prompt, so a session whose child dies mid
         // turn can still be resumed rather than silently starting over.
         store::set_session_thread_id(session_id, &thread).await?;
@@ -193,7 +257,7 @@ async fn open_thread(
         // `thread/start` never answered. Nothing to resume by.
         .context("this session has no Codex thread to resume")?;
 
-    resume_thread(client, &recorded).await?;
+    resume_thread(client, &recorded, settings).await?;
     Ok(recorded)
 }
 
@@ -213,34 +277,44 @@ async fn handshake(client: &RpcClient) -> Result<()> {
     client.notify("initialized", json!({}))
 }
 
-async fn start_thread(
-    client: &RpcClient,
-    model: &Model,
-    effort: Option<Effort>,
-    permission_mode: ApprovalPolicy,
-    cwd: &str,
-) -> Result<String> {
-    let (approval_policy, sandbox) = approval_for(permission_mode);
-
-    let mut params = json!({
+/// Opens a fresh thread. No `effort` here — `ThreadStartParams` has no such
+/// field, and one sent anyway is accepted and dropped, so it rides every
+/// `turn/start` instead.
+async fn start_thread(client: &RpcClient, settings: &TurnSettings, cwd: &str) -> Result<String> {
+    let params = json!({
         "cwd": cwd,
-        "model": model.id.as_arg().context("model has no CLI alias")?,
-        "approvalPolicy": approval_policy,
-        "sandbox": sandbox,
+        "model": settings.model,
+        "approvalPolicy": settings.approval_policy,
+        "sandbox": settings.sandbox,
     });
-
-    if let Some(effort) = effort {
-        params["effort"] = json!(effort.as_arg());
-    }
 
     let answer = client.request("thread/start", params).await?;
 
     thread_id_from(&answer).context("thread/start answered with no thread id")
 }
 
-async fn resume_thread(client: &RpcClient, thread_id: &str) -> Result<()> {
+/// Picks a thread back up, restating what it should run as.
+///
+/// The overrides are not decoration: a resume with the thread id alone runs on
+/// whatever the rollout recorded, so a session whose model or stance changed
+/// between runs — which is every effort or model change, since those respawn
+/// the child — would go on running the old one while the index reported the
+/// new. Silent, because nothing on the wire disagrees.
+async fn resume_thread(
+    client: &RpcClient,
+    thread_id: &str,
+    settings: &TurnSettings,
+) -> Result<()> {
     client
-        .request("thread/resume", json!({"threadId": thread_id}))
+        .request(
+            "thread/resume",
+            json!({
+                "threadId": thread_id,
+                "model": settings.model,
+                "approvalPolicy": settings.approval_policy,
+                "sandbox": settings.sandbox,
+            }),
+        )
         .await?;
 
     Ok(())
@@ -286,7 +360,7 @@ struct ReaderHandles {
 async fn read_stdout(
     stdout: ChildStdout,
     handles: ReaderHandles,
-    ready: tokio::sync::oneshot::Receiver<String>,
+    ready: tokio::sync::oneshot::Receiver<Thread>,
     events: Arc<Mutex<Vec<AgentEvent>>>,
     status: Arc<Mutex<StatusTracker>>,
     queued: QueuedMessages,
@@ -310,11 +384,8 @@ async fn read_stdout(
         if transport.is_none() {
             if let Some(rx) = &mut ready {
                 match rx.try_recv() {
-                    Ok(thread_id) => {
-                        transport = Some(Transport::Rpc {
-                            client: handles.client.clone(),
-                            thread_id,
-                        });
+                    Ok(thread) => {
+                        transport = Some(Transport::Rpc(thread));
                         ready = None;
                     }
                     // The sender was dropped, so the thread never opened. Stop
@@ -398,6 +469,23 @@ async fn read_stdout(
             continue;
         };
 
+        // Whatever the turn is, Stop has to be able to name it. The server
+        // opens turns of its own — a review it starts, a compaction — so the
+        // send path cannot be the only thing that records one, and a turn id
+        // left standing after its turn ended would have Stop interrupting
+        // something already over.
+        if let Transport::Rpc(thread) = transport {
+            match &event {
+                parser::CodexEvent::TurnStarted(turn) => {
+                    *thread.turn_id.lock().await = Some(turn.turn.id.clone());
+                }
+                parser::CodexEvent::TurnCompleted(_) => {
+                    *thread.turn_id.lock().await = None;
+                }
+                _ => {}
+            }
+        }
+
         let ingest = crate::session::Ingest {
             session_id: &handles.session_id,
             harness: Codex,
@@ -437,13 +525,33 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
 /// answer names the turn. The answer is awaited so a refusal — an unsteerable
 /// turn, a thread that has gone — reaches the caller as an error instead of a
 /// prompt that vanished.
-pub async fn start_turn(client: &RpcClient, thread_id: &str, text: &str) -> Result<()> {
-    let params = json!({
-        "threadId": thread_id,
+pub async fn start_turn(thread: &Thread, text: &str) -> Result<()> {
+    let mut params = json!({
+        "threadId": thread.id,
         "input": [{"type": "text", "text": text}],
+        "model": thread.settings.model,
+        "approvalPolicy": thread.settings.approval_policy,
     });
 
-    client.request("turn/start", params).await?;
+    // Absent means "whatever the model defaults to", which is not the same as
+    // any level, so it is left out rather than sent as null.
+    if let Some(effort) = thread.settings.effort {
+        params["effort"] = json!(effort);
+    }
+
+    let answer = thread.client.request("turn/start", params).await?;
+
+    // Recorded here rather than left to `turn/started`: the notification lands
+    // a beat later, and a Stop pressed inside that window would find no turn to
+    // name. The reader writes the same id over it moments later.
+    if let Some(id) = answer
+        .get("turn")
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
+    {
+        *thread.turn_id.lock().await = Some(id.to_string());
+    }
+
     Ok(())
 }
 
@@ -452,9 +560,23 @@ pub async fn start_turn(client: &RpcClient, thread_id: &str, text: &str) -> Resu
 /// The server acknowledges immediately and the turn ends with its own
 /// `turn/completed` carrying `interrupted`, so the reader is what reports it —
 /// nothing here waits for the turn to actually stop.
-pub async fn interrupt_turn(client: &RpcClient, thread_id: &str) -> Result<()> {
-    client
-        .request("turn/interrupt", json!({"threadId": thread_id}))
+///
+/// Names the turn, not just the thread: a request carrying the thread alone is
+/// refused outright with `missing field turnId`, so Stop reached the server as
+/// an error and the turn ran on. With nothing running there is nothing to name,
+/// and that answers success — Stop is pressed on a row whose turn may have just
+/// ended, and an error there would report a failure that isn't one.
+pub async fn interrupt_turn(thread: &Thread) -> Result<()> {
+    let Some(turn_id) = thread.turn_id.lock().await.clone() else {
+        return Ok(());
+    };
+
+    thread
+        .client
+        .request(
+            "turn/interrupt",
+            json!({"threadId": thread.id, "turnId": turn_id}),
+        )
         .await?;
     Ok(())
 }
@@ -707,19 +829,47 @@ mod tests {
 
         let model = crate::models::find_model(crate::models::default_model_for(Codex))
             .expect("the default Codex model should be listed");
+        let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto)
+            .expect("the default Codex model has an alias");
 
-        let thread = start_thread(
+        let thread_id = start_thread(
             &client,
-            &model,
-            None,
-            ApprovalPolicy::Auto,
+            &settings,
             std::env::temp_dir().to_str().unwrap(),
         )
         .await
         .expect("thread/start should succeed");
 
-        assert!(!thread.is_empty(), "a thread id came back");
-        println!("live thread: {thread}");
+        assert!(!thread_id.is_empty(), "a thread id came back");
+        println!("live thread: {thread_id}");
+
+        // The shape of Stop, checked without paying for a turn. A request
+        // carrying the thread alone is refused with `missing field turnId`, so
+        // the interrupt that mattered never reached the server at all; naming a
+        // turn that does not exist has to fail for *that* reason instead.
+        let thread = Thread {
+            client: client.clone(),
+            id: thread_id,
+            settings,
+            turn_id: Arc::new(Mutex::new(Some(
+                "00000000-0000-0000-0000-000000000000".to_string(),
+            ))),
+        };
+        let refusal = interrupt_turn(&thread)
+            .await
+            .expect_err("no such turn exists")
+            .to_string();
+        assert!(
+            !refusal.contains("missing field"),
+            "turn/interrupt rejected our params: {refusal}"
+        );
+
+        // And with nothing running there is nothing to name, which is not a
+        // failure — Stop is pressed on turns that have just ended.
+        *thread.turn_id.lock().await = None;
+        interrupt_turn(&thread)
+            .await
+            .expect("an idle thread has nothing to interrupt");
 
         let _ = child.kill().await;
     }

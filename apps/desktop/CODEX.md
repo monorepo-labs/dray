@@ -35,7 +35,8 @@ initialized →                                  (a notification, not a request)
 thread/start {cwd, model, approvalPolicy, sandbox}
   ←  {thread: {id}}                            ← recorded on the index entry
   ↓
-turn/start {threadId, input}                   ← one per prompt
+turn/start {threadId, input, model, effort, approvalPolicy}
+  ←  {turn: {id}}                              ← the id Stop has to name
   ←  turn/started
   ←  item/started      {agentMessage}          ← a block opens
   ←  item/…/delta      …                       ← streamed preview
@@ -81,6 +82,8 @@ README don't match what the binary does:
 | `approvalPolicy: "unlessTrusted"` | `"untrusted"` |
 | `turn/completed` carries no items | it carries all of them |
 | the client works out which approval buttons to show | the server names them, in `availableDecisions` |
+| `thread/start` takes an `effort` | it does not — the field is accepted and silently dropped, so effort rides `turn/start` |
+| `turn/interrupt` takes a thread | it takes a thread **and a turn**, and refuses `missing field turnId` without one |
 
 And one thing the docs don't mention at all, which is the trap most worth
 knowing:
@@ -118,8 +121,14 @@ tests — see `src-tauri/src/harness/codex/fixtures/README.md`.
 
 A Codex session runs, streams, and resumes. The transcript draws agent messages,
 reasoning, shell commands with their output, and file changes with real unified
-diffs. The context ring fills. Stop works. The changes panel works — it diffs
-tree snapshots, so it never needed anything harness-specific.
+diffs. The context ring fills. The changes panel works — it diffs tree
+snapshots, so it never needed anything harness-specific.
+
+Stop names the turn as well as the thread, which is not optional: a
+`turn/interrupt` carrying only a thread id is refused outright with `missing
+field turnId`. So the running turn's id is tracked — recorded when `turn/start`
+answers, overwritten by `turn/started`, cleared by `turn/completed` — and with
+no turn running, Stop is a no-op rather than an error.
 
 You pick the agent in the composer, left of the model picker. It's
 creation-time only, like the project and branch pickers: the harness *is* the
@@ -134,9 +143,16 @@ fails closed — nothing runs unasked — but it means a Codex session in a stan
 that asks (`auto`, `manual`, `plan`) will have its commands refused. Sessions in
 `dontAsk` or `bypassPermissions` run without asking and work fully.
 
-Also not wired: fork for Codex (it refuses outright rather than forking into the
-parent's own conversation), subagents, MCP tool calls, web search, images in
-prompts, and changing model or permission mode mid-session.
+Also not wired: fork for Codex (it refuses before it copies anything, rather
+than forking into the parent's own conversation), subagents, MCP tool calls,
+web search, and images in prompts.
+
+Model, effort and permission mode **do** change mid-session, by replacing the
+child rather than steering it. Codex takes model, effort and approval policy as
+`turn/start` overrides, so two of the three could apply in place — but a stance
+is two settings and `sandbox` has no turn-level form, so applying one in place
+would move the approval policy and leave the sandbox where it was. Respawning
+settles both at once; `thread/resume` carries the conversation across it.
 
 Worktrees **do** work, by a different route. Claude gets a `-w` flag and makes
 its own tree; Codex has none, so Dray creates the tree first — resolving the

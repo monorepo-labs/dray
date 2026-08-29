@@ -11,6 +11,7 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
 import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
@@ -481,7 +482,12 @@ const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
   setHarnessState(prefs.harness);
-  setModelId(prefs.modelId);
+  // Repaired against the list on screen, not taken as read. The effect below
+  // only fires when the harness *changes*, so a stored model left over from the
+  // other harness would come back here untouched every time — and the harness
+  // is stored too, so the two can disagree from the moment one is picked
+  // without the other.
+  setModelId(usableModel(models, prefs.modelId));
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
   setUseWorktreeState(prefs.useWorktree);
@@ -810,7 +816,7 @@ useEffect(() => {
     // A model belongs to exactly one harness, so switching harness leaves the
     // pick naming something the new one cannot run. Repaired here, where the
     // real list has just landed, rather than guessed at when the toggle moved.
-    setModelId((current) => (list.some((m) => m.id === current) ? current : list[0]?.id ?? current));
+    setModelId((current) => usableModel(list, current));
   });
 }, [harness])
 

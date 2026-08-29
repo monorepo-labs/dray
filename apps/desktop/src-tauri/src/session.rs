@@ -13,7 +13,7 @@ use crate::{
         },
     },
     issues::{self, IssueRef},
-    models::{find_model, resolve_effort, Effort, Model, ModelId},
+    models::{find_model, models_for, resolve_effort, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
         delete_session, get_session_index_item, link_session_issue, list_session_events,
@@ -368,6 +368,16 @@ impl SessionManager {
         app: &AppHandle,
     ) -> Result<SendOutcome> {
         let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
+
+        // A model belongs to exactly one harness, and the pair reaches here from
+        // two places that each know only half of it — the composer's stored
+        // defaults and the `dray` CLI's own flags — so nothing upstream makes
+        // them agree. Refused rather than quietly repaired: a session running on
+        // a model nobody picked is the failure that looks like success.
+        if !models_for(harness).iter().any(|m| m.id == model) {
+            bail!("{} is not a {} model", model_spec.label, harness.label());
+        }
+
         let effort = resolve_effort(&model_spec, effort);
 
         // Resolved once for every path below — created, live, queued and
@@ -536,9 +546,18 @@ impl SessionManager {
                 app,
             )
             .await?;
-            session
+            if let Err(error) = session
                 .send_msg(prompt, attachment_paths, issues, baseline, from, app)
-                .await?;
+                .await
+            {
+                // Nothing has this session yet — it is inserted below — so
+                // returning here is the last anything can reach that child, and
+                // a `Child` is not reaped on drop. Reachable with the child
+                // alive and well on Codex, where the send is a request the
+                // server can refuse or leave unanswered.
+                let _ = session.kill().await;
+                return Err(error);
+            }
             // The prompt event is synthesized by `send_msg`, so read the log
             // back rather than returning empty — otherwise the frontend's first
             // render drops the user's own message.
@@ -589,11 +608,15 @@ impl SessionManager {
         // the kill would destroy not just a turn in flight but every background
         // task the child is still carrying. The index still records the pick
         // below, so the next idle send is what respawns.
-        // Codex is in the same position for its model and its stance: the one
-        // method that would set them in place, `thread/settings/update`, is
-        // experimental, and a `turn/start` override only takes effect from the
-        // next turn. So it respawns for all three where Claude respawns for
-        // effort alone. `thread/resume` carries the conversation across it.
+        // Codex respawns for its model and its stance as well. Not for want of
+        // a per-turn override — `turn/start` carries model, effort and approval
+        // policy, and this restates all three on every turn — but because a
+        // stance is *two* settings and only one of them has a turn-level form.
+        // `sandbox` is thread-level only, so applying a stance change in place
+        // would move the approval policy and leave the sandbox where it was:
+        // exactly the half-applied setting that makes a session more or less
+        // free than the reader asked for. Respawning settles both at once, and
+        // `thread/resume` carries the conversation across it.
         let respawn_needed = !busy
             && sessions_guard.get(session_id).is_some_and(|s| {
                 s.effort != effort
@@ -759,9 +782,15 @@ impl SessionManager {
             clear_fork_from(session_id).await?;
         }
 
-        session
+        if let Err(error) = session
             .send_msg(prompt, attachment_paths, issues, baseline, from, app)
-            .await?;
+            .await
+        {
+            // Same reason as the creation path above: the insert is below, so
+            // this is the last reference to a child that is still running.
+            let _ = session.kill().await;
+            return Err(error);
+        }
         sessions_guard.insert(session_id.to_string(), session);
         Ok(SendOutcome {
             issues: linked,
@@ -792,6 +821,14 @@ impl SessionManager {
         let parent = get_session_index_item(session_id)
             .await?
             .with_context(|| format!("unknown session {session_id}"))?;
+
+        // Ahead of every write below, not left to the first send. A fork copies
+        // the log and appends an index entry before any child exists, so a
+        // refusal that late leaves a row in the sidebar holding a whole
+        // conversation it can never carry on.
+        if parent.harness == Harness::Codex {
+            bail!("Codex sessions cannot be forked yet");
+        }
 
         if let Some(s) = self.sessions.lock().await.get(session_id) {
             if s.status.lock().await.has_outstanding_work() {
@@ -1025,12 +1062,9 @@ impl SessionManager {
 #[derive(Clone, Debug)]
 pub enum Transport {
     Lines(Arc<Mutex<ChildStdin>>),
-    /// The thread id rides along because it is what every Codex write is
-    /// addressed to, and it is minted by the server rather than by us.
-    Rpc {
-        client: crate::harness::codex::rpc::RpcClient,
-        thread_id: String,
-    },
+    /// The conversation every Codex write is addressed to, and the settings
+    /// each one restates. See [`Thread`](crate::harness::codex::Thread).
+    Rpc(crate::harness::codex::Thread),
 }
 
 impl Transport {
@@ -1042,7 +1076,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc { .. } => bail!("this control is not wired for Codex yet"),
+            Transport::Rpc(_) => bail!("this control is not wired for Codex yet"),
         }
     }
 }
@@ -1262,8 +1296,8 @@ impl Session {
         // Codex answers the ack immediately and ends the turn with its own
         // `turn/completed` carrying `interrupted`, so the reader is what
         // reports the stop — nothing waits here for the turn to actually end.
-        if let Transport::Rpc { client, thread_id } = &self.stdin {
-            return crate::harness::codex::interrupt_turn(client, thread_id).await;
+        if let Transport::Rpc(thread) = &self.stdin {
+            return crate::harness::codex::interrupt_turn(thread).await;
         }
 
         write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
@@ -1541,8 +1575,8 @@ async fn deliver_prompt(
     // Codex takes a prompt as a request that opens a turn, so the write is the
     // send rather than a line the child picks up on its own schedule. Images
     // ride a different shape there and are not wired yet; the text still goes.
-    if let Transport::Rpc { client, thread_id } = transport {
-        return crate::harness::codex::start_turn(client, thread_id, &text).await;
+    if let Transport::Rpc(thread) = transport {
+        return crate::harness::codex::start_turn(thread, &text).await;
     }
     let stdin = transport.lines()?;
 
@@ -1733,7 +1767,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // Spawned rather than made fire-and-forget so the send still reports its own
     // failure. Ordering is unaffected — the queue was drained under one lock, and
     // `flush_queued` already logs rather than propagates.
-    if matches!(ctx.flush_transport, Transport::Rpc { .. }) {
+    if matches!(ctx.flush_transport, Transport::Rpc(_)) {
         let session_id = ctx.session_id.to_string();
         let harness = ctx.harness;
         let queued = ctx.queued.clone();

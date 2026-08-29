@@ -46,3 +46,13 @@ pub enum Harness {
     ClaudeCode,
     Codex,
 }
+
+impl Harness {
+    /// What to call it in a sentence somebody reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "Claude Code",
+            Harness::Codex => "Codex",
+        }
+    }
+}
