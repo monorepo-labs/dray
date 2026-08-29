@@ -5,6 +5,52 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.9.0
+
+### Added
+
+- **Codex runs, as a second agent.** Pick it in the composer beside Claude
+  Code and the session spawns `codex app-server` instead. Sessions stream,
+  resume and stop; the transcript draws messages, reasoning, shell calls and
+  file diffs; the context ring fills. Approvals are wired, and the buttons on
+  the card are Codex's own — where it offers no way to refuse, Dray adds one.
+
+  Two differences are Codex's, not choices: it splits Dray's permission mode
+  into two settings (when it asks, and what a command may touch), and it has
+  no plan mode, so Plan is hidden there. Changing model, effort or mode
+  restarts the session, image prompts are not supported yet, and a Codex
+  session cannot be forked.
+
+- **The agent's CLI is checked before you type.** Picking an agent that isn't
+  installed marks it in the picker and draws a notice with the vendor's own
+  install command and a link, rather than failing after a session already
+  exists.
+
+- **Open a session's working directory in an editor, terminal or Finder.** A
+  split button in the right panel's tab row: the left half opens in whichever
+  app you chose last, the chevron picks without launching anything. Installed
+  apps are detected with their own icons.
+
+### Changed
+
+- **Accept edits is gone as a permission mode.** It applied file edits without
+  asking while still asking about commands — too narrow a promise to sit
+  beside Auto. Sessions set to it now read as Auto.
+
+### Fixed
+
+- **A session running a dev server can be forked again.** Fork refused while
+  any background task was outstanding — and a dev server never ends — so it
+  was refused for the rest of that session's life, with the menu item left
+  enabled. It now refuses only while a turn is actually in flight.
+- **`dray issue link` works inside a worktree session.** The documented form
+  named `$DRAY_SESSION_ID`, and the agent's own guard refuses any command
+  naming an environment variable there — silently, so the issue was never
+  linked. The session id is now optional and read by the CLI itself. Update
+  the CLI with `dray update`.
+- **"Spin up a session" starts a Dray session.** That phrasing and its
+  neighbours reached for the agent's own subagent tool instead.
+
 ## 0.8.2
 
 ### Added
