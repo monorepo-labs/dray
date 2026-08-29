@@ -210,6 +210,7 @@ function userProps(turn: Turn) {
         images: payload.images,
         issues: payload.issues,
         from: payload.from,
+        cwd: payload.cwd,
       }
     : { text: "" };
 }

@@ -891,7 +891,7 @@ impl SessionManager {
             None
         };
 
-        let events = copy_session_log(session_id, fork_id).await?;
+        let events = copy_session_log(session_id, fork_id, &parent.cwd).await?;
 
         // The parent never got a conversation off the ground — indexed, then its
         // spawn failed — so the CLI has no transcript under that id to fork
@@ -1609,6 +1609,9 @@ async fn deliver_prompt(
         baseline,
         queued,
         from,
+        // Absent means "this session's own cwd", which is the truth for every
+        // message a session logs itself. Only a fork records one.
+        cwd: None,
     };
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),

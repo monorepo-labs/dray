@@ -80,6 +80,7 @@ export default function EventRow({
           images={payload.images}
           issues={payload.issues}
           from={payload.from}
+          cwd={payload.cwd}
           onOpenSession={onOpenSession}
         />
       );

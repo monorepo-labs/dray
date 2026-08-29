@@ -1,6 +1,7 @@
 import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
+import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -261,22 +262,16 @@ export default function RightPanel({
         ) : (
           <>
             {tabOrder({ pr, issue }).map((value) => (
-              <button
+              <TabButton
                 key={value}
-                type="button"
+                active={tab === value}
                 onClick={() => onTabChange(value)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-ui transition-colors",
-                  tab === value
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
               >
                 {LABELS[value]}
                 {!!counts?.[value] && (
                   <span className="ml-1 text-muted-foreground">{counts[value]}</span>
                 )}
-              </button>
+              </TabButton>
             ))}
 
             {/* Beside the tabs rather than at the far end, and with no label:

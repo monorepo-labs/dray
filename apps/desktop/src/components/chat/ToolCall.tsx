@@ -16,7 +16,7 @@ import {
   toolLabel,
   toolSummary,
 } from "@/lib/tools";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import FileLink from "@/components/chat/FileLink";
 import type { FileEdit, ToolResult, ToolType } from "@/types/events";
 import FileEdits from "@/components/chat/FileEdits";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
@@ -275,27 +275,7 @@ export default function ToolCall({
                 invalid markup and the click would toggle the row instead of
                 opening anything. `stopPropagation` is what keeps the two
                 apart. */}
-            {target ? (
-              <span
-                role="link"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void revealItemInDir(target).catch(() => {});
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  e.stopPropagation();
-                  e.preventDefault();
-                  void revealItemInDir(target).catch(() => {});
-                }}
-                className="underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
-              >
-                {fileName(target)}
-              </span>
-            ) : (
-              summary
-            )}
+            {target ? <FileLink path={target}>{fileName(target)}</FileLink> : summary}
           </span>
         )}
 

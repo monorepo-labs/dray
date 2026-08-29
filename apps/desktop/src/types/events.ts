@@ -91,7 +91,28 @@ queued: boolean,
  * sender, and anything drawn from prose the model can write itself is
  * a thing the model can forge.
  */
-from: MessageSender | null, } | { "type": "assistant_text", 
+from: MessageSender | null, 
+/**
+ * The working directory this prompt was written in, when it is not the
+ * one the session runs in now.
+ *
+ * `None` is the ordinary case and means "this session's own cwd" — the
+ * truth for every message a session logged itself, and for every
+ * message logged before this field existed.
+ *
+ * Set by [`fork`](crate::store::fork_session), because a fork is the
+ * one thing that carries a conversation into a *different* tree. An
+ * `@mention` is written relative to the tree it was typed in, so a
+ * copied one resolved against the fork's tree silently opens the fork's
+ * own copy of the file rather than the one the message named. The
+ * transcript is a record everywhere else in this app — a turn's
+ * baseline and closing tree are both frozen — and this is the same
+ * rule for the same reason.
+ *
+ * Deliberately not overwritten on a fork of a fork: the first ancestor
+ * to record one is the tree the message was actually written in.
+ */
+cwd: string | null, } | { "type": "assistant_text", 
 /**
  * `Some` only when this content was also streamed, naming the preview
  * it supersedes. `None` — the common case, covering Claude Code
@@ -413,7 +434,7 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type ErrorSource = "harness" | "parser" | "process";
 
 /**
- * An installed app the working directory can be handed to.
+ * An installed app a path can be handed to.
  */
 export type ExternalApp = { 
 /**

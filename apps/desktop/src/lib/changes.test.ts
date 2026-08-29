@@ -26,6 +26,7 @@ function prompt(baseline: string | null): AgentEvent {
       baseline,
       queued: false,
       from: null,
+      cwd: null,
     },
     raw: null,
   } as AgentEvent;

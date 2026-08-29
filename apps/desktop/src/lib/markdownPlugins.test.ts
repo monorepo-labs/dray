@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { REHYPE_PLUGINS } from "./markdownPlugins";
+import { FILE_LINK_CLASS, FILE_PATH_CLASS, REHYPE_PLUGINS, walk } from "./markdownPlugins";
 
 type Hast = {
   type: string;
@@ -61,5 +61,187 @@ describe("REHYPE_PLUGINS", () => {
       tagName: "a",
       properties: { href: "https://example.com/x", target: "_blank" },
     });
+  });
+});
+
+describe("rehypeFilePaths", () => {
+  const paragraph = (children: Hast[]): Hast => ({
+    type: "root",
+    children: [{ type: "element", tagName: "p", properties: {}, children }],
+  });
+
+  /// Every element the walk marked, wherever it ended up in the tree.
+  const marked = (node: Hast): Hast[] =>
+    (node.children ?? []).flatMap((child) =>
+      child.properties?.className ? [child] : marked(child),
+    );
+
+  it("splits a path out of a sentence and marks it", () => {
+    const tree = paragraph([{ type: "text", value: "I changed /a/b/Footer.js today" }]);
+    walk(tree);
+
+    const parts = tree.children![0].children!;
+    expect(parts.map((c) => c.value ?? c.children![0].value)).toEqual([
+      "I changed ",
+      "/a/b/Footer.js",
+      " today",
+    ]);
+    expect(marked(tree)[0].properties).toEqual({
+      className: [FILE_PATH_CLASS],
+      title: "/a/b/Footer.js",
+    });
+  });
+
+  /// Punctuation stays outside the run, so the path on `title` is the path and
+  /// nothing else. Opening `/a/b.ts).` would fail in a way nobody could read.
+  it("puts the path and only the path inside the span", () => {
+    const tree = paragraph([{ type: "text", value: "see (/a/b.ts)." }]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("/a/b.ts");
+    expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
+  });
+
+  /// The shape an agent writes most readily. Left as an anchor it raised the
+  /// external-link confirmation for something that is not a URL, and then had
+  /// nowhere to go.
+  it("converts a markdown link whose href is a path, keeping its label", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "/Users/me/app/Footer.js" },
+        children: [{ type: "text", value: "Footer.js" }],
+      },
+    ]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(span.tagName).toBe("span");
+    expect(span.properties?.title).toBe("/Users/me/app/Footer.js");
+    expect(span.children).toEqual([{ type: "text", value: "Footer.js" }]);
+    // Drawn as the link its author wrote, not as a path found in a sentence.
+    expect(span.properties?.className).toEqual([FILE_PATH_CLASS, FILE_LINK_CLASS]);
+  });
+
+  /// The one way to write a path holding a space as a markdown link, since a
+  /// bare space there ends the href.
+  it("decodes an escaped href before judging it", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "/Users/me/My%20Project/x.ts" },
+        children: [{ type: "text", value: "x.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("/Users/me/My Project/x.ts");
+  });
+
+  /// A malformed escape throws, and a link nobody can decode is still a link.
+  it("survives an href that will not decode", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "/Users/me/100%/x.ts" },
+        children: [{ type: "text", value: "x.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("/Users/me/100%/x.ts");
+  });
+
+  it("leaves a markdown link to a real URL as a link", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "https://example.com/a/b" },
+        children: [{ type: "text", value: "the docs" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)).toEqual([]);
+    expect(tree.children![0].children![0].tagName).toBe("a");
+  });
+
+  /// That text already belongs to a link. A second one nested inside it would
+  /// fire both on one click.
+  it("leaves a path alone inside a real link's label", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "https://example.com" },
+        children: [{ type: "text", value: "see /a/b.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)).toEqual([]);
+  });
+
+  /// Splitting a highlighted block's text would break its tokens, and the path
+  /// is already drawn there.
+  it("leaves a fenced block alone", () => {
+    const tree = paragraph([]);
+    tree.children!.push({
+      type: "element",
+      tagName: "pre",
+      properties: {},
+      children: [
+        {
+          type: "element",
+          tagName: "code",
+          properties: {},
+          children: [{ type: "text", value: "open /a/b.ts" }],
+        },
+      ],
+    });
+    walk(tree);
+
+    expect(marked(tree)).toEqual([]);
+  });
+
+  it("leaves an autolinked URL alone", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "https://example.com/a/b" },
+        children: [{ type: "text", value: "https://example.com/a/b" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)).toEqual([]);
+  });
+
+  /// Where an agent puts a path most of the time.
+  it("marks a path inside inline code", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "code",
+        properties: {},
+        children: [{ type: "text", value: "/a/b.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
+  });
+
+  it("leaves a tree with no path in it untouched", () => {
+    const tree = paragraph([{ type: "text", value: "nothing here" }]);
+    const before = tree.children![0].children;
+    walk(tree);
+
+    expect(tree.children![0].children).toBe(before);
   });
 });

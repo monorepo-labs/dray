@@ -2,7 +2,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
 
 import SessionAvatar from "@/components/SessionAvatar";
+import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { useChatCwd } from "@/hooks/useChatCwd";
+import { absolutePath } from "@/lib/filePath";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -43,6 +46,7 @@ export default function UserMessage({
   images = [],
   issues = [],
   from = null,
+  cwd: writtenIn = null,
   onOpenSession,
 }: {
   text: string;
@@ -53,10 +57,21 @@ export default function UserMessage({
   issues?: IssueRef[];
   /// The session that relayed this, or `null` for a prompt the user typed.
   from?: MessageSender | null;
+  /// The working directory this prompt was written in, where it is not the
+  /// session's own. Only a fork records one, and it is what keeps a copied
+  /// `@mention` naming the tree it was typed in rather than the fork's own copy
+  /// of the same file.
+  cwd?: string | null;
   /// Opens the sending session. Absent where nothing can navigate, which draws
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
 }) {
+  // The recorded one wins where there is one. A fork carries its parent's
+  // conversation into a different tree, so a mention resolved against the
+  // session's own cwd there would open the fork's copy of the file rather than
+  // the one this message named.
+  const sessionCwd = useChatCwd();
+  const cwd = writtenIn ?? sessionCwd;
   const body = stripSenderPrefix(text, from);
   const segments = highlightSegments(body);
 
@@ -108,11 +123,24 @@ export default function UserMessage({
             {segments.map((segment, i) => {
               if (segment.kind === "mention") {
                 const { name } = splitMention(segment.text);
+                const raw = segment.text.slice(1);
+                // Written against the agent's own working directory, which is
+                // what the context carries. Inert without one, the same resting
+                // state an unresolved issue tag has.
+                const path = absolutePath(raw, cwd);
+
+                if (!path) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.mention} title={raw}>
+                      @{name}
+                    </span>
+                  );
+                }
 
                 return (
-                  <span key={i} className={SEGMENT_COLOR.mention} title={segment.text.slice(1)}>
+                  <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
                     @{name}
-                  </span>
+                  </FileLink>
                 );
               }
 

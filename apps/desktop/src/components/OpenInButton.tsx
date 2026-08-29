@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { AppWindow, Check, ChevronDown, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, TriangleAlert } from "lucide-react";
 
+import AppIcon from "@/components/AppIcon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,14 +167,4 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
       </DropdownMenu>
     </div>
   );
-}
-
-/// The app's own icon, or a glyph where the bundle keeps none as an `.icns`.
-///
-/// `aria-hidden` and no `alt`: the name sits beside it in the menu and in the
-/// tooltip on the button, so a screen reader reading the mark as well would say
-/// the app twice.
-function AppIcon({ app, className }: { app: ExternalApp; className?: string }) {
-  if (!app.icon) return <AppWindow className={cn("shrink-0", className)} />;
-  return <img src={app.icon} alt="" aria-hidden className={cn("shrink-0", className)} />;
 }

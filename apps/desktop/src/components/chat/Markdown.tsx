@@ -1,11 +1,18 @@
 import { memo, useMemo } from "react";
 import { Streamdown, type Components, type LinkSafetyConfig, type ThemeInput } from "streamdown";
 
+import FileLink from "@/components/chat/FileLink";
 import LinkDialog from "@/components/chat/LinkDialog";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
-import { REHYPE_PLUGINS } from "@/lib/markdownPlugins";
+import { isFilePath } from "@/lib/filePath";
+import {
+  FILE_LINK_CLASS,
+  FILE_PATH_CLASS,
+  REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_PATHS,
+} from "@/lib/markdownPlugins";
 import { cn } from "@/lib/utils";
 
 type MarkdownProps = {
@@ -17,6 +24,13 @@ type MarkdownProps = {
   /// renderer cannot resolve on its own — an issue description, whose images
   /// and files sit behind the tracker's auth and have to be fetched with a key.
   components?: Components;
+  /// Draw an absolute path in the prose as something that opens.
+  ///
+  /// Off by default and on for the assistant's own messages alone. Everywhere
+  /// else this renders — an issue description, a PR review comment — the paths
+  /// come from somebody else's checkout, so a link there would offer to open a
+  /// file the reader has not got.
+  linkFilePaths?: boolean;
   className?: string;
 };
 
@@ -50,7 +64,13 @@ const LINK_SAFETY: LinkSafetyConfig = {
 
 /// Streamdown is built on the same shadcn tokens as the rest of the app, so it
 /// inherits the palette; only typography scale is ours to set.
-function MarkdownImpl({ children, streaming = false, components, className }: MarkdownProps) {
+function MarkdownImpl({
+  children,
+  streaming = false,
+  components,
+  linkFilePaths = false,
+  className,
+}: MarkdownProps) {
   // Shiki takes a [light, dark] pair and picks by the `.dark` class our theme
   // already sets, so this needs no mode of its own — only the user's pick.
   const { pair } = useCodeTheme();
@@ -60,14 +80,21 @@ function MarkdownImpl({ children, streaming = false, components, className }: Ma
   );
   const plugins = useMemo(() => ({ code: codePlugin(pair) }), [pair]);
 
+  // The caller's own overrides win, so a surface needing its own `span` is not
+  // quietly handed this one instead.
+  const overrides = useMemo(
+    () => (linkFilePaths ? { span: FilePathSpan, ...components } : components),
+    [linkFilePaths, components],
+  );
+
   return (
     <Streamdown
       mode={streaming ? "streaming" : "static"}
       isAnimating={streaming}
       plugins={plugins}
-      components={components}
+      components={overrides}
       controls={CONTROLS}
-      rehypePlugins={REHYPE_PLUGINS}
+      rehypePlugins={linkFilePaths ? REHYPE_PLUGINS_WITH_FILE_PATHS : REHYPE_PLUGINS}
       linkSafety={LINK_SAFETY}
       shikiTheme={shikiTheme}
       lineNumbers={false}
@@ -168,6 +195,32 @@ function MarkdownImpl({ children, streaming = false, components, className }: Ma
     >
       {children}
     </Streamdown>
+  );
+}
+
+/// Every `span` in the rendered markdown, passed through untouched unless
+/// `rehypeFilePaths` marked it.
+///
+/// A pass-through rather than a narrow override, because `span` is an ordinary
+/// element in markdown output and taking it over wholesale would swallow
+/// whatever else put one there.
+function FilePathSpan({ className, title, children, ...props }: React.ComponentProps<"span">) {
+  // The path rides `title`, since a converted markdown link's text is its own
+  // label rather than the path. Re-checked here rather than trusted: the class
+  // is a plain attribute, and raw HTML in agent output can carry one.
+  const classes = className?.split(" ") ?? [];
+  if (classes.includes(FILE_PATH_CLASS) && title && isFilePath(title)) {
+    return (
+      <FileLink path={title} writtenAsLink={classes.includes(FILE_LINK_CLASS)}>
+        {children}
+      </FileLink>
+    );
+  }
+
+  return (
+    <span className={className} title={title} {...props}>
+      {children}
+    </span>
   );
 }
 

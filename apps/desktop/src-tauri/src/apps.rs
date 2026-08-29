@@ -1,4 +1,5 @@
-//! Which apps on this machine can open a session's working directory.
+//! Which apps on this machine can open a path — a session's working directory
+//! from the right panel's split button, or one file from a transcript row.
 //!
 //! Everything here is macOS-only and says so by returning an empty list
 //! elsewhere: `open(1)`, `.app` bundles and `.icns` are all one platform's,
@@ -27,7 +28,7 @@ pub enum ExternalAppKind {
     Files,
 }
 
-/// An installed app the working directory can be handed to.
+/// An installed app a path can be handed to.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -67,10 +68,12 @@ const fn terminal(bundle: &'static str, name: &'static str) -> Known {
     Known { bundle, name, kind: ExternalAppKind::Terminal }
 }
 
-/// The apps this menu knows how to hand a directory to, in the order drawn.
+/// The apps this menu knows how to hand a path to, in the order drawn.
 ///
 /// Curated rather than discovered, and the curation *is* the guarantee: every
-/// entry here takes a directory as `open -a <bundle> <dir>`. Reading each found
+/// entry here takes a directory as `open -a <bundle> <dir>`, and every
+/// [`ExternalAppKind::Editor`] takes a single file the same way — which is what
+/// a filename in the transcript is handed to. Reading each found
 /// bundle's `CFBundleDocumentTypes` for `public.folder` was the alternative and
 /// it is the wrong gate — `open -a` names the app outright rather than asking
 /// Launch Services to rank handlers, so it reaches apps that declare nothing
@@ -270,7 +273,7 @@ fn detect() -> Vec<ExternalApp> {
     apps
 }
 
-/// The apps that can open a working directory on this machine.
+/// The apps that can open a path on this machine.
 ///
 /// Re-scanned on every call rather than held for the process: the walk is a
 /// handful of `read_dir`s, and only the icons are dear enough to cache — so an
@@ -288,9 +291,11 @@ pub async fn list_open_apps() -> Vec<ExternalApp> {
 
 /// Hands `path` to the app at `app_path`.
 ///
-/// `open -a <bundle> <dir>` and not `open -b <id>`, for [`ExternalApp::path`]'s
-/// reason. Nothing here reaches a shell, so injection is not the risk — but a
-/// directory whose name opens with `-` parses as a flag, which `--` ends.
+/// `open -a <bundle> <path>` and not `open -b <id>`, for [`ExternalApp::path`]'s
+/// reason. A directory or a file alike: `open -a` names the app outright, and
+/// Launch Services hands it whichever the path is. Nothing here reaches a
+/// shell, so injection is not the risk — but a path whose name opens with `-`
+/// parses as a flag, which `--` ends.
 #[tauri::command]
 pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     let out = tokio::process::Command::new("open")

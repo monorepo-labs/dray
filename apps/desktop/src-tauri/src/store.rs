@@ -11,7 +11,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
-    events::{now_rfc3339, AgentEvent, ApprovalPolicy},
+    events::{now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy},
     issues::IssueRef,
     models::{Effort, ModelId},
     session::Harness,
@@ -996,7 +996,9 @@ pub async fn list_session_events(session_id: &str) -> Result<Vec<AgentEvent>> {
 /// Missing images are the ordinary case (a session that attached none), and the
 /// directory copy is best-effort for the same reason the archive write is: a
 /// picture that fails to copy costs one image, not the fork.
-pub async fn copy_session_log(from: &str, to: &str) -> Result<Vec<AgentEvent>> {
+/// `from_cwd` is where the parent runs, so a copied `@mention` keeps naming the
+/// tree it was written in.
+pub async fn copy_session_log(from: &str, to: &str, from_cwd: &str) -> Result<Vec<AgentEvent>> {
     let mut events = list_session_events(from).await?;
 
     // A session indexed before its process spawned has no log at all, and
@@ -1012,7 +1014,7 @@ pub async fn copy_session_log(from: &str, to: &str) -> Result<Vec<AgentEvent>> {
     let to_dir = attachments.join(to);
     copy_dir(&from_dir, &to_dir).await?;
 
-    repoint_events(&mut events, to, &from_dir, &to_dir);
+    repoint_events(&mut events, to, &from_dir, &to_dir, from_cwd);
 
     let body: String = events
         .iter()
@@ -1029,8 +1031,24 @@ pub async fn copy_session_log(from: &str, to: &str) -> Result<Vec<AgentEvent>> {
 
 /// Rewrites a copied log to belong to `to`. Split out from the copy so it can be
 /// tested without a `~/.dray` to write into.
-fn repoint_events(events: &mut [AgentEvent], to: &str, from_dir: &Path, to_dir: &Path) {
+fn repoint_events(
+    events: &mut [AgentEvent],
+    to: &str,
+    from_dir: &Path,
+    to_dir: &Path,
+    from_cwd: &str,
+) {
     for event in events {
+        // An `@mention` is relative to the tree it was typed in. A fork into a
+        // new worktree is a different tree holding its own copy of the same
+        // files, so an unrecorded mention would open the fork's copy rather
+        // than the one the message named. `get_or_insert` and not a plain set:
+        // on a fork of a fork the first ancestor to record one is the tree the
+        // message was actually written in.
+        if let AgentEventPayload::UserMessage { cwd, .. } = &mut event.payload {
+            cwd.get_or_insert_with(|| from_cwd.to_string());
+        }
+
         // The envelope names the session that produced the event, and the
         // frontend routes live events by it. Left alone, the fork's log would
         // open claiming to be its parent's and then grow new events under its own
@@ -1500,6 +1518,19 @@ mod tests {
                 baseline: None,
                 queued: false,
                 from: None,
+                cwd: None,
+            }),
+            // Already carried a cwd, so this copy is a fork of a fork. The
+            // first ancestor to record one is the tree the message was
+            // actually written in, and it has to survive every copy after.
+            event(AgentEventPayload::UserMessage {
+                text: "and this".into(),
+                images: vec![],
+                issues: vec![],
+                baseline: None,
+                queued: false,
+                from: None,
+                cwd: Some("/repo/grandparent".into()),
             }),
             event(AgentEventPayload::ToolCallCompleted {
                 call_id: "c1".into(),
@@ -1518,9 +1549,21 @@ mod tests {
             }),
         ];
 
-        repoint_events(&mut events, "child", from_dir, to_dir);
+        repoint_events(&mut events, "child", from_dir, to_dir, "/repo/parent");
 
         assert!(events.iter().all(|e| e.session_id == "child"));
+
+        // The prompt keeps naming the tree it was typed in, so an `@mention`
+        // copied into a fork's own worktree does not resolve against the
+        // fork's copy of the same file.
+        assert!(matches!(
+            &events[0].payload,
+            AgentEventPayload::UserMessage { cwd: Some(cwd), .. } if cwd == "/repo/parent"
+        ));
+        assert!(matches!(
+            &events[1].payload,
+            AgentEventPayload::UserMessage { cwd: Some(cwd), .. } if cwd == "/repo/grandparent"
+        ));
 
         let paths: Vec<_> = events
             .iter_mut()

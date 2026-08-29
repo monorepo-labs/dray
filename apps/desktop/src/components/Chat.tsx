@@ -20,6 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ChatCwdContext } from "@/hooks/useChatCwd";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, StreamingBlock, Working } from "@/hooks/useSessions";
 import { IS_MAC } from "@/lib/platform";
@@ -449,142 +450,147 @@ export default function Chat({
     // sidebar and the right panel both take from. On a 1440px window with both
     // open the chat column fills the pane and the rail would sit on top of the
     // text, so it goes; open one of them, or run wider, and the gutter is there.
-    <div className="relative h-full">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        onWheel={onWheel}
-        className="h-full overflow-y-auto"
-      >
-        <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-          {turns.map((turn) => (
-            // The wrapper is what the rail measures and scrolls to. It carries
-            // no styles of its own — it stands in for the block as the flex item.
-            <div key={turn.key} data-turn={turn.key}>
-              <TurnBlock
-                turn={turn}
-                subagentById={subagentById}
-                resultByCallId={resultByCallId}
-                editsByCallId={editsByCallId}
-                onOpenSubagent={onOpenSubagent}
-                onOpenSession={onOpenSession}
-                // Both cover the wait for output, and never at once —
-                // `waitingTurn` requires no streaming text. Inside the block so
-                // they sit at the gap the committed event will occupy, rather
-                // than the wider one between turns: the preview belongs to this
-                // turn, not after it.
-                footer={
-                  turn === waitingTurn ? (
-                    <WorkingIndicator tokens={working?.tokens ?? 0} />
-                  ) : turn !== streamingTurn ? (
-                    undefined
-                  ) : streamingThinking ? (
-                    // The same component the committed `reasoning` event renders
-                    // with, in its `streaming` presentation — the multi-line
-                    // preview keeps growing live; it collapses to one line once
-                    // committed.
-                    <Reasoning text={streamingThinking} encrypted={false} streaming />
-                  ) : streamingTool ? (
-                    // Must come before the text arm: a tool block leaves
-                    // `streamingText` empty, so falling through would render an
-                    // empty message where the row belongs.
-                    <StreamingToolCall {...streamingTool} />
-                  ) : (
-                    <AssistantMessage text={streamingText} streaming />
-                  )
-                }
+    //
+    // The cwd rides a context because the only thing that reads it is a
+    // `@mention` several components down — see `useChatCwd`.
+    <ChatCwdContext value={session.cwd}>
+      <div className="relative h-full">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          onWheel={onWheel}
+          className="h-full overflow-y-auto"
+        >
+          <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
+            {turns.map((turn) => (
+              // The wrapper is what the rail measures and scrolls to. It carries
+              // no styles of its own — it stands in for the block as the flex item.
+              <div key={turn.key} data-turn={turn.key}>
+                <TurnBlock
+                  turn={turn}
+                  subagentById={subagentById}
+                  resultByCallId={resultByCallId}
+                  editsByCallId={editsByCallId}
+                  onOpenSubagent={onOpenSubagent}
+                  onOpenSession={onOpenSession}
+                  // Both cover the wait for output, and never at once —
+                  // `waitingTurn` requires no streaming text. Inside the block so
+                  // they sit at the gap the committed event will occupy, rather
+                  // than the wider one between turns: the preview belongs to this
+                  // turn, not after it.
+                  footer={
+                    turn === waitingTurn ? (
+                      <WorkingIndicator tokens={working?.tokens ?? 0} />
+                    ) : turn !== streamingTurn ? (
+                      undefined
+                    ) : streamingThinking ? (
+                      // The same component the committed `reasoning` event renders
+                      // with, in its `streaming` presentation — the multi-line
+                      // preview keeps growing live; it collapses to one line once
+                      // committed.
+                      <Reasoning text={streamingThinking} encrypted={false} streaming />
+                    ) : streamingTool ? (
+                      // Must come before the text arm: a tool block leaves
+                      // `streamingText` empty, so falling through would render an
+                      // empty message where the row belongs.
+                      <StreamingToolCall {...streamingTool} />
+                    ) : (
+                      <AssistantMessage text={streamingText} streaming />
+                    )
+                  }
+                />
+              </div>
+            ))}
+
+            {cards.map((ask) =>
+              ask.type === "questions_asked" ? (
+                <QuestionRequest
+                  key={ask.requestId}
+                  questions={ask.questions}
+                  onAnswer={(answers) => onAnswerQuestions(ask.requestId, answers)}
+                />
+              ) : (
+                <PermissionRequest
+                  key={ask.requestId}
+                  // The agent writes a description for nearly every call; the
+                  // tool's own name is the floor, so the card always has a subject.
+                  description={
+                    ask.description ?? ask.title ?? ask.displayName ?? ask.toolName
+                  }
+                  argument={toolArgument(ask.input)}
+                  options={ask.options}
+                  onRespond={(optionId) => onRespondPermission(ask.requestId, optionId)}
+                />
+              ),
+            )}
+
+            <QueuedMessages messages={queuedMessages} />
+
+            {backgroundTaskCount > 0 && (
+              <BackgroundTasksIndicator
+                count={backgroundTaskCount}
+                onOpen={onOpenSubagentPanel}
               />
-            </div>
-          ))}
+            )}
 
-          {cards.map((ask) =>
-            ask.type === "questions_asked" ? (
-              <QuestionRequest
-                key={ask.requestId}
-                questions={ask.questions}
-                onAnswer={(answers) => onAnswerQuestions(ask.requestId, answers)}
+            {compacting && <CompactingIndicator />}
+
+            {apiRetry && (
+              <ApiRetryIndicator
+                attempt={apiRetry.attempt}
+                maxRetries={apiRetry.maxRetries}
+                status={apiRetry.status}
+                reason={apiRetry.reason}
               />
-            ) : (
-              <PermissionRequest
-                key={ask.requestId}
-                // The agent writes a description for nearly every call; the
-                // tool's own name is the floor, so the card always has a subject.
-                description={
-                  ask.description ?? ask.title ?? ask.displayName ?? ask.toolName
-                }
-                argument={toolArgument(ask.input)}
-                options={ask.options}
-                onRespond={(optionId) => onRespondPermission(ask.requestId, optionId)}
-              />
-            ),
-          )}
-
-          <QueuedMessages messages={queuedMessages} />
-
-          {backgroundTaskCount > 0 && (
-            <BackgroundTasksIndicator
-              count={backgroundTaskCount}
-              onOpen={onOpenSubagentPanel}
-            />
-          )}
-
-          {compacting && <CompactingIndicator />}
-
-          {apiRetry && (
-            <ApiRetryIndicator
-              attempt={apiRetry.attempt}
-              maxRetries={apiRetry.maxRetries}
-              status={apiRetry.status}
-              reason={apiRetry.reason}
-            />
-          )}
+            )}
+          </div>
         </div>
+
+        {/* Centred on the pane and outside the scroller, so it holds its place
+            while the transcript moves under it — the rail's own arrangement. Sits
+            low enough to read as belonging to the composer's edge rather than
+            floating over the last message. */}
+        {!atBottom && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                // `secondary` for its fill, not its emphasis: this floats over moving
+                // text, so it needs an opaque surface the way a menu does. `outline`'s
+                // is `--input` at 30% — 4.5% white — which the transcript scrolls
+                // straight through, and the vibrancy block veils `--card` and
+                // `--muted` but deliberately leaves `--secondary` alone.
+                variant="secondary"
+                size="icon-sm"
+                aria-label="Scroll to bottom"
+                onClick={scrollToBottom}
+                className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border-border shadow-sm"
+              >
+                <ArrowDown />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+              Scroll to bottom
+              <KbdGroup>
+                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                <Kbd>↓</Kbd>
+              </KbdGroup>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {showRail && (
+          <CheckpointRail
+            checkpoints={checkpoints}
+            activeKey={activeTurn}
+            onSelect={jumpToTurn}
+            onWheel={onRailWheel}
+            dimmed={crowded}
+            // Centred vertically and outside the scroller, so it holds still while
+            // the transcript moves under it.
+            className="absolute left-1.5 top-1/2 -translate-y-1/2"
+          />
+        )}
       </div>
-
-      {/* Centred on the pane and outside the scroller, so it holds its place
-          while the transcript moves under it — the rail's own arrangement. Sits
-          low enough to read as belonging to the composer's edge rather than
-          floating over the last message. */}
-      {!atBottom && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              // `secondary` for its fill, not its emphasis: this floats over moving
-              // text, so it needs an opaque surface the way a menu does. `outline`'s
-              // is `--input` at 30% — 4.5% white — which the transcript scrolls
-              // straight through, and the vibrancy block veils `--card` and
-              // `--muted` but deliberately leaves `--secondary` alone.
-              variant="secondary"
-              size="icon-sm"
-              aria-label="Scroll to bottom"
-              onClick={scrollToBottom}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border-border shadow-sm"
-            >
-              <ArrowDown />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-none whitespace-nowrap">
-            Scroll to bottom
-            <KbdGroup>
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>↓</Kbd>
-            </KbdGroup>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {showRail && (
-        <CheckpointRail
-          checkpoints={checkpoints}
-          activeKey={activeTurn}
-          onSelect={jumpToTurn}
-          onWheel={onRailWheel}
-          dimmed={crowded}
-          // Centred vertically and outside the scroller, so it holds still while
-          // the transcript moves under it.
-          className="absolute left-1.5 top-1/2 -translate-y-1/2"
-        />
-      )}
-    </div>
+    </ChatCwdContext>
   );
 }
