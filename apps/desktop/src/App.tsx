@@ -851,6 +851,7 @@ function App() {
             pr={hasPrTab}
             issue={hasIssueTab}
             refresh={panelRefresh}
+            cwd={selectedSession.cwd}
           >
             <TabBody active={activeTab === "changes"}>
               <ChangesPanel cwd={selectedSession.cwd} baseline={baseline} {...changesData} />

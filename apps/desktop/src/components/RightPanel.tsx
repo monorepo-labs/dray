@@ -1,5 +1,6 @@
 import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
 
+import OpenInButton from "@/components/OpenInButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -177,6 +178,15 @@ type RightPanelProps = {
   /// everywhere, so it belongs to the frame and always sits in the same place.
   /// Absent for a tab with nothing to re-read.
   refresh?: { onRefresh: () => void; loading: boolean } | null;
+  /// Where this session's agent runs, for the button that hands it to an editor
+  /// or Finder. In the tab row rather than in the Changes body because the
+  /// working directory belongs to the *session*, not to one tab's answer about
+  /// it — a reader on the PR tab wanting their editor should not have to go via
+  /// Changes to find the way there.
+  ///
+  /// Absent on the issues page, which is showing somebody else's issue and has
+  /// no working directory of its own.
+  cwd?: string | null;
   /// A word in the top strip in place of the tab row.
   ///
   /// For a pane with one thing in it and no second thing to switch to. A row of
@@ -224,6 +234,7 @@ export default function RightPanel({
   pr = false,
   issue = false,
   refresh,
+  cwd,
   heading,
   children,
 }: RightPanelProps) {
@@ -286,37 +297,46 @@ export default function RightPanel({
           </>
         )}
 
-        {/* Gone entirely on Subagents, which has nothing to re-read. It reserved
-            its width back when the keycaps sat to its right and would have slid
-            on that one tab; with them anchored to the tabs there is nothing left
-            to hold still, and an empty box on the far edge is a slot for a
-            button the reader is not waiting for. */}
-        {refresh && (
-          // A real tooltip rather than the `title` this used to carry: the
-          // chord has to be shown somewhere, and the app puts shortcuts in
-          // tooltips everywhere else. `ml-auto` moves to the wrapper, since the
-          // trigger is what sits in the flex row now.
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="-mr-0.5 ml-auto text-muted-foreground/60 hover:text-muted-foreground"
-                onClick={refresh.onRefresh}
-                aria-label="Refresh"
-              >
-                <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              Refresh
-              <KbdGroup>
-                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                <Kbd>R</Kbd>
-              </KbdGroup>
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* The far end of the row, and one group rather than two `ml-auto`s:
+            Refresh is gone on Subagents and the Open button is gone off a
+            session, so whichever survives has to hold the same edge. */}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Ahead of Refresh, and outside the tab row's own logic: it acts on
+              the session rather than on whatever tab is open, so unlike Refresh
+              it does not change meaning from one tab to the next. */}
+          {cwd && <OpenInButton cwd={cwd} />}
+
+          {/* Gone entirely on Subagents, which has nothing to re-read. It
+              reserved its width back when the keycaps sat to its right and
+              would have slid on that one tab; with them anchored to the tabs
+              there is nothing left to hold still, and an empty box on the far
+              edge is a slot for a button the reader is not waiting for. */}
+          {refresh && (
+            // A real tooltip rather than the `title` this used to carry: the
+            // chord has to be shown somewhere, and the app puts shortcuts in
+            // tooltips everywhere else.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="-mr-0.5 text-muted-foreground/60 hover:text-muted-foreground"
+                  onClick={refresh.onRefresh}
+                  aria-label="Refresh"
+                >
+                  <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                Refresh
+                <KbdGroup>
+                  <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                  <Kbd>R</Kbd>
+                </KbdGroup>
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       {children}

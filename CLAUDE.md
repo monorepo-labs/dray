@@ -581,6 +581,34 @@ Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per d
 
 **v3 bump for `issues` and `LinkIssues`.** Same test `from` earned bump on: old app ignoring `issues` start session against no issue, with no line in prompt saying what work about, and answer **identically to success**. Wrong work that look like right work = what earn bump.
 
+## Opening the working directory
+
+**Split button in right panel's tab row** ([OpenInButton](apps/desktop/src/components/OpenInButton.tsx)) hand session's `cwd` to installed app. Left half open in app reader picked last, chevron open menu to change it. Detection = [apps.rs](apps/desktop/src-tauri/src/apps.rs), macOS only — `open(1)`, `.app` bundle and `.icns` all one platform's, everything else answer empty list.
+
+**Tab row, not Changes body, because directory belong to *session* not to one tab's answer about it.** Reader on PR tab wanting their editor otherwise go via Changes to find way there. Follow that it sit outside tab row's own logic: Refresh change meaning tab to tab and go entirely on Subagents, this don't. Both share one `ml-auto` group rather than each carrying own — Refresh absent on Subagents and button absent off a session, so whichever survive have to hold same edge. Absent on issues page, which show somebody else's issue and have no working directory of own.
+
+**Detection = `read_dir` over known dirs, matched on bundle file name exactly.** `/Applications`, `/Applications/Utilities`, `/Applications/Setapp`, `/System/Applications`, `/System/Applications/Utilities`, `~/Applications`; first dir win, so machine-wide install outrank user's copy — order Launch Services itself prefer. **Exact, never substring**: `Cloudflare WARP.app` not `Warp.app`, and contains-check list it as terminal that then ignore directory handed to it. Pinned by test.
+
+**No `mdfind`.** Spotlight can be off or still indexing, and common case = app not installed at all — where per-app query = spawn answering nothing. Twenty absent app = twenty spawns for empty list.
+
+**Table = the guarantee, not `CFBundleDocumentTypes`.** Reading each found bundle for `public.folder` = alternative gate and wrong one: `open -a` name app outright rather than asking Launch Services to rank handler, so it reach app declaring nothing — MacVim declare no folder type and open one fine. Gating on declaration = menu hiding app that work. App absent from table cost one entry, never list.
+
+**Address = bundle path, not bundle id.** `open -b` hand id to Launch Services, which pick whichever copy it indexed — second install of editor, or stale index, silently open wrong one. Scan found bundle by path; path = what it know, and what stored preference keyed by. Name no good either: two build of one editor differ by path alone, and name that stop matching quietly reseat default on wrong app.
+
+**Icon = app's own, `CFBundleIconFile` → `.icns` → `sips` → `data:` PNG at 64px.** Two spawn per bundle, cached per path for process life; list itself re-scanned every call, so editor installed while app running show up next time panel ask rather than needing restart the way slash-command cache do. Measured: 7 app, icons included, 0.17s cold. Full-colour brand mark = same exception file icons make — fastest way to read which app click about to reach. `None` ordinary (bundle keeping icon in asset catalog) and fall back to glyph, never to failure.
+
+**Kind = Editor / Terminal / Files, and Finder sit last.** "Open in Cursor" and "open in Ghostty" = different ask, and flat list of both read as one. Finder at end not front because it = entry every machine have, so leading with it put least specific answer where eye land first.
+
+**Divider = inset rule, and both other option tried.** Heading per kind rejected — three group on menu of five entry, where heading apiece = more furniture than list they organise. Bare spacing shipped next and read as accident not division. Component's own separator full-bleed (`-mx-1`), which cut menu in two and read heavier than three group of two deserve. So **dotted** inset rule, `PickerMenu`'s own idiom: `mx-2 my-1` at `border-border/80` = 8%. Component draw filled `h-px` bar, so rule move onto border — fill cleared and height zeroed, or solid bar sit under dots. Opacity on **token** not hard-coded value, which keep it 8% white in dark and 8% black in light rather than white rule on light menu.
+
+**Menu pick, left half open, and split deliberate.** Menu entry that both reseat default *and* launch have no way to say "next time, this one" without launching something reader didn't ask for — and picking wrong row then cost a window rather than second click. So `select` and `open` separate in [useOpenApps](apps/desktop/src/hooks/useOpenApps.ts).
+
+**Pref = `ade.openWith`, global not per-session.** Which editor you use = fact about you, same standing preference `ade.diffStyle` and `ade.updateChannel` are. Per session it would be learned again on every new session — exactly where it least likely to be right. Stored by **bundle path**, for `ExternalApp::path`'s reason.
+
+**Border = `border-border dark:border-input`, matching `outline` button variant.** That = app's edge for bordered *control*; `--border` alone (10% white) = token for surface edge or rule. Started at `border-border/60`, which multiply out to **6%** and all but vanish on 24px-tall control. Token shared app-wide either way — nothing here bespoke.
+
+**Button draw nothing where no app detected.** Empty menu = control that cannot do anything, and there no cure to name: every mac have Finder, so empty list mean scan found nothing rather than reader missing an editor.
+
 ## Handing work back
 
 **Composer hide row of canned prompt behind itself.** [HandoffRow](apps/desktop/src/components/composer/HandoffRow.tsx) sit above composer card, clipped to sliver, open on hover. Buttons = Commit, Create PR, Run server. Mostly hand work *back*; Run server start work instead and sit here because bargain identical — click = prompt reader didn't type. Name predate that second kind and kept anyway: churning `HandoffRow`/`handoffActions`/`HandoffAction` through five file buy nothing doc comment can't say.
