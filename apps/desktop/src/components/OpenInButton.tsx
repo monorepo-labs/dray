@@ -34,7 +34,7 @@ const FAILED_MS = 4000;
 /// an empty list means the scan itself found nothing rather than that the
 /// reader is missing an editor.
 export default function OpenInButton({ cwd, className }: { cwd: string; className?: string }) {
-  const { apps, pick, select, open } = useOpenApps();
+  const { apps, pick, select, open, refresh } = useOpenApps();
 
   // `open`'s own sentence when a launch failed, held briefly on the button.
   // The alternative was the developer console, where it told the reader
@@ -109,7 +109,13 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenu>
+      {/* Opening the menu is what re-reads a stale list, and it is the right
+          moment for it: this button is mounted for the life of the app, so
+          there is no remount to hang a read off, and the list only has to be
+          current when somebody is about to read it. No polling and no
+          visibility listener — an app being installed is rare, and the reader
+          about to pick from the menu is the one event that cares. */}
+      <DropdownMenu onOpenChange={(isOpen) => isOpen && refresh()}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

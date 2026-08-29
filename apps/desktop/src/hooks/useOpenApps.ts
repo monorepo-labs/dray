@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -23,9 +23,10 @@ const PICK_KEY = "ade.openWith";
 /// bundle path on offer, for the life of the process.
 ///
 /// 60s is the same window `useIssues` counts a read fresh for, and it is picked
-/// against the same two costs: the panel remounts on every session switch, so
-/// clicking between sessions has to be free, while installing an editor and
-/// coming back to the button has to work.
+/// against the same two costs: opening the menu has to be free when it was just
+/// opened, while installing an editor and coming back to the button has to work.
+///
+/// The window alone does nothing — see `refresh` below for what re-checks it.
 const FRESH_MS = 60_000;
 
 let cached: ExternalApp[] | null = null;
@@ -40,20 +41,21 @@ async function load(): Promise<ExternalApp[]> {
   if (fresh()) return cached!;
   // Several buttons mounting in one frame must not each spawn a scan.
   inFlight ??= invoke<ExternalApp[]>("list_open_apps")
+    .then((apps) => {
+      cached = apps;
+      readAt = Date.now();
+      return apps;
+    })
     .catch((err) => {
       console.error("failed to list the apps that can open a directory", err);
       // A failed read changes nothing — no list written, no stamp — so a blip
-      // leaves the last good answer on screen and the next mount tries again.
-      // The same bargain `usePrMarks` makes with its own failed reads.
+      // leaves the last good answer on screen and the next read tries again
+      // rather than certifying an empty one as fresh for a minute. The same
+      // bargain `usePrMarks` makes with its own failed reads.
       return cached ?? [];
     })
-    .then((apps) => {
-      if (apps !== cached) {
-        cached = apps;
-        readAt = Date.now();
-      }
+    .finally(() => {
       inFlight = null;
-      return apps;
     });
   return inFlight;
 }
@@ -68,18 +70,27 @@ async function load(): Promise<ExternalApp[]> {
 export function useOpenApps() {
   const [apps, setApps] = useState<ExternalApp[]>(cached ?? []);
   const [picked, setPicked] = useLocalStorage<string | null>(PICK_KEY, null);
+  const live = useRef(true);
+
+  /// Reads if the cached answer has gone stale, and does nothing if it hasn't.
+  ///
+  /// Has to be callable rather than an effect dependency, because the panel
+  /// this button lives in is **mounted forever** — closing the pane and
+  /// switching tabs hide it rather than unmounting it. So a mount effect runs
+  /// exactly once for the life of the app, and a freshness window it never
+  /// re-checks expires without anything noticing: the whole point of the
+  /// window, a newly installed editor showing up, was still unreachable.
+  const refresh = useCallback(() => {
+    void load().then((next) => live.current && setApps(next));
+  }, []);
 
   useEffect(() => {
-    // Whatever is cached is drawn immediately; the read underneath decides
-    // whether it also needs replacing. Returning early on a *stale* cache is
-    // what stopped a newly installed app from ever appearing.
-    if (fresh()) return;
-    let live = true;
-    void load().then((next) => live && setApps(next));
+    live.current = true;
+    refresh();
     return () => {
-      live = false;
+      live.current = false;
     };
-  }, []);
+  }, [refresh]);
 
   const pick = apps.find((app) => app.path === picked) ?? apps[0] ?? null;
 
@@ -113,5 +124,5 @@ export function useOpenApps() {
     [],
   );
 
-  return { apps, pick, select, open };
+  return { apps, pick, select, open, refresh };
 }
