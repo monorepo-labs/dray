@@ -5,6 +5,33 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.9.1
+
+### Added
+
+- **Codex knows Dray's rules.** Claude Code was given them at spawn and Codex
+  was given nothing, so it knew neither the reply style nor that `dray`
+  exists. It has its own instructions now, sent on resume too, and
+  `dray skill install` writes the skill where Codex reads it. Update the CLI
+  with `dray update`.
+
+### Fixed
+
+- **A Codex session gets a generated title.** Titling always shelled out to
+  `claude`, so a reader without it installed silently kept every session's
+  prompt-derived title. Codex titles itself now.
+- **The model picker remembers a model per agent.** One stored pick served
+  both, so switching agent and back replaced a deliberate choice with whatever
+  led the list. A new Claude Code session also seeds Opus rather than Haiku —
+  seeding cheap made every untouched session weak.
+- **A spawned session no longer inherits an effort its agent didn't ask for.**
+  The two ladders share every name and Codex accepts whichever is passed, so a
+  Claude parent on High started its Codex child above Codex's own default,
+  silently.
+- **The composer's picker is readable over the transcript.** It was the last
+  floating list with no blur behind it, so the transcript showed through the
+  list of files or commands.
+
 ## 0.9.0
 
 ### Added
