@@ -1,7 +1,7 @@
+import TabButton from "@/components/TabButton";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IS_MAC } from "@/lib/platform";
-import { cn } from "@/lib/utils";
 
 /// Which view fills the main column. Set and order in one, unlike the right
 /// panel's tabs: none of these are conditional, so a Terminal view joins by
@@ -33,18 +33,9 @@ export default function ViewTabs({
       {VIEW_TABS.map((value, i) => (
         <Tooltip key={value}>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => onChange(value)}
-              className={cn(
-                "rounded-md px-2 py-1 text-ui transition-colors",
-                tab === value
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
+            <TabButton active={tab === value} onClick={() => onChange(value)}>
               {LABELS[value]}
-            </button>
+            </TabButton>
           </TooltipTrigger>
           {/* The name is already on the button, so the tooltip carries the
               keycaps alone rather than repeating it back — and with nothing to
