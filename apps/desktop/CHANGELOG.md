@@ -26,6 +26,11 @@ second description of it. GitHub's generated commit list is appended below it.
   install command and a link, rather than failing after a session already
   exists.
 
+- **Click a filename in the chat to open it in your editor.** It revealed the
+  file in Finder before. Tool rows, `@mentions` in your own messages and a
+  path an agent writes into a sentence all reach it, and the editor is its own
+  preference — Finder stays the default, and any failure falls back to it.
+
 - **Open a session's working directory in an editor, terminal or Finder.** A
   split button in the right panel's tab row: the left half opens in whichever
   app you chose last, the chevron picks without launching anything. Installed
@@ -33,6 +38,8 @@ second description of it. GitHub's generated commit list is appended below it.
 
 ### Changed
 
+- **Settings has tabs.** Five groups in one scroll meant reading past four
+  to change one.
 - **Accept edits is gone as a permission mode.** It applied file edits without
   asking while still asking about commands — too narrow a promise to sit
   beside Auto. Sessions set to it now read as Auto.
