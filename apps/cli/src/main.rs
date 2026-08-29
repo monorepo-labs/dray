@@ -898,6 +898,26 @@ mod tests {
         assert!(SKILL.contains("Committed work only"));
     }
 
+    /// A spawned session inherits model and effort, and two inherited answers
+    /// are wrong often enough to be worth a question: Fable, which somebody
+    /// picked for one chat, and a raised effort, which fanning out multiplies.
+    /// Neither is enforceable in the app — asking is the agent's own act — so
+    /// the skill saying it is the whole rule.
+    ///
+    /// "Raised" is per harness, and the pair below is what keeps that honest:
+    /// the two ladders share their names and not their scale, so one threshold
+    /// across both would either ask about Codex's own resting level or never
+    /// ask about a Codex session running two rungs above it.
+    #[test]
+    fn the_skill_says_when_to_ask_before_inheriting_a_model_or_effort() {
+        assert!(SKILL.contains("This session is on Fable"));
+        assert!(SKILL.contains("above its harness's default effort"));
+        assert!(SKILL.contains("On Claude Code the default is High, so `xhigh` and `max` ask."));
+        assert!(SKILL.contains("Medium, so `high` and above ask."));
+        // And what a session takes when nothing carries across.
+        assert!(SKILL.contains("Claude Code is Opus 5 on High, Codex is Sol on Medium"));
+    }
+
     #[test]
     fn the_skill_carries_frontmatter_claude_code_can_read() {
         assert!(SKILL.starts_with("---\n"), "skill needs YAML frontmatter");

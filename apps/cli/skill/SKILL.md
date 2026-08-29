@@ -41,11 +41,38 @@ Options:
 | flag | meaning |
 |---|---|
 | `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
-| `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku`. Defaults to the current session's model. |
-| `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's. |
+| `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku`. Defaults to the current session's model — see *Model and effort*. |
+| `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's — see *Model and effort*. |
 | `--harness <name>` | `claude_code` or `codex`. Defaults to the current session's. |
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
+
+### Model and effort
+
+A new session inherits this one's harness, model and effort. Pass whatever the
+user named. Where they named nothing, two cases are worth a question rather than
+an inherited answer:
+
+- **This session is on Fable.** Ask which model and which effort. Fable is a
+  pick somebody made for this chat. It is not one to hand to a session nobody
+  will be sitting in front of.
+- **This session is above its harness's default effort.** Ask which effort.
+  On Claude Code the default is High, so `xhigh` and `max` ask. On Codex it is
+  Medium, so `high` and above ask. One session at a raised level is a cost the
+  user chose once, and fanning it out multiplies it by however many sessions
+  you are about to start.
+
+Everything else inherits with no question: any model but Fable, at the default
+effort or below. On Codex the model never raises one either — Sol performs and
+costs like Opus, so the choice between Codex's models is not worth a turn.
+
+Ask **once for the whole batch**, not once per session, and start them all on
+the answer.
+
+Changing harness carries nothing across, because the two ladders are not one
+scale. A Codex session spawned from a Claude one takes Codex's own default, and
+the reverse likewise: Claude Code is Opus 5 on High, Codex is Sol on Medium.
+Pass `--model` and `--effort` there only when the user named them.
 
 ### Tagging a session with its issue
 

@@ -320,15 +320,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
     let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness)?;
 
-    // The caller's pick, else whatever the parent ran at, else `None` — which
-    // `send_msg` resolves to the model's own default through `resolve_effort`,
-    // the same call that drops an effort a model has no levels for.
-    let effort = match create.effort.as_deref() {
-        Some(alias) => Some(Effort::from_arg(alias).with_context(|| {
-            format!("unknown effort {alias:?} — try low, medium, high, xhigh or max")
-        })?),
-        None => parent.as_ref().and_then(|p| p.effort),
-    };
+    let effort = resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?;
     let permission_mode = parent
         .as_ref()
         .map(|p| p.permission_mode)
@@ -516,6 +508,30 @@ fn resolve_model(
         .unwrap_or_else(|| default_model_for(harness)))
 }
 
+/// The caller's level if it gave one, else the parent's, else `None` — which
+/// `send_msg` resolves to the model's own default through
+/// [`models::resolve_effort`], the same call that drops an effort a model has
+/// no levels for.
+///
+/// Inheritance is filtered by harness for [`resolve_model`]'s reason, one step
+/// further on: the two ladders share their names but not their scale. Codex
+/// reasons at every level and starts at Medium, where Claude's models start at
+/// High — so a Claude parent's `high` carried onto Codex sets a level nobody
+/// picked, and does it silently, since Codex accepts the flag.
+fn resolve_effort(
+    requested: Option<&str>,
+    parent: Option<&SessionIndexItem>,
+    harness: Harness,
+) -> Result<Option<Effort>> {
+    if let Some(alias) = requested {
+        return Ok(Some(Effort::from_arg(alias).with_context(|| {
+            format!("unknown effort {alias:?} — try low, medium, high, xhigh or max")
+        })?));
+    }
+
+    Ok(parent.filter(|p| p.harness == harness).and_then(|p| p.effort))
+}
+
 /// Sends a prompt into a session that already exists.
 ///
 /// The target's *own* recorded model, effort and permission mode are passed
@@ -692,6 +708,26 @@ mod tests {
             ApprovalPolicy::Auto,
             parent,
         )
+    }
+
+    /// The two harnesses' ladders share their names and not their scale —
+    /// Codex starts at Medium where Claude's models start at High — so a
+    /// parent's level must not cross onto a child on the other harness. It
+    /// falls through to `None`, which resolves to that model's own default.
+    #[test]
+    fn an_effort_does_not_cross_harnesses() {
+        let parent = item("a", None);
+
+        assert_eq!(
+            resolve_effort(None, Some(&parent), Harness::ClaudeCode).unwrap(),
+            Some(Effort::High)
+        );
+        assert_eq!(resolve_effort(None, Some(&parent), Harness::Codex).unwrap(), None);
+        // A level the caller named stands whatever the parent ran.
+        assert_eq!(
+            resolve_effort(Some("max"), Some(&parent), Harness::Codex).unwrap(),
+            Some(Effort::Max)
+        );
     }
 
     #[test]
