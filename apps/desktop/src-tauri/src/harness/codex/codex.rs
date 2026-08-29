@@ -889,9 +889,18 @@ mod tests {
             })
             .collect();
 
-        for want in ["shell", "web_search", "view_image", "wait"] {
+        for want in ["shell", "web_search", "view_image", "spawn_agent"] {
             assert!(drawn.contains(want), "{want} drew no row; drew {drawn:?}");
         }
+
+        // `wait` is the exception, and it is *deliberately* nothing: the model
+        // blocking on a run whose row and panel entry are already on screen.
+        // It carries no prompt and names no receiver, so the row read `wait
+        // wait` — the same word twice, about work drawn directly above it.
+        assert!(
+            !drawn.contains("wait"),
+            "the wait call drew a row of its own"
+        );
         // The MCP row is named for the tool the server offered, not for a
         // fixed string, so it is checked by its type rather than its name.
         assert!(
@@ -914,6 +923,34 @@ mod tests {
             )),
             "the viewed image never reached a row"
         );
+    }
+
+    /// A call that drew no row must not be answered either. The result is
+    /// keyed by call id, so a stray one closes a row that was never opened —
+    /// which in a group header counts as a tool call that is not there.
+    #[test]
+    fn a_silent_call_is_not_answered() {
+        let (events, _) = replay(TOOL_KINDS);
+
+        let opened: std::collections::HashSet<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                crate::events::AgentEventPayload::ToolCallStarted { call_id, .. } => {
+                    Some(call_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+
+        for e in &events {
+            if let crate::events::AgentEventPayload::ToolCallCompleted { call_id, .. } = &e.payload
+            {
+                assert!(
+                    opened.contains(call_id.as_str()),
+                    "{call_id} was answered without ever being asked"
+                );
+            }
+        }
     }
 
     /// `cwd` rides every `commandExecution` on the wire and is the session's own
@@ -1067,6 +1104,11 @@ mod tests {
     #[test]
     fn a_subagents_thread_is_filed_under_its_spawn() {
         let (events, _) = replay(TOOL_KINDS);
+
+        // The card sits beside a title and a running orb, so the agent's own
+        // identifier is written as prose rather than pasted in.
+        assert_eq!(mapper::agent_name(Some("/root/count_to_three")), "Count to three");
+        assert_eq!(mapper::agent_name(None), "Agent");
 
         let spawn = events
             .iter()

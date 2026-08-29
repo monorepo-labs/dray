@@ -257,6 +257,13 @@ The last two are why the guard drops the subagent's turn and usage events
 outright rather than merely labelling them: an event filed under a run is still
 an event, and `session.rs` reads turn boundaries off the payload.
 
+**Its deltas are dropped in the frontend, for the same reason one layer up.**
+There is one streaming preview per session, so a correctly stamped subagent
+delta still streamed into the main transcript, ran to the end, vanished when the
+committed message filed itself under the run, and left the primary agent's reply
+to start streaming into the space. Claude Code sends no deltas for subagent
+output at all, which is why the preview never needed the check before.
+
 **The join is `agentThreadId`, never the activity's own id.** The lifecycle
 arrives as two `subAgentActivity` items on the main thread:
 
@@ -274,6 +281,24 @@ just keeps shimmering.
 the tool the model calls to block on the agent it already started. Without an
 arm for the activity there is no row for the run at all, so the transcript shows
 a `wait` on something that never appeared.
+
+**`wait` itself draws nothing.** It carries `prompt: null` and names no
+receiver, so its row read `wait wait` — the same word twice, about a run whose
+own row and panel entry sit directly above it. The gate is on having something
+to say rather than on the name, so a call that hands a brief to a named agent
+still draws. A call that drew no row is not answered either: the result is keyed
+by call id, and a stray one closes a row nobody opened, which a group header
+counts as a call that is not there.
+
+**The panel's spawn row is gated the same way.** It exists to show the brief,
+and Codex's spawn carries only the agent's name — so drawing it printed
+`spawn_agent read_footer` under a header already reading `Read footer`. The rule
+reads off the call (`input.prompt`), not off the harness.
+
+**The name is written as prose.** `agentPath`'s last segment is an identifier
+(`read_footer`) and the card is a sentence beside a running orb, so separators
+become spaces and the first letter is raised. Nothing else is touched — a name
+already carrying deliberate capitals comes through as it was.
 
 `item/started` and `item/completed` both carry the identical activity, so it is
 acted on once, on `started`.

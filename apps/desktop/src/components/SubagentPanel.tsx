@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { compactTokens } from "@/lib/format";
 import type { SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
-import type { ToolResult } from "@/types/events";
+import type { AgentEvent, ToolResult } from "@/types/events";
 
 type SubagentPanelProps = {
   runs: SubagentRun[];
@@ -69,6 +69,22 @@ export default function SubagentPanel({
 /// No icon and no tool name. Every row here is a subagent, so an icon repeated
 /// down the list distinguishes nothing, and the name is the harness's word for
 /// the mechanism ("Task", "local_bash") rather than for the work.
+/// Whether the spawning call is worth a row of its own.
+///
+/// The row exists to show the brief the agent was given. Claude's `Task`
+/// carries one; Codex's spawn carries the agent's name and nothing else, so
+/// drawing it printed `spawn_agent read_footer` directly under a header
+/// already reading `Read footer` — the same fact twice, in the one slot the
+/// reader opened the run to read.
+///
+/// Read off the call rather than off the harness: a spawn is worth drawing
+/// when it briefs the agent, whoever sent it.
+function hasBrief(spawn: AgentEvent): boolean {
+  if (spawn.payload.type !== "tool_call_started") return false;
+  const prompt = (spawn.payload.input as Record<string, unknown> | null)?.prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0;
+}
+
 function RunRow({
   run,
   open,
@@ -175,7 +191,7 @@ function RunRow({
               nothing. Expanded on arrival: it is what the reader opened the run
               for, and a second click to reach it reveals nothing they hadn't
               already asked for. */}
-          {run.spawn && (
+          {run.spawn && hasBrief(run.spawn) && (
             <EventRow event={run.spawn} resultByCallId={resultByCallId} openTool />
           )}
 

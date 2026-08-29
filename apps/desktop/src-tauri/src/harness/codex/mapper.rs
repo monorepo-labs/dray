@@ -68,6 +68,12 @@ pub struct Mapper {
     /// conversation. Set once per line in [`Self::map`] so no arm has to
     /// remember to ask.
     current: Option<Subagent>,
+    /// Calls whose `item/started` drew no row, so their `item/completed` must
+    /// not draw a result. Kept rather than re-deriving the same condition on
+    /// the way out, because the two notifications need not carry identical
+    /// fields — `wait` populates `receiverThreadIds` on neither, but a shape
+    /// that filled it in only on completion would close a row nobody opened.
+    silent_calls: std::collections::HashSet<String>,
 }
 
 impl Mapper {
@@ -81,6 +87,7 @@ impl Mapper {
             plan_updates: 0,
             subagent_threads: std::collections::HashMap::new(),
             current: None,
+            silent_calls: std::collections::HashSet::new(),
         }
     }
 
@@ -318,9 +325,26 @@ impl Mapper {
                 })]
             }
 
+            // The model talking to an agent it already started, and mostly
+            // that is `wait` — blocking on a run whose own row and panel entry
+            // are already on screen. It carries `prompt: null` and no
+            // receivers, so the row read `wait wait` and said nothing twice.
+            //
+            // Gated on having something to say rather than on the name: a call
+            // that hands a brief to a named agent is a real row, and the day
+            // Codex sends one it should draw without a change here.
             ThreadItem::CollabAgentToolCall {
-                id, tool, prompt, ..
+                id,
+                tool,
+                prompt,
+                receiver_thread_ids,
+                ..
             } => {
+                if prompt.is_none() && receiver_thread_ids.is_empty() {
+                    self.silent_calls.insert(id);
+                    return Vec::new();
+                }
+
                 vec![self.event(AgentEventPayload::ToolCallStarted {
                     call_id: id,
                     name: tool.clone(),
@@ -504,17 +528,25 @@ impl Mapper {
             }
 
             ThreadItem::CollabAgentToolCall { id, status, .. } => {
-                let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
-                    call_id: id,
-                    result: ToolResult {
-                        text: String::new(),
-                        is_error: status != ItemStatus::Completed,
-                        structured: None,
-                        exit_code: None,
-                        duration_ms: None,
-                        images: Vec::new(),
-                    },
-                })];
+                // The working indicator reopens either way — the wait ending is
+                // the main agent picking up again — but a call that drew no row
+                // must not be answered, or the transcript closes a row that was
+                // never opened.
+                let drawn = !self.silent_calls.remove(&id);
+                let mut out = Vec::new();
+                if drawn {
+                    out.push(self.event(AgentEventPayload::ToolCallCompleted {
+                        call_id: id,
+                        result: ToolResult {
+                            text: String::new(),
+                            is_error: status != ItemStatus::Completed,
+                            structured: None,
+                            exit_code: None,
+                            duration_ms: None,
+                            images: Vec::new(),
+                        },
+                    }));
+                }
                 out.push(self.event(AgentEventPayload::ModelRequestStarted));
                 out
             }
@@ -872,11 +904,22 @@ fn error_kind(info: &serde_json::Value) -> String {
 /// `agent_path` is the agent's own name (`/root/count_to_three`), not a
 /// filesystem path — the leading `/root` is the namespace every one of them
 /// shares, so it says nothing and the last segment is the name.
-fn agent_name(agent_path: Option<&str>) -> String {
-    agent_path
+///
+/// That segment is an identifier, and the card is prose: `read_footer` sits
+/// beside a title and a running orb, so it is written the way the rest of the
+/// row is. Only the separators are touched — a name that is already prose, or
+/// one carrying deliberate capitals, comes through as it was.
+pub(super) fn agent_name(agent_path: Option<&str>) -> String {
+    let raw = agent_path
         .and_then(|path| path.rsplit('/').find(|part| !part.is_empty()))
-        .unwrap_or("agent")
-        .to_string()
+        .unwrap_or("agent");
+
+    let spaced = raw.replace(['_', '-'], " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => spaced,
+    }
 }
 
 /// Whether an `extension` item is the connector-driven web search.

@@ -1044,6 +1044,18 @@ useEffect(() => {
 
             const sessionId = agentEvent.sessionId;
 
+            // A subagent's stream is not this conversation's. There is one
+            // preview per session, so its text landed in the main transcript,
+            // streamed to the end, then vanished when the committed message
+            // filed itself under the run — and the primary agent's reply began
+            // streaming into the space it left. Claude Code sends no deltas for
+            // subagent output at all, which is why this only ever showed up
+            // under Codex, where the whole run arrives on the same connection.
+            //
+            // Dropped rather than routed: the panel draws the committed message
+            // and has no preview of its own to feed.
+            if (agentEvent.subagent) return;
+
             if (payload.delta == "block_start") {
                 // Which kind opens decides whether the wait is over. Text and a
                 // tool call both start drawing immediately, so the indicator
