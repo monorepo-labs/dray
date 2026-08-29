@@ -1,5 +1,6 @@
 import { useState } from "react";
 import AgentIcon from "@/components/AgentIcon";
+import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -85,6 +86,10 @@ export default function ModelSelector({
 
   const selected = models.find((m) => m.id === modelId) ?? null;
   const activeAgent = AGENTS.findIndex((a) => a.id === harness);
+  // `null` until the first read lands, which is why the mark is drawn from an
+  // explicit `!a.available` rather than from "not found in the list": an
+  // unanswered read must mark nothing, not mark everything.
+  const availability = useAgentAvailability();
 
   /// What a row would resolve to if clicked: the live effort for the model
   /// already selected, each other model's own default. Mirrors the resolution
@@ -161,19 +166,41 @@ export default function ModelSelector({
                   hover and left Claude — which carries its own rust — sitting
                   at one state forever. Opacity is the one dial both marks
                   answer to. */}
-              {AGENTS.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={agent.id === harness}
-                  aria-label={agent.label}
-                  onClick={() => onHarnessChange(agent.id)}
-                  className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
-                >
-                  <AgentIcon harness={agent.id} brand className="size-3.5" />
-                </button>
-              ))}
+              {AGENTS.map((agent) => {
+                const missing = availability?.some(
+                  (a) => a.harness === agent.id && !a.available,
+                );
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={agent.id === harness}
+                    aria-label={
+                      missing ? `${agent.label} (not installed)` : agent.label
+                    }
+                    onClick={() => onHarnessChange(agent.id)}
+                    className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+                  >
+                    <AgentIcon harness={agent.id} brand className="size-3.5" />
+                    {/* Marked, not disabled. Disabling leaves nowhere to say
+                        why — a tooltip is the only slot left, and the cure is
+                        two lines and two buttons. Picking it is what draws the
+                        notice under the composer, so the mark is an invitation
+                        to find out rather than a closed door.
+
+                        Drawn as a dot rather than a colour: the marks are
+                        brand art and already carry their own, so recolouring
+                        one says "Codex" more than it says "missing". */}
+                    {missing && (
+                      <span
+                        aria-hidden
+                        className="absolute -top-px -right-px size-1.5 rounded-full bg-destructive ring-1 ring-surface-well"
+                      />
+                    )}
+                  </button>
+                );
+              })}
             </div>
             {/* Inside the track, in the width the two marks leave: a hint you
                 have to hover to find is one nobody finds. */}

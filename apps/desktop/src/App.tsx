@@ -52,6 +52,8 @@ import { pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
+import { useMissingAgent } from "@/hooks/useAgentAvailability";
+import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import type { Issue, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -118,6 +120,11 @@ function App() {
     deleteSession,
     removeWorktree,
   } = useSessions();
+
+  // Whether the agent the composer is pointed at can actually be run. Null
+  // while the first read is out and null when it is installed — both mean
+  // there is nothing to say, so the composer sends as it always did.
+  const missingAgent = useMissingAgent(harness);
 
   const [collapsed, setCollapsed] = useLocalStorage("ade.sidebarCollapsed", false);
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
@@ -942,6 +949,14 @@ function App() {
               onSend={(prompt) => void handleSendMsg(prompt)}
               disabled={!selectedSessionId}
             />
+          }
+          // Only on a new task. An agent is fixed at creation, so a live
+          // session cannot be pointed at one that is missing — and a session
+          // that already exists has a CLI that already ran.
+          notice={
+            !selectedSessionId && missingAgent ? (
+              <AgentMissingNotice agent={missingAgent} />
+            ) : null
           }
           toolbar={
             <ComposerToolbar

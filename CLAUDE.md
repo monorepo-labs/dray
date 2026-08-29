@@ -950,6 +950,94 @@ keyboard alike.
 row until next render. So `restoreSessionControls` take *item* not id, and both
 path call it. Without it fork open under whatever model composer last left on
 rather than one it inherited.
+## A missing agent CLI
+
+**Answered before the reader writes a prompt, and refused before a session
+exists.** `agent_availability` reports which harnesses can run here; the picker
+reads it on mount and marks the one that can't, and `send_msg` checks again in
+the pre-flight block under `if is_new_session`.
+
+That ordering is the whole feature. The index entry lands **before** spawn on
+purpose, so a session failing for a reason nobody predicted stays visible — but
+a missing CLI is predictable, and taken through that path it leaves an empty row
+pointing at an agent that can never start, which every retry fails against
+identically. Refusing earlier means there is nothing to delete, nothing to
+select, and no retry choreography: the composer never unmounts, `useDraft` still
+holds the text under the new-task key, and retry is pressing send again.
+
+**"Is it installed" is read off the cached path, not probed again.**
+`binpath::agent_available` calls the ordinary resolver and asks
+`is_absolute()` — a successful resolution is always absolute, and the bare-name
+fallback both resolvers end at is the only relative answer either can give. Free
+after the first call, which matters because the *failing* call is the expensive
+one (it ends in a login shell reading the whole rc chain). For Codex it covers
+the stale binary for free: one with no `app-server` subcommand never satisfies
+`speaks_app_server`, so it falls through to the bare name exactly like an absent
+one — and "installed but undriveable" is the same answer to the reader.
+
+**Marked, not disabled.** A disabled mark leaves nowhere to say why: a tooltip
+is the only slot left, and the cure is two lines and two buttons. Picking the
+agent is what draws the notice, so the mark invites finding out. Drawn as a dot
+rather than a colour, since the marks are brand art and recolouring one says
+"Codex" louder than it says "missing".
+
+**Notice, not error.** `ChatInput` takes it as its own `notice` slot beside
+`error`, because the two say different things — `error` reports something that
+was attempted and failed, this reports that nothing can be attempted yet, and
+only the second has a cure to offer, which is why it is a node and not a string.
+It gates `canSend` *and* returns early from `submit`: Enter has its own path in,
+so a disabled button is not the guard.
+
+**Dray installs nothing** — it names the command and links the page, the same
+call the CLI already makes for itself. `install_command` is each vendor's own
+install script (`curl -fsSL https://claude.ai/install.sh | bash`, and Codex's
+equivalent), not a route Dray picked on its behalf: running someone else's
+script for them is still installing it for them, and a failure inside it is
+still ours to debug where a failure on the vendor's page is theirs to follow.
+The link sits *beside* the copy button, not behind it, for the reader without
+`curl` or wary of piping one into a shell.
+
+Known cost: `binpath`'s cache never invalidates, so a CLI installed while the
+app runs still reads as missing until restart — the same bargain `gh` makes. It
+would have to be made clearable the day an Install button lands.
+
+## Demo pages
+
+**A demo is its own page, never a flag on the real one, and gone once its
+question is answered.** The pattern, for whichever surface needs it next: an
+HTML entry at the package root (`demo.html`) loading its own `main.tsx`. Vite's
+dev server serves any root HTML, so it is reachable under `pnpm dev`;
+`vite.config.ts` names no extra `rollupOptions.input`, so `pnpm build` emits
+`index.html` alone and nothing there can reach a shipped bundle. Delete the
+whole thing — the HTML entry and its `src/demo/` tree — once it has done its
+job; it is scaffolding for showing someone a behaviour, not a fixture worth
+keeping alive.
+
+Gating on a query flag was the rejected alternative: it puts demo-only branches
+inside production code paths, where they can fire for a real reader and have to
+be reasoned about on every later edit of that surface.
+
+A demo mounts the **real** components with faked inputs — not a second
+implementation of them — so a regression in any of them shows up on the page.
+Any test seam built only for the demo's sake (a module-level setter, say) goes
+with it; leaving one behind after the demo is deleted is a route into
+production state that nothing exercises any more.
+
+**A demo page has to bring `App`'s own providers with it.** `TooltipProvider`
+wraps the whole app, so mounting a control with a tooltip in it —
+`ModelSelector`, for one — throws `Tooltip must be used within TooltipProvider`
+without one. That failure is a blank page and an empty `#root`: React unmounts
+the tree, and nothing in the dev server's output says so.
+
+**And a browser is not a webview.** `getCurrentWebview()` and
+`getCurrentWindow()` **throw** outside Tauri rather than rejecting, so an
+unguarded call in an effect takes the tree down the same way. `useDockBadge` and
+`useFullscreen` already carry a `try` for it; `ChatInput`'s drag-and-drop
+listener did not, and the fix stayed after the demo that surfaced it was
+deleted — it broke plain `pnpm dev` for the composer too, whether or not a demo
+page is mounted. Reach for the guard whenever an effect touches
+`@tauri-apps/api` synchronously — `invoke` is safe, since it rejects.
+
 ## Persistence
 
 Everything live under `~/.dray/` ([store.rs](apps/desktop/src-tauri/src/store.rs), [projects.rs](apps/desktop/src-tauri/src/projects.rs)) .

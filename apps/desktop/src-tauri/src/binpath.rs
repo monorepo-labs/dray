@@ -11,6 +11,7 @@
 //! real time (a shell reading the user's whole rc chain), and the answer can't
 //! change while the app runs.
 
+use crate::harness::Harness;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -120,6 +121,31 @@ pub async fn codex() -> PathBuf {
         .get()
         .cloned()
         .unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+/// Whether the agent's CLI is installed and usable.
+///
+/// Read off the resolver's own answer rather than probing again: both cache in
+/// a `OnceLock`, absence included, so this costs nothing after the first call —
+/// which matters, since a failed resolution is the expensive one (it ends in a
+/// login shell reading the whole rc chain).
+///
+/// **The test is `is_absolute`.** A successful resolution is always an absolute
+/// path; the bare-name fallback both resolvers end at is the only relative
+/// answer either can give. For Codex that covers the stale binary for free: one
+/// with no `app-server` subcommand never satisfies `speaks_app_server`, so it
+/// falls through to the bare name exactly like an absent one — and "installed
+/// but cannot be driven" is the same answer to the reader as "not installed".
+///
+/// The cache never invalidates, so a CLI installed while the app runs still
+/// reads as missing until restart. That is the same bargain `gh` already makes,
+/// and it is why nothing here offers to install anything: the reader is at a
+/// terminal by then anyway.
+pub async fn agent_available(harness: Harness) -> bool {
+    match harness {
+        Harness::ClaudeCode => claude().await.is_absolute(),
+        Harness::Codex => codex().await.is_absolute(),
+    }
 }
 
 /// Whether this `codex` has an `app-server` subcommand.

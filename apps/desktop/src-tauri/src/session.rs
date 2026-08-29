@@ -408,6 +408,26 @@ impl SessionManager {
         let linked_issues = &expanded.linked;
 
         if is_new_session {
+            // Refused before anything is written, and that ordering is the
+            // whole of it. The index entry lands before spawn on purpose, so a
+            // session failing for a reason we could not predict is still
+            // visible in the sidebar — but a missing CLI is predictable, and
+            // taken through that path it leaves an empty row pointing at an
+            // agent that can never start, which every retry fails against
+            // identically.
+            //
+            // Refusing here instead means there is nothing to delete and
+            // nothing to select: the composer never unmounts, `useDraft` still
+            // holds the text under the new-task key, and retry is pressing send
+            // again once the CLI is installed.
+            if !crate::binpath::agent_available(harness).await {
+                bail!(
+                    "{} isn't installed. Install it with `{}`, then send again.",
+                    harness.label(),
+                    harness.install_command(),
+                );
+            }
+
             // Codex has no `-w`, so its worktree has to be one Dray makes — the
             // same route `--from` already takes, started where the CLI would
             // have started it. Without this the tree is never created, and the

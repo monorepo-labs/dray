@@ -63,6 +63,12 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
+  /// Drawn above the toolbar, and blocks sending while present.
+  ///
+  /// Separate from `error`: that reports something that was attempted and
+  /// failed, this reports that nothing can be attempted yet. Only the second
+  /// kind has a cure to offer, which is why it is a node and not a string.
+  notice?: ReactNode;
   /// The "hand it back" actions, clipped to a sliver above the card and opening
   /// on hover. A node for the toolbar's reason, and placed here rather than by
   /// the shell so it sits inside the same `max-w-3xl` column and against the
@@ -149,6 +155,7 @@ export default function ChatInput({
   onCancelQueued,
   queuedCount = 0,
   toolbar,
+  notice,
   handoff,
   busy = false,
   sessionId = null,
@@ -417,7 +424,19 @@ export default function ChatInput({
     let unlisten: (() => void) | null = null;
     let live = true;
 
-    void getCurrentWebview()
+    // `getCurrentWebview()` **throws** outside Tauri rather than rejecting, and
+    // synchronously — so in a plain browser this took the whole effect down and
+    // React unmounted the tree, leaving a blank page. Same trap `focus.ts`
+    // already carries a `try` for. Costs the drop target under `pnpm dev` and
+    // on the demo page, which is the one thing a browser could never do anyway.
+    let webview;
+    try {
+      webview = getCurrentWebview();
+    } catch {
+      return;
+    }
+
+    void webview
       .onDragDropEvent((event) => {
         // `enter` and `over` are one state here — the drag is over the window
         // and hasn't been dropped. Treating `enter` as anything else flashes
@@ -447,9 +466,18 @@ export default function ChatInput({
 
   // `busy` no longer gates this: a prompt typed into a running turn is queued
   // rather than refused, and the CLI folds it into that turn on its own.
-  const canSend = message.trim().length > 0 || attachments.length > 0;
+  //
+  // A notice does gate it. Backend refuses the same send anyway, so this is not
+  // the guard — it is what stops the reader finding that out by writing a
+  // prompt and pressing a button that was never going to work.
+  const canSend = !notice && (message.trim().length > 0 || attachments.length > 0);
 
   const submit = () => {
+    // Enter has its own path into here, so the disabled button is not the
+    // guard — without this, the one route that never touches the button still
+    // sends.
+    if (notice) return;
+
     const trimmed = message.trim();
     // An attachment on its own is a real prompt — dropping a screenshot and
     // pressing Enter is asking about the screenshot.
@@ -532,6 +560,8 @@ export default function ChatInput({
             className="mb-4 h-10 w-full max-w-30 bg-current text-foreground/10"
           />
         )}
+
+        {notice}
 
         {/* Above the toolbar in both states, so the failure reads before the
             controls rather than after them. `whitespace-pre-wrap` because these
