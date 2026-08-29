@@ -193,13 +193,18 @@ impl StatusTracker {
         self.model_call_open || !self.background_tasks.is_empty()
     }
 
-    /// Whether a model call is open right now, which is what decides that an
-    /// arriving prompt is queued rather than sent. Read *before* `on_send`,
-    /// which opens one unconditionally and would answer for itself.
+    /// Whether a model call is open right now. Two readers: it decides that an
+    /// arriving prompt is queued rather than sent — read *before* `on_send`,
+    /// which opens one unconditionally and would answer for itself — and it is
+    /// what [`SessionManager::fork`] refuses on.
+    ///
+    /// Also exactly what [`SessionStatus::InProgress`] reports, which is the
+    /// reading the sidebar's own fork guard takes. Neither side can call the
+    /// other, so that equivalence is pinned by test rather than assumed.
     ///
     /// Deliberately narrower than [`has_outstanding_work`](Self::has_outstanding_work). A background task
-    /// holds the session in-progress long after its turn ended, but the CLI's
-    /// main thread is idle and answers a prompt straight away — verified
+    /// keeps that one true long after its turn ended, but the CLI's main thread
+    /// is idle and answers a prompt straight away — verified
     /// against v2.1.232, where a prompt written with a background `sleep 300`
     /// outstanding was answered in 1.8s. Queueing on status instead held that
     /// prompt until the task drained, and since a `local_bash` task emits none
@@ -207,6 +212,12 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// The status the sidebar draws from, so a guard here can be checked
+    /// against the word the frontend reads.
+    pub fn status(&self) -> SessionStatus {
+        self.status
     }
 
     /// The outstanding background tasks, for a Stop that has to name each one.
@@ -809,9 +820,23 @@ impl SessionManager {
     /// instruction for the first send. The copied log is what the fork replays
     /// meanwhile, so it opens reading exactly like its parent.
     ///
-    /// Refused while the parent is working. The CLI forks by reading the
-    /// parent's transcript, which a live child is still appending to, so a fork
-    /// taken mid-turn can inherit half of one.
+    /// Refused while the parent's turn is in flight, and on nothing wider. The
+    /// CLI forks by reading the parent's transcript, which a live child is
+    /// appending to mid-turn, so a fork taken there inherits half of one. A
+    /// background task outstanding is not that case: it appends *after* the
+    /// turn ended — that is how a subagent reports back — and what this takes
+    /// is a copy at a point in time, which is what a fork is.
+    ///
+    /// Reading [`has_outstanding_work`](StatusTracker::has_outstanding_work)
+    /// here was the bug. That is the safe-to-replace-the-child question, and
+    /// this replaces no child — it borrowed a guard written for the paths that
+    /// kill one. A `local_bash` task never ends on its own, so a session
+    /// running a dev server could not be forked again for the rest of its life,
+    /// while the menu item stayed enabled: the sidebar guards on
+    /// `status === "in_progress"`, which the same `result` had already moved to
+    /// `completed`. The two must answer one question, which they now do —
+    /// `InProgress` *is* `turn_in_flight`, pinned by test. An item offering
+    /// what this refuses reads as Fork being broken rather than busy.
     pub async fn fork(
         &self,
         session_id: &str,
@@ -831,8 +856,8 @@ impl SessionManager {
         }
 
         if let Some(s) = self.sessions.lock().await.get(session_id) {
-            if s.status.lock().await.has_outstanding_work() {
-                bail!("wait for the session to finish before forking it");
+            if s.status.lock().await.turn_in_flight() {
+                bail!("wait for the turn to finish before forking it");
             }
         }
 
@@ -2137,6 +2162,84 @@ mod tests {
             None
         );
         assert!(!tracker.has_outstanding_work());
+    }
+
+    /// What [`SessionManager::fork`] reads. A dev server, a Monitor, a poll
+    /// loop — a `local_bash` task never ends, so guarding fork on the wide
+    /// reading took Fork away from that session for the rest of its life. The
+    /// transcript it copies is not being appended to mid-turn here; the turn
+    /// ended, and a task reporting back later opens a turn of its own.
+    #[test]
+    fn a_session_carrying_a_background_task_can_still_be_forked() {
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![crate::events::BackgroundTask {
+                task_id: "b0n57ez9b".to_string(),
+                task_type: "local_bash".to_string(),
+                description: "pnpm dev".to_string(),
+            }],
+        });
+        assert!(tracker.turn_in_flight(), "mid-turn, fork is refused");
+
+        tracker.on_event(&turn_completed());
+        assert!(
+            tracker.has_outstanding_work(),
+            "the child still carries the task, so it must not be replaced"
+        );
+        assert!(
+            !tracker.turn_in_flight(),
+            "but no model call is open, so there is no half a turn to inherit"
+        );
+    }
+
+    /// The two guards on Fork are one question, and this is what keeps them so.
+    /// The backend refuses on `turn_in_flight`; the sidebar disables the menu
+    /// item on `status === "in_progress"`. Neither side can call the other, so
+    /// the rule is stated twice — and a disabled item disagreeing with a
+    /// refusal is exactly what made Fork read as broken rather than busy.
+    #[test]
+    fn the_fork_guard_is_the_status_the_sidebar_reads() {
+        let mut mapper = Mapper::default();
+        let mut tracker = StatusTracker::default();
+
+        let mut check = |tracker: &StatusTracker| {
+            assert_eq!(
+                tracker.turn_in_flight(),
+                tracker.status() == SessionStatus::InProgress,
+                "the backend's fork guard and the word the sidebar reads have drifted"
+            );
+        };
+
+        check(&tracker);
+        tracker.on_send();
+        check(&tracker);
+
+        // The state this is all about: the turn over, tasks still running.
+        let mut forkable_with_a_task_running = false;
+
+        for line in include_str!("harness/claude_code/fixtures/background_bash_monitor.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            let Ok(Some(event)) = mapper.map(parser::parse_line(line).unwrap()) else {
+                continue;
+            };
+            tracker.on_event(&event.payload);
+            check(&tracker);
+            forkable_with_a_task_running |=
+                !tracker.turn_in_flight() && tracker.has_outstanding_work();
+        }
+
+        // Reading the finished session moves it off `Completed`, the one
+        // transition that touches the status without touching the turn.
+        tracker.mark_seen();
+        check(&tracker);
+        assert!(
+            forkable_with_a_task_running,
+            "the fixture runs its turn out with both tasks outstanding, which is the case that was refused"
+        );
     }
 
     /// Only a finished-and-unread session clears on read; selecting a running

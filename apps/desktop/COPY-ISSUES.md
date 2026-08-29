@@ -301,6 +301,18 @@ here, so taking it back means a trip to Linear for a new one.
 
 > --title and --url describe one issue, so name one
 
+**Refused when nothing names a session.** The session is optional so that the
+documented call names no environment variable, which Claude Code refuses inside
+a worktree. Run from a person's own terminal there is nothing to fall back to,
+so the sentence names the cure rather than guessing at a session.
+
+> no session named, and DRAY_SESSION_ID is not set: name the session, as printed by `dray ls`
+
+**Refused when a session is named and no issue is.** The same sentence the app
+answers with, so the two cannot drift into two ways of saying one thing.
+
+> name at least one issue, like DRA-53
+
 **After a link or unlink**, the session's whole issue list, one per line:
 
 > DRA-53: Add issue tracker integration

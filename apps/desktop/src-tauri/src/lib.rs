@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 pub mod analytics;
+pub mod apps;
 pub mod attachments;
 pub mod binpath;
 #[path = "events/events.rs"]
@@ -634,6 +635,8 @@ pub fn run() {
             github::mark_pr_ready,
             quit::confirm_quit,
             quit::dismiss_quit,
+            apps::list_open_apps,
+            apps::open_in_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

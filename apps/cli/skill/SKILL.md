@@ -51,10 +51,18 @@ Options:
 
 ```bash
 dray new --issue DRA-53 "Add the issue panel described in DRA-53"
-dray issue link <session-id> DRA-53 --title "Add the issue panel" --url https://linear.app/acme/issue/DRA-53
-dray issue link <session-id> DRA-53 DRA-54
-dray issue unlink <session-id> DRA-54
+dray issue link DRA-53 --title "Add the issue panel" --url https://linear.app/acme/issue/DRA-53
+dray issue link DRA-53 DRA-54
+dray issue unlink DRA-54
+
+dray issue link <session-id> DRA-53 --title "Add the issue panel"
 ```
+
+`link` and `unlink` tag **your own session** when you do not name one, so you
+never have to write `$DRAY_SESSION_ID` — and you must not, because Claude Code
+refuses a command naming an environment variable inside a worktree, which is
+where every session `dray new` creates runs. Name a session to tag one you
+spawned.
 
 A tagged session shows an **Issue** tab in the user's panel, and its prompt gains
 one line per issue: the identifier and the title, nothing else.

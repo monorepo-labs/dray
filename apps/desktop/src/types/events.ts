@@ -410,6 +410,33 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ErrorSource = "harness" | "parser" | "process";
 
+/**
+ * An installed app the working directory can be handed to.
+ */
+export type ExternalApp = { 
+/**
+ * The bundle's absolute path, and the app's address everywhere else here.
+ *
+ * Deliberately not a bundle identifier. `open -b` hands the id to Launch
+ * Services, which picks whichever copy it has indexed — so a second
+ * install of an editor, or a stale index, silently opens the wrong one.
+ * The scan found this bundle by path; the path is what it knows.
+ */
+path: string, name: string, kind: ExternalAppKind, 
+/**
+ * The app's own icon as a `data:` PNG, or `None` where none could be read.
+ * Absent is ordinary — a bundle can keep its icon in an asset catalog with
+ * no `.icns` beside it — so the button falls back to a glyph rather than
+ * treating this as a failure.
+ */
+icon: string | null, };
+
+/**
+ * Which run of the menu an app belongs to. Not cosmetic: "open in Cursor" and
+ * "open in Ghostty" are different asks, and a flat list of both reads as one.
+ */
+export type ExternalAppKind = "editor" | "terminal" | "files";
+
 export type FileChange = "add" | "update" | "delete";
 
 export type FileEdit = { path: string, change: FileChange, unifiedDiff: string | null, };
