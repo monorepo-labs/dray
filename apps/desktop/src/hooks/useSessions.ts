@@ -11,14 +11,11 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
 import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
-// Only for a session indexed before the model was recorded, which reads back as
-// "unknown". Everything else seeds from the user's stored prefs.
-const DEFAULT_MODEL: ModelId = "haiku";
 const DEFAULT_EFFORT: Effort = "high";
 
 /// A stretch where the agent is busy and the transcript has nothing to show —
@@ -79,7 +76,9 @@ export function useSessions() {
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
     const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
-    const [modelId, setModelId] = useState<ModelId>(() => prefs.modelId);
+    const [modelId, setModelId] = useState<ModelId>(() =>
+      rememberedModel(prefs.modelByHarness, prefs.harness),
+    );
     const [effortByModel, setEffortByModel] = useState<EffortByModel>(() => prefs.effortByModel);
     const [permissionMode, setPermissionModeState] = useState<ApprovalPolicy>(() => prefs.permissionMode);
     const [projects, setProjects] = useState<Project[]>([]);
@@ -144,20 +143,30 @@ const effort: Effort | null = model
 // on it earlier. Only an explicit level writes to the map.
 const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
   setModelId(nextModelId);
+  // Filed under the harness on screen, which is the only one that could have
+  // offered this model — so coming back to that agent finds this pick rather
+  // than whatever the other agent was left on.
+  const byHarness = { ...prefs.modelByHarness, [harness]: nextModelId };
   if (nextEffort) {
     const next = { ...effortByModel, [nextModelId]: nextEffort };
     setEffortByModel(next);
-    setPrefs({ modelId: nextModelId, effortByModel: next });
+    setPrefs({ modelByHarness: byHarness, effortByModel: next });
     return;
   }
-  setPrefs({ modelId: nextModelId });
+  setPrefs({ modelByHarness: byHarness });
 };
 
 // Wrapped like the rest: which agent you work in is a preference, not a
-// per-session accident. The model that comes with it is repaired by the effect
-// that fetches the new list, not guessed at here.
+// per-session accident.
+//
+// The model moves with it, from that harness's own remembered pick. Leaving it
+// to the fetch effect below was the bug: that only ever *repairs* a pick the
+// new harness cannot run, and its fallback is whatever leads the list, so
+// switching agent and back landed on Fable or Sol however deliberately the
+// reader had chosen otherwise.
 const setHarness = (next: Harness) => {
   setHarnessState(next);
+  setModelId(rememberedModel(prefs.modelByHarness, next));
   setPrefs({ harness: next });
 };
 
@@ -494,7 +503,9 @@ const handleNewSession = () => {
   // other harness would come back here untouched every time — and the harness
   // is stored too, so the two can disagree from the moment one is picked
   // without the other.
-  setModelId(usableModel(models, prefs.modelId));
+  setModelId(
+    usableModel(models, rememberedModel(prefs.modelByHarness, prefs.harness), prefs.harness),
+  );
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
   setUseWorktreeState(prefs.useWorktree);
@@ -517,7 +528,8 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   // session's, and clicking through old ones must not rewrite the default.
   setHarnessState(item.harness);
   // Sessions indexed before the model was recorded read back as "unknown".
-  const restored = item.model === "unknown" ? DEFAULT_MODEL : item.model;
+  // Answered from the session's own harness, since a model belongs to one.
+  const restored = item.model === "unknown" ? DEFAULT_MODEL_FOR[item.harness] : item.model;
   setModelId(restored);
   // The index stores one model/effort pair, so it can only seed that model's
   // entry; the rest of the map falls back to per-model defaults.
@@ -823,7 +835,7 @@ useEffect(() => {
     // A model belongs to exactly one harness, so switching harness leaves the
     // pick naming something the new one cannot run. Repaired here, where the
     // real list has just landed, rather than guessed at when the toggle moved.
-    setModelId((current) => usableModel(list, current));
+    setModelId((current) => usableModel(list, current, harness));
   });
 }, [harness])
 
