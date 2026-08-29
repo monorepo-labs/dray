@@ -109,9 +109,16 @@ pub async fn init(
     is_new_session: bool,
     app: &AppHandle,
 ) -> Result<Session> {
-    // Ahead of the spawn: a model with no alias is a refusal, and refusing
-    // after the child exists means killing one to report it.
+    // Both ahead of the spawn, and for one reason: everything between the spawn
+    // and the kill-wrapped `open_thread` below has to be infallible, or a `?`
+    // returns leaving a child nothing can reach. A model with no alias and an
+    // unreadable log are both refusals that owe the caller no process.
     let settings = TurnSettings::new(model, effort, permission_mode)?;
+    let seq_start = if is_new_session {
+        0
+    } else {
+        next_seq_by_session_id(session_id).await?
+    };
 
     let mut command = Command::new(crate::binpath::codex().await);
 
@@ -148,11 +155,6 @@ pub async fn init(
         app: app.clone(),
     };
 
-    let seq_start = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
     let seq = Arc::new(AtomicU64::new(seq_start));
 
     let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));

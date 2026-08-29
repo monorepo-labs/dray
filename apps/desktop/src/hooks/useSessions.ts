@@ -395,7 +395,14 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
   const sessionId = selectedSessionId;
   try {
     const cancelled = await invoke<QueuedMessage | null>("cancel_queued", { sessionId });
-    if (!cancelled) return null;
+    // Nothing to take back, so what is drawn is a row the backend no longer
+    // holds — a prompt whose delivery failed before it could mint the event
+    // that retires it, or a queue that died with its child. Cleared rather than
+    // left: it is a row whose Esc provably does nothing.
+    if (!cancelled) {
+      setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
+      return null;
+    }
     setQueuedBySession((prev) => ({
       ...prev,
       [sessionId]: (prev[sessionId] ?? []).filter((m) => m.id !== cancelled.id),
