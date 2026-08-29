@@ -607,11 +607,17 @@ export default function ChatInput({
             leave them floating rather than tucked. */}
         {!isNewTask && handoff}
 
-        {/* The ring lives on the card so the whole composer reads as one control.
+        {/* The picker anchors to this wrapper rather than to the card, and it has
+            to: an element carrying `backdrop-filter` is a backdrop root for
+            everything inside it, so the list's own blur — nested in the card —
+            sampled the card's empty interior instead of the transcript behind
+            it, and did nothing at all. That is the same trap one layer out from
+            the one that sends every menu through a portal. The wrapper's box is
+            the card's, so `top-full`/`bottom-full` land where they always did.
+
+            The ring lives on the card so the whole composer reads as one control.
             --input bakes in its own alpha, which makes Tailwind's /40-style opacity
             modifiers silently no-op, so both states set an explicit color.
-            `relative` anchors the command picker, which opens upward out of the
-            card rather than displacing anything as it filters.
 
             `bg-composer`, not `bg-card`, and that is a vibrancy fix rather than
             a colour change: the two tokens carry the same value, and they part
@@ -622,14 +628,7 @@ export default function ChatInput({
             takes. It was the one raised surface that could never be glass, back
             when it hid the handoff row by being opaque; [HandoffRow] clips
             itself now, which is what freed it. */}
-        <div
-          ref={cardRef}
-          className={cn(
-            "relative rounded-2xl transition-colors",
-            !isNewTask &&
-              "border border-hairline bg-composer backdrop-blur-xl focus-within:border-hairline-strong",
-          )}
-        >
+        <div className="relative">
           {/* Two separate consequences of the empty state, passed separately
               because they are separate things that happen to coincide. The
               toolbar sits above the input there and the window is empty below
@@ -666,189 +665,198 @@ export default function ChatInput({
               />
             ))}
 
-          {/* Covers the card rather than replacing anything, so the text and
-              the tray stay legible underneath and the box doesn't resize the
-              moment a file crosses the window. Inert to pointer events — the
-              drop is the OS's, and Tauri delivers it whatever is on top. */}
-          {dragging && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-2xl border-2 border-muted-foreground/25 bg-background/70 text-ui text-muted-foreground">
-              <Paperclip className="size-3.5" strokeWidth={2} />
-              Drop to attach
-            </div>
-          )}
-
-          {/* Inside the card and above the text, so an attachment reads as part
-              of the message being composed rather than as a separate control.
-              Padded on the same edges as the textarea below it. */}
-          {attachments.length > 0 && (
-            <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
-              <AttachmentTray
-                attachments={attachments}
-                onRemove={(path) => removeAttachment(sessionId, path)}
-              />
-            </div>
-          )}
-
-          {/* Both buttons sit on the last line. At one line that reads as
-              centered anyway, because the textarea's vertical padding below is
-              tuned to match the buttons' own height — no `self-center` needed,
-              and nothing drifts as the box grows. */}
-          <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
-            <div className="relative min-w-0 flex-1">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                autoFocus
-                value={message}
-                // Kept in step with the overlay below, which cannot scroll itself.
-                onScroll={(e) => {
-                  const mirror = mirrorRef.current;
-                  if (mirror) mirror.scrollTop = e.currentTarget.scrollTop;
-                }}
-                // Names `#` only where it would do something. An unconnected
-                // reader offered a tag they cannot use learns the app is
-                // missing a feature rather than that they haven't set one up.
-                placeholder={
-                  isNewTask
-                    ? issuesConnected
-                      ? "Describe a task. #issues. @files. /skills and commands."
-                      : "Describe a task. @files. /skills and commands."
-                    : "Send follow-up"
-                }
-                onChange={(e) => {
-                  setMessage(e.currentTarget.value);
-                  setCaret(e.currentTarget.selectionStart);
-                }}
-                // Fires for arrow keys, clicks, and drags alike, so the picker
-                // follows the caret however it moved rather than only on typing.
-                onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-                onKeyDown={(e) => {
-                  // Whichever picker is open owns these keys, and only while it
-                  // is — Enter completes the highlighted row instead of sending,
-                  // which is the one place the composer's usual rule gives way.
-                  if (menuOpen && !e.nativeEvent.isComposing) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setActiveIndex((active + 1) % rowCount);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setActiveIndex((active - 1 + rowCount) % rowCount);
-                      return;
-                    }
-                    if (e.key === "Enter" || e.key === "Tab") {
-                      e.preventDefault();
-                      pickRow(active);
-                      return;
-                    }
+          <div
+            ref={cardRef}
+            className={cn(
+              "relative rounded-2xl transition-colors",
+              !isNewTask &&
+                "border border-hairline bg-composer backdrop-blur-xl focus-within:border-hairline-strong",
+            )}
+          >
+            {/* Covers the card rather than replacing anything, so the text and
+                the tray stay legible underneath and the box doesn't resize the
+                moment a file crosses the window. Inert to pointer events — the
+                drop is the OS's, and Tauri delivers it whatever is on top. */}
+            {dragging && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-2xl border-2 border-muted-foreground/25 bg-background/70 text-ui text-muted-foreground">
+                <Paperclip className="size-3.5" strokeWidth={2} />
+                Drop to attach
+              </div>
+            )}
+  
+            {/* Inside the card and above the text, so an attachment reads as part
+                of the message being composed rather than as a separate control.
+                Padded on the same edges as the textarea below it. */}
+            {attachments.length > 0 && (
+              <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
+                <AttachmentTray
+                  attachments={attachments}
+                  onRemove={(path) => removeAttachment(sessionId, path)}
+                />
+              </div>
+            )}
+  
+            {/* Both buttons sit on the last line. At one line that reads as
+                centered anyway, because the textarea's vertical padding below is
+                tuned to match the buttons' own height — no `self-center` needed,
+                and nothing drifts as the box grows. */}
+            <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
+              <div className="relative min-w-0 flex-1">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  autoFocus
+                  value={message}
+                  // Kept in step with the overlay below, which cannot scroll itself.
+                  onScroll={(e) => {
+                    const mirror = mirrorRef.current;
+                    if (mirror) mirror.scrollTop = e.currentTarget.scrollTop;
+                  }}
+                  // Names `#` only where it would do something. An unconnected
+                  // reader offered a tag they cannot use learns the app is
+                  // missing a feature rather than that they haven't set one up.
+                  placeholder={
+                    isNewTask
+                      ? issuesConnected
+                        ? "Describe a task. #issues. @files. /skills and commands."
+                        : "Describe a task. @files. /skills and commands."
+                      : "Send follow-up"
                   }
-
-                  // Esc is not read here — it is the document listener's, so it
-                  // works with the composer unfocused too.
-
-                  // Shift+Enter is the only way to get a newline; plain Enter sends.
-                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
-                    submit();
-                  }
-                }}
-                // `py-1` puts one line at 28px — the buttons' own height — so the
-                // first row looks centered against them without being. `min-w-0`
-                // moved to the wrapper, where it still stops one long unbroken
-                // token setting the flex item's floor and pushing the buttons off
-                // the row.
-                className={cn(
-                  "block w-full resize-none overflow-y-auto bg-transparent placeholder:text-muted-foreground focus:outline-none",
-                  TEXT_BOX,
-                  isNewTask ? "px-0" : "px-1",
-                  // Hands the glyphs to the overlay only while there is something
-                  // to colour. Every other moment the textarea draws its own text
-                  // as before, so the usual case keeps no dependency on the
-                  // overlay rendering correctly.
-                  highlighted ? "text-transparent caret-foreground" : "text-foreground",
-                )}
-              />
-
-              {/* Draws the text the textarea is hiding, so a command or a file
-                  mention can take a colour — a textarea has no way to style part
-                  of its value. Painted *over* the textarea rather than under it,
-                  so a selection band sits behind these glyphs instead of covering
-                  them; the caret still shows, since it falls between them.
-
-                  Mounted only alongside `text-transparent` above, and built from
-                  the same segments the transcript renders, so neither the two
-                  copies of the text nor the two surfaces can disagree about what
-                  is coloured. `TEXT_BOX` and the padding are shared with the
-                  textarea for the same reason — any drift shows up as doubled
-                  text. */}
-              {highlighted && (
-                <div
-                  ref={mirrorRef}
-                  aria-hidden
+                  onChange={(e) => {
+                    setMessage(e.currentTarget.value);
+                    setCaret(e.currentTarget.selectionStart);
+                  }}
+                  // Fires for arrow keys, clicks, and drags alike, so the picker
+                  // follows the caret however it moved rather than only on typing.
+                  onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+                  onKeyDown={(e) => {
+                    // Whichever picker is open owns these keys, and only while it
+                    // is — Enter completes the highlighted row instead of sending,
+                    // which is the one place the composer's usual rule gives way.
+                    if (menuOpen && !e.nativeEvent.isComposing) {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setActiveIndex((active + 1) % rowCount);
+                        return;
+                      }
+                      if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setActiveIndex((active - 1 + rowCount) % rowCount);
+                        return;
+                      }
+                      if (e.key === "Enter" || e.key === "Tab") {
+                        e.preventDefault();
+                        pickRow(active);
+                        return;
+                      }
+                    }
+  
+                    // Esc is not read here — it is the document listener's, so it
+                    // works with the composer unfocused too.
+  
+                    // Shift+Enter is the only way to get a newline; plain Enter sends.
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      submit();
+                    }
+                  }}
+                  // `py-1` puts one line at 28px — the buttons' own height — so the
+                  // first row looks centered against them without being. `min-w-0`
+                  // moved to the wrapper, where it still stops one long unbroken
+                  // token setting the flex item's floor and pushing the buttons off
+                  // the row.
                   className={cn(
-                    "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-foreground",
+                    "block w-full resize-none overflow-y-auto bg-transparent placeholder:text-muted-foreground focus:outline-none",
                     TEXT_BOX,
                     isNewTask ? "px-0" : "px-1",
+                    // Hands the glyphs to the overlay only while there is something
+                    // to colour. Every other moment the textarea draws its own text
+                    // as before, so the usual case keeps no dependency on the
+                    // overlay rendering correctly.
+                    highlighted ? "text-transparent caret-foreground" : "text-foreground",
                   )}
-                >
-                  {segments.map((segment, i) => {
-                    // Every glyph the textarea lays out has to be laid out here
-                    // too, so a mention is dimmed rather than shortened — the
-                    // transcript is where it collapses to the filename.
-                    if (segment.kind === "mention") {
-                      const { dir, name } = splitMention(segment.text);
-
+                />
+  
+                {/* Draws the text the textarea is hiding, so a command or a file
+                    mention can take a colour — a textarea has no way to style part
+                    of its value. Painted *over* the textarea rather than under it,
+                    so a selection band sits behind these glyphs instead of covering
+                    them; the caret still shows, since it falls between them.
+  
+                    Mounted only alongside `text-transparent` above, and built from
+                    the same segments the transcript renders, so neither the two
+                    copies of the text nor the two surfaces can disagree about what
+                    is coloured. `TEXT_BOX` and the padding are shared with the
+                    textarea for the same reason — any drift shows up as doubled
+                    text. */}
+                {highlighted && (
+                  <div
+                    ref={mirrorRef}
+                    aria-hidden
+                    className={cn(
+                      "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-foreground",
+                      TEXT_BOX,
+                      isNewTask ? "px-0" : "px-1",
+                    )}
+                  >
+                    {segments.map((segment, i) => {
+                      // Every glyph the textarea lays out has to be laid out here
+                      // too, so a mention is dimmed rather than shortened — the
+                      // transcript is where it collapses to the filename.
+                      if (segment.kind === "mention") {
+                        const { dir, name } = splitMention(segment.text);
+  
+                        return (
+                          <span key={i} className={SEGMENT_COLOR.mention}>
+                            <span className="opacity-45">{dir}</span>
+                            {name}
+                          </span>
+                        );
+                      }
+  
                       return (
-                        <span key={i} className={SEGMENT_COLOR.mention}>
-                          <span className="opacity-45">{dir}</span>
-                          {name}
+                        <span key={i} className={SEGMENT_COLOR[segment.kind]}>
+                          {segment.text}
                         </span>
                       );
-                    }
-
-                    return (
-                      <span key={i} className={SEGMENT_COLOR[segment.kind]}>
-                        {segment.text}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
+                    })}
+                  </div>
+                )}
+              </div>
+  
+              {/* One button, two jobs, and what is typed decides which. Stopping
+                  is what an empty composer during a turn is for; with text in it
+                  the prompt is queued onto the running turn instead, so Send has
+                  to stay reachable — refusing it is the behaviour this replaced.
+                  `type="button"` on Stop so pressing it can't also submit.
+  
+                  Enter-to-send lives in `onKeyDown`, not in this button being the
+                  form's submitter, so the empty state can drop it for the hint
+                  below without losing the keyboard path. Neither `busy` nor a
+                  queue is reachable there — nothing runs before a session
+                  exists. */}
+              {!isNewTask &&
+                (() => {
+                  const stopping = busy && !canSend;
+  
+                  return (
+                    <Button
+                      type={stopping ? "button" : "submit"}
+                      size="icon-sm"
+                      disabled={stopping ? !onStop : !canSend}
+                      onClick={stopping ? onStop : undefined}
+                      title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
+                      className="rounded-full"
+                    >
+                      {stopping ? (
+                        <Square className="fill-current" />
+                      ) : (
+                        <ArrowUp strokeWidth={2} />
+                      )}
+                    </Button>
+                  );
+                })()}
             </div>
-
-            {/* One button, two jobs, and what is typed decides which. Stopping
-                is what an empty composer during a turn is for; with text in it
-                the prompt is queued onto the running turn instead, so Send has
-                to stay reachable — refusing it is the behaviour this replaced.
-                `type="button"` on Stop so pressing it can't also submit.
-
-                Enter-to-send lives in `onKeyDown`, not in this button being the
-                form's submitter, so the empty state can drop it for the hint
-                below without losing the keyboard path. Neither `busy` nor a
-                queue is reachable there — nothing runs before a session
-                exists. */}
-            {!isNewTask &&
-              (() => {
-                const stopping = busy && !canSend;
-
-                return (
-                  <Button
-                    type={stopping ? "button" : "submit"}
-                    size="icon-sm"
-                    disabled={stopping ? !onStop : !canSend}
-                    onClick={stopping ? onStop : undefined}
-                    title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
-                    className="rounded-full"
-                  >
-                    {stopping ? (
-                      <Square className="fill-current" />
-                    ) : (
-                      <ArrowUp strokeWidth={2} />
-                    )}
-                  </Button>
-                );
-              })()}
           </div>
         </div>
 

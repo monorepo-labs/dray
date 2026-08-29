@@ -181,6 +181,25 @@ export default function PickerMenu<T>({
           clips the scrollbar to the curve, so it stops short of the corners the
           way the rows do.
 
+          `bg-picker`, not `bg-popover`, and it is the same fill everywhere but
+          on glass. This is by some way the tallest floating surface in the app —
+          fourteen rems of list over a live transcript — so the wash that reads
+          as glass on a menu covers a third of the page here, and the words
+          behind move under the words in it. `--veil-panel` is the heavier
+          wash it takes instead; the arithmetic is beside it in App.css.
+
+          A blur goes with it, and is not decoration: a wash is not a fill, so
+          without one what shows through stays legible rather than resolving to a
+          tint. Every floating frame in the app carries the pair; this one was
+          the last that did not.
+
+          `lg` here against the `xl` those frames take, and the two numbers move
+          together — wash and blur are one lever with two ends. A menu is thin
+          enough to need the heavier blur to hide a strip of page; this surface
+          already spends the heavier wash, so only a quarter of the backdrop is
+          left to hide and 24px of blur on it read as a smear of the transcript
+          rather than as glass over it.
+
           `bare` drops the fill along with the border, the radius and the
           shadow, and they do go together: it is only ever the empty state,
           where the composer stands alone and the transcript is not rendered at
@@ -197,25 +216,29 @@ export default function PickerMenu<T>({
           "overflow-hidden",
           bare
             ? "text-foreground"
-            : "rounded-xl border border-hairline-strong bg-popover text-popover-foreground shadow-md",
+            : "rounded-xl border border-hairline-strong bg-picker backdrop-blur-lg text-popover-foreground shadow-md",
         )}
       >
         <div
           ref={listRef}
           role="listbox"
           aria-label={label}
+          // One inset, not two: `p-1` rather than a taller `py`, so the gap above
+          // the first row is the gap beside it. Uneven, the top read as a band
+          // of empty surface above the list while the sides read as an edge.
+          //
           // Seven rows either way, and that is why there are two heights: 7 ×
           // the row's own `h-8` is 14rem, and the bordered state adds the
-          // 0.5rem of `py-2` at each end. Written out rather than computed, so
+          // 0.25rem of `p-1` at each end. Written out rather than computed, so
           // it costs nothing at render — but it does mean these numbers, `h-8`
-          // and `py-2` have to move together.
+          // and `p-1` have to move together.
           //
           // `bare` drops the inset with the box it was insetting from: with no
           // border there is nothing for the rows to be held away from, and the
           // gap only reads as the list sitting oddly short of its own edge.
           className={cn(
             "overflow-x-hidden overflow-y-auto overscroll-contain",
-            bare ? "max-h-[14rem]" : "max-h-[15rem] px-1 py-2",
+            bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1",
           )}
         >
           {groups.map((group, g) => (
