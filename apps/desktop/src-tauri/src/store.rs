@@ -1223,7 +1223,7 @@ mod tests {
             "add the PR panel",
             ModelId::Opus,
             Some(Effort::High),
-            ApprovalPolicy::AcceptEdits,
+            ApprovalPolicy::Auto,
             None,
         );
         parent.archived = true;
@@ -1627,7 +1627,7 @@ mod tests {
             "hi",
             ModelId::Opus,
             Some(Effort::High),
-            ApprovalPolicy::AcceptEdits,
+            ApprovalPolicy::Auto,
             None,
         );
         let json = serde_json::to_value(SessionSnapshot {

@@ -248,7 +248,7 @@ linearAccount: TrackerAccount | null, };
  * autonomy. Every variant is settable, so this is what the app stores and
  * sends — see [`PermissionMode`] for the wider set the CLI reports.
  */
-export type ApprovalPolicy = "plan" | "manual" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions";
+export type ApprovalPolicy = "plan" | "manual" | "auto" | "dontAsk" | "bypassPermissions";
 
 /**
  * One thing the user attached, as the composer needs to draw it.

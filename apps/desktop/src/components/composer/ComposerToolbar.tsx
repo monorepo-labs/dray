@@ -183,7 +183,11 @@ export default function ComposerToolbar({
 
       {/* Last of the pickers: it is the one control here most sessions set once
           and never touch, so it sits furthest from where the eye lands. */}
-      <PermissionSelector value={permissionMode} onChange={onPermissionModeChange} />
+      <PermissionSelector
+        harness={harness}
+        value={permissionMode}
+        onChange={onPermissionModeChange}
+      />
 
       {/* `ml-auto` rather than a spacer, so a long branch name still gets the
           whole middle of the row and this stays pinned to the right edge. */}

@@ -358,6 +358,16 @@ impl Mapper {
         }))]
     }
 
+    /// Mints an event the read loop needs but no notification carried — a
+    /// permission request, which arrives as a JSON-RPC *request* rather than a
+    /// notification and so never reaches [`Self::map`].
+    ///
+    /// Through the same counter and the same turn id, because an event numbered
+    /// outside them would sort into the transcript at the wrong place.
+    pub fn synthesize(&self, payload: AgentEventPayload) -> AgentEvent {
+        self.event(payload)
+    }
+
     fn event(&self, payload: AgentEventPayload) -> AgentEvent {
         AgentEvent {
             id: Uuid::now_v7().to_string(),

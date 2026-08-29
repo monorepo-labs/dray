@@ -1384,11 +1384,25 @@ impl Session {
             (pending, chosen)
         };
 
-        write_line(
-            self.stdin.lines()?,
-            &decision_response(request_id, &pending, &chosen),
-        )
-        .await?;
+        // Answered on the channel that asked. Codex was handed its decision by
+        // the server and sends it back whole; Claude's verdict is composed here
+        // out of the rule the button carried.
+        match (&self.stdin, pending.rpc_id) {
+            (Transport::Rpc(thread), Some(rpc_id)) => {
+                let decision = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no decision to send")?;
+                thread.client.respond(rpc_id, json!({"decision": decision}))?;
+            }
+            _ => {
+                write_line(
+                    self.stdin.lines()?,
+                    &decision_response(request_id, &pending, &chosen),
+                )
+                .await?;
+            }
+        }
 
         let payload = AgentEventPayload::PermissionDecided {
             request_id: request_id.to_string(),

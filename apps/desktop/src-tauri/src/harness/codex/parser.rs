@@ -243,6 +243,41 @@ pub struct ErrorNotification {
     pub will_retry: bool,
 }
 
+/// A server request asking the user to approve something, in the one shape both
+/// kinds share.
+///
+/// Two methods land here — `item/commandExecution/requestApproval` and
+/// `item/fileChange/requestApproval` — because what the card needs from them is
+/// the same: which call is held, why, and what the server will accept as an
+/// answer. Every field past the id is optional, since the two kinds carry
+/// different subsets and neither is documented as stable.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    /// The item being held. It is the same id the mapper used as the tool
+    /// call's, so the card renders against the row already on screen.
+    pub item_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Set on a file-change request the agent wants a whole root for.
+    #[serde(default)]
+    pub grant_root: Option<String>,
+    /// What the server says it will take back, in its own words — a bare string
+    /// like `"accept"`, or a single-key object like
+    /// `{"acceptWithExecpolicyAmendment": {…}}`.
+    ///
+    /// **Not in the generated schema**, which lists neither this nor the field
+    /// on the command params; it is on the wire, and the capture is what proves
+    /// it. Kept as raw values because the answer echoes one back untouched: a
+    /// decision Dray retyped would be a decision it could get wrong.
+    #[serde(default)]
+    pub available_decisions: Vec<Value>,
+}
+
 /// Sorts one notification into [`CodexEvent`].
 ///
 /// Errors only where a method we *do* act on carried params we could not read;

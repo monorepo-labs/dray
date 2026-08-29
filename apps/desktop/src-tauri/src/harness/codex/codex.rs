@@ -12,9 +12,10 @@
 //! filesystem backend, not an agent interface. The ACP adapter wraps this same
 //! app-server behind a Node process.
 
-use crate::events::{AgentEvent, ApprovalPolicy};
+use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
 use crate::harness::Harness::Codex;
 use crate::models::{Effort, Model};
+use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
 use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
@@ -22,7 +23,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{ChildStderr, ChildStdout, Command},
@@ -31,8 +32,10 @@ use tokio::{
 
 pub mod mapper;
 pub mod parser;
+pub mod permissions;
 pub mod rpc;
 
+use permissions::ApprovalKind;
 use rpc::{Incoming, RpcClient};
 
 /// What Codex is told this client is.
@@ -148,10 +151,13 @@ pub async fn init(
     // Started with no ingest so the lines arriving during the handshake are
     // routed but drawn as nothing — there is no session to draw them into yet.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let pending: PendingPermissions = Default::default();
+
     let reader = ReaderHandles {
         client: client.clone(),
         session_id: session_id.to_string(),
         session_cwd: session_cwd.to_string(),
+        pending: pending.clone(),
         app: app.clone(),
     };
 
@@ -226,7 +232,7 @@ pub async fn init(
         events,
         seq,
         status,
-        pending_permissions: Default::default(),
+        pending_permissions: pending,
         queued,
     })
 }
@@ -337,14 +343,24 @@ fn thread_id_from(answer: &Value) -> Option<String> {
 /// variant`. Verified against 0.148.0-alpha.21.
 ///
 /// Codex splits into "when do I ask" and "what may I touch" where Claude has one
-/// mode, so this is a widening rather than a rename. `Plan` is the loose fit —
-/// Codex has no plan mode, so it becomes read-only-and-ask, which is what plan
-/// mode is for.
+/// mode, so this is a widening rather than a rename. Codex's own UI presents
+/// three combinations, and Dray's stances land on them:
+///
+/// - **Ask for approval** — `Manual`. Every command asks.
+/// - **Approve for me** — `Auto`. Runs inside the sandbox, asks to leave it.
+/// - **Full access** — `BypassPermissions`. No sandbox, no asking.
+///
+/// `DontAsk` has no Codex label of its own: it is "approve for me" with the
+/// asking turned off, still bounded by the same sandbox. `Plan` is the loose
+/// fit — Codex has no plan mode, so it becomes read-only-and-ask, which is what
+/// plan mode is for — and the composer hides it for Codex rather than offering
+/// a stance Codex does not name. It is kept here because a spawned session
+/// inherits its parent's stance, so one can still arrive.
 fn approval_for(mode: ApprovalPolicy) -> (&'static str, &'static str) {
     match mode {
         ApprovalPolicy::Plan => ("on-request", "read-only"),
         ApprovalPolicy::Manual => ("untrusted", "workspace-write"),
-        ApprovalPolicy::AcceptEdits | ApprovalPolicy::Auto => ("on-request", "workspace-write"),
+        ApprovalPolicy::Auto => ("on-request", "workspace-write"),
         ApprovalPolicy::DontAsk => ("never", "workspace-write"),
         ApprovalPolicy::BypassPermissions => ("never", "danger-full-access"),
     }
@@ -355,6 +371,8 @@ struct ReaderHandles {
     client: RpcClient,
     session_id: String,
     session_cwd: String,
+    /// Shared with the session, which is what answers the cards this raises.
+    pending: PendingPermissions,
     app: AppHandle,
 }
 
@@ -404,33 +422,51 @@ async fn read_stdout(
             Incoming::Notification { method, params } => (method, params),
 
             // Every server request blocks the turn until it is answered, so
-            // silence is not neutral. Slice 1 runs with `approvalPolicy: never`
-            // so none should arrive; one that does is refused rather than
-            // ignored, which keeps the turn moving and files the gap.
-            Incoming::Request { id, method, .. } => {
-                record_failure(&handles.session_id, "unsupported_request", &method, &line).await;
-
-                // An approval gets a real decision, not a protocol error.
-                //
-                // Until the permission card is wired there is nobody to ask, and
-                // the two ways of saying so are not equivalent: a JSON-RPC error
-                // leaves it to the server what to do with a request it cannot
-                // resolve, where an explicit decline is a defined outcome that
-                // ends the item as `declined` and draws as a failed tool call.
-                // Fails closed, which is the only safe direction — the reader
-                // picked a stance that asks, and nothing may run unasked.
-                let answered = if method.contains("requestApproval") {
-                    handles
-                        .client
-                        .respond(id, json!({"decision": "decline"}))
-                } else {
-                    handles.client.respond_err(
-                        id,
-                        -32601,
-                        "This client cannot answer that request yet.",
-                    )
+            // silence is not neutral: it stalls the session until Codex's own
+            // deadline, exactly as an unanswered `can_use_tool` does.
+            Incoming::Request { id, method, params } => {
+                let kind = match method.as_str() {
+                    "item/commandExecution/requestApproval" => Some(ApprovalKind::Command),
+                    "item/fileChange/requestApproval" => Some(ApprovalKind::FileChange),
+                    _ => None,
                 };
-                let _ = answered;
+
+                match kind {
+                    Some(kind) => {
+                        // The card is the answer, and the reply goes out when
+                        // the user presses a button — so nothing is written
+                        // here. An entry left in the map with no card raised is
+                        // the one way this hangs, which is why a request that
+                        // cannot be read is declined below rather than dropped.
+                        if let Err(err) =
+                            raise_permission(&handles, &mut mapper, id, kind, params).await
+                        {
+                            record_failure(
+                                &handles.session_id,
+                                "unsupported_request",
+                                &err.to_string(),
+                                &line,
+                            )
+                            .await;
+                            let _ = handles.client.respond(id, json!({"decision": "decline"}));
+                        }
+                    }
+                    None => {
+                        record_failure(&handles.session_id, "unsupported_request", &method, &line)
+                            .await;
+
+                        // Not an approval, so there is nothing to put to the
+                        // user and nothing honest to answer. A protocol error
+                        // leaves the server to decide what to do about a
+                        // request this build cannot serve, which is better than
+                        // a made-up success.
+                        let _ = handles.client.respond_err(
+                            id,
+                            -32601,
+                            "This client cannot answer that request yet.",
+                        );
+                    }
+                }
                 continue;
             }
 
@@ -583,6 +619,69 @@ pub async fn interrupt_turn(thread: &Thread) -> Result<()> {
     Ok(())
 }
 
+/// Turns one approval request into the card that answers it.
+///
+/// Registered before it is emitted, so a button pressed the instant the card
+/// draws finds the entry waiting. The reply is not written here: it goes out
+/// from [`Session::respond_permission`](crate::session::Session::respond_permission)
+/// when the user picks, and until then Codex is blocked — the same bargain
+/// `can_use_tool` makes.
+async fn raise_permission(
+    handles: &ReaderHandles,
+    mapper: &mut mapper::Mapper,
+    rpc_id: i64,
+    kind: ApprovalKind,
+    params: Value,
+) -> Result<()> {
+    let request: parser::ApprovalRequest = serde_json::from_value(params)?;
+    let (pending, options) = permissions::pending_for(&request, kind, rpc_id);
+
+    // The id the frontend answers with. Codex's is a number and Dray's whole
+    // permission vocabulary is keyed by string, so it is spelled once here.
+    let request_id = rpc_id.to_string();
+
+    handles
+        .pending
+        .lock()
+        .expect("pending permissions mutex poisoned")
+        .insert(request_id.clone(), pending);
+
+    let event = mapper.synthesize(AgentEventPayload::PermissionRequested {
+        request_id,
+        tool_use_id: request.item_id.clone(),
+        tool_name: kind.tool_name().to_string(),
+        display_name: Some(kind.display_name().to_string()),
+        title: request.command.clone(),
+        description: request.reason.clone(),
+        // Carried on the card itself rather than left to the tool row: the row
+        // may be collapsed inside a finished group, and a card asking about
+        // something invisible is a card nobody can answer.
+        //
+        // Field names are the card's, not Codex's: it reads `command` and
+        // `path` off raw input whatever tool carried them. A file-change
+        // request names no file — only the root it wants — and that root is the
+        // subject of the question, so it goes in the slot the card will draw.
+        input: json!({
+            "command": request.command,
+            "cwd": request.cwd,
+            "path": request.grant_root,
+        }),
+        blocked_path: request.grant_root.clone(),
+        decision_reason: request.reason.clone(),
+        decision_reason_type: None,
+        // Codex names no subagent on an approval, and it has none to name yet.
+        agent_id: None,
+        options,
+    });
+
+    // Emitted, never logged — the request can only be answered by the child
+    // that asked, and no child survives a restart, so a persisted card would
+    // come back with buttons that cannot work.
+    handles.app.emit("agent_event", &event)?;
+
+    Ok(())
+}
+
 /// Files a line this build could not use, with the raw line beside it.
 ///
 /// Same file and same stages as Claude Code's, because the question it answers
@@ -608,7 +707,7 @@ mod tests {
         for mode in [
             ApprovalPolicy::Plan,
             ApprovalPolicy::Manual,
-            ApprovalPolicy::AcceptEdits,
+            ApprovalPolicy::Auto,
             ApprovalPolicy::Auto,
             ApprovalPolicy::DontAsk,
             ApprovalPolicy::BypassPermissions,
@@ -706,6 +805,63 @@ mod tests {
                 "{name} carries unhandled methods: {unknown:?}"
             );
         }
+    }
+
+    /// The captured approval, built into a card and answered, end to end.
+    ///
+    /// The capture is the point: this request offered `accept`, an execpolicy
+    /// amendment and `cancel` — and no `decline` — so a card built only from
+    /// what the server named would have had nothing to refuse with. The reply
+    /// shape is pinned here too, since a wrongly shaped one is ignored in
+    /// silence and shows up as a turn that never resumes.
+    #[test]
+    fn the_captured_approval_becomes_a_card_and_an_answer() {
+        let request = captured_approval();
+        let (pending, options) = permissions::pending_for(&request, ApprovalKind::Command, 0);
+
+        assert!(
+            options
+                .iter()
+                .any(|o| o.behavior == crate::events::PermissionBehavior::Allow),
+            "nothing on the card would let the command run"
+        );
+        let deny = options
+            .iter()
+            .find(|o| o.behavior == crate::events::PermissionBehavior::Deny)
+            .expect("a card with no refusal cannot be answered honestly");
+
+        // What the button sends, in the envelope `respond` puts around it.
+        let decision = pending.options[&deny.id].decision.clone().unwrap();
+        assert_eq!(json!({"decision": decision}), json!({"decision": "cancel"}));
+
+        // And the allow carries the server's own word back, not ours.
+        let allow = options
+            .iter()
+            .find(|o| o.kind == crate::events::PermissionOptionKind::Once)
+            .unwrap();
+        assert_eq!(
+            pending.options[&allow.id].decision.as_ref().unwrap(),
+            &json!("accept")
+        );
+    }
+
+    /// Pulls the one real `requestApproval` out of the capture. A request is not
+    /// a notification, so `replay` skips it and this reads it directly.
+    fn captured_approval() -> parser::ApprovalRequest {
+        for line in COMMAND_APPROVAL.lines().filter(|l| !l.trim().is_empty()) {
+            let record: Value = serde_json::from_str(line).unwrap();
+            if record["dir"] != "in" {
+                continue;
+            }
+            let message: Value = serde_json::from_str(record["line"].as_str().unwrap()).unwrap();
+            if message.get("method").and_then(Value::as_str)
+                == Some("item/commandExecution/requestApproval")
+            {
+                return serde_json::from_value(message["params"].clone())
+                    .expect("the captured approval parses");
+            }
+        }
+        panic!("the capture holds no approval request");
     }
 
     /// The smallest complete turn has to produce a turn that opens, text that

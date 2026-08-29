@@ -35,17 +35,33 @@ pub struct PendingRequest {
     pub tool_use_id: String,
     pub tool_name: String,
     /// The call's arguments, echoed back on an allow. Never edited — a host may
-    /// rewrite them here, and nothing in this app does.
+    /// rewrite them here, and nothing in this app does. `Null` for a harness
+    /// that rebuilds nothing from the answer, which Codex does not.
     pub input: Value,
     /// Keyed by [`PermissionOption::id`].
     pub options: HashMap<String, ResolvedOption>,
+    /// The JSON-RPC id the answer has to name, for a harness that asked as a
+    /// peer rather than over a control channel.
+    ///
+    /// `None` is Claude Code, whose reply is a `control_response` addressed by
+    /// the request id this entry is filed under. Held here rather than worked
+    /// out at reply time because only the reader that took the request knows
+    /// it — and an answer aimed at the wrong id is ignored in silence on both
+    /// protocols.
+    pub rpc_id: Option<i64>,
 }
 
 /// A button, plus the wire payload picking it sends.
+///
+/// The two payload fields are one per harness and exactly one is ever set:
+/// Claude composes a verdict out of `updates` at reply time, where Codex was
+/// handed its answer by the server and carries it back whole.
 #[derive(Debug, Clone)]
 pub struct ResolvedOption {
     pub option: PermissionOption,
     pub updates: Vec<PermissionUpdate>,
+    /// Codex's own decision value, echoed back untouched.
+    pub decision: Option<Value>,
 }
 
 impl PendingRequest {
@@ -65,6 +81,9 @@ impl PendingRequest {
             tool_name: request.tool_name.clone(),
             input: request.input.clone(),
             options,
+            // Claude answers on the control channel, addressed by the request
+            // id this entry is already filed under.
+            rpc_id: None,
         };
 
         (pending, offered)
@@ -80,6 +99,7 @@ impl PendingRequest {
             tool_name: request.tool_name.clone(),
             input: request.input.clone(),
             options: HashMap::new(),
+            rpc_id: None,
         }
     }
 }
@@ -101,6 +121,7 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
             behavior: PermissionBehavior::Allow,
         },
         updates: Vec::new(),
+        decision: None,
     }];
 
     for (index, suggestion) in request.permission_suggestions.iter().enumerate() {
@@ -161,6 +182,7 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
                 behavior,
             },
             updates: vec![suggestion.clone()],
+            decision: None,
         });
     }
 
@@ -172,6 +194,7 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
             behavior: PermissionBehavior::Deny,
         },
         updates: Vec::new(),
+        decision: None,
     });
 
     options

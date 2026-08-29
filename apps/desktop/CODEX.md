@@ -135,17 +135,60 @@ creation-time only, like the project and branch pickers: the harness *is* the
 child process. The model list follows your pick, since a Codex model and a
 Claude model are not interchangeable.
 
+## Permission modes, and the second knob
+
+Claude has one setting: when does it ask you. Codex has two, and they are
+independent:
+
+- **`approvalPolicy`** — when it asks. `untrusted` / `on-request` / `never`.
+- **`sandbox`** — what a command is *allowed to do*, enforced by the OS whether
+  or not anyone was asked. `read-only` / `workspace-write` /
+  `danger-full-access`.
+
+The sandbox is not a policy the model can talk its way past — commands run
+inside it, so a write outside the workspace fails outright. That is why
+"approve for me" works the way it does: the agent runs freely *inside* the
+sandbox and only stops to ask when it needs to step outside.
+
+Codex's own UI names three combinations. Dray's stances land on them:
+
+| Dray | Codex | wire |
+|---|---|---|
+| Ask every time | Ask for approval | `untrusted` + `workspace-write` |
+| Auto | Approve for me | `on-request` + `workspace-write` |
+| Bypass permissions | Full access | `never` + `danger-full-access` |
+
+`Don't ask` has no Codex label of its own — it is "approve for me" with the
+asking turned off, still inside the same sandbox. **Plan is hidden for Codex**:
+it maps onto read-only-and-ask, which is close, but it is a stance Codex never
+names. It is still mapped, because a spawned session inherits its parent's.
+
+`acceptEdits` was a sixth Dray stance and is gone. It applied edits without
+asking while still asking about commands — a promise too narrow to fit on a
+button beside Auto. Sessions started under it read back as Auto; the alias in
+`ApprovalPolicy` is what keeps their index entries loading.
+
+**The card is wired.** When Codex asks, the same permission card Claude raises
+appears, and the buttons are **the server's own**: Codex sends
+`availableDecisions`, and each button carries one of those values back
+untouched. A decision this build cannot put into words is dropped rather than
+drawn as a button nobody can predict.
+
+One thing the real capture taught: a request can offer **no refusal at all**.
+The captured one offered `accept`, an execpolicy amendment and `cancel` — so a
+card built only from what was named would have had no way to say no. `decline`
+is always a legal answer, so it is added when the server names none.
+
 ## What doesn't, yet
 
-**Approvals are the big one.** The permission card isn't wired to Codex, so when
-Codex asks to run something, Dray **declines it**. That's deliberate and it
-fails closed — nothing runs unasked — but it means a Codex session in a stance
-that asks (`auto`, `manual`, `plan`) will have its commands refused. Sessions in
-`dontAsk` or `bypassPermissions` run without asking and work fully.
-
-Also not wired: fork for Codex (it refuses before it copies anything, rather
+Not wired: fork for Codex (it refuses before it copies anything, rather
 than forking into the parent's own conversation), subagents, MCP tool calls,
 web search, and images in prompts.
+
+A card left on screen when its turn is interrupted stays there — Codex sends no
+"never mind" for an approval the way Claude's `control_cancel_request` does, so
+the buttons answer a turn that has gone. Harmless (the reply is ignored) but
+untidy.
 
 Model, effort and permission mode **do** change mid-session, by replacing the
 child rather than steering it. Codex takes model, effort and approval policy as

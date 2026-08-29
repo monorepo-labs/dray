@@ -12,29 +12,46 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { ApprovalPolicy } from "@/types/events";
+import type { ApprovalPolicy, Harness } from "@/types/events";
 
 /// Listed top-down as the menu renders them, which puts `auto` — the default and
 /// the most-used — nearest the trigger at the bottom of the screen.
 ///
-/// Two omissions: `default`, which the CLI reports but its flag rejects, and
+/// Three omissions: `default`, which the CLI reports but its flag rejects;
 /// `dontAsk`, which overlaps `auto` closely enough that offering both only
-/// invites picking the wrong one.
+/// invites picking the wrong one; and `acceptEdits`, which was here and was
+/// removed — it applied edits without asking while still asking about
+/// commands, a promise too narrow to fit on a button beside `auto`.
 const MODES: { id: ApprovalPolicy; label: string }[] = [
   { id: "bypassPermissions", label: "Bypass permissions" },
   { id: "manual", label: "Ask every time" },
-  { id: "acceptEdits", label: "Accept edits" },
   { id: "plan", label: "Plan" },
   { id: "auto", label: "Auto" },
 ];
 
+/// Codex has no plan mode. Its own three stances are ask / approve-for-me /
+/// full access, and `plan` maps onto read-only-and-ask — close, but a stance
+/// Codex never names, so offering it would promise a mode it does not have.
+/// Hidden rather than disabled: a dead entry in a four-item menu reads as a bug.
+const HIDDEN_BY_HARNESS: Partial<Record<Harness, ApprovalPolicy[]>> = {
+  codex: ["plan"],
+};
+
 export default function PermissionSelector({
+  harness,
   value,
   onChange,
 }: {
+  harness: Harness;
   value: ApprovalPolicy;
   onChange: (mode: ApprovalPolicy) => void;
 }) {
+  const modes = MODES.filter(
+    (m) => !(HIDDEN_BY_HARNESS[harness] ?? []).includes(m.id),
+  );
+  // Read off the full list, not the filtered one: a session can be on a stance
+  // this harness does not offer — a spawned one takes its parent's — and a
+  // trigger reading "Permissions" would say less than the stance it is on.
   const selected = MODES.find((m) => m.id === value);
 
   return (
@@ -63,7 +80,7 @@ export default function PermissionSelector({
           value={value}
           onValueChange={(v) => onChange(v as ApprovalPolicy)}
         >
-          {MODES.map((mode) => (
+          {modes.map((mode) => (
             <DropdownMenuRadioItem
               key={mode.id}
               value={mode.id}

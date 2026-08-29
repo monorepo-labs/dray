@@ -782,9 +782,15 @@ pub enum ApprovalPolicy {
     Plan,
     /// Prompt per action.
     Manual,
-    /// Edits apply without prompting; other tools still ask.
-    AcceptEdits,
+    /// Prompt per action, but only where the sandbox cannot answer for itself.
+    ///
+    /// `acceptEdits` was a sixth variant and was removed: it auto-approved
+    /// edits while still asking about commands, which is a narrower promise
+    /// than this one and a hard difference to state on a button. The alias is
+    /// how sessions started under it still read — as this, the nearest stance
+    /// that exists — rather than failing the whole index entry.
     #[default]
+    #[serde(alias = "acceptEdits")]
     Auto,
     DontAsk,
     /// Every permission check bypassed.
@@ -798,7 +804,6 @@ impl ApprovalPolicy {
         match self {
             ApprovalPolicy::Plan => "plan",
             ApprovalPolicy::Manual => "manual",
-            ApprovalPolicy::AcceptEdits => "acceptEdits",
             ApprovalPolicy::Auto => "auto",
             ApprovalPolicy::DontAsk => "dontAsk",
             ApprovalPolicy::BypassPermissions => "bypassPermissions",
@@ -956,7 +961,6 @@ mod tests {
         for p in [
             ApprovalPolicy::Plan,
             ApprovalPolicy::Manual,
-            ApprovalPolicy::AcceptEdits,
             ApprovalPolicy::Auto,
             ApprovalPolicy::DontAsk,
             ApprovalPolicy::BypassPermissions,
@@ -964,6 +968,18 @@ mod tests {
             let json = serde_json::to_string(&p).unwrap();
             assert_eq!(json, format!("\"{}\"", p.as_arg()));
         }
+    }
+
+    /// `acceptEdits` was a settable stance and is not one any more. Sessions
+    /// started under it are on disk, and one index entry that fails to
+    /// deserialize takes the whole file with it — so the name has to keep
+    /// reading, as the nearest stance that still exists.
+    #[test]
+    fn a_retired_stance_still_reads_back() {
+        let read: ApprovalPolicy = serde_json::from_str("\"acceptEdits\"").unwrap();
+        assert_eq!(read, ApprovalPolicy::Auto);
+        // One direction only: nothing writes the old name again.
+        assert_eq!(serde_json::to_string(&read).unwrap(), "\"auto\"");
     }
 
     /// The CLI reports `default` in `system/init` even though its flag won't
