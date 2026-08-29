@@ -83,7 +83,7 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it. claude_code today.
+    /// Which agent runs it: claude_code or codex.
     #[arg(long)]
     harness: Option<String>,
 

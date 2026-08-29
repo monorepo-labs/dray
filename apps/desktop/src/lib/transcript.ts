@@ -1,5 +1,5 @@
 import { toolSummary } from "@/lib/tools";
-import type { AgentEvent, ToolResult, Usage } from "@/types/events";
+import type { AgentEvent, FileEdit, ToolResult, Usage } from "@/types/events";
 
 export type SubagentRun = {
   /// The spawning tool call's id — what the envelope correlates on, and the key
@@ -188,7 +188,6 @@ const RENDERS = new Set([
   "assistant_text",
   "reasoning",
   "tool_call_started",
-  "file_edits",
   "error",
   "context_compacted",
   "rate_limited",
@@ -513,6 +512,15 @@ export function buildTranscript(
   subagents: SubagentRun[];
   subagentById: Map<string, SubagentRun>;
   resultByCallId: Map<string, ToolResult>;
+  /// The edits a call made, keyed by that call.
+  ///
+  /// Codex reports a patch as two events — the tool call and a `file_edits`
+  /// carrying the real unified diff — and drawing both put the filename on
+  /// screen twice, once as "Edited <path>" and again as a separate expander
+  /// with the bare wire word "update" at the end of it. They are one action, so
+  /// they are one row: the call draws the header and this is what it opens
+  /// onto. The join is `call_id`, which `file_edits` has always carried.
+  editsByCallId: Map<string, FileEdit[]>;
   /// Consent requests and questions still waiting on the user, oldest first.
   ///
   /// Lifted out of the turns on purpose. A subagent's request would otherwise
@@ -524,6 +532,7 @@ export function buildTranscript(
   const events = [...source].sort(bySeq);
 
   const resultByCallId = new Map<string, ToolResult>();
+  const editsByCallId = new Map<string, FileEdit[]>();
   // Calls with no result yet, and the ones a later event proved will never get
   // one. Only the second is decided during the walk — a result routinely lands
   // many events after its call, so "still open" is a running state, not a
@@ -541,6 +550,11 @@ export function buildTranscript(
     if (event.payload.type === "tool_call_completed") {
       open.delete(event.payload.callId);
       resultByCallId.set(event.payload.callId, event.payload.result);
+    }
+    // A patch reworked mid-turn sends its edits again under the same call id;
+    // the newest is the one that describes the file as it now stands.
+    if (event.payload.type === "file_edits" && event.payload.callId) {
+      editsByCallId.set(event.payload.callId, event.payload.edits);
     }
     // A new prompt closes the book on everything before it: whatever the agent
     // was mid-way through, this turn is not going to finish it. Without this the
@@ -656,6 +670,7 @@ export function buildTranscript(
     subagents: [...subagentById.values()].reverse(),
     subagentById,
     resultByCallId,
+    editsByCallId,
     pendingAsks,
   };
 }

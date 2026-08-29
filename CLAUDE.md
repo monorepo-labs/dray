@@ -715,6 +715,8 @@ Hover-pause drop in `done` and have to: past that press no target left to protec
 
 Two build now run side by side and **share `~/.dray`** — same index, same session logs. `INDEX_LOCK` = in-process mutex, so cross-process write = last-writer-wins on whole file. Not split, deliberately: separate dev store hide exactly session reader testing against. Live with it or split store, don't add file lock for it.
 
+**And older build don't merely lose write, it downgrade schema.** Index rewritten whole, so build reading it round-trip every entry through *its own* struct and drop silently every field it cannot represent. Measured: released 0.8.2 open beside dev build erased `thread_id` from every Codex session moment after `thread/start` wrote it, and resume then answer "this session has no Codex thread to resume" for work still perfectly alive — 214 entry on disk, all carrying exactly 0.8.2's nineteen key. File lock fix none of this: serialized write drop field just as thoroughly. `SessionIndexItem.unknown` (`#[serde(flatten)]`) = what actually fix it, by carrying unknown key through untouched. It protect only version carrying it, so it go in **before** field it save, never after — and running released app beside dev one stay a thing to avoid until every shipped build have it.
+
 **Boundary = directory's `0700`, not socket's `0600`.** `bind` apply process umask, so socket land world-writable under permissive one and stay that way until chmod run moment later — window another local account connect through and reach session creation unauthenticated. Measured: umask 022 give 0755, umask 000 give 0777. Directory cannot have that window, since connecting need search permission on every dir in path — so `0700` settle it *before socket exist*. Socket's own `0600` stay as second line, not only one.
 
 **`~/.dray` narrowed in `get_home_app_dir`, and that fix privacy bug too.** It was `0755`, so every transcript — holding whole files agent read and wrote — readable by any local account.
@@ -948,6 +950,94 @@ keyboard alike.
 row until next render. So `restoreSessionControls` take *item* not id, and both
 path call it. Without it fork open under whatever model composer last left on
 rather than one it inherited.
+## A missing agent CLI
+
+**Answered before the reader writes a prompt, and refused before a session
+exists.** `agent_availability` reports which harnesses can run here; the picker
+reads it on mount and marks the one that can't, and `send_msg` checks again in
+the pre-flight block under `if is_new_session`.
+
+That ordering is the whole feature. The index entry lands **before** spawn on
+purpose, so a session failing for a reason nobody predicted stays visible — but
+a missing CLI is predictable, and taken through that path it leaves an empty row
+pointing at an agent that can never start, which every retry fails against
+identically. Refusing earlier means there is nothing to delete, nothing to
+select, and no retry choreography: the composer never unmounts, `useDraft` still
+holds the text under the new-task key, and retry is pressing send again.
+
+**"Is it installed" is read off the cached path, not probed again.**
+`binpath::agent_available` calls the ordinary resolver and asks
+`is_absolute()` — a successful resolution is always absolute, and the bare-name
+fallback both resolvers end at is the only relative answer either can give. Free
+after the first call, which matters because the *failing* call is the expensive
+one (it ends in a login shell reading the whole rc chain). For Codex it covers
+the stale binary for free: one with no `app-server` subcommand never satisfies
+`speaks_app_server`, so it falls through to the bare name exactly like an absent
+one — and "installed but undriveable" is the same answer to the reader.
+
+**Marked, not disabled.** A disabled mark leaves nowhere to say why: a tooltip
+is the only slot left, and the cure is two lines and two buttons. Picking the
+agent is what draws the notice, so the mark invites finding out. Drawn as a dot
+rather than a colour, since the marks are brand art and recolouring one says
+"Codex" louder than it says "missing".
+
+**Notice, not error.** `ChatInput` takes it as its own `notice` slot beside
+`error`, because the two say different things — `error` reports something that
+was attempted and failed, this reports that nothing can be attempted yet, and
+only the second has a cure to offer, which is why it is a node and not a string.
+It gates `canSend` *and* returns early from `submit`: Enter has its own path in,
+so a disabled button is not the guard.
+
+**Dray installs nothing** — it names the command and links the page, the same
+call the CLI already makes for itself. `install_command` is each vendor's own
+install script (`curl -fsSL https://claude.ai/install.sh | bash`, and Codex's
+equivalent), not a route Dray picked on its behalf: running someone else's
+script for them is still installing it for them, and a failure inside it is
+still ours to debug where a failure on the vendor's page is theirs to follow.
+The link sits *beside* the copy button, not behind it, for the reader without
+`curl` or wary of piping one into a shell.
+
+Known cost: `binpath`'s cache never invalidates, so a CLI installed while the
+app runs still reads as missing until restart — the same bargain `gh` makes. It
+would have to be made clearable the day an Install button lands.
+
+## Demo pages
+
+**A demo is its own page, never a flag on the real one, and gone once its
+question is answered.** The pattern, for whichever surface needs it next: an
+HTML entry at the package root (`demo.html`) loading its own `main.tsx`. Vite's
+dev server serves any root HTML, so it is reachable under `pnpm dev`;
+`vite.config.ts` names no extra `rollupOptions.input`, so `pnpm build` emits
+`index.html` alone and nothing there can reach a shipped bundle. Delete the
+whole thing — the HTML entry and its `src/demo/` tree — once it has done its
+job; it is scaffolding for showing someone a behaviour, not a fixture worth
+keeping alive.
+
+Gating on a query flag was the rejected alternative: it puts demo-only branches
+inside production code paths, where they can fire for a real reader and have to
+be reasoned about on every later edit of that surface.
+
+A demo mounts the **real** components with faked inputs — not a second
+implementation of them — so a regression in any of them shows up on the page.
+Any test seam built only for the demo's sake (a module-level setter, say) goes
+with it; leaving one behind after the demo is deleted is a route into
+production state that nothing exercises any more.
+
+**A demo page has to bring `App`'s own providers with it.** `TooltipProvider`
+wraps the whole app, so mounting a control with a tooltip in it —
+`ModelSelector`, for one — throws `Tooltip must be used within TooltipProvider`
+without one. That failure is a blank page and an empty `#root`: React unmounts
+the tree, and nothing in the dev server's output says so.
+
+**And a browser is not a webview.** `getCurrentWebview()` and
+`getCurrentWindow()` **throw** outside Tauri rather than rejecting, so an
+unguarded call in an effect takes the tree down the same way. `useDockBadge` and
+`useFullscreen` already carry a `try` for it; `ChatInput`'s drag-and-drop
+listener did not, and the fix stayed after the demo that surfaced it was
+deleted — it broke plain `pnpm dev` for the composer too, whether or not a demo
+page is mounted. Reach for the guard whenever an effect touches
+`@tauri-apps/api` synchronously — `invoke` is safe, since it rejects.
+
 ## Persistence
 
 Everything live under `~/.dray/` ([store.rs](apps/desktop/src-tauri/src/store.rs), [projects.rs](apps/desktop/src-tauri/src/projects.rs)) .
@@ -982,6 +1072,8 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 ## Settings
 
 **One dialog, three group** ([SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)). Gear in sidebar's titlebar strip, ⌘, from anywhere. **Appearance** holding theme picker and mode segments, **Privacy** holding analytics opt-out, **Feedback** holding two link out through `openUrl`.
+
+**Floating surface take glass, raised one take veil, and notice take neither.** `--card` become 5.5% white veil under transparency — right for surface sitting *in* page. Menu, dialog and tooltip float *over* it, so same veil there composite onto backdrop and leave page with their text on top; `--popover` take `--veil-float` instead, wash of its own colour (62% dark, 74% light) plus `backdrop-blur-xl` on every floating frame. Low number load-bearing: card transmit ~95% of what behind it, where menu sit over backdrop already at 80%, so 86% wash put ~3% of desktop through and read as slab. Blur = what keep that readable, and cost nothing where surface opaque. `--composer` take same pair — it float at window's edge over transcript scrolling under it. Both were opaque fill once and **both reason fixed at source**: `HandoffRow` clip itself rather than let composer occlude it, and blur make alert readable over unfilled sidebar. All three alias `--surface-card`, so palette bind them and transparency block part them.
 
 **Theme carry own background, and separate axis for it was built then removed.** `--composer` must stay opaque fill (handoff row parked behind it), so backdrop picked apart from palette leave grey slab along window's bottom edge under any tinted background — and reaching it mean overriding palette token, which end the independence that justified split. Background = part of what theme *is*.
 
@@ -1212,8 +1304,7 @@ Several things deliberately unfinished — don't mistake for bugs:
   **Max come from that same map's `contextWindow`**, so no window hardcoded per model and million-token model need no code; mapper remember `init`'s `model` to index it, since subagent on second model put two entries in it. Compaction clear tracked reading, so zeroed `result` landing _after_ boundary can't carry pre-compaction figure over `post_tokens` just published.
 
 - **Session status = state machine in `session.rs`, and it follow the turn alone.** `StatusTracker`: send or `init` → `in_progress`; `result` → `completed`, whatever background tasks outstanding. Background subagent run past `result` and CLI open promptless `init` later to report findings — that `init` reopen `in_progress` on own, so nothing gained by holding. Holding *was* the rule and it hung every session running a dev server, `Bash(run_in_background)` or `Monitor` — all `local_bash` (captured in `background_bash_monitor.jsonl`), and none ever end on own — until reader clicked Stop. Task set recorded beside status for two thing only: `has_outstanding_work()` (model call open *or* tasks outstanding) guard child-replacing paths — effort respawn, update install — and Stop's `stop_task` fan-out name each id. Fork **not** among them: it replace no child, so it guard on `turn_in_flight()` alone (see _Forking a session_). Frontend keep tasks in live `tasksBySession` map, not off log: task outlive its turn, so `busy` no longer say whether log's last set current. `read_stdout` mint empty `background_tasks_changed` when child exit, since CLI cannot announce own death and last set would stand forever — emitted, **never logged**: live map need no closing entry, and it run after delete removed the file, where append would recreate it. Turn ending with task open keep its asks (task's subagent may be one asking); drain with no turn running clear them. `buildTranscript` take live task ids and keep spawning call pending while its task live — join = `SubagentRun.taskId`, since `task_id` ≠ `tool_use_id`. `completed` mean finished _and unread_: frontend clear it to `idle` when user view session (`mark_session_idle`), and persisted `in_progress` reset to `idle` at startup since no child survive restart. Status changes reach frontend as `session_status` events — derived state, never written to `.jsonl` log.
-- **Codex = stub.** `Harness::Codex` parse from frontend, but `Session::init` bail on it.
-- **Composer toolbar = session's control surface.** [composer/](apps/desktop/src/components/composer) hold one component per control; `ComposerToolbar` hide project, branch, worktree toggle once session exist. `ChatInput` take row as `ReactNode` so it keep owning layout and measurement and nothing else.
+- **Codex run, over `codex app-server`, and it partial.** Session spawn, stream, resume and Stop; transcript draw message, reasoning, shell call and file diff; context ring fill. **Approval wired**, and option = server's own: Codex send `availableDecisions` and each button carry one back untouched, same bargain Claude's `permission_suggestions` make. Real capture offer *no* refusal at all (`accept`, amendment, `cancel`), so `decline` added where server name none — card with no way to say no cannot be answered honestly. Codex split stance into two setting where Claude have one — `approvalPolicy` = when it ask, `sandbox` = what command may touch, OS-enforced — so Dray's mode widen into pair, and composer hide Plan there since Codex name no plan mode. `acceptEdits` removed from Dray outright (Claude included): it apply edit without asking while still asking about command, promise too narrow for button beside Auto; `#[serde(alias)]` keep old index entry loading as `auto`. Fork refuse outright, before it copy anything. Image prompt absent; model, effort and mode change by respawn, since stance = approval policy *plus* sandbox and only first have turn-level form. Worktree work by other route — Codex have no `-w`, so Dray make tree itself at base CLI would have resolved, same path `dray new --from` take. **Read [CODEX.md](apps/desktop/CODEX.md) first** — plain-language, and it carry four thing that bite: `tokenUsage.last` = occupancy where `total` = cumulative (same trap `result.usage` set), stale `codex` on PATH with no `app-server` subcommand answer nothing for 30s, `turn/interrupt` refuse without `turnId` so Stop must track running turn, and `thread/start` drop `effort` in silence so it ride every `turn/start` instead. Deep design, rejected alternative and staging = [CODEX-PLAN.md](apps/desktop/CODEX-PLAN.md).- **Composer toolbar = session's control surface.** [composer/](apps/desktop/src/components/composer) hold one component per control; `ComposerToolbar` hide project, branch, worktree toggle once session exist. `ChatInput` take row as `ReactNode` so it keep owning layout and measurement and nothing else.
 - **`isNewTask` = composer's two presentations, not one flag per effect.** Before session exist composer stand alone mid-window, so [ChatInput](apps/desktop/src/components/ChatInput.tsx) drop card's fill, border, padding, move toolbar above input, swap placeholder, replace send button with "Press ⏎ to send" hint. Dropping button safe only because Enter-to-send live in `onKeyDown` rather than in that button being form's submitter — make it submitter again and empty state lose its send path. `AppShell` have own `centered` prop for surrounding geometry. Horizontal alignment hand-tuned to single edge: toolbar's `-ml-2.5` cancel its `px-1` plus ghost button's 6px icon inset so `+` _glyph_ land on text edge. Change that button's size or variant and offset have to move with it.
 - **Draft belong to session, not to composer.** [useDraft](apps/desktop/src/hooks/useDraft.ts) key unsent text by session id, with `null` for new task. Store **module-level, and ref would not do**: `AppShell` render footer at different position when `centered`, so moving between empty state and session unmount `ChatInput` and mount fresh one — losing draft on exactly switch most likely to be made. Writes go through to map as they happen, which make switch and unmount same case. Nothing persisted — restoring draft a week later read as composer having text in it for no reason. Caret reset to end on every switch, because picker state left over describe text this composer never had caret in.
 - **Slash command = prompt, not protocol.** `/compact`, custom command, skill, plugin's namespaced `railway:deploy` — every one travel as ordinary prompt text on same stdin line as prose, and CLI expand it on own. So _sending_ one needed no new code, and nothing new arrive on wire either. Verified live: custom `/hello world` ran ordinary turn, and unknown `/nope` came back as `assistant` text block plus `result` with no model call in between — so typo cost round trip, not error path.

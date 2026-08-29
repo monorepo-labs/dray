@@ -181,6 +181,18 @@ pub async fn archive_result_images(session_id: &str, images: &mut [ImageRef]) {
     }
 
     for image in images.iter_mut() {
+        // A picture named by path rather than carried as bytes — Codex's
+        // `imageView` hands over the file it looked at. Copied for the same
+        // reason the decoded ones are, plus one this side cannot ignore: the
+        // asset protocol is scoped to `~/.dray/attachments`, so a row pointing
+        // anywhere else does not merely go stale, it refuses to load at all.
+        if image.url.is_none() {
+            if let Some(src) = image.path.clone() {
+                archive_image_file(session_id, &src, image).await;
+            }
+            continue;
+        }
+
         let Some(url) = image.url.as_deref() else {
             continue;
         };
@@ -214,6 +226,37 @@ pub async fn archive_result_images(session_id: &str, images: &mut [ImageRef]) {
             }
             Err(e) => eprintln!("tool image not archived: {e}"),
         }
+    }
+}
+
+/// Copies a picture a tool named by path into the session's own directory.
+///
+/// Two things make this necessary rather than tidy. The file is the agent's to
+/// delete — an `imageView` of a screenshot under `/tmp` outlives nothing — and
+/// the asset protocol is scoped to `~/.dray/attachments`, so the transcript
+/// cannot load a row pointing anywhere else even while the file is still there.
+///
+/// A path already inside that directory is left alone: replay runs this again
+/// over its own output, and copying each time would grow a file per open.
+/// Best-effort like its caller, and the failure is the honest one — the row
+/// keeps the original path, which draws nothing but says where the picture was.
+async fn archive_image_file(session_id: &str, src: &str, image: &mut ImageRef) {
+    let Ok(dir) = attachments_dir(session_id).await else {
+        return;
+    };
+    if std::path::Path::new(src).starts_with(&dir) {
+        return;
+    }
+
+    let ext = std::path::Path::new(src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+    let stored = dir.join(format!("{}.{ext}", Uuid::now_v7()));
+
+    match fs::copy(src, &stored).await {
+        Ok(_) => image.path = Some(stored.to_string_lossy().into_owned()),
+        Err(e) => eprintln!("tool image not archived: {e}"),
     }
 }
 
@@ -337,6 +380,38 @@ mod archive_tests {
             STANDARD.decode(GIF).unwrap()
         );
 
+        delete_session_attachments(&session).await.unwrap();
+    }
+
+    /// Codex names a picture by path instead of carrying its bytes, and the
+    /// asset protocol is scoped to `~/.dray/attachments` — so a row left
+    /// pointing at the original does not go stale later, it fails to load now.
+    #[tokio::test]
+    #[ignore]
+    async fn archives_an_image_named_by_path() {
+        let session = format!("test-{}", Uuid::now_v7());
+        let src = std::env::temp_dir().join(format!("{}.png", Uuid::now_v7()));
+        fs::write(&src, b"not really a png").await.unwrap();
+
+        let mut images = vec![ImageRef {
+            path: Some(src.to_string_lossy().into_owned()),
+            url: None,
+            mime_type: None,
+        }];
+        archive_result_images(&session, &mut images).await;
+
+        let stored = images[0].path.as_deref().expect("not archived");
+        assert_ne!(stored, src.to_string_lossy(), "the row kept the original");
+        assert!(stored.ends_with(".png"), "{stored} lost its extension");
+        assert_eq!(fs::read(stored).await.unwrap(), b"not really a png");
+
+        // Replay runs this again over its own output. Copying each time would
+        // grow one file per open.
+        let once = stored.to_string();
+        archive_result_images(&session, &mut images).await;
+        assert_eq!(images[0].path.as_deref(), Some(once.as_str()));
+
+        fs::remove_file(&src).await.ok();
         delete_session_attachments(&session).await.unwrap();
     }
 }

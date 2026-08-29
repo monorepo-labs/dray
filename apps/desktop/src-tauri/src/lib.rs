@@ -101,9 +101,49 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     attachments::read_attachments(paths).await
 }
 
+/// Which agents can actually be run on this machine, and what to say about
+/// one that can't.
+///
+/// Read when the composer mounts, so an agent with no CLI behind it is marked
+/// before anybody writes a prompt for it. The resolution is cached in
+/// `binpath`, so this is a filesystem check on the first call and free after —
+/// but the first call can spawn a login shell, hence `async` and hence a
+/// command rather than something the picker computes per render.
+///
+/// The cure travels with the answer. A row saying "not installed" and nothing
+/// else is the errno reworded; naming the command and the page is the whole
+/// point of asking.
 #[tauri::command]
-fn list_models() -> Vec<Model> {
-    models::claude_models()
+async fn agent_availability() -> Vec<AgentAvailability> {
+    let mut out = Vec::new();
+    for harness in [harness::Harness::ClaudeCode, harness::Harness::Codex] {
+        out.push(AgentAvailability {
+            harness,
+            available: binpath::agent_available(harness).await,
+            label: harness.label().to_string(),
+            install_command: harness.install_command().to_string(),
+            docs_url: harness.docs_url().to_string(),
+        });
+    }
+    out
+}
+
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+struct AgentAvailability {
+    harness: harness::Harness,
+    available: bool,
+    label: String,
+    install_command: String,
+    docs_url: String,
+}
+
+#[tauri::command]
+fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+    // Defaulted rather than required so a caller that predates the second
+    // harness still gets the list it always got.
+    models::models_for(harness.unwrap_or(harness::Harness::ClaudeCode))
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
@@ -580,6 +620,7 @@ pub fn run() {
             send_msg,
             read_attachments,
             list_models,
+            agent_availability,
             get_settings,
             set_analytics_enabled,
             list_slash_commands,

@@ -16,7 +16,7 @@
 use crate::{
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
-    models::{default_model, find_model, Effort, ModelId},
+    models::{default_model_for, models_for, runs_on, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
 };
@@ -317,8 +317,8 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     // session under an unattached repo is already reachable — while
     // `add_project` bumps `last_selected` and resorts the list, which would
     // let an agent's call quietly reorder the user's project picker.
-    let model = resolve_model(create.model.as_deref(), parent.as_ref())?;
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
+    let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness)?;
 
     // The caller's pick, else whatever the parent ran at, else `None` — which
     // `send_msg` resolves to the model's own default through `resolve_effort`,
@@ -484,23 +484,36 @@ async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
 }
 
 /// The caller's alias if it gave one, else the parent's recorded model, else
-/// the app default. A parent indexed before models were recorded reads back as
-/// `Unknown`, which has no CLI alias — so that falls through to the default
-/// rather than failing a create for a field the user never chose.
-fn resolve_model(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Result<ModelId> {
+/// the harness's default. A parent indexed before models were recorded reads
+/// back as `Unknown`, which has no CLI alias — so that falls through to the
+/// default rather than failing a create for a field the user never chose.
+///
+/// Inheritance is filtered by harness, not just by "is this a model we know":
+/// a Codex session spawned from a Claude one would otherwise inherit `opus`,
+/// which Codex cannot run at all, and the create would fail at the spawn for a
+/// choice nobody made.
+fn resolve_model(
+    requested: Option<&str>,
+    parent: Option<&SessionIndexItem>,
+    harness: Harness,
+) -> Result<ModelId> {
     if let Some(alias) = requested {
         let id = ModelId::from_arg(alias)
-            .filter(|id| find_model(*id).is_some())
+            .filter(|id| runs_on(*id, harness))
             .with_context(|| {
-                format!("unknown model {alias:?} — try opus, sonnet, fable or haiku")
+                let known: Vec<_> = models_for(harness)
+                    .into_iter()
+                    .filter_map(|m| m.id.as_arg())
+                    .collect();
+                format!("unknown model {alias:?} — try {}", known.join(", "))
             })?;
         return Ok(id);
     }
 
     Ok(parent
         .map(|p| p.model)
-        .filter(|id| find_model(*id).is_some())
-        .unwrap_or_else(default_model))
+        .filter(|id| runs_on(*id, harness))
+        .unwrap_or_else(|| default_model_for(harness)))
 }
 
 /// Sends a prompt into a session that already exists.
@@ -617,7 +630,7 @@ fn resolve_harness(requested: Option<&str>, parent: Option<&SessionIndexItem>) -
     match requested {
         Some("claude_code") => Ok(Harness::ClaudeCode),
         Some("codex") => Ok(Harness::Codex),
-        Some(other) => bail!("unknown harness {other:?} — try claude_code"),
+        Some(other) => bail!("unknown harness {other:?} — try claude_code or codex"),
         None => Ok(parent.map(|p| p.harness).unwrap_or(Harness::ClaudeCode)),
     }
 }

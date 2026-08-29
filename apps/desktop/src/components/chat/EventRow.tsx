@@ -7,7 +7,7 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import { compactTokens, resetTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, ToolResult } from "@/types/events";
+import type { AgentEvent, FileEdit, ToolResult } from "@/types/events";
 
 /// A quiet single line for the events that are context rather than content.
 function Notice({
@@ -49,6 +49,7 @@ function Notice({
 export default function EventRow({
   event,
   resultByCallId,
+  editsByCallId,
   hideToolLabel = false,
   openTool = false,
   onOpenSession,
@@ -57,6 +58,9 @@ export default function EventRow({
   /// Results keyed by call id, so a started call renders its own outcome without
   /// searching the event list itself.
   resultByCallId: Map<string, ToolResult>;
+  /// The edits each call made, so a patch draws one row rather than a header
+  /// and a separate expander naming the same file again.
+  editsByCallId?: Map<string, FileEdit[]>;
   /// Passed down by `ToolGroupRow`, whose header already names the tool.
   hideToolLabel?: boolean;
   /// Draws a tool call already expanded. Only the subagent panel sets it, for
@@ -95,6 +99,7 @@ export default function EventRow({
           input={payload.input}
           rawInput={payload.rawInput}
           result={resultByCallId.get(payload.callId)}
+          edits={editsByCallId?.get(payload.callId)}
           hideLabel={hideToolLabel}
           defaultOpen={openTool}
         />
@@ -104,8 +109,11 @@ export default function EventRow({
     case "tool_call_completed":
       return null;
 
+    // Drawn by the `tool_call_started` row it belongs to, via `editsByCallId`
+    // — the same bargain `tool_call_completed` makes. A patch with no call to
+    // hang off still draws, since losing the diff is worse than a stray row.
     case "file_edits":
-      return <FileEdits edits={payload.edits} />;
+      return payload.callId ? null : <FileEdits edits={payload.edits} />;
 
     case "error":
       return (

@@ -135,6 +135,34 @@ export function countChanges(sides: EditSides): { added: number; removed: number
   return { added, removed };
 }
 
+/// The same `+N -M`, for a harness that hands over a unified diff already.
+///
+/// Codex reports a patch as a real diff per file, so there are no two sides to
+/// reconstruct and nothing to re-run the diff algorithm over — the counting is
+/// just reading the prefixes it already carries. Without this a Codex edit drew
+/// no size at all beside it, where the same edit from Claude drew `+22 -12`.
+///
+/// `+++` and `---` are file headers, not content, and they are the one pair of
+/// prefixes that would otherwise be counted as a line each.
+export function countUnifiedChanges(diffs: (string | null)[]): {
+  added: number;
+  removed: number;
+} {
+  let added = 0;
+  let removed = 0;
+
+  for (const diff of diffs) {
+    if (!diff) continue;
+    for (const line of diff.split("\n")) {
+      if (line.startsWith("+++") || line.startsWith("---")) continue;
+      if (line.startsWith("+")) added += 1;
+      else if (line.startsWith("-")) removed += 1;
+    }
+  }
+
+  return { added, removed };
+}
+
 /// A range read, resolved to the text and the line it starts at.
 export type ReadRange = {
   path: string;

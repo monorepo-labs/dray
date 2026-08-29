@@ -82,6 +82,18 @@ pub struct SessionIndexItem {
     /// this one is cleared the moment the CLI carries the fork out.
     #[serde(default)]
     pub fork_from: Option<String>,
+    /// The id the harness knows this session by, where that is not our own.
+    ///
+    /// Claude Code adopts the id the frontend mints, so this stays `None` there
+    /// and the two questions never come apart. `codex app-server` mints its own
+    /// thread id and hands it back from `thread/start`, so a Codex session has
+    /// two ids and this is the mapping between them.
+    ///
+    /// Ours stays primary — it keys the index, the log filename, the
+    /// attachments directory and every `dray` address, and all of those are
+    /// written *before* the child answers. This is read by resume alone.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     /// The issues this session's work is against, newest link last.
     ///
     /// A list because one session really does carry several — three tags in one
@@ -101,6 +113,28 @@ pub struct SessionIndexItem {
     pub modified: String,
     pub archived: bool,
     pub pinned: bool,
+    /// Every key this build does not know, carried through untouched.
+    ///
+    /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
+    /// mutex — so two Dray builds sharing `~/.dray` do not merely race, they
+    /// downgrade each other's schema. The older one round-trips all 200-odd
+    /// entries through *its* struct and silently drops every field it cannot
+    /// represent. Observed: a released 0.8.2 running beside a dev build erased
+    /// `thread_id` from every Codex session moments after it was written, so
+    /// resume answered "this session has no Codex thread to resume" for work
+    /// that was still perfectly alive.
+    ///
+    /// A file lock would not have helped — serialized writes drop the field
+    /// just as thoroughly. Only keeping the unknown keys does. This is
+    /// insurance for the *next* field rather than a cure for that one: it can
+    /// only protect a version that carries it, so it must go in before the
+    /// field it saves, not after.
+    ///
+    /// `#[ts(skip)]` because the frontend must never read through it. A field
+    /// worth the frontend's attention is worth declaring.
+    #[serde(flatten)]
+    #[ts(skip)]
+    pub unknown: serde_json::Map<String, Value>,
 }
 
 /// What crosses the IPC boundary for one session: its index entry plus the
@@ -257,6 +291,9 @@ impl SessionIndexItem {
         Self {
             session_id: session_id.to_string(),
             harness,
+            // Nothing has spawned yet, so no harness has minted anything. A
+            // Codex session fills this when `thread/start` answers.
+            thread_id: None,
             cwd: cwd.to_string(),
             project_path: project_path.to_string(),
             // A worktree's branch is the CLI's to name, so it's derived rather
@@ -279,6 +316,7 @@ impl SessionIndexItem {
             modified: now,
             archived: false,
             pinned: false,
+            unknown: Default::default(),
         }
     }
 
@@ -298,6 +336,11 @@ impl SessionIndexItem {
         Self {
             session_id: session_id.to_string(),
             harness: self.harness,
+            // Deliberately not inherited. A fork is a new conversation on the
+            // harness's side too — `thread/fork` mints its own id — so carrying
+            // the parent's here would make the fork's first send resume the
+            // parent's thread and write into the conversation it copied.
+            thread_id: None,
             cwd: match worktree_name {
                 Some(name) => worktree_path(&self.project_path, name),
                 None => self.cwd.clone(),
@@ -337,6 +380,7 @@ impl SessionIndexItem {
             modified: now,
             archived: false,
             pinned: false,
+            unknown: Default::default(),
         }
     }
 }
@@ -866,6 +910,23 @@ pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<S
     Ok(Some(updated))
 }
 
+/// Records the id the harness knows this session by.
+///
+/// Written once, when `thread/start` answers. A session whose entry has gone —
+/// deleted while its child was starting — answers `Ok` rather than erroring:
+/// there is nothing to record it on and nothing has gone wrong.
+pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = list_session_index_items().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(());
+    };
+
+    item.thread_id = Some(thread_id.to_string());
+    write_session_index(&sessions).await
+}
+
 /// Caller must hold `INDEX_LOCK`: this rewrites the whole file, so a concurrent
 /// writer would drop the other's entry.
 async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {
@@ -1140,6 +1201,34 @@ mod tests {
     use super::*;
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
+    /// A field a *newer* build wrote has to survive being read and written back
+    /// by this one.
+    ///
+    /// This is the failure it exists for, and it is not hypothetical: a
+    /// released 0.8.2 sharing `~/.dray` with a dev build rewrote the whole
+    /// index through its own struct and erased `threadId` from every Codex
+    /// session, which turned live work into "this session has no Codex thread
+    /// to resume". Without the catch-all, the assert below is what breaks.
+    #[test]
+    fn a_field_from_a_newer_build_survives_a_round_trip() {
+        let newer = r#"{"sessionId":"a","harness":"claude_code","cwd":"/p","projectPath":"/p",
+            "branch":null,"worktreeName":null,"title":"t","created":"c","modified":"m",
+            "archived":false,"pinned":false,"somethingWeHaveNotShippedYet":{"keep":[1,2]}}"#;
+
+        let item: SessionIndexItem = serde_json::from_str(newer).unwrap();
+        let written: Value = serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();
+
+        assert_eq!(
+            written.get("somethingWeHaveNotShippedYet"),
+            Some(&serde_json::json!({"keep": [1, 2]})),
+            "an unknown field was dropped on write, which is how a shared index downgrades"
+        );
+        // The known fields still land where they belong rather than being
+        // swallowed by the catch-all beside them.
+        assert_eq!(item.session_id, "a");
+        assert!(item.unknown.get("sessionId").is_none());
+    }
+
     #[test]
     fn index_entries_written_before_these_fields_still_read() {
         let legacy = r#"{"sessionId":"a","harness":"claude_code","cwd":"/p","projectPath":"/p",
@@ -1186,7 +1275,7 @@ mod tests {
             "add the PR panel",
             ModelId::Opus,
             Some(Effort::High),
-            ApprovalPolicy::AcceptEdits,
+            ApprovalPolicy::Auto,
             None,
         );
         parent.archived = true;
@@ -1590,7 +1679,7 @@ mod tests {
             "hi",
             ModelId::Opus,
             Some(Effort::High),
-            ApprovalPolicy::AcceptEdits,
+            ApprovalPolicy::Auto,
             None,
         );
         let json = serde_json::to_value(SessionSnapshot {

@@ -73,7 +73,25 @@ const TOOL_VERBS: Record<string, Verbs> = {
   WebFetch: ["Fetching", "Fetched", "page"],
   WebSearch: ["Searching web", "Searched web", "query"],
   AskUserQuestion: ["Asking", "Asked", "question"],
-  Skill: ["Launching", "Launched", "skill"],
+  // "Reading", not "Launching". A skill is a document the agent goes and reads
+  // — the row sits beside the skill's own name, so "Read Skill pdf" says what
+  // happened where "Launched skill" suggested something was started and left
+  // running. Both harnesses use this: Codex has no skill item at all and gets
+  // here by the command it ran.
+  Skill: ["Reading Skill", "Read Skill", "skill"],
+
+  // Codex's own tool names. The table is keyed by the name the harness sends,
+  // and a miss falls through to that name verbatim — so without these rows a
+  // Codex transcript read "shell" and "apply_patch" in lowercase wire spelling
+  // beside Claude's "Bash" and "Edited".
+  //
+  // `shell` takes Bash's exact verbs rather than its own. The two are the same
+  // act, and a reader switching harness mid-project should not have to learn
+  // that one agent's commands are labelled differently from another's.
+  shell: ["Bash", "Bash", "command"],
+  apply_patch: ["Editing", "Edited", "file"],
+  web_search: ["Searching web", "Searched web", "query"],
+  view_image: ["Viewing", "Viewed", "image"],
 };
 
 /// The brief a `Skill` call was given — the sentence the model wrote for the
@@ -101,6 +119,11 @@ const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   BashOutput: ["Reading", "Read"],
   KillShell: ["Killing", "Killed"],
   WebSearch: ["Searching", "Searched"],
+  shell: ["Running", "Ran"],
+  web_search: ["Searching", "Searched"],
+  // The row's verb carries the noun ("Read Skill pdf"), which a count would
+  // then say a second time — "Read Skill 2 skills". The group drops it.
+  Skill: ["Reading", "Read"],
 };
 
 /// English plurals only where the nouns here need it — a trailing `y` after a
@@ -146,6 +169,83 @@ export function streamingLabel(name: string): string {
 
 /// Absolute paths dominate the row otherwise; the last two segments are enough
 /// to recognize a file and still fit beside the tool name.
+/// An MCP call, split into the server and the method a reader would name it by.
+///
+/// The two harnesses spell the same call differently and both spell it for a
+/// machine: Claude sends `mcp__linear-server__save_issue` as the tool name,
+/// Codex sends `list_document_sessions` with `codex_apps ·
+/// codex_document_control.list_document_sessions` as the title. Drawn raw, the
+/// row said the wire id twice — once as its label and again as its summary —
+/// and neither copy read as a sentence.
+///
+/// So the label becomes "MCP", the way a shell row's is "Bash", and this is
+/// what sits beside it. The exact id stays on the tooltip, since it is what
+/// anyone debugging the server actually needs.
+export function mcpCall(
+  name: string,
+  title: string | null,
+): { label: string; detail: string } {
+  let server: string | null = null;
+  let tool = name;
+
+  if (name.startsWith("mcp__")) {
+    // `mcp__<server>__<tool>`, and the tool half may carry `__` of its own.
+    const [, head, ...rest] = name.split("__");
+    if (rest.length) {
+      server = head;
+      tool = rest.join("__");
+    }
+  } else if (title?.includes(" · ")) {
+    const [head, ...rest] = title.split(" · ");
+    server = head;
+    tool = rest.join(" · ");
+  }
+
+  // Codex qualifies the method with its own namespace — `codex_document_control
+  // .list_document_sessions` — which repeats what the server name already said.
+  const method = tool.includes(".") ? tool.slice(tool.lastIndexOf(".") + 1) : tool;
+
+  return {
+    label: humanize(method),
+    detail: server ? `${server} · ${tool}` : tool,
+  };
+}
+
+/// `list_document_sessions` → `List document sessions`.
+///
+/// Only for an identifier already known to be one. A tool id is written for a
+/// machine and read by a person, and the row is the one place that gap shows.
+function humanize(id: string): string {
+  const words = id.replace(/[_-]+/g, " ").trim();
+  if (!words) return id;
+  return words[0].toUpperCase() + words.slice(1);
+}
+
+/// The file a row acted on, where it names one.
+///
+/// Only for the tool types whose subject *is* a file — a `Bash` call mentioning
+/// a path in its command has not necessarily touched it, and offering to open
+/// that would be a guess. Returns the path exactly as the harness gave it,
+/// since that is what has to be opened; the caller decides how much to draw.
+export function fileTarget(toolType: ToolType, input: JsonValue): string | null {
+  if (toolType !== "file_edit" && toolType !== "file_read") return null;
+  const path =
+    field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
+  // A relative path has no anchor here — the row does not know the session's
+  // cwd — so it is drawn as text rather than offered as something to open.
+  return path?.startsWith("/") ? path : null;
+}
+
+/// The last segment of a path: the part that identifies the file to a reader.
+///
+/// A row is one line and a path is mostly directory, so the name leads and the
+/// rest is a click away. Falls back to the whole string for anything that does
+/// not look like a path, which keeps this safe on input it was not given.
+export function fileName(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
 export function shortenPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
   if (parts.length <= 2) return path;

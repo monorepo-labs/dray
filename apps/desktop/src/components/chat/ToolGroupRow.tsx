@@ -6,16 +6,18 @@ import { countChanges, editSides } from "@/lib/diff";
 import { groupLabel, groupVerb } from "@/lib/tools";
 import type { ToolGroup } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
-import type { ToolResult } from "@/types/events";
+import type { FileEdit, ToolResult } from "@/types/events";
 
 /// A run of consecutive same-tool calls behind one row. Expanding reveals the
 /// individual calls, each still its own independently expandable `ToolCall`.
 export default function ToolGroupRow({
   group,
   resultByCallId,
+  editsByCallId,
 }: {
   group: ToolGroup;
   resultByCallId: Map<string, ToolResult>;
+  editsByCallId?: Map<string, FileEdit[]>;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -126,6 +128,7 @@ export default function ToolGroupRow({
               key={event.id}
               event={event}
               resultByCallId={resultByCallId}
+              editsByCallId={editsByCallId}
               hideToolLabel
             />
           ))}

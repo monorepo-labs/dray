@@ -171,7 +171,7 @@ export default function Chat({
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
-  const { events, turns, subagentById, resultByCallId, pendingAsks } = useMemo(
+  const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
     () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
     [session?.events, busy, liveTaskIds],
   );
@@ -465,6 +465,7 @@ export default function Chat({
                 turn={turn}
                 subagentById={subagentById}
                 resultByCallId={resultByCallId}
+                editsByCallId={editsByCallId}
                 onOpenSubagent={onOpenSubagent}
                 onOpenSession={onOpenSession}
                 // Both cover the wait for output, and never at once —

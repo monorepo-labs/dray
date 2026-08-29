@@ -11,9 +11,10 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 // Only for a session indexed before the model was recorded, which reads back as
 // "unknown". Everything else seeds from the user's stored prefs.
@@ -77,6 +78,7 @@ export function useSessions() {
     const [models, setModels] = useState<Model[]>([]);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
+    const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
     const [modelId, setModelId] = useState<ModelId>(() => prefs.modelId);
     const [effortByModel, setEffortByModel] = useState<EffortByModel>(() => prefs.effortByModel);
     const [permissionMode, setPermissionModeState] = useState<ApprovalPolicy>(() => prefs.permissionMode);
@@ -149,6 +151,14 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
     return;
   }
   setPrefs({ modelId: nextModelId });
+};
+
+// Wrapped like the rest: which agent you work in is a preference, not a
+// per-session accident. The model that comes with it is repaired by the effect
+// that fetches the new list, not guessed at here.
+const setHarness = (next: Harness) => {
+  setHarnessState(next);
+  setPrefs({ harness: next });
 };
 
 // Wrapped rather than exported raw: picking a mode is a preference, and the
@@ -295,7 +305,7 @@ const handleSendMsg = async (
       sessionId,
       prompt: message,
       attachmentPaths,
-      harness: "claude_code",
+      harness,
       model: modelId,
       effort,
       permissionMode,
@@ -385,7 +395,14 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
   const sessionId = selectedSessionId;
   try {
     const cancelled = await invoke<QueuedMessage | null>("cancel_queued", { sessionId });
-    if (!cancelled) return null;
+    // Nothing to take back, so what is drawn is a row the backend no longer
+    // holds — a prompt whose delivery failed before it could mint the event
+    // that retires it, or a queue that died with its child. Cleared rather than
+    // left: it is a row whose Esc provably does nothing.
+    if (!cancelled) {
+      setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
+      return null;
+    }
     setQueuedBySession((prev) => ({
       ...prev,
       [sessionId]: (prev[sessionId] ?? []).filter((m) => m.id !== cancelled.id),
@@ -471,7 +488,13 @@ const handleAnswerQuestions = async (
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
-  setModelId(prefs.modelId);
+  setHarnessState(prefs.harness);
+  // Repaired against the list on screen, not taken as read. The effect below
+  // only fires when the harness *changes*, so a stored model left over from the
+  // other harness would come back here untouched every time — and the harness
+  // is stored too, so the two can disagree from the moment one is picked
+  // without the other.
+  setModelId(usableModel(models, prefs.modelId));
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
   setUseWorktreeState(prefs.useWorktree);
@@ -490,6 +513,9 @@ const handleNewSession = () => {
 // Project, branch, and the worktree flag aren't restored — the composer hides
 // all three once a session exists, and they'd only mislead the next new chat.
 const restoreSessionControls = (item: SessionIndexItem) => {
+  // The raw setter, like the rest of this function: a session's harness is the
+  // session's, and clicking through old ones must not rewrite the default.
+  setHarnessState(item.harness);
   // Sessions indexed before the model was recorded read back as "unknown".
   const restored = item.model === "unknown" ? DEFAULT_MODEL : item.model;
   setModelId(restored);
@@ -792,8 +818,14 @@ useEffect(() => {
 }, [showArchived])
 
 useEffect(() => {
-  invoke<Model[]>("list_models").then(setModels);
-}, [])
+  invoke<Model[]>("list_models", { harness }).then((list) => {
+    setModels(list);
+    // A model belongs to exactly one harness, so switching harness leaves the
+    // pick naming something the new one cannot run. Repaired here, where the
+    // real list has just landed, rather than guessed at when the toggle moved.
+    setModelId((current) => usableModel(list, current));
+  });
+}, [harness])
 
 useEffect(() => {
   invoke<Project[]>("list_projects")
@@ -1011,6 +1043,18 @@ useEffect(() => {
             const payload = agentEvent.payload;
 
             const sessionId = agentEvent.sessionId;
+
+            // A subagent's stream is not this conversation's. There is one
+            // preview per session, so its text landed in the main transcript,
+            // streamed to the end, then vanished when the committed message
+            // filed itself under the run — and the primary agent's reply began
+            // streaming into the space it left. Claude Code sends no deltas for
+            // subagent output at all, which is why this only ever showed up
+            // under Codex, where the whole run arrives on the same connection.
+            //
+            // Dropped rather than routed: the panel draws the committed message
+            // and has no preview of its own to feed.
+            if (agentEvent.subagent) return;
 
             if (payload.delta == "block_start") {
                 // Which kind opens decides whether the wait is over. Text and a
@@ -1440,6 +1484,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

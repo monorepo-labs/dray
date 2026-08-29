@@ -7,7 +7,6 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { basename } from "@/lib/format";
@@ -71,8 +70,6 @@ export default function ProjectSelector({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-
-        <DropdownMenuSeparator />
 
         <DropdownMenuItem onSelect={onAttach} className="text-ui">
           <FolderPlus />

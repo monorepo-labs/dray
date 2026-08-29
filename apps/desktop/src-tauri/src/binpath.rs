@@ -11,13 +11,24 @@
 //! real time (a shell reading the user's whole rc chain), and the answer can't
 //! change while the app runs.
 
-use std::path::PathBuf;
+use crate::harness::Harness;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
 use tokio::process::Command;
 
 static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static GH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// The `codex` shipped inside the ChatGPT desktop app.
+///
+/// Tried after every ordinary location, never before: it is an implementation
+/// detail of somebody else's bundle and Apple may move or drop it. But on a
+/// machine with that app and no separate install it is the only `codex` there
+/// is, and telling a reader who plainly has Codex that we cannot find it is the
+/// worse answer of the two.
+const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 /// The absolute path to `claude`, or the bare name as a last resort.
 ///
@@ -56,6 +67,103 @@ pub async fn gh() -> Option<PathBuf> {
     let resolved = resolve("gh").await;
     let _ = GH_PATH.set(resolved);
     GH_PATH.get().cloned().flatten()
+}
+
+/// The absolute path to a `codex` that can actually speak app-server.
+///
+/// Unlike [`claude`], finding *a* binary is not enough. Verified against a real
+/// machine: an old `codex-cli 0.29.0` sitting in an nvm bin directory has no
+/// `app-server` subcommand at all, so `codex app-server` is forwarded to the
+/// interactive CLI as a *prompt*. It then writes terminal escape sequences to
+/// stdout and never answers, which reaches the reader as a handshake timeout
+/// thirty seconds later — a failure that names the wrong thing entirely and
+/// looks like a broken protocol rather than a stale install.
+///
+/// So each candidate is asked what it can do before it is chosen, and the first
+/// that lists `app-server` wins. One `--help` per candidate, once per process.
+///
+/// Falls back to the bare name like [`claude`] rather than answering `None`
+/// like [`gh`]: a Codex session is one the reader picked, so a spawn error
+/// naming the binary is the honest failure.
+pub async fn codex() -> PathBuf {
+    if let Some(path) = CODEX_PATH.get() {
+        return path.clone();
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = search_path("codex") {
+        candidates.push(path);
+    }
+    if let Some(path) = search_known_dirs("codex") {
+        candidates.push(path);
+    }
+    if let Some(path) = login_shell_which("codex").await {
+        candidates.push(path);
+    }
+    // Last, because it belongs to somebody else's bundle — but present, because
+    // on a machine with the ChatGPT app and no separate install it is the only
+    // Codex there is.
+    candidates.push(PathBuf::from(CHATGPT_APP_CODEX));
+
+    let mut resolved = None;
+    for candidate in candidates {
+        if resolved.as_ref() == Some(&candidate) {
+            continue;
+        }
+        if is_executable(&candidate) && speaks_app_server(&candidate).await {
+            resolved = Some(candidate);
+            break;
+        }
+    }
+
+    let _ = CODEX_PATH.set(resolved.unwrap_or_else(|| PathBuf::from("codex")));
+    CODEX_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+/// Whether the agent's CLI is installed and usable.
+///
+/// Read off the resolver's own answer rather than probing again: both cache in
+/// a `OnceLock`, absence included, so this costs nothing after the first call —
+/// which matters, since a failed resolution is the expensive one (it ends in a
+/// login shell reading the whole rc chain).
+///
+/// **The test is `is_absolute`.** A successful resolution is always an absolute
+/// path; the bare-name fallback both resolvers end at is the only relative
+/// answer either can give. For Codex that covers the stale binary for free: one
+/// with no `app-server` subcommand never satisfies `speaks_app_server`, so it
+/// falls through to the bare name exactly like an absent one — and "installed
+/// but cannot be driven" is the same answer to the reader as "not installed".
+///
+/// The cache never invalidates, so a CLI installed while the app runs still
+/// reads as missing until restart. That is the same bargain `gh` already makes,
+/// and it is why nothing here offers to install anything: the reader is at a
+/// terminal by then anyway.
+pub async fn agent_available(harness: Harness) -> bool {
+    match harness {
+        Harness::ClaudeCode => claude().await.is_absolute(),
+        Harness::Codex => codex().await.is_absolute(),
+    }
+}
+
+/// Whether this `codex` has an `app-server` subcommand.
+///
+/// Asked of `--help` rather than parsed out of `--version`, because a version
+/// number is a guess about when the subcommand landed and this is the question
+/// we actually have. A binary that cannot be run at all answers `false`, which
+/// puts it behind the next candidate rather than failing the resolution.
+async fn speaks_app_server(bin: &Path) -> bool {
+    let Ok(output) = Command::new(bin)
+        .arg("--help")
+        .output()
+        .await
+    else {
+        return false;
+    };
+
+    String::from_utf8_lossy(&output.stdout).contains("app-server")
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install

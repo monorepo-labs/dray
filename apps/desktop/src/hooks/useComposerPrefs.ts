@@ -1,11 +1,12 @@
 import { useCallback } from "react";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import type { ApprovalPolicy, Effort, ModelId } from "@/types/events";
+import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
 
 /// Seeds for a first run with nothing stored. Once the user picks anything, their
 /// pick is the default — these are never read again.
 const SEED: ComposerPrefs = {
+  harness: "claude_code",
   modelId: "haiku",
   effortByModel: {},
   permissionMode: "auto",
@@ -21,6 +22,9 @@ export type EffortByModel = Partial<Record<ModelId, Effort>>;
 /// running the checkout would have the composer claim a branch the tree isn't on;
 /// `projectPath` is already persisted backend-side by `set_last_selected_project`.
 export type ComposerPrefs = {
+  /// Which agent a new session starts on. Sticky like the rest of this row —
+  /// somebody who works in Codex should not re-pick it every time.
+  harness: Harness;
   modelId: ModelId;
   effortByModel: EffortByModel;
   permissionMode: ApprovalPolicy;

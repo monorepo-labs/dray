@@ -47,12 +47,13 @@
      sets the thing and every name follows. */
   --card: var(--surface-card);
   --popover: var(--surface-card);
-  /* The composer card's own fill, pinned to `--card` by that shared alias
-     because it exists to be the one raised surface that stays a *fill* under
-     transparency: the handoff row is parked behind it, so a veil there shows
-     the buttons it is meant to hide. Still its own name, because the composer
-     is not a popover and the next change to floating surfaces should not have
-     to wonder whether the composer wanted it too. */
+  /* The composer card's own fill. It was the one raised surface that had to
+     stay a fill — the handoff row was parked behind it and a veil showed the
+     buttons it exists to hide — and it stopped being that when `HandoffRow`
+     started clipping itself. It floats at the window's edge over a transcript
+     that scrolls under it, so it takes `--veil-float` like a menu does. Still
+     its own name: the composer is not a popover, and the next change to
+     floating surfaces should not have to wonder whether it wanted that too. */
   --composer: var(--surface-card);
   --secondary: var(--muted);
   --accent: var(--muted);
@@ -165,9 +166,35 @@
      moves fewer perceptual steps over a near-white page than over a near-black
      one — so `--veil-strong` is tuned per mode; see the light block. The
      arithmetic behind these three is in the transparency block. */
+  /* A well: the track a segmented control's thumb slides in, and anything else
+     that has to read as cut *into* the surface it sits on. A black scrim in
+     both modes, and that is the whole point of it being its own token —
+     `--surface-raised` is a white veil on glass, so a track built from it came
+     out lighter than the menu around it and the recess read as a raised strip.
+     Nothing above a floating surface can be described by adding light to it. */
+  --surface-well: oklch(0 0 0 / 22%);
+  /* What rides in a well: the thumb of a segmented control. Mixed off
+     `--surface-card` rather than named, so a ported palette gets one without
+     declaring it — and light rather than equal, because a thumb at the menu's
+     own colour is only as visible as the scrim under it is deep, and deepening
+     the scrim to fix that darkens the whole control instead. */
+  --surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--surface-card));
   --veil-card: oklch(1 0 0 / 5.5%);
   --veil-raised: oklch(1 0 0 / 4%);
   --veil-strong: oklch(1 0 0 / 11.5%);
+  /* Floating surfaces take a wash of their own colour, not a veil of white.
+     The other three sit *in* the page, so "the page plus a little light" is
+     what raised means there; a menu sits *over* it, and 5.5% white over the
+     page is the page again with menu text on top of it.
+
+     The number has to be this low to read as glass at all, and the arithmetic
+     is why: a card transmits ~95% of what is behind it, and what is behind a
+     menu is already the backdrop at 80%. At 86% only ~3% of the desktop
+     reached the eye and the menu was a slab. At 62% it is ~8%, which is a
+     surface you can see through. It is only readable because the primitives
+     blur their backdrop — see `backdrop-blur` on the menu, dialog and tooltip
+     frames, which is what stops the transcript showing through the words. */
+  --veil-float: color-mix(in oklab, var(--surface-card) 62%, transparent);
 
   /* Enough to lift a filled button off the surface and no more: on a dark
      palette a filled button and its background are two flat fields, and without
@@ -209,6 +236,13 @@
   --accent-command: oklch(0.58 0.13 75);
   --accent-mention: oklch(0.55 0.16 245);
 
+  /* Far shallower than dark's 22%: the same scrim over a near-white surface
+     reads as a hole rather than a recess. */
+  --surface-well: oklch(0 0 0 / 7%);
+  /* The card colour itself. It is already near-white, so lightening it further
+     has nowhere to go — here the scrim under the thumb is what separates the
+     two, which is the same trick read from the other end. */
+  --surface-thumb: var(--surface-card);
   --veil-card: oklch(0 0 0 / 4%);
   --veil-raised: oklch(0 0 0 / 3%);
   /* 10%, against dark's 11.5%, because the percentages are not the whole story:
@@ -216,6 +250,10 @@
      a near-black one. Measured on the picker's own highlight — 8% black gave 19
      levels of separation where dark's white veil gives 28. */
   --veil-strong: oklch(0 0 0 / 10%);
+  /* Tighter than dark's 62%: what shows through a light surface is a bright
+     desktop, and the same alpha reads as a washed-out surface rather than a
+     glass one. */
+  --veil-float: color-mix(in oklab, var(--surface-card) 74%, transparent);
 
   /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
      reads as dirt against near-white. */
@@ -334,6 +372,9 @@
   --text-composer--line-height: 1.5;
 
   --color-surface-raised: var(--surface-raised);
+  --color-surface-well: var(--surface-well);
+  --color-surface-thumb: var(--surface-thumb);
+  --color-surface-card: var(--surface-card);
   --color-accent-thinking: var(--accent-thinking);
   --color-accent-command: var(--accent-command);
   --color-accent-mention: var(--accent-mention);
@@ -513,15 +554,24 @@
        the buttons it exists to hide. It costs the composer its glass and buys
        the one thing on that edge that has to be opaque.
 
-       `--popover` is left out for its own reason, also deliberate: the alert
-       and settings dialogs picked it over `--card` precisely because it stays a
-       fill. They land over the sidebar, which has no fill here, so a veil would
-       composite onto the backdrop and leave their text washed out. A floating
-       surface is not a raised one.
+       `--popover` and `--composer` take a different one: `--veil-float`, a wash
+       of their own colour rather than a veil of white. Both float *over* the
+       page instead of sitting in it, so a white veil there composites onto the
+       backdrop and leaves it the page with their text on top — which is the
+       failure they used to be excluded to avoid, not an argument that floating
+       surfaces should be fills. Both are readable only because their frames
+       carry `backdrop-blur`; see `--veil-float` for the arithmetic.
 
-       Both are aliases of `--surface-card` now, so naming `--card` alone here is
-       what splits them — the alias binds them in a palette and this parts them
-       on glass, which is exactly the pair of jobs each was written for. */
+       Nothing is excluded now. The two that were are both fixed at the source:
+       the composer no longer hides the handoff row by being opaque, and the
+       alert no longer needs a fill to be read over an unfilled sidebar.
+
+       All three are aliases of `--surface-card`, so naming them one at a time
+       here is what splits them — the alias binds them in a palette and this
+       parts them on glass, which is exactly the pair of jobs each was written
+       for. */
+    --popover: var(--veil-float);
+    --composer: var(--veil-float);
     /* The one highlight that lands on the backdrop rather than inside a menu:
        the sidebar has no fill here, so a selected session row — and the panel's
        active tab, which shares the token — is drawn straight onto it. The `/50`

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { groupLabel, isRoutineError, skillBrief, streamingLabel, toolLabel, toolSummary } from "./tools";
+import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, toolLabel, toolSummary } from "./tools";
 
 // Every input here is a real `Skill` call taken out of `~/.dray/sessions`. The
 // harness classifies the tool as `other` and leaves `title` null, so the name
@@ -13,11 +13,16 @@ describe("a Skill call", () => {
     ).toBe("agent-browser");
   });
 
-  it("reads as a launch in both tenses", () => {
-    expect(toolLabel("Skill", true)).toBe("Launching");
-    expect(toolLabel("Skill", false)).toBe("Launched");
-    expect(groupLabel("Skill", 2, false)).toBe("Launched 2 skills");
-    expect(streamingLabel("Skill")).toBe("Launching a skill");
+  // "Reading", not "Launching". A skill is a document the agent goes and reads,
+  // and the row sits beside the skill's own name — so this reads "Read Skill
+  // caveman-commit", where "Launched" suggested something was started and left
+  // running. The group verb drops the noun the row's own verb carries, or a
+  // count would say it twice: "Read Skill 2 skills".
+  it("reads as a read in both tenses, and names the skill only on a row", () => {
+    expect(toolLabel("Skill", true)).toBe("Reading Skill");
+    expect(toolLabel("Skill", false)).toBe("Read Skill");
+    expect(groupLabel("Skill", 2, false)).toBe("Read 2 skills");
+    expect(streamingLabel("Skill")).toBe("Reading a skill");
   });
 
   it("takes the brief only where one was written", () => {
@@ -81,5 +86,36 @@ describe("isRoutineError", () => {
   it("treats a call with no text as worth marking", () => {
     expect(isRoutineError(undefined)).toBe(false);
     expect(isRoutineError("")).toBe(false);
+  });
+});
+
+describe("mcpCall", () => {
+  // Both harnesses spell the same call for a machine, and drawn raw the row
+  // said the wire id twice — once as its label, again as its summary.
+  it("reads Claude's mcp__server__tool", () => {
+    expect(mcpCall("mcp__linear-server__save_issue", null)).toEqual({
+      label: "Save issue",
+      detail: "linear-server · save_issue",
+    });
+  });
+
+  it("reads Codex's title, and drops the namespace the server already named", () => {
+    expect(
+      mcpCall("list_document_sessions", "codex_apps · codex_document_control.list_document_sessions"),
+    ).toEqual({
+      label: "List document sessions",
+      detail: "codex_apps · codex_document_control.list_document_sessions",
+    });
+  });
+
+  // A tool half carrying `__` of its own must not be cut short.
+  it("keeps a tool name containing the separator", () => {
+    expect(mcpCall("mcp__srv__a__b", null).detail).toBe("srv · a__b");
+  });
+
+  // Nothing to split on is an ordinary state, not a malformed one: the row
+  // still needs something to draw.
+  it("falls back to the bare name", () => {
+    expect(mcpCall("query", null)).toEqual({ label: "Query", detail: "query" });
   });
 });

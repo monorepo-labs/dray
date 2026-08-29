@@ -14,12 +14,17 @@ import type {
   ApprovalPolicy,
   BranchList,
   Effort,
+  Harness,
   Model,
   ModelId,
   Project,
 } from "@/types/events";
 
 export type ComposerToolbarProps = {
+  /// Creation-time only, like project and branch: it decides which child runs.
+  harness: Harness;
+  onHarnessChange: (harness: Harness) => void;
+
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
@@ -66,6 +71,8 @@ export type ComposerToolbarProps = {
 /// header already shows the project and branch. Its own spacing from the card is
 /// the caller's, since only the caller knows which side of it the row sits on.
 export default function ComposerToolbar({
+  harness,
+  onHarnessChange,
   models,
   modelId,
   effort,
@@ -116,6 +123,9 @@ export default function ComposerToolbar({
       </Tooltip>
 
       <ModelSelector
+        harness={harness}
+        onHarnessChange={onHarnessChange}
+        canSwitchHarness={isNewSession}
         models={models}
         modelId={modelId}
         effort={effort}
@@ -171,7 +181,11 @@ export default function ComposerToolbar({
 
       {/* Last of the pickers: it is the one control here most sessions set once
           and never touch, so it sits furthest from where the eye lands. */}
-      <PermissionSelector value={permissionMode} onChange={onPermissionModeChange} />
+      <PermissionSelector
+        harness={harness}
+        value={permissionMode}
+        onChange={onPermissionModeChange}
+      />
 
       {/* `ml-auto` rather than a spacer, so a long branch name still gets the
           whole middle of the row and this stays pinned to the right edge. */}

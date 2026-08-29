@@ -52,6 +52,8 @@ import { pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
+import { useMissingAgent } from "@/hooks/useAgentAvailability";
+import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import type { Issue, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -73,6 +75,8 @@ function App() {
     showArchived,
     setShowArchived,
     models,
+    harness,
+    setHarness,
     modelId,
     effort,
     permissionMode,
@@ -116,6 +120,11 @@ function App() {
     deleteSession,
     removeWorktree,
   } = useSessions();
+
+  // Whether the agent the composer is pointed at can actually be run. Null
+  // while the first read is out and null when it is installed — both mean
+  // there is nothing to say, so the composer sends as it always did.
+  const missingAgent = useMissingAgent(harness);
 
   const [collapsed, setCollapsed] = useLocalStorage("ade.sidebarCollapsed", false);
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
@@ -652,6 +661,23 @@ function App() {
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
   // custom menu carries no Settings item to swallow the key first.
   useHotkey(",", () => setSettingsOpen(true));
+  // Both only mean anything before a session exists — the agent *is* the child
+  // process and the worktree is where it starts — so they are unregistered
+  // rather than no-ops there. `useHotkey` claims every chord it matches, and
+  // ⌘⇧T is reopen-closed-tab in a webview: left bound on a session that cannot
+  // use it, it would eat the key and do nothing.
+  const composingNewSession = !selectedSessionId && !issuesOpen;
+  useHotkey(
+    "a",
+    () => setHarness(harness === "codex" ? "claude_code" : "codex"),
+    { shift: true, enabled: composingNewSession },
+  );
+  useHotkey("t", () => setUseWorktree((v) => !v), {
+    shift: true,
+    // A worktree has nothing to fork from until a project is picked, which is
+    // the same condition the toggle itself is drawn under.
+    enabled: composingNewSession && projectPath !== null,
+  });
   // No accelerator: Shift+Tab on its own. The CLI spends this chord on
   // permission mode, which in practice gets set once and left; effort is the
   // dial actually reached for mid-work, so it takes the cheapest key here.
@@ -924,8 +950,18 @@ function App() {
               disabled={!selectedSessionId}
             />
           }
+          // Only on a new task. An agent is fixed at creation, so a live
+          // session cannot be pointed at one that is missing — and a session
+          // that already exists has a CLI that already ran.
+          notice={
+            !selectedSessionId && missingAgent ? (
+              <AgentMissingNotice agent={missingAgent} />
+            ) : null
+          }
           toolbar={
             <ComposerToolbar
+              harness={harness}
+              onHarnessChange={setHarness}
               models={models}
               modelId={modelId}
               effort={effort}

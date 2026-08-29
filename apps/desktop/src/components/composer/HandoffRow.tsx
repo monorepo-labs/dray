@@ -25,13 +25,17 @@ import type { HandoffAction } from "@/lib/handoff";
 /// wants it — at the cost that with a session open the row is never empty, so
 /// the reserve below is now permanent.
 ///
-/// **The composer is the occluder, not a clip.** The buttons sit at full height
-/// in a reserve a fraction as tall, so most of each one runs on past it and
-/// behind the card — which is opaque, and which paints later than this because
-/// it comes later in the form. Hovering slides the whole row clear. Clipping
-/// instead would leave the same picture and a different lie: the buttons would
-/// end where the card starts rather than continue behind it, so nothing would
-/// suggest there was more of them.
+/// **A clip, not the composer occluding it.** The row lives in a window pinned
+/// to the card's top edge, 4px tall closed and 32px open, and the buttons sit at
+/// the window's top — so growing it upward *is* the animation, and what shows
+/// closed is the top 4px of each button.
+///
+/// The composer used to do this job by being opaque and painting later. That
+/// held the whole of `--composer` hostage: the one raised surface that could
+/// never be glass, on the one edge of the window most worth blending into the
+/// backdrop. A clip costs the picture nothing — 4px of a button top reads the
+/// same whether the rest is hidden by a card or by an edge — and hands the
+/// composer back its transparency.
 ///
 /// **The hover zone and the thing it moves are separate elements**, and they
 /// have to be. With one element, the box travels with the buttons — so the
@@ -77,24 +81,29 @@ export default function HandoffRow({
     // `px-3` matches the card's own inner padding, so the first button's edge
     // lands on the same line as the toolbar buttons inside it.
     <div className="relative h-1 px-3">
-      {/* The zone, not the row. `-top-7 pt-7` grows its box 28px upward without
-          moving what's inside it, turning a 4px target into a 32px one — and
-          `w-fit` keeps that box off the rest of the transcript's bottom edge,
-          where an invisible full-width strip would swallow clicks and text
-          selection. */}
-      <div className="group absolute -top-7 left-3 w-fit pt-7">
+      {/* The zone, not the row. `-top-7 h-8` spans from 28px above the reserve
+          to its bottom edge, turning a 4px target into a 32px one — and `w-fit`
+          keeps that box off the rest of the transcript's bottom edge, where an
+          invisible full-width strip would swallow clicks and text selection.
+          `justify-end` is what pins the window below to the card's top edge, so
+          the height it gains is gained upward. */}
+      <div className="group absolute -top-7 left-3 flex h-8 w-fit flex-col justify-end">
         <div
           className={
-            "flex gap-1 " +
+            "overflow-hidden " +
             // The delay is symmetric on purpose: it keeps a cursor merely
             // passing through from popping the row open, and lets one that
             // overshoots on the way out come back without it having closed.
-            "transition-transform delay-150 duration-200 ease-out " +
-            // -28px clears the card's top edge, so the open row reads as sitting
-            // above the composer rather than resting on it.
-            "group-hover:-translate-y-7 group-focus-within:-translate-y-7"
+            "transition-[height] delay-150 duration-200 ease-out " +
+            // 4px is all that shows: enough to say there is something under
+            // there, not enough to read as a row of buttons. 32px is the
+            // buttons' own 28 plus the reserve, so the open row clears the
+            // card's top edge and reads as sitting above the composer rather
+            // than resting on it. This is the component's one dial.
+            "h-1 group-hover:h-8 group-focus-within:h-8"
           }
         >
+          <div className="flex gap-1">
           {actions.map((action) => {
             const Icon = HANDOFF_ICONS[action.id];
             return (
@@ -112,6 +121,7 @@ export default function HandoffRow({
               </Button>
             );
           })}
+          </div>
         </div>
       </div>
     </div>
