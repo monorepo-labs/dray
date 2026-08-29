@@ -587,6 +587,36 @@ Live check existed and was removed. `mcp.rs` ran `claude mcp list`, cached per d
 
 **v3 bump for `issues` and `LinkIssues`.** Same test `from` earned bump on: old app ignoring `issues` start session against no issue, with no line in prompt saying what work about, and answer **identically to success**. Wrong work that look like right work = what earn bump.
 
+## Opening the working directory
+
+**Split button in right panel's tab row** ([OpenInButton](apps/desktop/src/components/OpenInButton.tsx)) hand session's `cwd` to installed app. Left half open in app reader picked last, chevron open menu to change it. Detection = [apps.rs](apps/desktop/src-tauri/src/apps.rs), macOS only — `open(1)`, `.app` bundle and `.icns` all one platform's, everything else answer empty list.
+
+**Tab row, not Changes body, because directory belong to *session* not to one tab's answer about it.** Reader on PR tab wanting their editor otherwise go via Changes to find way there. Sit outside tab row's own logic: Refresh change meaning tab to tab and go entirely on Subagents, this don't. Both share one `ml-auto` group — Refresh absent on Subagents and button absent off a session, so whichever survive hold same edge. Absent on issues page, which show somebody else's issue and have no working directory of own.
+
+**Detection = `read_dir` over known dirs, matched on bundle file name exactly.** `/Applications`, `/Applications/Utilities`, `/Applications/Setapp`, `/System/Applications`, `/System/Applications/Utilities`, `~/Applications`; first dir win, so machine-wide install outrank user's copy — order Launch Services itself prefer. **Exact, never substring**: `Cloudflare WARP.app` not `Warp.app`, and contains-check list it as terminal that then ignore directory handed to it. Both pinned by test against temp dir of fake bundles — `resolve` split from `detect` so order testable with nothing spawned.
+
+**No `mdfind`.** Spotlight can be off or still indexing, and common case = app not installed at all — where per-app query = spawn answering nothing.
+
+**Table = the guarantee, not `CFBundleDocumentTypes`.** Reading each found bundle for `public.folder` = wrong gate: `open -a` name app outright rather than asking Launch Services to rank handler, so it reach app declaring nothing — MacVim declare no folder type and open one fine. App absent from table cost one entry, never list.
+
+**Address = bundle path, not bundle id.** `open -b` hand id to Launch Services, which pick whichever copy it indexed — second install of editor, or stale index, silently open wrong one. Path = what scan know, and what stored preference keyed by. Name no good either: two build of one editor differ by path alone.
+
+**Icon = app's own, `CFBundleIconFile` → `.icns` → `sips` → `data:` PNG at 64px.** Two spawn per bundle, cached per path for process life; list itself re-scanned every call. Measured: 7 app, icons included, 0.17s cold. Full-colour brand mark = same exception file icons make. `None` ordinary (bundle keeping icon in asset catalog) and fall back to glyph.
+
+**Kind = Editor / Terminal / Files, and Finder sit last.** "Open in Cursor" and "open in Ghostty" = different ask, and flat list of both read as one — so inset dotted rule between run, `PickerMenu`'s idiom, at `border-border/80` (opacity on token so it stay 8% black on light menu). Heading per kind rejected: more furniture than list they organise. Finder at end because it = entry every machine have; leading with it put least specific answer where eye land first.
+
+**Menu pick, left half open, and split deliberate.** Menu entry that both reseat default *and* launch have no way to say "next time, this one" without launching something reader didn't ask for. So `select` and `open` separate in [useOpenApps](apps/desktop/src/hooks/useOpenApps.ts).
+
+**Frontend hold last answer, trust none of it.** `load` ask Rust every time — read = handful of `read_dir` with icons cached Rust-side, so nothing worth a freshness window. Called on mount and on menu open; panel hide rather than unmount, so mount alone run once for life of app and editor installed after never appear. Menu opening = one moment list must be current. `list_open_apps` infallible on its side — `invoke` only reject when IPC itself broken, at which point nothing in app work — so no retry, no failed flag, no key. First version carried all three against that phantom.
+
+**Failed launch reach reader, on button itself.** `open_in_app` answer `open`'s own sentence, only thing naming cure — bundle that moved, directory that gone. Button take alert glyph and destructive colour for 4s, sentence in tooltip **forced open** (Radix close tooltip on click, so red glyph with no sentence otherwise) and `text-wrap`, since truncating clip exactly where cure start. Tooltip `key`ed on failure state: flipping `open` between `true` and `undefined` swap controlled↔uncontrolled and Radix keep stale open state across it. **Word stay "Open"**: swapping label make failure read as different control.
+
+**Pref = `ade.openWith`, global not per-session.** Which editor you use = fact about you, same standing preference `ade.diffStyle` is. Per session it would be learned again on every new session — where it least likely to be right.
+
+**Border = `border-border dark:border-input`, matching `outline` button variant.** That = app's edge for bordered *control*; `--border` alone (10% white) = token for surface edge or rule, and `/60` on it multiply to 6% and vanish.
+
+**Button draw nothing where no app detected.** Every mac have Finder, so empty list mean scan found nothing rather than reader missing an editor — no cure to name.
+
 ## Handing work back
 
 **Composer hide row of canned prompt behind itself.** [HandoffRow](apps/desktop/src/components/composer/HandoffRow.tsx) sit above composer card, clipped to sliver, open on hover. Buttons = Commit, Create PR, Run server. Mostly hand work *back*; Run server start work instead and sit here because bargain identical — click = prompt reader didn't type. Name predate that second kind and kept anyway: churning `HandoffRow`/`handoffActions`/`HandoffAction` through five file buy nothing doc comment can't say.
