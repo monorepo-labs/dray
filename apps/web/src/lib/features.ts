@@ -18,7 +18,7 @@ export const FEATURES: Feature[] = [
   {
     id: "orchestration",
     label: "Agent orchestration",
-    title: "One agent, many sessions.",
+    title: "Run a swarm of agents in parallel.",
     points: [
       "Ask an agent to split up the work and it starts a session per task, as many as you need",
       "Each one runs in its own worktree, so they never get in each other's way",

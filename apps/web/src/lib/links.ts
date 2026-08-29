@@ -12,6 +12,11 @@ export const DOWNLOAD = `${REPO}/releases/latest`;
 /// asset list when bumping.
 export const DOWNLOAD_SIZE = "32 MB";
 
+/// The product's own account. Separate from `FEEDBACK` below, which is a DM
+/// to the person who builds it — this one is where the app posts, so it is
+/// somewhere to follow rather than somewhere to write to.
+export const DRAY_X = "https://x.com/dray_hq";
+
 /// Where feedback goes: a DM to the person who builds it. Most visitors
 /// arrive from a tweet, so this is the channel they are already on.
 export const FEEDBACK = "https://x.com/yogesharc";

@@ -1,9 +1,11 @@
 import Image from "next/image";
 import { AppleGlyph } from "@/components/AppleGlyph";
+import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 // import { Board } from "@/components/Board";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
+import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 // import { Tweets } from "@/components/Tweets";
 import { DOWNLOAD, DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
@@ -37,9 +39,24 @@ export default function Home() {
         {/* Headline-sized now that the page is a home page and not a caption
             over a board. Aeonik at medium — the file is that one weight, so
             `font-medium` is the only weight that renders as itself. Wraps
-            freely — nowrap at this size clipped on phones. */}
+            freely — nowrap at this size clipped on phones, so only each
+            mark-and-name pair holds together: a logo that wrapped away from
+            the word it stands for would read as decoration. Marks are sized
+            in `em` and not in a fixed step, so they follow the headline
+            through its own breakpoint; the baseline nudge is eyeballed
+            against Aeonik's cap height. */}
         <h1 className="max-w-2xl font-display text-3xl leading-[1.1] font-medium tracking-tight text-balance sm:text-4xl">
-          Run Claude Code and Codex in one app.
+          Run{" "}
+          <span className="whitespace-nowrap">
+            <ClaudeGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            Claude Code
+          </span>{" "}
+          and{" "}
+          <span className="whitespace-nowrap">
+            <OpenAIGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            Codex
+          </span>{" "}
+          in one app.
         </h1>
         <p className="mt-3 text-base text-muted-foreground text-pretty sm:text-lg">
           Fast, feels right, runs agents in parallel — on your existing
