@@ -11,7 +11,7 @@
 
 use crate::events::{
     usage::ContextWindow, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, FileEdit,
-    SessionInfo, ToolResult, ToolType, TurnStatus, Usage,
+    ImageRef, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::Harness;
 use serde_json::json;
@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use super::parser::{
     CodexEvent, DeltaNotification, ErrorNotification, FileChangeEntry, ItemNotification, ItemStatus,
-    ThreadItem, TokenUsageNotification, TurnNotification, TurnStatus as CodexTurnStatus,
+    PlanNotification, ThreadItem, TokenUsageNotification, TurnNotification,
+    TurnStatus as CodexTurnStatus,
+    WebSearchResult,
 };
 
 /// Per-session state the mapping needs across lines.
@@ -40,6 +42,32 @@ pub struct Mapper {
     /// Item ids currently open as a streamed block, so a delta for an item we
     /// never saw start cannot mint a block the transcript has no header for.
     open_blocks: std::collections::HashSet<String>,
+    /// How many times the plan has been rewritten. Part of the synthesized
+    /// call id, so each rewrite is its own row rather than one row that
+    /// changes under a reader scrolling back through the turn.
+    plan_updates: u64,
+    /// Every thread known to belong to a subagent, and the run it is.
+    ///
+    /// A Codex subagent is a **whole second thread on the same connection** —
+    /// it sends its own `turn/started`, items, deltas, token usage and
+    /// `turn/completed`, all indistinguishable from the main conversation's
+    /// except by `threadId`. So this is what keeps a subagent's answer out of
+    /// the transcript, its usage out of the context ring, and its turn ending
+    /// out of the session's status.
+    ///
+    /// Keyed by `agentThreadId` and **not** by the activity's own `id`: the
+    /// `started` activity carries the spawning call's id where `completed`
+    /// carries a synthetic `subagent-completed-<uuid>`, so the two ids never
+    /// match and a run joined on them would never close.
+    ///
+    /// Populated only by the server telling us, so a thread we were not told
+    /// about reads as the main conversation — the safe direction, since the
+    /// main thread is the one the reader is actually having.
+    subagent_threads: std::collections::HashMap<String, Subagent>,
+    /// The run the line being mapped belongs to, or `None` for the main
+    /// conversation. Set once per line in [`Self::map`] so no arm has to
+    /// remember to ask.
+    current: Option<Subagent>,
 }
 
 impl Mapper {
@@ -50,10 +78,36 @@ impl Mapper {
             turn_id: None,
             occupancy: None,
             open_blocks: std::collections::HashSet::new(),
+            plan_updates: 0,
+            subagent_threads: std::collections::HashMap::new(),
+            current: None,
         }
     }
 
     pub fn map(&mut self, event: CodexEvent) -> Vec<AgentEvent> {
+        // Whose conversation this line belongs to, resolved once for every arm
+        // below and for `event()`, which stamps it onto the envelope. Read
+        // before the match so a kind added later cannot forget to ask.
+        self.current = event
+            .thread_id()
+            .and_then(|thread| self.subagent_threads.get(thread))
+            .cloned();
+
+        // A subagent's turn is not the session's. Its `turn/completed` reaching
+        // `StatusTracker` marked the whole session finished while the main turn
+        // was still running, and its usage overwrote the context ring — so both
+        // are dropped rather than mapped. What the reader sees of the run is
+        // its items, which still map and are filed into the panel by the
+        // envelope.
+        if self.current.is_some() {
+            match event {
+                CodexEvent::TurnStarted(_)
+                | CodexEvent::TurnCompleted(_)
+                | CodexEvent::TokenUsage(_) => return Vec::new(),
+                _ => {}
+            }
+        }
+
         match event {
             CodexEvent::TurnStarted(turn) => self.turn_started(turn),
             CodexEvent::TurnCompleted(turn) => self.turn_completed(turn),
@@ -62,6 +116,7 @@ impl Mapper {
             CodexEvent::Delta(delta) => self.delta(delta),
             CodexEvent::TokenUsage(usage) => self.token_usage(usage),
             CodexEvent::Error(err) => self.error(err),
+            CodexEvent::PlanUpdated(plan) => self.plan_updated(plan),
             CodexEvent::Ignored | CodexEvent::Unknown => Vec::new(),
         }
     }
@@ -154,25 +209,58 @@ impl Mapper {
                 }))]
             }
 
-            ThreadItem::CommandExecution {
-                id, command, cwd, ..
-            } => {
+            ThreadItem::CommandExecution { id, command, .. } => {
+                // `cwd` deliberately not carried. It is on the wire for every
+                // call and it is the session's own directory on nearly all of
+                // them, so putting it in `input` gave every shell row an
+                // expanded body holding one obvious line of JSON — noise on the
+                // most common row in the transcript. The command is the whole
+                // input, and it is already the title.
+                // A skill names itself, and the invocation is the wrong label
+                // for it: the row would read `Read Skill /bin/zsh -lc "sed -n
+                // '1,240p' …`, which is the machinery rather than the thing.
+                // `title` is left unset so the row falls through to
+                // `toolSummary`, which reads `skill` — the same path Claude's
+                // own skill rows take.
+                let skill = skill_name(&command);
                 vec![self.event(AgentEventPayload::ToolCallStarted {
                     call_id: id,
-                    name: "shell".to_string(),
+                    name: match &skill {
+                        Some(_) => "Skill".to_string(),
+                        None => "shell".to_string(),
+                    },
                     tool_type: ToolType::Shell,
-                    input: json!({"command": command, "cwd": cwd}),
+                    input: match &skill {
+                        Some(name) => json!({"skill": name, "command": command}),
+                        None => json!({"command": command}),
+                    },
                     raw_input: None,
-                    title: Some(command),
+                    title: skill.is_none().then_some(command),
                 })]
             }
 
             ThreadItem::FileChange { id, changes, .. } => {
                 let started = self.event(AgentEventPayload::ToolCallStarted {
                     call_id: id.clone(),
-                    name: "apply_patch".to_string(),
+                    // The verb follows what was done to the file, so a new file
+                    // reads "Created notes.md" rather than "Edited" — a patch
+                    // that adds a file has no previous version to have edited.
+                    // `kind` used to reach the reader as the bare wire word
+                    // "update" sitting at the end of the row, which named the
+                    // distinction without making it mean anything.
+                    name: edit_tool_name(&changes),
                     tool_type: ToolType::FileEdit,
-                    input: json!({"paths": changes.iter().map(|c| &c.path).collect::<Vec<_>>()}),
+                    // One path per call is the common case, so it goes on
+                    // `file_path` — the key every path-reading surface already
+                    // looks at, which is what makes the row title itself and
+                    // the group count files. The list stays beside it for the
+                    // multi-file patch.
+                    input: match changes.as_slice() {
+                        [one] => json!({"file_path": one.path}),
+                        many => json!({
+                            "paths": many.iter().map(|c| &c.path).collect::<Vec<_>>()
+                        }),
+                    },
                     raw_input: None,
                     title: Some(edit_title(&changes)),
                 });
@@ -186,12 +274,99 @@ impl Mapper {
                 vec![started, edits]
             }
 
+            // Both search routes open the same row. The native item arrives
+            // with `query: ""` — everything lands on completion — so the
+            // header has nothing to say yet and the title falls back to the
+            // tool's own name rather than drawing an empty string.
+            ThreadItem::WebSearch { id, query, .. } => {
+                vec![self.search_started(id, query)]
+            }
+            ThreadItem::Extension {
+                id, kind, query, ..
+            } if is_web_search(&kind) => {
+                vec![self.search_started(id, query.unwrap_or_default())]
+            }
+
+            ThreadItem::ImageView { id, path } => {
+                let shown = display_path(&path);
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: "view_image".to_string(),
+                    tool_type: ToolType::FileRead,
+                    input: json!({"path": shown}),
+                    raw_input: None,
+                    title: Some(shown),
+                })]
+            }
+
+            ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                ..
+            } => {
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: tool.clone(),
+                    tool_type: ToolType::Mcp,
+                    input: arguments.unwrap_or(json!({})),
+                    raw_input: None,
+                    // Server first, the shape Claude's MCP rows already use, so
+                    // one tool name appearing on two servers stays legible.
+                    title: Some(format!("{server} · {tool}")),
+                })]
+            }
+
+            ThreadItem::CollabAgentToolCall {
+                id, tool, prompt, ..
+            } => {
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: tool.clone(),
+                    tool_type: ToolType::SubagentSpawn,
+                    input: json!({"description": prompt}),
+                    raw_input: None,
+                    title: Some(tool),
+                })]
+            }
+
+            // The spawn row, and the registration that files everything the
+            // subagent goes on to say.
+            //
+            // This *is* the spawn: the call never arrives as a
+            // `collabAgentToolCall` — the only one of those in the capture is
+            // `wait` — so without this arm there is no row for the run at all.
+            //
+            // `item/started` and `item/completed` both carry the same activity,
+            // so registering happens here and closing on the `completed` kind,
+            // not on the completed *notification*.
+            ThreadItem::SubAgentActivity {
+                id,
+                kind,
+                agent_thread_id,
+                agent_path,
+            } => self.subagent_activity(id, kind, agent_thread_id, agent_path),
+
             ThreadItem::ContextCompaction { .. } => {
                 vec![self.event(AgentEventPayload::ContextCompactionStarted)]
             }
 
-            ThreadItem::Other => Vec::new(),
+            ThreadItem::Extension { .. } | ThreadItem::Other => Vec::new(),
         }
+    }
+
+    /// The opening row both web-search routes share.
+    fn search_started(&mut self, id: String, query: String) -> AgentEvent {
+        let has_query = !query.is_empty();
+        self.event(AgentEventPayload::ToolCallStarted {
+            call_id: id,
+            name: "web_search".to_string(),
+            tool_type: ToolType::Web,
+            input: json!({"query": query.clone()}),
+            raw_input: None,
+            title: has_query.then_some(query),
+        })
     }
 
     fn item_completed(&mut self, done: ItemNotification) -> Vec<AgentEvent> {
@@ -270,6 +445,85 @@ impl Mapper {
                 out
             }
 
+            ThreadItem::WebSearch {
+                id, query, results, ..
+            } => self.search_completed(id, query, results),
+            ThreadItem::Extension {
+                id,
+                kind,
+                query,
+                results,
+            } if is_web_search(&kind) => {
+                self.search_completed(id, query.unwrap_or_default(), results)
+            }
+
+            // The image is the whole answer, so the row has to carry it rather
+            // than say a file was read. `ImageRef` holds the path; the session
+            // layer copies it into the session's own attachments directory,
+            // since a screenshot under `/tmp` outlives nothing.
+            ThreadItem::ImageView { id, path } => {
+                let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
+                    call_id: id,
+                    result: ToolResult {
+                        text: String::new(),
+                        is_error: false,
+                        structured: None,
+                        exit_code: None,
+                        duration_ms: None,
+                        images: vec![ImageRef {
+                            path: Some(display_path(&path)),
+                            url: None,
+                            mime_type: None,
+                        }],
+                    },
+                })];
+                out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                out
+            }
+
+            ThreadItem::McpToolCall {
+                id,
+                status,
+                result,
+                error,
+                ..
+            } => {
+                let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
+                    call_id: id,
+                    result: ToolResult {
+                        text: mcp_text(result.as_ref(), error.as_ref()),
+                        is_error: status != ItemStatus::Completed || error.is_some(),
+                        structured: result,
+                        exit_code: None,
+                        duration_ms: None,
+                        images: Vec::new(),
+                    },
+                })];
+                out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                out
+            }
+
+            ThreadItem::CollabAgentToolCall { id, status, .. } => {
+                let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
+                    call_id: id,
+                    result: ToolResult {
+                        text: String::new(),
+                        is_error: status != ItemStatus::Completed,
+                        structured: None,
+                        exit_code: None,
+                        duration_ms: None,
+                        images: Vec::new(),
+                    },
+                })];
+                out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                out
+            }
+
+            // Handled on `item/started`, which carries the identical activity —
+            // acting on both would draw the spawn row twice and close the run
+            // before its own events had arrived.
+            ThreadItem::SubAgentActivity { .. } | ThreadItem::Extension { .. } => Vec::new(),
+
             ThreadItem::ContextCompaction { .. } => {
                 // Codex reports no before/after counts. Every one is already
                 // `Option`, so the panel drops the saving line rather than
@@ -282,6 +536,209 @@ impl Mapper {
                 })]
             }
         }
+    }
+
+    /// A subagent starting or finishing.
+    ///
+    /// `started` opens the run: it registers the agent's thread so everything
+    /// that thread goes on to send is filed under this call, and draws the row
+    /// the panel selects by. `completed` closes it.
+    ///
+    /// **Looked up by thread, never by the activity's own id.** `started`
+    /// carries the spawning call's id; `completed` carries a synthetic
+    /// `subagent-completed-<uuid>`. The two never match, so a run joined on
+    /// them would sit open forever — and silently, since an unclosed run just
+    /// keeps shimmering.
+    fn subagent_activity(
+        &mut self,
+        id: String,
+        kind: Option<String>,
+        agent_thread_id: Option<String>,
+        agent_path: Option<String>,
+    ) -> Vec<AgentEvent> {
+        let Some(thread) = agent_thread_id else {
+            // Nothing to file work under. The row would be a card that never
+            // fills, so it is not drawn at all.
+            return Vec::new();
+        };
+
+        match kind.as_deref() {
+            Some("started") => {
+                let label = agent_name(agent_path.as_deref());
+                self.subagent_threads.insert(
+                    thread,
+                    Subagent {
+                        id: id.clone(),
+                        label: Some(label.clone()),
+                    },
+                );
+
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: "spawn_agent".to_string(),
+                    tool_type: ToolType::SubagentSpawn,
+                    input: json!({"description": label}),
+                    raw_input: None,
+                    title: Some(label),
+                })]
+            }
+
+            Some("completed") | Some("failed") => {
+                let failed = kind.as_deref() == Some("failed");
+                // The run's own id, not this activity's.
+                let Some(run) = self.subagent_threads.get(&thread).cloned() else {
+                    return Vec::new();
+                };
+
+                let mut settle = self.event(AgentEventPayload::SubagentCompleted {
+                    agent_id: thread,
+                    status: if failed { "failed" } else { "completed" }.to_string(),
+                    summary: None,
+                    // Codex reports the subagent's tokens on its own thread, and
+                    // that reading is dropped rather than folded into the
+                    // session's. Reporting it here would put a second figure
+                    // beside the ring it was deliberately kept out of.
+                    usage: None,
+                });
+                // Stamped by hand: the activity rides the **main** thread, so
+                // `current` is `None` here. Without the envelope the frontend
+                // never matches it to a run, `done` stays false, and a finished
+                // subagent shimmers for the rest of the session.
+                settle.subagent = Some(run.clone());
+
+                vec![
+                    settle,
+                    self.event(AgentEventPayload::ToolCallCompleted {
+                        call_id: run.id,
+                        result: ToolResult {
+                            text: String::new(),
+                            is_error: failed,
+                            structured: None,
+                            exit_code: None,
+                            duration_ms: None,
+                            images: Vec::new(),
+                        },
+                    }),
+                ]
+            }
+
+            // A kind we have not seen. The run is already registered, so its
+            // work still files correctly; this just draws no row.
+            _ => Vec::new(),
+        }
+    }
+
+    /// The model's plan, drawn as a tool call that opens and closes at once.
+    ///
+    /// `update_plan` is the one tool with no item of its own — this
+    /// notification is its only trace — so without a synthesized pair the
+    /// reader sees the agent go quiet and then act on a plan they were never
+    /// shown. Both halves are minted here because there is no second line
+    /// coming to close it.
+    ///
+    /// The id carries the turn and a counter: a plan is rewritten several times
+    /// a turn, and each rewrite is its own row rather than one row that changes
+    /// underneath the reader as they scroll back through it.
+    fn plan_updated(&mut self, plan: PlanNotification) -> Vec<AgentEvent> {
+        self.plan_updates += 1;
+        let turn = plan.turn_id.as_deref().unwrap_or("turn");
+        let call_id = format!("plan:{turn}:{}", self.plan_updates);
+
+        let steps: Vec<_> = plan
+            .plan
+            .iter()
+            .map(|s| json!({"step": s.step, "status": s.status}))
+            .collect();
+
+        // The model's own sentence where it wrote one, a count otherwise. A
+        // plan's steps are the body, not the label.
+        let title = plan
+            .explanation
+            .clone()
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or_else(|| match steps.len() {
+                1 => "1 step".to_string(),
+                n => format!("{n} steps"),
+            });
+
+        vec![
+            self.event(AgentEventPayload::ToolCallStarted {
+                call_id: call_id.clone(),
+                name: "update_plan".to_string(),
+                tool_type: ToolType::Other,
+                input: json!({"explanation": plan.explanation, "plan": steps}),
+                raw_input: None,
+                title: Some(title),
+            }),
+            self.event(AgentEventPayload::ToolCallCompleted {
+                call_id,
+                result: ToolResult {
+                    text: String::new(),
+                    is_error: false,
+                    structured: None,
+                    exit_code: None,
+                    duration_ms: None,
+                    images: Vec::new(),
+                },
+            }),
+        ]
+    }
+
+    /// The closing row both web-search routes share.
+    ///
+    /// Results are flattened to text rather than kept as structured data: the
+    /// expander renders a tool result's text, and a card that listed hits would
+    /// be a surface of its own. Title and URL per line, which is what a reader
+    /// following one up needs.
+    fn search_completed(
+        &mut self,
+        id: String,
+        query: String,
+        results: Vec<WebSearchResult>,
+    ) -> Vec<AgentEvent> {
+        let text = results
+            .iter()
+            .map(|r| {
+                let title = r.title.as_deref().unwrap_or("untitled");
+                match r.url.as_deref() {
+                    Some(url) => format!("{title}\n{url}"),
+                    None => title.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
+            call_id: id.clone(),
+            result: ToolResult {
+                text,
+                is_error: false,
+                structured: None,
+                exit_code: None,
+                duration_ms: None,
+                images: Vec::new(),
+            },
+        })];
+
+        // The started row had no query on it — the native item sends `""` and
+        // fills everything in on completion — so the header would stay bare
+        // without this.
+        if !query.is_empty() {
+            out.insert(
+                0,
+                self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: "web_search".to_string(),
+                    tool_type: ToolType::Web,
+                    input: json!({"query": query.clone()}),
+                    raw_input: None,
+                    title: Some(query),
+                }),
+            );
+        }
+
+        out.push(self.event(AgentEventPayload::ModelRequestStarted));
+        out
     }
 
     fn delta(&mut self, delta: DeltaNotification) -> Vec<AgentEvent> {
@@ -376,7 +833,11 @@ impl Mapper {
             seq: self.seq.fetch_add(1, Relaxed),
             ts: crate::events::now_rfc3339(),
             turn_id: self.turn_id.clone(),
-            subagent: None,
+            // Set for every line arriving on a subagent's thread, which is what
+            // files its work into the panel instead of the transcript. The
+            // frontend correlates on `subagent.id == the spawning call's
+            // callId`, and that is exactly what the registry holds.
+            subagent: self.current.clone(),
             payload,
             raw: None,
         }
@@ -406,10 +867,117 @@ fn error_kind(info: &serde_json::Value) -> String {
     }
 }
 
-fn edit_title(changes: &[FileChangeEntry]) -> String {
+/// What to call a subagent on its card.
+///
+/// `agent_path` is the agent's own name (`/root/count_to_three`), not a
+/// filesystem path — the leading `/root` is the namespace every one of them
+/// shares, so it says nothing and the last segment is the name.
+fn agent_name(agent_path: Option<&str>) -> String {
+    agent_path
+        .and_then(|path| path.rsplit('/').find(|part| !part.is_empty()))
+        .unwrap_or("agent")
+        .to_string()
+}
+
+/// Whether an `extension` item is the connector-driven web search.
+///
+/// Two routes reach the same row: a plain `app-server` session emits a native
+/// `webSearch` item, a session running under the ChatGPT connectors emits
+/// `extension` with this kind. Both were captured live; handling one drew half
+/// the searches a reader makes.
+fn is_web_search(kind: &Option<String>) -> bool {
+    kind.as_deref() == Some("web.search")
+}
+
+/// The path an `imageView` names, with `file://` taken off.
+///
+/// Captured both ways — bare under a plain session, URL-shaped under a
+/// connector one — and everything downstream wants a path it can open.
+fn display_path(path: &str) -> String {
+    path.strip_prefix("file://").unwrap_or(path).to_string()
+}
+
+/// The skill an `exec` is running, where it is running one.
+///
+/// Codex has no skill item: a skill is a shell command invoking the skill's own
+/// script, so the only evidence is the path in the command. Recognised so the
+/// row can say "Launched skill" instead of showing a reader a shell invocation
+/// they did not write and cannot place.
+///
+/// Deliberately narrow, and it fails *towards* an ordinary shell row: a command
+/// this does not recognise is still perfectly well drawn as the command it is,
+/// where a false positive would relabel real work as something it isn't.
+pub(super) fn skill_name(command: &str) -> Option<String> {
+    let at = command.rfind("/skills/")?;
+    let rest = &command[at + "/skills/".len()..];
+
+    // Skills live one directory deeper than the path suggests: Codex's own ship
+    // under `skills/.system/<name>/`, so taking the first segment named the
+    // whole set `.system` on every one of them. A hidden segment is a category,
+    // never the skill.
+    rest.split(['/', ' ', '\'', '"'])
+        .find(|part| !part.is_empty() && !part.starts_with('.'))
+        .map(str::to_string)
+}
+
+/// An MCP result flattened to the text the expander draws.
+///
+/// The server's own `content` blocks where there are any, its error otherwise.
+/// `structured` keeps the whole payload beside this, so nothing is lost by the
+/// flattening — this is the readable side of the same answer.
+fn mcp_text(result: Option<&serde_json::Value>, error: Option<&serde_json::Value>) -> String {
+    if let Some(err) = error {
+        return match err.as_str() {
+            Some(text) => text.to_string(),
+            None => err.to_string(),
+        };
+    }
+
+    let Some(content) = result.and_then(|r| r.get("content")).and_then(|c| c.as_array()) else {
+        return String::new();
+    };
+
+    content
+        .iter()
+        .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What the row calls the change, so the verb beside it is true.
+///
+/// A patch that creates a file has no previous version to have edited, and one
+/// that removes it has nothing left to show. Mixed patches stay `apply_patch`:
+/// the header names the run, and the files under it each say their own kind.
+pub(super) fn edit_tool_name(changes: &[FileChangeEntry]) -> String {
+    let kinds: Vec<_> = changes
+        .iter()
+        .map(|c| c.kind.as_ref().and_then(kind_name))
+        .collect();
+
+    match kinds.as_slice() {
+        [Some(k)] if k == "add" => "create_file".to_string(),
+        [Some(k)] if k == "delete" => "delete_file".to_string(),
+        _ => "apply_patch".to_string(),
+    }
+}
+
+/// The row's own label: the file's name, not the path to it.
+///
+/// The full path is on `input.file_path`, which is what the row hovers and what
+/// the diff underneath is keyed by — so nothing is lost by shortening, and the
+/// line stops being mostly directory. A patch touching several files counts
+/// them instead, since no one name describes it.
+pub(super) fn edit_title(changes: &[FileChangeEntry]) -> String {
     match changes {
         [] => "apply_patch".to_string(),
-        [one] => one.path.clone(),
+        [one] => one
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&one.path)
+            .to_string(),
         many => format!("{} files", many.len()),
     }
 }

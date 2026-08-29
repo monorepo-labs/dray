@@ -7,13 +7,14 @@ import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { GROUP_MIN, isToolGroup, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
-import type { ToolResult } from "@/types/events";
+import type { FileEdit, ToolResult } from "@/types/events";
 import { cn } from "@/lib/utils";
 
 type TurnBlockProps = {
   turn: Turn;
   subagentById: Map<string, SubagentRun>;
   resultByCallId: Map<string, ToolResult>;
+  editsByCallId?: Map<string, FileEdit[]>;
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt, for a `user_message` that carries
   /// a sender. Reaches both the turn's own prompt and any queued one inside it.
@@ -67,6 +68,7 @@ export default function TurnBlock({
   turn,
   subagentById,
   resultByCallId,
+  editsByCallId,
   onOpenSubagent,
   onOpenSession,
   footer,
@@ -104,7 +106,7 @@ export default function TurnBlock({
           something is part of what they said. */}
       {!collapsible
         ? turn.work.map((item) =>
-            renderItem(item, subagentById, resultByCallId, onOpenSubagent, onOpenSession),
+            renderItem(item, subagentById, resultByCallId, editsByCallId, onOpenSubagent, onOpenSession),
           )
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
@@ -127,13 +129,14 @@ export default function TurnBlock({
                 )}
                 {open &&
                   seg.items.map((item) =>
-                    renderItem(item, subagentById, resultByCallId, onOpenSubagent, onOpenSession),
+                    renderItem(item, subagentById, resultByCallId, editsByCallId, onOpenSubagent, onOpenSession),
                   )}
                 {seg.prompt &&
                   renderItem(
                     seg.prompt,
                     subagentById,
                     resultByCallId,
+                    editsByCallId,
                     onOpenSubagent,
                     onOpenSession,
                   )}
@@ -152,6 +155,7 @@ export default function TurnBlock({
         <EventRow
           event={turn.completed}
           resultByCallId={resultByCallId}
+          editsByCallId={editsByCallId}
         />
       )}
     </div>
@@ -164,11 +168,19 @@ function renderItem(
   item: WorkItem,
   subagentById: Map<string, SubagentRun>,
   resultByCallId: Map<string, ToolResult>,
+  editsByCallId: Map<string, FileEdit[]> | undefined,
   onOpenSubagent: (id: string) => void,
   onOpenSession: (sessionId: string) => void,
 ) {
   if (isToolGroup(item)) {
-    return <ToolGroupRow key={item.key} group={item} resultByCallId={resultByCallId} />;
+    return (
+      <ToolGroupRow
+        key={item.key}
+        group={item}
+        resultByCallId={resultByCallId}
+        editsByCallId={editsByCallId}
+      />
+    );
   }
 
   const run =

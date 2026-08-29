@@ -654,6 +654,23 @@ function App() {
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
   // custom menu carries no Settings item to swallow the key first.
   useHotkey(",", () => setSettingsOpen(true));
+  // Both only mean anything before a session exists — the agent *is* the child
+  // process and the worktree is where it starts — so they are unregistered
+  // rather than no-ops there. `useHotkey` claims every chord it matches, and
+  // ⌘⇧T is reopen-closed-tab in a webview: left bound on a session that cannot
+  // use it, it would eat the key and do nothing.
+  const composingNewSession = !selectedSessionId && !issuesOpen;
+  useHotkey(
+    "a",
+    () => setHarness(harness === "codex" ? "claude_code" : "codex"),
+    { shift: true, enabled: composingNewSession },
+  );
+  useHotkey("t", () => setUseWorktree((v) => !v), {
+    shift: true,
+    // A worktree has nothing to fork from until a project is picked, which is
+    // the same condition the toggle itself is drawn under.
+    enabled: composingNewSession && projectPath !== null,
+  });
   // No accelerator: Shift+Tab on its own. The CLI spends this chord on
   // permission mode, which in practice gets set once and left; effort is the
   // dial actually reached for mid-work, so it takes the cheapest key here.

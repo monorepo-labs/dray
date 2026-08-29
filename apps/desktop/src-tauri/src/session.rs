@@ -13,7 +13,7 @@ use crate::{
         },
     },
     issues::{self, IssueRef},
-    models::{find_model, models_for, resolve_effort, Effort, Model, ModelId},
+    models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
         delete_session, get_session_index_item, link_session_issue, list_session_events,
@@ -374,7 +374,7 @@ impl SessionManager {
         // defaults and the `dray` CLI's own flags — so nothing upstream makes
         // them agree. Refused rather than quietly repaired: a session running on
         // a model nobody picked is the failure that looks like success.
-        if !models_for(harness).iter().any(|m| m.id == model) {
+        if !runs_on(model, harness) {
             bail!("{} is not a {} model", model_spec.label, harness.label());
         }
 

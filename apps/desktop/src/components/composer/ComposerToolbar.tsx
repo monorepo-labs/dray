@@ -3,7 +3,6 @@ import { Plus } from "lucide-react";
 import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
-import HarnessSelector from "@/components/composer/HarnessSelector";
 import ModelSelector from "@/components/composer/ModelSelector";
 import PermissionSelector from "@/components/composer/PermissionSelector";
 import ProjectSelector from "@/components/composer/ProjectSelector";
@@ -123,11 +122,10 @@ export default function ComposerToolbar({
         </TooltipContent>
       </Tooltip>
 
-      {isNewSession && (
-        <HarnessSelector value={harness} onChange={onHarnessChange} />
-      )}
-
       <ModelSelector
+        harness={harness}
+        onHarnessChange={onHarnessChange}
+        canSwitchHarness={isNewSession}
         models={models}
         modelId={modelId}
         effort={effort}

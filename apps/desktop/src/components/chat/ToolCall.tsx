@@ -5,9 +5,20 @@ import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
 import { cn } from "@/lib/utils";
-import { countChanges, editSides, readRange } from "@/lib/diff";
-import { formatToolInput, isRoutineError, skillBrief, toolLabel, toolSummary } from "@/lib/tools";
-import type { ToolResult, ToolType } from "@/types/events";
+import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
+import {
+  fileName,
+  fileTarget,
+  formatToolInput,
+  mcpCall,
+  isRoutineError,
+  skillBrief,
+  toolLabel,
+  toolSummary,
+} from "@/lib/tools";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import type { FileEdit, ToolResult, ToolType } from "@/types/events";
+import FileEdits from "@/components/chat/FileEdits";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
 // Shown in the header, so the expanded body omits them to avoid repeating
@@ -62,6 +73,13 @@ type ToolCallProps = {
   rawInput: string | null;
   /// Absent while the call is still in flight.
   result?: ToolResult;
+  /// The files this call changed, where the harness reports them first-class.
+  ///
+  /// Codex does; Claude Code does not, and its edits arrive inside `input` for
+  /// `editSides` to pull apart instead. Drawn inside this row rather than
+  /// beside it, because a patch is one action — two rows put the filename on
+  /// screen twice and made the reader work out that they were the same thing.
+  edits?: FileEdit[];
   /// Set for a row inside a `ToolGroupRow`, whose header already names the tool
   /// — repeating "Edited" down all 30 rows is noise, and the path is the only
   /// thing that varies.
@@ -80,12 +98,26 @@ export default function ToolCall({
   input,
   rawInput,
   result,
+  edits,
   hideLabel = false,
   defaultOpen = false,
 }: ToolCallProps) {
   const [open, setOpen] = useState(defaultOpen);
 
-  const summary = title ?? toolSummary(name, toolType, input);
+  // An MCP call names a server and a method, and both harnesses spell that for
+  // a machine. The label becomes "MCP" the way a shell row's is "Bash", and the
+  // method sits beside it as something readable.
+  const mcp = toolType === "mcp" ? mcpCall(name, title) : null;
+
+  const summary = mcp
+    ? mcp.label
+    : // A skill names itself. Its title is the command that read it, which is
+      // machinery rather than the thing — and preferring the field here is what
+      // makes a row logged *before* the mapper stopped titling them that way
+      // draw right, since the title on disk cannot be changed.
+      name === "Skill"
+      ? (toolSummary(name, toolType, input) ?? title)
+      : (title ?? toolSummary(name, toolType, input));
   const pending = result === undefined;
   const failed = result?.isError ?? false;
 
@@ -113,6 +145,21 @@ export default function ToolCall({
     () => (sides ? countChanges(sides) : null),
     [sides?.path, sides?.oldText, sides?.newText],
   );
+
+  // The same figure for a harness that reports a unified diff rather than two
+  // sides. Without it a Codex edit drew no size beside it while the identical
+  // edit from Claude drew `+22 -12`.
+  const editChanges = useMemo(
+    () => (edits?.length ? countUnifiedChanges(edits.map((e) => e.unifiedDiff)) : null),
+    [edits],
+  );
+
+  const shownChanges = changes ?? editChanges;
+
+  // Resolved from the call's own arguments rather than read off `title`, so a
+  // row logged before the mapper shortened its title draws the same as one
+  // logged after it. The full path stays on the tooltip and is what opens.
+  const target = rawInput ? null : fileTarget(toolType, input);
 
   const output = result?.text.trim() ?? "";
 
@@ -178,7 +225,12 @@ export default function ToolCall({
   // results only made rows inconsistent — some opened, some didn't, with no
   // visible reason why.
   const expandable =
-    Boolean(body) || Boolean(shown) || Boolean(brief) || sides !== null || range !== null;
+    Boolean(body) ||
+    Boolean(shown) ||
+    Boolean(brief) ||
+    sides !== null ||
+    range !== null ||
+    Boolean(edits?.length);
 
   return (
     <div className="group/tool flex flex-col gap-1.5">
@@ -201,7 +253,7 @@ export default function ToolCall({
               pending && "shimmer-text",
             )}
           >
-            {toolLabel(name, pending)}
+            {mcp ? "MCP" : toolLabel(name, pending)}
           </span>
         )}
 
@@ -216,19 +268,49 @@ export default function ToolCall({
               !showLabel && alarming ? "text-destructive" : "text-muted-foreground",
               !showLabel && pending && "shimmer-text",
             )}
+            title={mcp?.detail ?? target ?? undefined}
           >
-            {summary}
+            {/* A span, not an anchor: this sits inside the row's own expand
+                button, so nesting a second interactive element would be
+                invalid markup and the click would toggle the row instead of
+                opening anything. `stopPropagation` is what keeps the two
+                apart. */}
+            {target ? (
+              <span
+                role="link"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void revealItemInDir(target).catch(() => {});
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  void revealItemInDir(target).catch(() => {});
+                }}
+                className="underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current"
+              >
+                {fileName(target)}
+              </span>
+            ) : (
+              summary
+            )}
           </span>
         )}
 
         {/* Sits with the path rather than at the row's end, so it reads as part
             of the filename the way `git --stat` prints it. A side with no lines
             is omitted instead of showing `+0`, which says nothing. */}
-        {changes && (changes.added > 0 || changes.removed > 0) && (
+        {shownChanges && (shownChanges.added > 0 || shownChanges.removed > 0) && (
           <span className="shrink-0 font-mono tabular-nums">
-            {changes.added > 0 && <span className="text-emerald-400">+{changes.added}</span>}
-            {changes.added > 0 && changes.removed > 0 && " "}
-            {changes.removed > 0 && <span className="text-destructive">-{changes.removed}</span>}
+            {shownChanges.added > 0 && (
+              <span className="text-emerald-400">+{shownChanges.added}</span>
+            )}
+            {shownChanges.added > 0 && shownChanges.removed > 0 && " "}
+            {shownChanges.removed > 0 && (
+              <span className="text-destructive">-{shownChanges.removed}</span>
+            )}
           </span>
         )}
 
@@ -260,6 +342,10 @@ export default function ToolCall({
       <ImageRow images={images} />
 
       {open && sides && <DiffView sides={sides} />}
+
+      {/* The harness reported the change itself, so this is a real unified diff
+          rather than two sides reconstructed from the call's arguments. */}
+      {open && edits && edits.length > 0 && <FileEdits edits={edits} />}
 
       {open && range && <CodeView range={range} />}
 

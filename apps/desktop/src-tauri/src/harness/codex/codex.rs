@@ -867,6 +867,301 @@ mod tests {
     /// The smallest complete turn has to produce a turn that opens, text that
     /// commits, and a turn that closes. If the shapes drifted, this is where a
     /// transcript that draws nothing shows up as a test failure.
+    /// Every tool Codex ran in the capture reaches the transcript as a row.
+    ///
+    /// The regression this pins is a silent one. An item kind we have not typed
+    /// lands in `ThreadItem::Other` and maps to nothing — no parse failure, no
+    /// row, nothing to notice it by. A real session made 62 tool calls and Dray
+    /// drew 34, and the only way that surfaced was reading Codex's own rollout
+    /// beside our log. So the assert is on the *set* of tools drawn, and a kind
+    /// dropping out of it fails here rather than going quiet in a transcript.
+    #[test]
+    fn every_captured_tool_kind_draws_a_row() {
+        let (events, _) = replay(TOOL_KINDS);
+
+        let drawn: std::collections::HashSet<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                crate::events::AgentEventPayload::ToolCallStarted { name, .. } => {
+                    Some(name.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+
+        for want in ["shell", "web_search", "view_image", "wait"] {
+            assert!(drawn.contains(want), "{want} drew no row; drew {drawn:?}");
+        }
+        // The MCP row is named for the tool the server offered, not for a
+        // fixed string, so it is checked by its type rather than its name.
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.payload,
+                crate::events::AgentEventPayload::ToolCallStarted { tool_type, .. }
+                    if *tool_type == crate::events::ToolType::Mcp
+            )),
+            "the MCP call drew no row"
+        );
+
+        // An image the model looked at is the whole answer, so the completed
+        // row has to carry it — a "read a file" row with nothing in it is what
+        // this looked like before.
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.payload,
+                crate::events::AgentEventPayload::ToolCallCompleted { result, .. }
+                    if !result.images.is_empty()
+            )),
+            "the viewed image never reached a row"
+        );
+    }
+
+    /// `cwd` rides every `commandExecution` on the wire and is the session's own
+    /// directory on nearly all of them, so carrying it gave the most common row
+    /// in the transcript an expanded body holding one obvious line of JSON.
+    #[test]
+    fn a_shell_row_carries_only_its_command() {
+        let (events, _) = replay(TOOL_KINDS);
+
+        let inputs: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                crate::events::AgentEventPayload::ToolCallStarted { name, input, .. }
+                    if name == "shell" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(!inputs.is_empty(), "the capture drew no shell row");
+        for input in inputs {
+            assert!(input.get("cwd").is_none(), "cwd leaked into a shell row");
+            assert!(input.get("command").is_some(), "a shell row lost its command");
+        }
+    }
+
+    /// `update_plan` is the one tool with no item of its own — the plan
+    /// reaches us only as `turn/plan/updated`, so before this the agent went
+    /// quiet and then acted on a plan the reader was never shown.
+    ///
+    /// Each rewrite is its own row. A plan is redrawn several times a turn, and
+    /// one row changing underneath a reader scrolling back through it would
+    /// describe a decision they never saw taken.
+    #[test]
+    fn a_rewritten_plan_draws_a_row_each_time() {
+        let (events, _) = replay(PLAN_UPDATED);
+
+        let plans: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                crate::events::AgentEventPayload::ToolCallStarted { name, input, .. }
+                    if name == "update_plan" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(plans.len() >= 2, "the capture rewrote the plan; drew {}", plans.len());
+        let steps = plans[0].get("plan").and_then(|p| p.as_array());
+        assert!(
+            steps.is_some_and(|s| !s.is_empty()),
+            "a plan row carried no steps"
+        );
+
+        // Every row is answered, or each one shimmers forever waiting on a
+        // result that has no line coming to deliver it.
+        let done = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.payload,
+                    crate::events::AgentEventPayload::ToolCallCompleted { call_id, .. }
+                        if call_id.starts_with("plan:")
+                )
+            })
+            .count();
+        assert_eq!(done, plans.len(), "a plan row was left open");
+    }
+
+    /// The verb has to follow what happened to the file: a patch that creates
+    /// one has no previous version to have edited. The path is the row's
+    /// tooltip and the diff's key, so the label itself is the filename alone.
+    #[test]
+    fn an_edit_is_named_for_the_file_and_the_change() {
+        use parser::FileChangeEntry;
+
+        let add = vec![FileChangeEntry {
+            path: "/a/b/notes.md".to_string(),
+            kind: Some(serde_json::json!("add")),
+            diff: None,
+        }];
+        assert_eq!(mapper::edit_tool_name(&add), "create_file");
+        assert_eq!(mapper::edit_title(&add), "notes.md");
+
+        let update = vec![FileChangeEntry {
+            path: "/a/b/notes.md".to_string(),
+            kind: Some(serde_json::json!("update")),
+            diff: None,
+        }];
+        assert_eq!(mapper::edit_tool_name(&update), "apply_patch");
+
+        // No one name describes a multi-file patch, so it counts instead.
+        let many = vec![
+            FileChangeEntry {
+                path: "/a/one.rs".to_string(),
+                kind: Some(serde_json::json!("add")),
+                diff: None,
+            },
+            FileChangeEntry {
+                path: "/a/two.rs".to_string(),
+                kind: Some(serde_json::json!("add")),
+                diff: None,
+            },
+        ];
+        assert_eq!(mapper::edit_tool_name(&many), "apply_patch");
+        assert_eq!(mapper::edit_title(&many), "2 files");
+    }
+
+    /// Codex has no skill item — a skill is an `exec` of the skill's own file —
+    /// so the name has to come off the command, and the row must not be titled
+    /// with the invocation. Before this it read `Read Skill /bin/zsh -lc "sed
+    /// -n '1,240p' /Users/…`, which is the machinery rather than the thing.
+    ///
+    /// The `.system` case is the one that made it wrong rather than ugly:
+    /// Codex's own skills sit a directory deeper than the path suggests, so
+    /// taking the first segment named the whole set on every one of them.
+    #[test]
+    fn a_skill_is_named_for_itself_not_its_invocation() {
+        assert_eq!(
+            mapper::skill_name(
+                "/bin/zsh -lc \"sed -n '1,240p' /Users/dev/.codex/skills/.system/imagegen/SKILL.md\""
+            )
+            .as_deref(),
+            Some("imagegen")
+        );
+        assert_eq!(
+            mapper::skill_name("cat /Users/dev/.claude/skills/caveman-commit/SKILL.md").as_deref(),
+            Some("caveman-commit")
+        );
+
+        // Fails towards an ordinary shell row: a command that is not a skill
+        // must not be relabelled as one.
+        assert_eq!(mapper::skill_name("git status").as_deref(), None);
+        assert_eq!(mapper::skill_name("ls /tmp/skills/").as_deref(), None);
+    }
+
+    /// A Codex subagent is a whole second thread on the same connection, and
+    /// telling it from the main conversation is the only thing standing between
+    /// its work and the reader's transcript.
+    ///
+    /// Three separate failures live here, all silent:
+    ///
+    /// - its `agentMessage` drawn as though the primary agent said it;
+    /// - its `turn/completed` marking the **session** finished while the main
+    ///   turn is still running;
+    /// - its `thread/tokenUsage/updated` reported as the main context ring.
+    #[test]
+    fn a_subagents_thread_is_filed_under_its_spawn() {
+        let (events, _) = replay(TOOL_KINDS);
+
+        let spawn = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                crate::events::AgentEventPayload::ToolCallStarted { call_id, name, .. }
+                    if name == "spawn_agent" =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .expect("the spawn drew no row");
+
+        // The subagent's own answer, filed under that call rather than sitting
+        // in the transcript.
+        let filed: Vec<_> = events
+            .iter()
+            .filter(|e| e.subagent.as_ref().is_some_and(|s| s.id == spawn))
+            .collect();
+        assert!(!filed.is_empty(), "nothing was filed under the run");
+        assert!(
+            filed.iter().any(|e| matches!(
+                &e.payload,
+                crate::events::AgentEventPayload::AssistantText { text, .. }
+                    if text.contains("One, two, three")
+            )),
+            "the subagent's answer never reached its run"
+        );
+
+        // And it is *not* in the main conversation.
+        assert!(
+            !events.iter().any(|e| e.subagent.is_none()
+                && matches!(
+                    &e.payload,
+                    crate::events::AgentEventPayload::AssistantText { text, .. }
+                        if text.contains("One, two, three")
+                )),
+            "the subagent's answer was drawn as the main agent's"
+        );
+
+        // The capture stops while the main turn is still running, so the one
+        // `turn/completed` in it belongs to the **subagent** — which is what
+        // makes this the sharp version of the test rather than the weak one.
+        // Attributed to the main conversation it closes a turn that never
+        // ended, settling the session while the agent is still working.
+        let closes = events
+            .iter()
+            .filter(|e| {
+                e.subagent.is_none()
+                    && matches!(
+                        &e.payload,
+                        crate::events::AgentEventPayload::TurnCompleted { .. }
+                    )
+            })
+            .count();
+        assert_eq!(closes, 0, "a subagent's turn ended the session");
+
+        // Same for its occupancy. The count is exact on purpose: the capture
+        // carries six `thread/tokenUsage/updated` on the main thread and one on
+        // the subagent's, so a seventh here is the subagent's reading folded
+        // into the ring, describing a conversation the reader is not having.
+        let usage = events
+            .iter()
+            .filter(|e| {
+                matches!(&e.payload, crate::events::AgentEventPayload::UsageUpdate(_))
+            })
+            .count();
+        assert_eq!(usage, 6, "a subagent's usage reached the main context ring");
+
+        // The run closes, and on the thread rather than on the activity's own
+        // id — `completed` carries a synthetic one that never matches.
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.payload,
+                crate::events::AgentEventPayload::ToolCallCompleted { call_id, .. }
+                    if *call_id == spawn
+            )),
+            "the run never closed"
+        );
+
+        // And the panel is told, under the run's own envelope. The transcript
+        // row and the panel entry both read `done` off this one event, and it
+        // rides the *main* thread — so an unstamped one matches no run and
+        // leaves a finished subagent shimmering for the rest of the session.
+        assert!(
+            events.iter().any(|e| e.subagent.as_ref().is_some_and(|r| r.id == spawn)
+                && matches!(
+                    &e.payload,
+                    crate::events::AgentEventPayload::SubagentCompleted { status, .. }
+                        if status == "completed"
+                )),
+            "the run never settled"
+        );
+    }
+
     #[test]
     fn simple_turn_draws_a_whole_exchange() {
         let (events, _) = replay(SIMPLE_TURN);
@@ -938,11 +1233,15 @@ mod tests {
     const SIMPLE_TURN: &str = include_str!("fixtures/simple_turn.jsonl");
     const MULTI_CALL_TURN: &str = include_str!("fixtures/multi_call_turn.jsonl");
     const COMMAND_APPROVAL: &str = include_str!("fixtures/command_approval.jsonl");
+    const TOOL_KINDS: &str = include_str!("fixtures/tool_kinds.jsonl");
+    const PLAN_UPDATED: &str = include_str!("fixtures/plan_updated.jsonl");
 
     const FIXTURES: &[(&str, &str)] = &[
         ("simple_turn", SIMPLE_TURN),
         ("multi_call_turn", MULTI_CALL_TURN),
         ("command_approval", COMMAND_APPROVAL),
+        ("tool_kinds", TOOL_KINDS),
+        ("plan_updated", PLAN_UPDATED),
     ];
 
     /// Drives a real `codex app-server` through this module's own client.

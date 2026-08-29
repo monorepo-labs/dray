@@ -19,6 +19,20 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Reads `null` as the type's default, which `#[serde(default)]` alone will not.
+///
+/// `default` answers for a key that is *absent* and does nothing for one that is
+/// present and null. Codex does both on the same field: `webSearch` arrives
+/// twice, and the opening one sends `"results": null` where the closing one
+/// sends an array. That failed the whole line, so a search drew no row at all.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// A notification we act on, or a marker saying why we don't.
 pub enum CodexEvent {
     TurnStarted(TurnNotification),
@@ -29,6 +43,8 @@ pub enum CodexEvent {
     Delta(DeltaNotification),
     TokenUsage(TokenUsageNotification),
     Error(ErrorNotification),
+    /// The model rewrote its own plan.
+    PlanUpdated(PlanNotification),
     /// Modelled on purpose and drawn as nothing.
     ///
     /// The distinction from [`Self::Unknown`] is the whole point: this build
@@ -38,6 +54,28 @@ pub enum CodexEvent {
     Ignored,
     /// A method this build has never seen. Filed, and costs nothing else.
     Unknown,
+}
+
+impl CodexEvent {
+    /// The thread this line belongs to, where it names one.
+    ///
+    /// A Codex subagent runs on its **own thread over the same connection**, so
+    /// this is what tells a subagent's work apart from the main conversation's.
+    /// Read once, in `Mapper::map`, rather than at each arm — a new event kind
+    /// that forgets to check would put a subagent's output in the transcript.
+    ///
+    /// `None` means the notification names no thread, which is read as the main
+    /// conversation: every line that could belong to a subagent carries one.
+    pub fn thread_id(&self) -> Option<&str> {
+        match self {
+            Self::TurnStarted(t) | Self::TurnCompleted(t) => Some(t.thread_id.as_str()),
+            Self::ItemStarted(i) | Self::ItemCompleted(i) => Some(i.thread_id.as_str()),
+            Self::Delta(d) => d.thread_id.as_deref(),
+            Self::TokenUsage(u) => u.thread_id.as_deref(),
+            Self::PlanUpdated(p) => p.thread_id.as_deref(),
+            Self::Error(_) | Self::Ignored | Self::Unknown => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +137,11 @@ pub struct ItemNotification {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaNotification {
+    /// Which conversation this belongs to. A subagent streams on a thread of
+    /// its own over the same connection, so without this its text lands in the
+    /// main transcript as though the primary agent said it.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub turn_id: Option<String>,
     pub item_id: String,
@@ -132,10 +175,10 @@ pub enum ThreadItem {
     Reasoning {
         id: String,
         /// Readable summaries, which is what most OpenAI models emit.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         summary: Vec<String>,
         /// Raw reasoning blocks, which open-weight models emit instead.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         content: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
@@ -157,15 +200,118 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     FileChange {
         id: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         changes: Vec<FileChangeEntry>,
         #[serde(default)]
         status: ItemStatus,
+    },
+    /// The model searched the web.
+    ///
+    /// Arrives twice and the first one is empty — `item/started` carries
+    /// `query: ""` with null `action` and `results`, and only `item/completed`
+    /// has anything in it. So the started row has nothing to title itself with,
+    /// the same shape Claude's half-arrived tool arguments have.
+    #[serde(rename_all = "camelCase")]
+    WebSearch {
+        id: String,
+        #[serde(default, deserialize_with = "null_as_default")]
+        query: String,
+        #[serde(default, deserialize_with = "null_as_default")]
+        results: Vec<WebSearchResult>,
+    },
+    /// The model looked at an image on disk.
+    ///
+    /// Carries a path and no bytes, so the transcript has to copy the file the
+    /// way `archive_result_images` copies decoded ones — a screenshot in `/tmp`
+    /// is gone by the next boot. Captured bare (`/tmp/…`) here and as a
+    /// `file://` URL in a connector-driven session, so both spellings reach us.
+    ImageView { id: String, path: String },
+    #[serde(rename_all = "camelCase")]
+    McpToolCall {
+        id: String,
+        #[serde(default)]
+        server: String,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        status: ItemStatus,
+        #[serde(default)]
+        arguments: Option<Value>,
+        /// Whole, because the two captures disagree about what is in it: one
+        /// carries `connectorId`/`appName`/`duration{secs,nanos}`, the other
+        /// `appContext`/`pluginId`/`durationMs`. Reading it field by field
+        /// would pick a side.
+        #[serde(default)]
+        result: Option<Value>,
+        #[serde(default)]
+        error: Option<Value>,
+    },
+    /// A subagent Codex started, and what it is doing.
+    ///
+    /// `agent_path` is the agent's own name (`/root/count_to_three`), not a
+    /// filesystem path.
+    #[serde(rename_all = "camelCase")]
+    SubAgentActivity {
+        id: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        agent_thread_id: Option<String>,
+        #[serde(default)]
+        agent_path: Option<String>,
+    },
+    /// The calls that drive subagents — `spawn_agent`, `send_message`, `wait`,
+    /// `list_agents`, `interrupt_agent`, `followup_task`.
+    #[serde(rename_all = "camelCase")]
+    CollabAgentToolCall {
+        id: String,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        status: ItemStatus,
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default, deserialize_with = "null_as_default")]
+        receiver_thread_ids: Vec<String>,
+    },
+    /// A tool belonging to a connector rather than to Codex itself.
+    ///
+    /// **This is the second web-search route**, and the reason the native
+    /// `WebSearch` above is not enough: a session running under the ChatGPT
+    /// connectors searches through `extension` with `kind: "web.search"`,
+    /// carrying the same `query` and `results`, while a plain `app-server`
+    /// session emits `WebSearch`. Both were captured. Building to either alone
+    /// draws half the searches a reader makes.
+    #[serde(rename_all = "camelCase")]
+    Extension {
+        id: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default, deserialize_with = "null_as_default")]
+        results: Vec<WebSearchResult>,
     },
     /// Codex compacted the conversation. Can happen without being asked.
     ContextCompaction { id: String },
     #[serde(other)]
     Other,
+}
+
+/// One hit from either search route. Every field optional — this is somebody
+/// else's payload and a missing snippet must cost a line of the card, never the
+/// item it arrived on.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchResult {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +340,11 @@ pub enum ItemStatus {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsageNotification {
+    /// Load-bearing: a subagent reports its own occupancy on its own thread,
+    /// and folding that into the main reading makes the context ring describe
+    /// a conversation the reader is not having.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub turn_id: Option<String>,
     pub token_usage: TokenUsage,
@@ -243,6 +394,37 @@ pub struct ErrorNotification {
     pub will_retry: bool,
 }
 
+/// The model's own plan for the turn, rewritten each time it changes.
+///
+/// `update_plan` produces **no item at all** — it is the one tool whose only
+/// trace is this notification, which is why it drew nothing while every other
+/// tool at least had an item kind to miss.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanNotification {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    /// The model's own sentence about why the plan looks like this.
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub plan: Vec<PlanStep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStep {
+    #[serde(default)]
+    pub step: String,
+    /// `pending`, `inProgress`, `completed` — **camelCase**, where the same
+    /// tool's arguments in Codex's own rollout log spell it `in_progress`.
+    /// Captured rather than guessed at, for exactly that reason.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 /// A server request asking the user to approve something, in the one shape both
 /// kinds share.
 ///
@@ -274,7 +456,7 @@ pub struct ApprovalRequest {
     /// on the command params; it is on the wire, and the capture is what proves
     /// it. Kept as raw values because the answer echoes one back untouched: a
     /// decision Dray retyped would be a decision it could get wrong.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub available_decisions: Vec<Value>,
 }
 
@@ -294,30 +476,74 @@ pub fn parse_notification(method: &str, params: Value) -> Result<CodexEvent, ser
         | "item/reasoning/textDelta" => CodexEvent::Delta(serde_json::from_value(params)?),
         "thread/tokenUsage/updated" => CodexEvent::TokenUsage(serde_json::from_value(params)?),
         "error" => CodexEvent::Error(serde_json::from_value(params)?),
+        "turn/plan/updated" => CodexEvent::PlanUpdated(serde_json::from_value(params)?),
 
         // Seen, understood, drawn as nothing.
+        //
+        // Taken from the server's own `ServerNotification` enum, read out of
+        // the `codex` binary rather than guessed at from what has happened to
+        // fire here — a method reaches this arm the first time it arrives, not
+        // the second. What is *left* out is the rule: surfaces Dray never opens
+        // (`thread/realtime/*` voice, `fuzzyFileSearch/*` sessions, Windows
+        // sandbox setup, `externalAgentConfig/import/*`, login completion) stay
+        // `Unknown`, because one of those arriving would mean this app started
+        // speaking a protocol it does not know it speaks. That is news. A
+        // command execution narrating itself is not.
         //
         // `thread/status/changed` is a second opinion on a question
         // `StatusTracker` already answers from the turn lifecycle, and taking
         // both would let them disagree. `turn/diff/updated` is the
         // transcript-derived diff Dray's snapshot design deliberately rejects.
+        // `rawResponse*` is the model's own wire echo of items already drawn.
         // The rest are chatter with no row to draw.
         "thread/started"
         | "thread/status/changed"
         | "thread/closed"
+        | "thread/deleted"
         | "thread/archived"
         | "thread/unarchived"
+        | "thread/reverted"
         | "thread/name/updated"
         | "thread/queue/changed"
+        | "thread/goal/updated"
+        | "thread/goal/cleared"
+        | "thread/project/updated"
+        | "thread/settings/updated"
+        | "thread/environment/connected"
+        | "thread/environment/disconnected"
         | "turn/diff/updated"
-        | "turn/plan/updated"
+        | "turn/moderationMetadata"
+        | "hook/started"
+        | "hook/completed"
+        | "item/plan/delta"
         | "item/reasoning/summaryPartAdded"
         | "item/commandExecution/outputDelta"
+        // Codex writing into a running command's terminal, and saying so.
+        // `stdin` is the bytes it sent — `Ctrl-C` where Stop interrupted the
+        // command. The row already shows the command and its output, and the
+        // interrupt reaches the transcript on `turn/completed`.
+        | "item/commandExecution/terminalInteraction"
+        | "item/fileChange/outputDelta"
         | "item/fileChange/patchUpdated"
+        | "item/mcpToolCall/progress"
+        // The pass that decides whether a call can be auto-approved. Its
+        // outcome is already visible: the call either runs or raises a card.
+        | "item/autoApprovalReview/started"
+        | "item/autoApprovalReview/completed"
+        | "autoApprovalReview/strictReviewRequired"
+        | "rawResponseItem/completed"
+        | "rawResponse/completed"
+        // Connection-scoped exec, which Dray does not use — it runs commands
+        // through the agent, not around it.
+        | "command/exec/outputDelta"
+        | "process/outputDelta"
+        | "process/exited"
         | "serverRequest/resolved"
         | "account/rateLimits/updated"
         | "account/updated"
         | "mcpServer/startupStatus/updated"
+        | "mcpServer/oauthLogin/completed"
+        | "mcpServer/event/stream/notification"
         | "remoteControl/status/changed"
         | "model/safetyBuffering/updated"
         | "model/rerouted"
@@ -326,6 +552,8 @@ pub fn parse_notification(method: &str, params: Value) -> Result<CodexEvent, ser
         | "skills/changed"
         | "fs/changed"
         | "configWarning"
+        | "deprecationNotice"
+        | "guardianWarning"
         | "warning" => CodexEvent::Ignored,
 
         _ => CodexEvent::Unknown,
@@ -375,13 +603,44 @@ mod tests {
         ));
     }
 
+    /// Captured off the wire, and the reason the ignore list was taken from the
+    /// server's own enum rather than grown one failure at a time: this fired on
+    /// an ordinary Stop, so every interrupted command was filing a coverage gap
+    /// against a line there is nothing to draw for.
+    #[test]
+    fn terminal_interaction_is_ignored_not_unknown() {
+        let params = json!({
+            "threadId": "t", "turnId": "u", "itemId": "exec-1",
+            "processId": "38400", "stdin": "\u{3}"
+        });
+
+        assert!(matches!(
+            parse_notification("item/commandExecution/terminalInteraction", params).unwrap(),
+            CodexEvent::Ignored
+        ));
+    }
+
+    /// The other half of that rule. A surface Dray never opens has to stay
+    /// `Unknown`, because one arriving means this build is speaking a protocol
+    /// it does not know it speaks — which is a gap, not chatter.
+    #[test]
+    fn unopened_surface_stays_unknown() {
+        assert!(matches!(
+            parse_notification("thread/realtime/outputAudio/delta", json!({})).unwrap(),
+            CodexEvent::Unknown
+        ));
+    }
+
     /// An item kind we have not typed must not fail the line it arrived on —
     /// the turn around it still has to draw.
     #[test]
     fn unmodelled_item_kind_degrades() {
+        // `imageGeneration` is in the server's own variant list and Dray draws
+        // nothing for it. Pick a kind from that list rather than an invented
+        // one, so this keeps testing the case that actually happens.
         let params = json!({
             "threadId": "t", "turnId": "u",
-            "item": {"type": "webSearch", "id": "ws_1", "query": "rust"}
+            "item": {"type": "imageGeneration", "id": "ig_1", "prompt": "a cat"}
         });
 
         let CodexEvent::ItemStarted(started) =

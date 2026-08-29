@@ -116,6 +116,48 @@ tests — see `src-tauri/src/harness/codex/fixtures/README.md`.
   drives the working indicator. Codex sends nothing, so the mapper synthesizes
   one at the start of a turn and after every tool call. Without it the indicator
   fires once and stays quiet for the rest of the turn.
+- **Steering works, and not through `turn/steer`.** The server exposes that
+  method — it sits beside `turn/start` and `turn/interrupt` in the binary's
+  client-method list — and Dray never calls it. A prompt typed mid-turn goes out
+  as an ordinary `turn/start`, which the server accepts on a thread that already
+  has a turn running and folds into it. Verified live. `start_turn` awaits its
+  answer for exactly this reason, so a turn that *cannot* be steered comes back
+  as an error rather than a prompt that vanished. Wiring `turn/steer` would
+  change behaviour that already works; if it is ever wanted, it needs a capture
+  first, like everything else here.
+- **An item kind we have not typed vanishes without a trace.** An unknown
+  *method* files a parse failure; an unknown **item kind** falls into
+  `ThreadItem::Other`, maps to nothing, and files no failure at all. A real
+  session made 62 tool calls and Dray drew 34 — `mcpToolCall`, `webSearch`,
+  `imageView`, `subAgentActivity` and `collabAgentToolCall` all drew nothing,
+  and the only way that surfaced was reading Codex's own rollout beside our log.
+  `tool_kinds.jsonl` and `every_captured_tool_kind_draws_a_row` exist so the
+  next one fails a test instead.
+- **Web search arrives two different ways.** A plain `app-server` session emits
+  a native `webSearch` item; a session under the ChatGPT connectors emits
+  `extension` with `kind: "web.search"`, carrying the same query and results.
+  Both were captured live. CODEX-PLAN.md planned only the first, so building to
+  the plan would have drawn half the searches a reader makes.
+- **A Codex tool name is not a Claude tool name, and the label table is keyed by
+  name.** `toolLabel` returns the raw name on a miss, so `shell` and
+  `apply_patch` rendered as lowercase wire tokens beside Claude's "Bash" and
+  "Edited" until both were added to `TOOL_VERBS`. Any tool name a new mapper arm
+  invents needs a row there in the same change.
+- **The server sends about eighty notifications and Dray draws nine.** Growing
+  the "seen, drawn as nothing" list one failure at a time makes the failure log
+  useless, because every ordinary turn files gaps that are not gaps — an
+  interrupted command narrates itself on
+  `item/commandExecution/terminalInteraction`, which is how this was found. The
+  list in `parser.rs` is taken from the server's own `ServerNotification` enum
+  instead, read straight out of the `codex` binary:
+
+  ```
+  strings -a <codex> | grep -o 'ServerNotificationthread/started.*setupCompleted'
+  ```
+
+  What stays *unknown* is the rule. Surfaces Dray never opens — realtime voice,
+  fuzzy file search sessions, the Windows sandbox, config import — are left out
+  deliberately, so one arriving is real news rather than more chatter.
 
 ## What works today
 
@@ -179,11 +221,79 @@ The captured one offered `accept`, an execpolicy amendment and `cancel` — so a
 card built only from what was named would have had no way to say no. `decline`
 is always a legal answer, so it is added when the server names none.
 
+## Turn boundaries, and why the transcript ignores them
+
+Codex gives Dray what Claude Code cannot: real `turn/started` and
+`turn/completed` lines, a `duration_ms` on the close, and a final summary
+message. Codex's own app uses them to collapse a whole turn behind one
+"Worked for 19s" header, from the moment you send.
+
+Dray keeps its own grouping instead, deliberately. The transcript infers turns
+for Claude and segments them at **queued prompts**, so a message typed mid-turn
+stays where it was typed — and *when* the reader said something is part of what
+they said. Codex's single group loses that. The duration is mapped and
+persisted on `turn_completed`; nothing draws it today. Both are available if the
+collapse label ever wants them.
+
+## A subagent is a second thread on the same connection
+
+Claude Code files a subagent's work under the tool call that spawned it, and the
+envelope carries the join. Codex has no envelope. The subagent gets its **own
+thread id**, and everything it does — `turn/started`, its items, its deltas, its
+`thread/tokenUsage/updated`, its `turn/completed` — arrives on the same socket
+as the main conversation, distinguished by `threadId` and nothing else.
+
+So the mapper keeps a map of subagent thread → run, and stamps
+`AgentEvent.subagent` from it. Three things go wrong at once without it, and all
+three are silent:
+
+- the subagent's answer is drawn as though the primary agent said it;
+- its `turn/completed` **settles the session** while the main turn is still
+  running, so the composer goes idle mid-task;
+- its `thread/tokenUsage/updated` overwrites the context ring, which then
+  describes a conversation the reader is not having.
+
+The last two are why the guard drops the subagent's turn and usage events
+outright rather than merely labelling them: an event filed under a run is still
+an event, and `session.rs` reads turn boundaries off the payload.
+
+**The join is `agentThreadId`, never the activity's own id.** The lifecycle
+arrives as two `subAgentActivity` items on the main thread:
+
+```
+kind=started    id=call_THudg…                        agentThreadId=01a04c84-8c9b…
+kind=completed  id=subagent-completed-01a04c84-8cda…  agentThreadId=01a04c84-8c9b…
+```
+
+`started` carries the spawning call's id; `completed` mints a synthetic one.
+Joining on `id` leaves the run open forever — and quietly, since an unclosed run
+just keeps shimmering.
+
+**`subAgentActivity{started}` *is* the spawn row.** There is no
+`collabAgentToolCall` for it — the only one of those in the capture is `wait`,
+the tool the model calls to block on the agent it already started. Without an
+arm for the activity there is no row for the run at all, so the transcript shows
+a `wait` on something that never appeared.
+
+`item/started` and `item/completed` both carry the identical activity, so it is
+acted on once, on `started`.
+
+**The completion emits two events, and the second is stamped by hand.** Closing
+the spawning tool call settles the transcript row; the panel reads `done` off a
+`SubagentCompleted`, which has to carry the run's envelope or it matches no run.
+The activity rides the *main* thread, so the mapper's automatic stamping leaves
+it `None` — and an unstamped one is silent: the subagent shimmers for the rest
+of the session. Its usage is deliberately left off, since that reading was
+dropped rather than folded into the ring.
+
+The name comes off `agentPath` (`/root/count_to_three`), which is the agent's
+own name and not a filesystem path — `/root` is the namespace they all share, so
+the last segment is the name.
+
 ## What doesn't, yet
 
 Not wired: fork for Codex (it refuses before it copies anything, rather
-than forking into the parent's own conversation), subagents, MCP tool calls,
-web search, and images in prompts.
+than forking into the parent's own conversation) and images in prompts.
 
 A card left on screen when its turn is interrupted stays there — Codex sends no
 "never mind" for an approval the way Claude's `control_cancel_request` does, so

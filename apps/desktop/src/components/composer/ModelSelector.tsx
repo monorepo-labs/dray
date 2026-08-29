@@ -1,4 +1,5 @@
 import { useState } from "react";
+import AgentIcon from "@/components/AgentIcon";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,7 +16,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { Effort, Model, ModelId } from "@/types/events";
+import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
   low: "Low",
@@ -24,6 +25,15 @@ const EFFORT_LABELS: Record<Effort, string> = {
   xhigh: "Extra High",
   max: "Max",
 };
+
+/// Named as the reader knows them, not as the wire spells them. The label is
+/// the screen reader's alone — the row is marks, since two of them side by side
+/// say "pick one" in less space than two words do, and a tooltip repeating the
+/// name is longer than the row it hangs off.
+const AGENTS: { id: Harness; label: string }[] = [
+  { id: "claude_code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+];
 
 /// Next effort level for `model`, wrapping — what Shift+Tab lands on. `null`
 /// where the model offers nothing to cycle, so the chord no-ops rather than
@@ -41,12 +51,29 @@ export function nextEffort(model: Model | undefined, current: Effort | null): Ef
   return cycle[(i + 1) % cycle.length];
 }
 
+/// Which agent runs the session, which model it runs on, and at what effort —
+/// one control, because the three are one decision.
+///
+/// The agent used to sit in its own picker to the left. Folding it in costs
+/// nothing to reach (it is the first row of a menu that was already there) and
+/// buys the row a slot back, which the handoff row's three-button budget was
+/// already short of. It also puts the mark *on the trigger*, so the agent is
+/// readable at rest rather than only while the menu is open.
 export default function ModelSelector({
+  harness,
+  onHarnessChange,
+  canSwitchHarness,
   models,
   modelId,
   effort,
   onChange,
 }: {
+  harness: Harness;
+  onHarnessChange: (harness: Harness) => void;
+  /// The agent is the child process, so it is fixed once a session exists. The
+  /// row of icons goes with it; the trigger's own mark stays, since naming the
+  /// agent a session runs is worth a glyph whether or not it can change.
+  canSwitchHarness: boolean;
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
@@ -57,6 +84,7 @@ export default function ModelSelector({
   const [open, setOpen] = useState(false);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
+  const activeAgent = AGENTS.findIndex((a) => a.id === harness);
 
   /// What a row would resolve to if clicked: the live effort for the model
   /// already selected, each other model's own default. Mirrors the resolution
@@ -77,6 +105,7 @@ export default function ModelSelector({
               size="sm"
               className="gap-1 px-1.5 text-ui text-muted-foreground"
             >
+              <AgentIcon harness={harness} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
                   held back a step rather than reading as one long label. */}
               <span>{selected?.label ?? modelId}</span>
@@ -86,23 +115,76 @@ export default function ModelSelector({
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        {/* One line, so it stays a tooltip rather than a menu of shortcuts —
-            hence `max-w-none`, which the default `max-w-xs` would wrap. */}
+        {/* One thing only. Effort has its own control inside the menu and names
+            its own chord there, so listing both here made a tooltip that read
+            as a menu of shortcuts — hence `max-w-none`, which the default
+            `max-w-xs` would wrap. */}
         <TooltipContent side="top" className="max-w-none whitespace-nowrap">
           Switch model
           <KbdGroup>
             <Kbd>Shift</Kbd>
             <Kbd>Shift</Kbd>
           </KbdGroup>
-          <span className="text-muted-foreground">Effort</span>
-          <KbdGroup>
-            <Kbd>Shift</Kbd>
-            <Kbd>Tab</Kbd>
-          </KbdGroup>
         </TooltipContent>
       </Tooltip>
 
       <DropdownMenuContent align="start" className="min-w-48">
+        {/* Not menu items: a segmented control says "one of these two" where
+            two stacked rows would read as two more models. Plain buttons, so
+            the menu stays open — switching agent and then picking one of its
+            models is one visit rather than two. `mb-1` is the whole separation
+            from the list below: a rule there drew a box round a control that is
+            already a different shape. */}
+        {canSwitchHarness && (
+          <div
+            role="radiogroup"
+            aria-label="Agent"
+            className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1"
+          >
+            {/* The one moving part. A thumb under the marks, placed by index,
+                so switching reads as the selection sliding across rather than
+                one pill blinking out and another in. Unknown harness parks it
+                under the first mark rather than off the track.
+
+                `--surface-thumb` and a shadow, not `--accent`: the thumb has to
+                come up *past* the surface the menu is drawn at, out of the well
+                the track cuts. `--accent` is a white veil on glass, which over
+                a scrim is a few percent of light and read as nothing. */}
+            <div className="relative flex items-center">
+              <span
+                aria-hidden
+                className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+                style={{ transform: `translateX(${Math.max(activeAgent, 0) * 100}%)` }}
+              />
+              {/* Dimmed by opacity, not by colour. A muted-to-foreground ladder
+                  only moves a mark drawn in `currentColor`, so it lit Codex on
+                  hover and left Claude — which carries its own rust — sitting
+                  at one state forever. Opacity is the one dial both marks
+                  answer to. */}
+              {AGENTS.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={agent.id === harness}
+                  aria-label={agent.label}
+                  onClick={() => onHarnessChange(agent.id)}
+                  className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+                >
+                  <AgentIcon harness={agent.id} brand className="size-3.5" />
+                </button>
+              ))}
+            </div>
+            {/* Inside the track, in the width the two marks leave: a hint you
+                have to hover to find is one nobody finds. */}
+            <KbdGroup className="ml-auto pr-0.5">
+              <Kbd>⌘</Kbd>
+              <Kbd>Shift</Kbd>
+              <Kbd>A</Kbd>
+            </KbdGroup>
+          </div>
+        )}
+
         {models.map((model) =>
           model.efforts.length ? (
             // One row: hover opens the effort submenu (Radix's own behaviour),
@@ -124,6 +206,17 @@ export default function ModelSelector({
                 )}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
+                {/* The chord lives here, on the control it drives, rather than
+                    on the model trigger — that tooltip was carrying a shortcut
+                    for a thing one level down. No word beside it and no rule
+                    under it: the levels below say what it cycles, and a
+                    separator would draw a box round a hint. */}
+                <div className="flex px-1.5 py-1">
+                  <KbdGroup>
+                    <Kbd>Shift</Kbd>
+                    <Kbd>Tab</Kbd>
+                  </KbdGroup>
+                </div>
                 {model.efforts.map((level) => (
                   <DropdownMenuItem
                     key={level}

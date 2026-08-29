@@ -63,11 +63,11 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
-  /// The "hand it back" actions, parked behind the card with a quarter of each
-  /// button standing above it. A node for the toolbar's reason, and placed here
-  /// rather than by the shell so it sits inside the same `max-w-3xl` column and
-  /// against the card's own top edge — the card is what hides it, so nothing can
-  /// come between them. Absent on a new task: there is no session to send into.
+  /// The "hand it back" actions, clipped to a sliver above the card and opening
+  /// on hover. A node for the toolbar's reason, and placed here rather than by
+  /// the shell so it sits inside the same `max-w-3xl` column and against the
+  /// card's own top edge — it clips itself to that edge, so nothing can come
+  /// between them. Absent on a new task: there is no session to send into.
   handoff?: ReactNode;
   busy?: boolean;
   /// Which session's draft is in the box, and what the composer refocuses on
@@ -584,18 +584,20 @@ export default function ChatInput({
             card rather than displacing anything as it filters.
 
             `bg-composer`, not `bg-card`, and that is a vibrancy fix rather than
-            a colour change: the two tokens carry the same value, and only
-            `--card` becomes a 5.5% veil on glass. A veil is right for a surface
-            sitting *in* the page and wrong for one that has to hide something —
-            and this card has the handoff row parked behind it, which showed
-            straight through. Its own token rather than a borrowed one, so the
-            reason lives in the palette beside the rule it is an exception to. */}
+            a colour change: the two tokens carry the same value, and they part
+            on glass. `--card` becomes a 5.5% white veil, right for a surface
+            sitting *in* the page; this one floats at the window's edge over a
+            transcript that scrolls under it, so it takes `--veil-float` and the
+            blur that makes it readable — the same pair every menu and dialog
+            takes. It was the one raised surface that could never be glass, back
+            when it hid the handoff row by being opaque; [HandoffRow] clips
+            itself now, which is what freed it. */}
         <div
           ref={cardRef}
           className={cn(
             "relative rounded-2xl transition-colors",
             !isNewTask &&
-              "border border-hairline bg-composer focus-within:border-hairline-strong",
+              "border border-hairline bg-composer backdrop-blur-xl focus-within:border-hairline-strong",
           )}
         >
           {/* Two separate consequences of the empty state, passed separately

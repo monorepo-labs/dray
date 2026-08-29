@@ -201,25 +201,46 @@ pub fn claude_models() -> Vec<Model> {
 pub fn codex_models() -> Vec<Model> {
     use Effort::*;
 
+    // The current family only. Older generations keep their ids, aliases and
+    // context windows — a session started on one resumes and reads back — they
+    // are simply not offered, since a picker is a recommendation and nothing
+    // here recommends last year's model.
+    //
+    // **Medium by default, where Claude's models default to High.** Codex
+    // reasons at every level and starts here itself; `resolve_effort` reads
+    // this, so the flag follows without a second constant.
     vec![
         Model {
             id: ModelId::Gpt56Sol,
-            label: "GPT-5.6-Sol".into(),
+            label: "5.6 Sol".into(),
             efforts: vec![Low, Medium, High, Xhigh, Max],
-            default_effort: Some(High),
+            default_effort: Some(Medium),
         },
         Model {
             id: ModelId::Gpt56Terra,
-            label: "GPT-5.6-Terra".into(),
+            label: "5.6 Terra".into(),
             efforts: vec![Low, Medium, High, Xhigh, Max],
             default_effort: Some(Medium),
         },
         Model {
             id: ModelId::Gpt56Luna,
-            label: "GPT-5.6-Luna".into(),
+            label: "5.6 Luna".into(),
             efforts: vec![Low, Medium, High, Xhigh, Max],
             default_effort: Some(Medium),
         },
+    ]
+}
+
+/// Every Codex model this build can still *run*, listed or not.
+///
+/// [`codex_models`] is the picker's list and stops at the current family; this
+/// is what [`find_model`] searches, so a session started on an older one
+/// resumes instead of failing at the spawn with "unknown model".
+fn every_codex_model() -> Vec<Model> {
+    use Effort::*;
+
+    let mut all = codex_models();
+    all.extend([
         Model {
             id: ModelId::Gpt55,
             label: "GPT-5.5".into(),
@@ -238,15 +259,32 @@ pub fn codex_models() -> Vec<Model> {
             efforts: vec![Low, Medium, High, Xhigh],
             default_effort: Some(Medium),
         },
-    ]
+    ]);
+    all
 }
 
-/// Every model this build lists, whichever harness runs it.
+/// What the picker offers for a harness.
 pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => codex_models(),
     }
+}
+
+/// Whether a harness can *run* a model, which is a wider question than whether
+/// it offers one.
+///
+/// The two differ by exactly the models retired from a picker, and reading the
+/// offered list for this is the bug it exists to prevent: a session started on
+/// an older model would stop resuming the day its successor shipped, refused
+/// for a stance nobody changed.
+pub fn runs_on(id: ModelId, harness: Harness) -> bool {
+    match harness {
+        Harness::ClaudeCode => claude_models(),
+        Harness::Codex => every_codex_model(),
+    }
+    .into_iter()
+    .any(|m| m.id == id)
 }
 
 /// `None` for anything this build doesn't list, including `Unknown` read back
@@ -259,7 +297,7 @@ pub fn models_for(harness: Harness) -> Vec<Model> {
 pub fn find_model(id: ModelId) -> Option<Model> {
     claude_models()
         .into_iter()
-        .chain(codex_models())
+        .chain(every_codex_model())
         .find(|m| m.id == id)
 }
 
@@ -279,6 +317,33 @@ pub fn resolve_effort(model: &Model, requested: Option<Effort>) -> Option<Effort
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model dropped from the picker must still resume. The two lists differ
+    /// by exactly the retired models, and reading the offered one for "may this
+    /// run" is what would strand every session on an older generation.
+    #[test]
+    fn a_retired_model_still_runs_but_is_not_offered() {
+        assert!(runs_on(ModelId::Gpt55, Harness::Codex));
+        assert!(find_model(ModelId::Gpt55).is_some());
+        assert!(!models_for(Harness::Codex).iter().any(|m| m.id == ModelId::Gpt55));
+    }
+
+    /// The picker offers one family, and every model in it reasons — so a
+    /// harness switch can never land the composer on a model with no effort.
+    #[test]
+    fn the_offered_codex_models_are_the_current_family() {
+        let offered = models_for(Harness::Codex);
+
+        assert_eq!(
+            offered.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
+            ["5.6 Sol", "5.6 Terra", "5.6 Luna"]
+        );
+        // Medium, where Claude's default is High. Cheap to state, and the one
+        // number a reader would otherwise have to open the picker to learn.
+        assert!(offered
+            .iter()
+            .all(|m| m.default_effort == Some(Effort::Medium)));
+    }
 
     /// Verified against the CLI: `--effort` on Haiku is accepted and ignored,
     /// so this pins a UI/persistence rule, not a spawn failure.

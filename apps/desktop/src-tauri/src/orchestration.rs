@@ -16,7 +16,7 @@
 use crate::{
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
-    models::{default_model_for, models_for, Effort, ModelId},
+    models::{default_model_for, models_for, runs_on, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
 };
@@ -514,11 +514,6 @@ fn resolve_model(
         .map(|p| p.model)
         .filter(|id| runs_on(*id, harness))
         .unwrap_or_else(|| default_model_for(harness)))
-}
-
-/// Whether this harness can actually run that model.
-fn runs_on(id: ModelId, harness: Harness) -> bool {
-    models_for(harness).into_iter().any(|m| m.id == id)
 }
 
 /// Sends a prompt into a session that already exists.
