@@ -33,4 +33,4 @@ When the user wants several independent pieces of work going at once, each can h
 
 # Issues
 
-When this session creates a Linear issue, or works on one, link it: `dray issue link "$DRAY_SESSION_ID" DRA-53 --title "<title>" --url "<url>"`.
+When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.
