@@ -34,9 +34,7 @@ const FAILED_MS = 4000;
 /// an empty list means the scan itself found nothing rather than that the
 /// reader is missing an editor.
 export default function OpenInButton({ cwd, className }: { cwd: string; className?: string }) {
-  // Keyed on `cwd` so a read also happens on session switch — the one trigger
-  // that survives this component rendering nothing. See `useOpenApps`.
-  const { apps, pick, select, open, refresh } = useOpenApps(cwd);
+  const { apps, pick, select, open, refresh } = useOpenApps();
 
   // `open`'s own sentence when a launch failed, held briefly on the button.
   // The alternative was the developer console, where it told the reader
@@ -70,14 +68,17 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         className,
       )}
     >
-      {/* Forced open while a failure is standing, and that is the difference
-          between reporting the error and filing it. Radix closes a tooltip on
-          click, so after a failed press the reader was left with a red glyph
-          and no sentence unless they moved away and hovered back — the glyph
-          says something went wrong, and `open`'s own sentence is the only thing
-          that says what to do about it. `undefined` hands control back, so
-          hover behaves normally the rest of the time. */}
-      <Tooltip open={error ? true : undefined}>
+      {/* Forced open while a failure is standing: Radix closes a tooltip on
+          click, so after a failed press the reader would otherwise have a red
+          glyph and no sentence unless they hovered back — and the sentence is
+          the only thing that says what to do about it.
+
+          `key` remounts the tooltip when the failure clears. Flipping `open`
+          between `true` and `undefined` swaps it between controlled and
+          uncontrolled, and Radix keeps its own stale open state across that —
+          a fresh instance starts closed, which is what "the failure is over"
+          should look like. */}
+      <Tooltip key={error ? "failed" : "idle"} open={error ? true : undefined}>
         <TooltipTrigger asChild>
           <button
             type="button"
@@ -118,12 +119,7 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         </TooltipContent>
       </Tooltip>
 
-      {/* Opening the menu is what re-reads a stale list, and it is the right
-          moment for it: this button is mounted for the life of the app, so
-          there is no remount to hang a read off, and the list only has to be
-          current when somebody is about to read it. No polling and no
-          visibility listener — an app being installed is rare, and the reader
-          about to pick from the menu is the one event that cares. */}
+      {/* Opening the menu re-reads the list — see `useOpenApps.refresh`. */}
       <DropdownMenu onOpenChange={(isOpen) => isOpen && refresh()}>
         <DropdownMenuTrigger asChild>
           <button
@@ -141,22 +137,13 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
         <DropdownMenuContent align="end" className="min-w-44">
           {apps.map((app, i) => (
             <Fragment key={app.path}>
-              {/* An inset rule between runs of a kind. Spacing alone was tried
-                  first and read as an accident rather than as a division; the
-                  component's own separator is full-bleed (`-mx-1`), which cuts
-                  the menu in two and reads heavier than three groups of two
-                  deserve. Held off both ends and at half the ramp's own 10%,
-                  it parts the runs without becoming the loudest thing here —
-                  it only has to separate two entries from two more. */}
+              {/* An inset dotted rule between runs of a kind, `PickerMenu`'s
+                  own idiom. The component's separator is a full-bleed filled
+                  bar, which cuts a five-entry menu in two; this clears the fill
+                  and zeroes the height so a solid bar doesn't sit under the
+                  dots. `/80` against the token rather than a hard-coded 8%, so
+                  it stays 8% black on a light menu rather than 8% white. */}
               {i > 0 && apps[i - 1].kind !== app.kind && (
-                // Dotted, the same idiom `PickerMenu` parts its own groups
-                // with. The component draws a filled `h-px` bar, so the rule
-                // has to move onto a border: the fill is cleared and the height
-                // zeroed, or a solid bar sits under the dots.
-                //
-                // `/80` of the ramp's 10%, so 8% — expressed against the token
-                // rather than hard-coded, which keeps it 8% *white* in dark and
-                // 8% black in light instead of a white rule on a light menu.
                 <DropdownMenuSeparator className="mx-2 my-1 h-0 border-t border-dotted border-border/80 bg-transparent" />
               )}
               <DropdownMenuItem

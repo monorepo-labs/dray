@@ -132,10 +132,10 @@ fn search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Bundle file name to its path, for every `.app` in the searched directories.
-fn installed() -> HashMap<String, PathBuf> {
+/// Bundle file name to its path, for every `.app` in `dirs`.
+fn installed(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
     let mut found = HashMap::new();
-    for dir in search_dirs() {
+    for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -229,14 +229,14 @@ fn read_icon(bundle: &Path) -> Option<String> {
     icon
 }
 
-/// Every known app that is installed, in [`KNOWN`]'s order with Finder last.
+/// Every known app in `installed`, in [`KNOWN`]'s order, then Finder — with no
+/// icons yet. Split from [`detect`] so the order can be pinned by a test that
+/// spawns nothing.
 ///
 /// Finder sits at the end rather than the front on purpose: it is the entry
 /// every machine has, so leading with it puts the least specific answer where
 /// the eye lands first.
-fn detect() -> Vec<ExternalApp> {
-    let installed = installed();
-
+fn resolve(installed: &HashMap<String, PathBuf>, finder: &Path) -> Vec<ExternalApp> {
     let mut apps: Vec<ExternalApp> = KNOWN
         .iter()
         .filter_map(|known| {
@@ -245,21 +245,28 @@ fn detect() -> Vec<ExternalApp> {
                 path: path.to_string_lossy().into_owned(),
                 name: known.name.to_string(),
                 kind: known.kind,
-                icon: read_icon(path),
+                icon: None,
             })
         })
         .collect();
 
-    let finder = Path::new(FINDER);
     if finder.is_dir() {
         apps.push(ExternalApp {
-            path: FINDER.to_string(),
+            path: finder.to_string_lossy().into_owned(),
             name: "Finder".to_string(),
             kind: ExternalAppKind::Files,
-            icon: read_icon(finder),
+            icon: None,
         });
     }
 
+    apps
+}
+
+fn detect() -> Vec<ExternalApp> {
+    let mut apps = resolve(&installed(&search_dirs()), Path::new(FINDER));
+    for app in &mut apps {
+        app.icon = read_icon(Path::new(&app.path));
+    }
     apps
 }
 
@@ -336,22 +343,52 @@ mod tests {
         }
     }
 
-    /// `Cloudflare WARP.app` is not `Warp.app`. A substring match would list it
-    /// as a terminal that then ignores the directory it is handed.
-    #[test]
-    fn lookup_is_exact_not_substring() {
-        let mut found = HashMap::new();
-        found.insert(
-            "Cloudflare WARP.app".to_string(),
-            PathBuf::from("/Applications/Cloudflare WARP.app"),
-        );
-        assert!(found.get("Warp.app").is_none());
+    fn bundle(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 
-    /// Finder is the fallback every machine has, so it must not lead the list.
+    /// One scan over a directory of fake bundles pins the three things worth
+    /// pinning: the match is exact (`Cloudflare WARP.app` is not `Warp.app`,
+    /// and a substring match would list it as a terminal that ignores the
+    /// directory it is handed), the order is the table's, and Finder comes
+    /// last. Icons are not read, so nothing spawns.
     #[test]
-    fn finder_is_not_an_editor() {
-        assert!(!KNOWN.iter().any(|k| k.name == "Finder"));
+    fn resolves_in_table_order_with_finder_last() {
+        let tmp = std::env::temp_dir().join(format!("dray-apps-{}", uuid::Uuid::now_v7()));
+        let apps_dir = bundle(&tmp, "Applications");
+        // Deliberately created in the order that would be wrong if read_dir
+        // order leaked through.
+        bundle(&apps_dir, "Ghostty.app");
+        bundle(&apps_dir, "Cloudflare WARP.app");
+        bundle(&apps_dir, "Cursor.app");
+        bundle(&apps_dir, "Not An App");
+        let finder = bundle(&tmp, "Finder.app");
+
+        let found = resolve(&installed(&[apps_dir]), &finder);
+        let names: Vec<&str> = found.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Cursor", "Ghostty", "Finder"]);
+        assert_eq!(found[2].kind, ExternalAppKind::Files);
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A bundle present in two searched directories resolves to the first —
+    /// the machine-wide install over the user's own copy, matching Launch
+    /// Services. A `HashMap` insert in the other order would silently flip it.
+    #[test]
+    fn first_directory_wins() {
+        let tmp = std::env::temp_dir().join(format!("dray-apps-{}", uuid::Uuid::now_v7()));
+        let system = bundle(&tmp, "Applications");
+        let user = bundle(&tmp, "home/Applications");
+        let expected = bundle(&system, "Zed.app");
+        bundle(&user, "Zed.app");
+
+        let found = installed(&[system, user]);
+        assert_eq!(found["Zed.app"], expected);
+
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     /// What this machine actually resolves, printed rather than asserted:
