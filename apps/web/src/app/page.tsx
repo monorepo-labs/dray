@@ -1,12 +1,11 @@
 import Image from "next/image";
 import { AppleGlyph } from "@/components/AppleGlyph";
 // import { Board } from "@/components/Board";
-import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
 // import { Tweets } from "@/components/Tweets";
-import { CLAUDE_SETUP, DOWNLOAD, DOWNLOAD_SIZE, REPO } from "@/lib/links";
+import { DOWNLOAD, DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
 
 /// Two widths, nested. The shell caps at 6xl and only the hero screenshot
@@ -40,22 +39,7 @@ export default function Home() {
             `font-medium` is the only weight that renders as itself. Wraps
             freely — nowrap at this size clipped on phones. */}
         <h1 className="max-w-2xl font-display text-3xl leading-[1.1] font-medium tracking-tight text-balance sm:text-4xl">
-          Run Claude Code and{" "}
-          {/* Codex is not shipped, so it is muted and carries the tag. The
-              two are one inline-block so the tag can never wrap away from
-              the word it qualifies. */}
-          <span className="relative inline-block whitespace-nowrap text-muted-foreground">
-            Codex
-            {/* Sits on the word's top-right corner: a badge inline would
-                push the headline's rhythm around, and one below it would
-                read as a second line of copy. The offsets are eyeballed
-                against the 4xl size — check them if the headline's size
-                changes. */}
-            <span className="absolute -top-0.5 -right-4 rounded-sm bg-command px-1 py-[0.15em] font-sans text-[0.26em] leading-none font-semibold tracking-wide text-background uppercase">
-              Soon
-            </span>
-          </span>{" "}
-          in one app.
+          Run Claude Code and Codex in one app.
         </h1>
         <p className="mt-3 text-base text-muted-foreground text-pretty sm:text-lg">
           Fast, feels right, runs agents in parallel — on your existing
@@ -73,39 +57,14 @@ export default function Home() {
           <span className="text-sm text-muted-foreground">{DOWNLOAD_SIZE}</span>
         </div>
 
-        {/* One footnote to the button: the prerequisite and the licence. The
-            setup link matters because the app drives the CLI rather than
-            bundling it. "Codex next" used to sit here too and moved into the
-            headline — the caveat belongs where the claim is made, or the
-            headline promises something the reader only later finds out
-            hasn't shipped. "open source" links the repo as the nav does;
-            that copy carries the star count, this one the licence. */}
-        <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground sm:text-sm">
-          <ClaudeGlyph className="size-3.5 shrink-0" />
-          <span>
-            Needs{" "}
-            <a
-              href={CLAUDE_SETUP}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-current"
-            >
-              Claude Code
-            </a>
-          </span>
-          <span aria-hidden>·</span>
-          <span>
-            Free and{" "}
-            <a
-              href={REPO}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-current"
-            >
-              open source
-            </a>
-            , Apache 2.0
-          </span>
+        {/* One footnote to the button: the licence. Naming a CLI as a
+            prerequisite used to sit here and moved into the app, which says
+            which agent is missing and how to install it at the moment the
+            reader picks one. "open source" carries no link — the nav's repo
+            copy is the one route to GitHub, and a second one a line below it
+            said the same thing twice. */}
+        <p className="mt-4 text-xs text-muted-foreground sm:text-sm">
+          Free and open source, Apache 2.0
         </p>
       </section>
 
