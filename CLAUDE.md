@@ -784,7 +784,7 @@ Drawn with **no backdrop** and at `size-5`, both against component's own default
 ## Forking a session
 
 **Fork = one conversation carried on twice.** Sidebar row's right-click menu hold
-it, as submenu: **Fork here** and **Fork in new worktree**. Both copy whole
+it, as submenu: **Fork in new worktree** and **Fork here**. Both copy whole
 conversation — CLI have no way to fork at chosen message, `--fork-session` take
 session and nothing narrower — so two item differ only in *where* copy run.
 
@@ -803,12 +803,24 @@ what let frontend mint fork's id like it mint new session's, keeping one rule
 have to read it back off first `result`, which arrive turn later. Also verified:
 CLI write fork **complete standalone transcript** holding parent's history, so
 `--resume <fork>` after work with no reference to parent; and `-w` combine with
-all three, which what make second menu item possible at all.
+all three, which what make worktree item possible at all.
 
-**Refused while parent busy.** CLI fork by *reading* parent's transcript, which
-live child still appending to, so fork taken mid-turn inherit half a turn.
-Backend check `has_outstanding_work()`, submenu trigger disable on `in_progress` — second one
-save trip, not the guard.
+**Refused while parent's *turn* in flight, and nothing wider.** CLI fork by
+*reading* parent's transcript, which live child appending to mid-turn, so fork
+taken there inherit half a turn. Background task outstanding = not that case: it
+append *after* turn ended (how subagent report back), and fork = copy at point in
+time. Backend check `turn_in_flight()`, submenu trigger disable on
+`in_progress` — **same question**, since `InProgress` *is* `turn_in_flight` by
+construction, pinned by test in `session.rs`; frontend state rule once in
+[fork.ts](apps/desktop/src/lib/fork.ts) rather than inline in menu.
+
+Guard was `has_outstanding_work()` and that = bug: it safe-to-replace-the-child
+question, and fork replace no child — it borrowed guard written for path that
+kill one (effort respawn, update install, which keep wide reading). `local_bash`
+task never end, so session running dev server could not be forked again for rest
+of its life, **while menu item stay enabled** — same `result` had already moved
+status to `completed`. Two guard disagreeing = what made Fork read as broken
+rather than busy, which why they now answer one question.
 
 **Refused too where parent have no conversation.** Index entry written before
 spawn, so session whose child failed to start sit in sidebar with empty log and
@@ -885,7 +897,7 @@ either (`fork_from` cleared once CLI carry it out), so counting generation in
 title would promise more than rest of feature keep.
 
 **Submenu's digit picks by position, and the listener sits above the portal
-it names rows in.** `1`/`2` on Fork here / Fork in new worktree, same rule
+it names rows in.** `1`/`2` on Fork in new worktree / Fork here, same rule
 `VIEW_TABS` accelerator follow. `SubContent` render through Radix portal, so
 handler placed there only fire once focus — not just open submenu — move
 inside it; hovering trigger alone leave focus behind on trigger. Listener
@@ -1163,7 +1175,7 @@ Several things deliberately unfinished — don't mistake for bugs:
 
   **Max come from that same map's `contextWindow`**, so no window hardcoded per model and million-token model need no code; mapper remember `init`'s `model` to index it, since subagent on second model put two entries in it. Compaction clear tracked reading, so zeroed `result` landing _after_ boundary can't carry pre-compaction figure over `post_tokens` just published.
 
-- **Session status = state machine in `session.rs`, and it follow the turn alone.** `StatusTracker`: send or `init` → `in_progress`; `result` → `completed`, whatever background tasks outstanding. Background subagent run past `result` and CLI open promptless `init` later to report findings — that `init` reopen `in_progress` on own, so nothing gained by holding. Holding *was* the rule and it hung every session running a dev server, `Bash(run_in_background)` or `Monitor` — all `local_bash` (captured in `background_bash_monitor.jsonl`), and none ever end on own — until reader clicked Stop. Task set recorded beside status for two thing only: `has_outstanding_work()` (model call open *or* tasks outstanding) guard child-replacing paths — effort respawn, fork, update install — and Stop's `stop_task` fan-out name each id. Frontend keep tasks in live `tasksBySession` map, not off log: task outlive its turn, so `busy` no longer say whether log's last set current. `read_stdout` mint empty `background_tasks_changed` when child exit, since CLI cannot announce own death and last set would stand forever — emitted, **never logged**: live map need no closing entry, and it run after delete removed the file, where append would recreate it. Turn ending with task open keep its asks (task's subagent may be one asking); drain with no turn running clear them. `buildTranscript` take live task ids and keep spawning call pending while its task live — join = `SubagentRun.taskId`, since `task_id` ≠ `tool_use_id`. `completed` mean finished _and unread_: frontend clear it to `idle` when user view session (`mark_session_idle`), and persisted `in_progress` reset to `idle` at startup since no child survive restart. Status changes reach frontend as `session_status` events — derived state, never written to `.jsonl` log.
+- **Session status = state machine in `session.rs`, and it follow the turn alone.** `StatusTracker`: send or `init` → `in_progress`; `result` → `completed`, whatever background tasks outstanding. Background subagent run past `result` and CLI open promptless `init` later to report findings — that `init` reopen `in_progress` on own, so nothing gained by holding. Holding *was* the rule and it hung every session running a dev server, `Bash(run_in_background)` or `Monitor` — all `local_bash` (captured in `background_bash_monitor.jsonl`), and none ever end on own — until reader clicked Stop. Task set recorded beside status for two thing only: `has_outstanding_work()` (model call open *or* tasks outstanding) guard child-replacing paths — effort respawn, update install — and Stop's `stop_task` fan-out name each id. Fork **not** among them: it replace no child, so it guard on `turn_in_flight()` alone (see _Forking a session_). Frontend keep tasks in live `tasksBySession` map, not off log: task outlive its turn, so `busy` no longer say whether log's last set current. `read_stdout` mint empty `background_tasks_changed` when child exit, since CLI cannot announce own death and last set would stand forever — emitted, **never logged**: live map need no closing entry, and it run after delete removed the file, where append would recreate it. Turn ending with task open keep its asks (task's subagent may be one asking); drain with no turn running clear them. `buildTranscript` take live task ids and keep spawning call pending while its task live — join = `SubagentRun.taskId`, since `task_id` ≠ `tool_use_id`. `completed` mean finished _and unread_: frontend clear it to `idle` when user view session (`mark_session_idle`), and persisted `in_progress` reset to `idle` at startup since no child survive restart. Status changes reach frontend as `session_status` events — derived state, never written to `.jsonl` log.
 - **Codex = stub.** `Harness::Codex` parse from frontend, but `Session::init` bail on it.
 - **Composer toolbar = session's control surface.** [composer/](apps/desktop/src/components/composer) hold one component per control; `ComposerToolbar` hide project, branch, worktree toggle once session exist. `ChatInput` take row as `ReactNode` so it keep owning layout and measurement and nothing else.
 - **`isNewTask` = composer's two presentations, not one flag per effect.** Before session exist composer stand alone mid-window, so [ChatInput](apps/desktop/src/components/ChatInput.tsx) drop card's fill, border, padding, move toolbar above input, swap placeholder, replace send button with "Press ⏎ to send" hint. Dropping button safe only because Enter-to-send live in `onKeyDown` rather than in that button being form's submitter — make it submitter again and empty state lose its send path. `AppShell` have own `centered` prop for surrounding geometry. Horizontal alignment hand-tuned to single edge: toolbar's `-ml-2.5` cancel its `px-1` plus ghost button's 6px icon inset so `+` _glyph_ land on text edge. Change that button's size or variant and offset have to move with it.
