@@ -55,6 +55,46 @@ const DEADLINE: Duration = Duration::from_secs(45);
 /// spent, without changing the answer.
 const MAX_PROMPT_CHARS: usize = 500;
 
+/// A title is 3 to 6 words by contract, so anything much longer is the model
+/// having written a sentence. Slack over the contract deliberately: this is
+/// here to tell a title from prose, not to enforce the prompt.
+const MAX_WORDS: usize = 8;
+
+/// The empty directory a Codex title child runs in, under `~/.dray`.
+///
+/// **Codex has no `--disallowed-tools`, and `-s read-only` does not stand in
+/// for one** — it bounds what a call may do, and reading is a thing it may do.
+/// Verified against the real CLI under every other flag here: asked what the
+/// repo's `AGENTS.md` says, the model shells out and reads it. So the project
+/// root cannot be the child's cwd, or a repo's own instructions are one tool
+/// call away from steering the title, and `# Repository Guidelines` is a
+/// plausible-looking title that survives every check in [`clean_title`].
+///
+/// Emptiness is the whole guarantee: a read tool pointed at `.` finds nothing.
+/// Not an absolute one — a read-only sandbox can still reach the wider disk —
+/// but nothing in the child's context names a path to reach for, and the fence
+/// in [`build_prompt`] is what keeps the user's own text from supplying one.
+///
+/// Under `~/.dray` rather than `/tmp` because that directory is already `0700`,
+/// so nothing another local account plants can appear in the child's cwd.
+///
+/// Claude needs none of this: its tool list is empty, so its cwd is inert and
+/// stays the project root.
+const SCRATCH_DIR: &str = "title-scratch";
+
+/// The empty directory above, created if it isn't there.
+///
+/// Not cleaned up: it is one empty directory for the life of the install, and
+/// removing it between runs would open exactly the window where two overlapping
+/// title children disagree about whether their cwd exists.
+async fn scratch_dir() -> Result<std::path::PathBuf> {
+    let path = crate::store::get_home_app_dir().await?.join(SCRATCH_DIR);
+    tokio::fs::create_dir_all(&path)
+        .await
+        .with_context(|| format!("couldn't create the title scratch dir at {path:?}"))?;
+    Ok(path)
+}
+
 /// The instructions and the text to title, as the one prompt argument both
 /// CLIs take.
 ///
@@ -132,10 +172,13 @@ async fn title_command(harness: Harness, prompt: &str) -> Command {
                 // ~4.5k tokens against the real CLI.
                 "-c",
                 "model_reasoning_effort=low",
-                // The `AGENTS.md` in the child's cwd, refused. Codex reads one
-                // by default, which is a repo's own instructions steering a
-                // title — the thing the empty tool list buys on the Claude
-                // side.
+                // The `AGENTS.md` in the child's cwd, not injected. Verified
+                // both ways against the real CLI: with this the model answers
+                // "NOT IN CONTEXT" when asked what the doc says, and without it
+                // the repo's own instructions are in the turn that titles.
+                //
+                // Injection is only half of it — see [`SCRATCH_DIR`] for the
+                // half a sandbox cannot close.
                 "-c",
                 "project_doc_max_bytes=0",
                 // `~/.codex/config.toml` unread, so a reader's own MCP servers
@@ -148,11 +191,9 @@ async fn title_command(harness: Harness, prompt: &str) -> Command {
                 // The project root need not be a repository, and Codex refuses
                 // to start outside one otherwise.
                 "--skip-git-repo-check",
-                // Codex has no `--disallowed-tools`, so the sandbox is what
-                // bounds a turn that should call nothing at all. It cannot stop
-                // the model calling a tool, only stop the call writing — and
-                // `clean_title` is the other half: a turn that narrated its way
-                // to an answer is rejected rather than mined for a line.
+                // Bounds what a tool call can *do*, never whether one happens —
+                // read-only blocks writes and permits reads. So this is the
+                // floor under [`SCRATCH_DIR`], not a substitute for it.
                 "-s",
                 "read-only",
                 // Verified: the agent's final message is the whole of stdout,
@@ -177,9 +218,10 @@ async fn title_command(harness: Harness, prompt: &str) -> Command {
 /// symptom is a title that never arrives. Checked here so the log names the
 /// directory rather than reporting a bare spawn error.
 ///
-/// Nothing in the project reaches either model — verified against a `CLAUDE.md`
-/// planted in the child's cwd, which left the title untouched, and against
-/// Codex with `project_doc_max_bytes=0`.
+/// Nothing in the project reaches either model, and the two earn that
+/// differently: Claude by an empty tool list, verified against a `CLAUDE.md`
+/// planted in its cwd, and Codex by not being run in the project at all — see
+/// [`SCRATCH_DIR`], which is where its `cwd` argument stops applying.
 pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result<String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -189,6 +231,11 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
     if !Path::new(cwd).is_dir() {
         bail!("cwd for title generation does not exist: {cwd}");
     }
+
+    let cwd = match harness {
+        Harness::ClaudeCode => Path::new(cwd).to_path_buf(),
+        Harness::Codex => scratch_dir().await?,
+    };
 
     let child = title_command(harness, prompt)
         .await
@@ -201,15 +248,23 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        // Tokio leaves a child running when its handle drops, so without this
+        // the deadline below *abandons* a wedged child rather than ending it —
+        // and a Codex turn that called a tool is exactly the one with something
+        // left to be doing. `wait_with_output` moves the handle into its
+        // future, so timing that future out drops the handle, and this is what
+        // turns that drop into a kill and a reap.
+        //
+        // Paired with `wait_with_output` rather than a hand-rolled wait: it
+        // drains stdout while it waits, where waiting first deadlocks the
+        // moment a chatty model fills the pipe buffer.
+        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("couldn't start {} for title generation", harness.label()))?;
 
     let output = match timeout(DEADLINE, child.wait_with_output()).await {
-        Ok(res) => res.with_context(|| {
-            format!("{} failed while generating a title", harness.label())
-        })?,
-        // `wait_with_output` consumed the handle, so there's no kill to issue —
-        // the child is orphaned deliberately and exits on its own.
+        Ok(res) => res
+            .with_context(|| format!("{} failed while generating a title", harness.label()))?,
         Err(_) => bail!("title generation timed out"),
     };
 
@@ -302,8 +357,24 @@ fn clean_title(raw: &str) -> Option<String> {
         return None;
     }
 
-    // A title states a task; it doesn't ask or trail into what follows.
-    if line.ends_with('?') || line.ends_with(':') {
+    // A title states a task; it doesn't ask.
+    if line.ends_with('?') {
+        return None;
+    }
+
+    // A colon anywhere, not just trailing. `Here is the title: Fix Auth` is one
+    // line, ends in no punctuation, and clears every check above — so the
+    // trailing-only rule caught the shape that announces itself and missed the
+    // shape that goes on to answer. Nothing a 3-to-6-word title needs a colon
+    // for, so refusing all of them costs nothing real.
+    if line.contains(':') {
+        return None;
+    }
+
+    // A sentence is not a title. The one-line rule assumed prose arrives as
+    // several lines and it does not always: a model that complies with the
+    // format and ignores the brief writes one long line.
+    if line.split_whitespace().count() > MAX_WORDS {
         return None;
     }
 
@@ -345,6 +416,35 @@ mod tests {
         assert!(clean_title("Where should this live?").is_none());
         assert!(clean_title("Here is the title:").is_none());
         assert!(clean_title("```rust").is_none());
+    }
+
+    /// One line, no trailing punctuation, and still not a title. The
+    /// trailing-colon rule caught the preamble that stopped and missed the one
+    /// that carried on into an answer.
+    #[test]
+    fn a_preamble_that_answers_on_the_same_line_is_rejected() {
+        assert!(clean_title("Here is the title: Fix Auth").is_none());
+        assert!(clean_title("Title: Add dark mode").is_none());
+    }
+
+    /// The one-line rule assumed prose arrives as several lines. A model that
+    /// keeps the format and drops the brief writes one long line instead.
+    #[test]
+    fn a_sentence_is_not_a_title() {
+        assert!(clean_title(
+            "This session adds a dark mode toggle to the settings panel and wires it up"
+        )
+        .is_none());
+        // The contract is 3 to 6 words; the cap has slack and must not eat one
+        // that merely runs long.
+        assert!(clean_title("Add a dark mode toggle to settings").is_some());
+    }
+
+    /// `Untitled` is the documented answer for a meaningless prompt, so the
+    /// word rules have no floor — only a ceiling.
+    #[test]
+    fn the_one_word_fallback_survives() {
+        assert_eq!(clean_title("Untitled").unwrap(), "Untitled");
     }
 
     /// The contract is one line, so trailing blank lines are still fine.
@@ -426,20 +526,84 @@ mod command_tests {
         assert!(args_for(Harness::Codex).await.contains(&"gpt-5.6-luna".to_string()));
     }
 
-    /// Both must keep the project out of the child's context, and they buy it
-    /// with different flags — an empty tool list on one, a zeroed doc budget
-    /// and an unread user config on the other. Dropping either silently lets a
-    /// repo's own instructions steer the title.
+    /// Claude keeps the project out by having no tool to reach it with.
     #[tokio::test]
-    async fn neither_harness_lets_the_project_reach_the_model() {
+    async fn claude_titles_with_no_tools_at_all() {
         let claude = args_for(Harness::ClaudeCode).await;
+
         assert!(claude.contains(&"--strict-mcp-config".to_string()));
         assert!(claude.iter().any(|a| a.contains("Read,Write,Edit")));
+    }
 
+    /// Codex cannot: it has no `--disallowed-tools`, and `-s read-only` permits
+    /// reads. These flags stop the project *doc* being injected and the
+    /// reader's own config adding tools — the cwd is what stops the rest, and
+    /// it is asserted next door.
+    #[tokio::test]
+    async fn codex_refuses_the_project_doc_and_the_user_config() {
         let codex = args_for(Harness::Codex).await;
+
         assert!(codex.contains(&"project_doc_max_bytes=0".to_string()));
         assert!(codex.contains(&"--ignore-user-config".to_string()));
         assert!(codex.contains(&"read-only".to_string()));
+    }
+
+    /// The real boundary for Codex. Read-only bounds what a tool call may do,
+    /// never whether one happens — verified against the CLI, where the model
+    /// shells out and reads `AGENTS.md` under every flag above. An empty cwd is
+    /// what leaves the call nothing to find.
+    #[tokio::test]
+    async fn codex_titles_somewhere_empty_and_claude_titles_in_the_project() {
+        let project = std::env::current_dir().unwrap();
+        let project = project.to_str().unwrap();
+
+        let scratch = scratch_dir().await.unwrap();
+        assert!(scratch.is_dir());
+        assert!(!scratch.starts_with(project), "{scratch:?} is inside the repo");
+        assert_eq!(
+            tokio::fs::read_dir(&scratch)
+                .await
+                .unwrap()
+                .next_entry()
+                .await
+                .unwrap()
+                .map(|e| e.file_name()),
+            None,
+            "the scratch dir has to stay empty; that emptiness is the guarantee"
+        );
+    }
+
+    /// The deadline only ends a wedged child because `kill_on_drop` is set —
+    /// tokio's default leaves one running, which is what made the timeout an
+    /// abandonment rather than a stop. Pinned with `sleep` rather than a CLI,
+    /// since the behaviour being relied on is the runtime's.
+    #[tokio::test]
+    async fn timing_out_kills_the_child_rather_than_abandoning_it() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap() as i32;
+
+        assert!(
+            timeout(Duration::from_millis(100), child.wait_with_output())
+                .await
+                .is_err(),
+            "sleep 30 should outlast a 100ms deadline"
+        );
+
+        // The kill and reap are asynchronous, so give the runtime a moment
+        // before asking whether the process is gone.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let alive = std::process::Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success();
+
+        assert!(!alive, "pid {pid} outlived the deadline");
     }
 
     /// The fenced prompt has to travel as one argv element. Split across two,
