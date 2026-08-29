@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
+import { forkBlocked } from "@/lib/fork";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { isToday, relativeTime } from "@/lib/format";
 import { sessionBranch } from "@/lib/pr";
@@ -1123,8 +1124,8 @@ function RowAction({
 /// so reordering moves the digits with it and there is no second table to fall
 /// out of step with the labels.
 const FORKS = [
-  { label: "Fork here", worktree: false },
   { label: "Fork in new worktree", worktree: true },
+  { label: "Fork here", worktree: false },
 ] as const;
 
 /// The row's right-click menu. Delete confirms in place — a second surface for
@@ -1148,9 +1149,11 @@ function RowMenu({
   children,
 }: {
   onFork: (worktree: boolean) => void;
-  /// The session is working. The CLI forks by reading its transcript, which a
-  /// live child is still appending to, so a fork taken now can inherit half a
-  /// turn. The backend refuses it too — this only saves the trip.
+  /// The session's turn is in flight. The CLI forks by reading its transcript,
+  /// which a live child is appending to mid-turn, so a fork taken now can
+  /// inherit half a turn. From [`forkBlocked`](@/lib/fork), which is where the
+  /// rule is written — the backend refuses on the same question, and this only
+  /// saves the trip.
   forkDisabled: boolean;
   onDelete: () => void;
   /// Absent on a row that isn't nested — there is nothing to detach from, and
@@ -1363,7 +1366,7 @@ function SessionRow({
   return (
     <RowMenu
       onFork={(worktree) => void onFork(item.sessionId, worktree)}
-      forkDisabled={status === "in_progress"}
+      forkDisabled={forkBlocked(status)}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
     >
