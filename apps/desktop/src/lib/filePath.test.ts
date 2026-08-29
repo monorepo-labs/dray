@@ -59,8 +59,27 @@ describe("findFilePaths", () => {
     expect(paths("open /Users/me/My Project/file.ts now")).toEqual([]);
   });
 
-  /// The cost of that rule, stated rather than discovered. A slash in the next
-  /// word is not conclusive, and losing a link is the side to be wrong on.
+  /// A path can hold several spaces, so the read has to cross more than one
+  /// word to find the slash that gives the break away.
+  it("drops one several spaces cut up", () => {
+    expect(paths("open /Users/me/My Project Sub/file.ts now")).toEqual([]);
+  });
+
+  /// And what stops that read from eating ordinary prose. A match that already
+  /// names a file is complete, so the relative path four words later does not
+  /// cost it its link.
+  it("keeps a path that names a file, whatever follows it", () => {
+    expect(paths("Updated /a/b/x.ts and src/foo.ts")).toEqual(["/a/b/x.ts"]);
+  });
+
+  /// The other stop: a word opening with a slash is a path of its own.
+  it("is not fooled by a second path later in the line", () => {
+    expect(paths("open /a/b now and see /c/d")).toEqual(["/a/b", "/c/d"]);
+  });
+
+  /// The cost of the rule, stated rather than discovered. A slash in a
+  /// following word is not conclusive, and losing a link is the side to be
+  /// wrong on.
   it("also drops one followed by a word holding a slash", () => {
     expect(paths("see /a/b and/or c")).toEqual([]);
     expect(paths("see /a/b and c")).toEqual(["/a/b"]);

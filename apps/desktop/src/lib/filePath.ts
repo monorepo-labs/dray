@@ -54,7 +54,7 @@ export function findFilePaths(text: string): FilePathMatch[] {
     // and the half is a real path — one that can exist and open the wrong
     // directory. Nothing here can tell where the name ended, so an ambiguous
     // run is dropped rather than guessed at.
-    if (continuesPath(text, stop)) continue;
+    if (continuesPath(text, stop, path)) continue;
 
     found.push({ start: i, end, path });
     i = end - 1;
@@ -63,23 +63,50 @@ export function findFilePaths(text: string): FilePathMatch[] {
   return found;
 }
 
-/// Whether the word after `stop` looks like the rest of a path this scan just
-/// cut in half.
+/// Whether a final segment reads as a filename rather than as a directory.
 ///
-/// A slash in it is the whole signal, and it is not conclusive — `see /a/b
-/// and/or c` reads as a truncated path by this rule and is not one, so that
-/// link is lost. Losing a link is the side to be wrong on: the alternative is
-/// offering one that opens a directory the reader did not name.
+/// A dot is the whole of it, which is enough because of *where* a truncation
+/// falls: the scan cuts at a space, and the piece before a space inside a path
+/// is a directory name. `/Users/me/My Project/a.ts` breaks after `My`, never
+/// after something ending `.ts`.
+function namesAFile(path: string): boolean {
+  return (path.split("/").filter(Boolean).at(-1) ?? "").includes(".");
+}
+
+/// Whether what follows `stop` looks like the rest of a path this scan cut in
+/// half.
 ///
-/// One space only. A path does not span lines, so a run after a newline is the
-/// next sentence rather than the rest of this one.
-function continuesPath(text: string, stop: number): boolean {
-  if (text[stop] !== " ") return false;
+/// Read across every word to the end of the line, not just the next one: a path
+/// can hold several spaces, and `/Users/me/My Project Sub/a.ts` puts two plain
+/// words between the break and the slash that gives it away. The line is the
+/// bound, since a path does not span one.
+///
+/// Two things stop the read, and both are what keep it from eating ordinary
+/// prose. A match that already `namesAFile` is complete, so `Updated /a/b/x.ts
+/// and src/foo.ts` keeps its link rather than losing it to the relative path
+/// four words later. And a word *starting* with a slash opens a path of its
+/// own rather than continuing this one, which is what tells `open /a/b now and
+/// see /c/d` from a break.
+///
+/// What is left is not conclusive: `see /a/b and/or c` reads as truncated and
+/// is not, so that link is lost. Losing a link is the side to be wrong on,
+/// because the alternative opens a directory the reader never named.
+function continuesPath(text: string, stop: number, path: string): boolean {
+  if (namesAFile(path)) return false;
 
-  let end = stop + 1;
-  while (end < text.length && !/\s/.test(text[end])) end += 1;
+  let at = stop;
+  while (text[at] === " ") {
+    let end = at + 1;
+    while (end < text.length && !/\s/.test(text[end])) end += 1;
 
-  return text.slice(stop + 1, end).includes("/");
+    const word = text.slice(at + 1, end);
+    if (word.startsWith("/")) return false;
+    if (word.includes("/")) return true;
+
+    at = end;
+  }
+
+  return false;
 }
 
 /// `raw` as something `open` can be handed, or `null` where it cannot be.
