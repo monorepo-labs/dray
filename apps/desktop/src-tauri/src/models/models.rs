@@ -121,11 +121,13 @@ impl ModelId {
 /// cannot serve here — it is `Unknown`, which exists so an old index entry
 /// still deserializes and which has no CLI alias at all.
 ///
-/// Deliberately *not* the composer's seed. That one opens a picker the user is
-/// about to touch, so it starts cheap; this one is a session nobody is sitting
-/// in front of, doing a whole task unattended, and the cost of it being weak is
-/// work that has to be redone by hand. Effort follows from the model's own
-/// default, which is `High` for every model that has levels.
+/// The same answer the composer seeds on, and stated in both places because
+/// neither can call the other — `DEFAULT_MODEL_FOR` in `lib/model.ts` is the
+/// frontend's copy. The composer seeded cheap once, on the reasoning that it
+/// opens a picker the reader is about to touch; in practice that made every
+/// untouched session weak, and the cost of a weak session is work redone by
+/// hand. Effort follows from the model's own default, `High` for every Claude
+/// model that has levels.
 pub fn default_model() -> ModelId {
     ModelId::Opus
 }
