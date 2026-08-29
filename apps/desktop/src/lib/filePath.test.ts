@@ -95,6 +95,37 @@ describe("findFilePaths", () => {
   /// A path does not span lines, so the next line is a new sentence.
   it("is not fooled across a newline", () => {
     expect(paths("open /a/b.ts\nthen /c/d.ts")).toEqual(["/a/b.ts", "/c/d.ts"]);
+    expect(paths("open /a/b.ts\r\nthen /c/d.ts")).toEqual(["/a/b.ts", "/c/d.ts"]);
+  });
+
+  /// The match stops on any whitespace, so the read forward has to resume on
+  /// the same set. A non-breaking space is ordinary input — `&nbsp;` in agent
+  /// HTML — and checking the ASCII space alone left these halved.
+  it("drops one cut by a tab or a non-breaking space", () => {
+    expect(paths("open /Users/me/My Project/x.ts now")).toEqual([]);
+    expect(paths("open /Users/me/My\tProject/x.ts now")).toEqual([]);
+    expect(paths("open /Users/me/My Project/x.ts now")).toEqual([]);
+  });
+
+  /// `file_path:line_number` is what this app's own harness prompt asks for, so
+  /// it is the commonest shape a path takes in a transcript. The number cannot
+  /// reach the editor through `open -a`, so it stays prose.
+  it("drops a line locator, keeping the path", () => {
+    expect(paths("fix /a/b.ts:12 now")).toEqual(["/a/b.ts"]);
+    expect(paths("fix /a/b.ts:12:5 now")).toEqual(["/a/b.ts"]);
+    expect(paths("fix /a/b.ts#L12 now")).toEqual(["/a/b.ts"]);
+    expect(paths("fix (/a/b.ts:12).")).toEqual(["/a/b.ts"]);
+  });
+
+  /// The locator strip runs before the path is judged, so what is left of a
+  /// one-segment path is still refused.
+  it("does not let a locator strip conjure a path", () => {
+    expect(paths("see /a:12 there")).toEqual([]);
+  });
+
+  /// A digit-only path is not a locator.
+  it("keeps a path made of numbers", () => {
+    expect(paths("see /12/34 there")).toEqual(["/12/34"]);
   });
 });
 

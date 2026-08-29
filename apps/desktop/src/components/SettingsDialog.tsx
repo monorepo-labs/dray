@@ -393,7 +393,20 @@ function useRovingGroup(
 ) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
+  const move = (next: number) => {
+    onPick(next);
+    refs.current[next]?.focus();
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // Home and End are part of the same promise the arrows are: a screen reader
+    // told this is a radio group or a tab list expects all four.
+    if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      move(e.key === "Home" ? 0 : count - 1);
+      return;
+    }
+
     const step =
       e.key === "ArrowRight" || e.key === "ArrowDown"
         ? 1
@@ -402,9 +415,7 @@ function useRovingGroup(
           : 0;
     if (!step) return;
     e.preventDefault();
-    const next = (index + step + count) % count;
-    onPick(next);
-    refs.current[next]?.focus();
+    move((index + step + count) % count);
   };
 
   return { refs, onKeyDown };

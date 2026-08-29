@@ -96,9 +96,26 @@ function anchorToFile(node: HastNode): HastNode | null {
   if (node.tagName !== "a") return null;
 
   const href = node.properties?.href;
-  if (typeof href !== "string" || !isFilePath(href)) return null;
+  if (typeof href !== "string") return null;
 
-  return marked(href, node.children ?? [], true);
+  // `[x](/Users/me/My%20Project/x.ts)` is the one way to write a path holding a
+  // space as a markdown link — a bare one there ends the href — so the encoded
+  // form is the shape to expect, and it names no file left as it is. Decoding
+  // cannot smuggle anything past `isFilePath`, which still runs on the result.
+  const path = decodePath(href);
+  if (!isFilePath(path)) return null;
+
+  return marked(path, node.children ?? [], true);
+}
+
+/// `href` with its escapes resolved, or unchanged where they do not resolve.
+/// A malformed escape throws, and a link nobody can decode is still a link.
+function decodePath(href: string): string {
+  try {
+    return decodeURIComponent(href);
+  } catch {
+    return href;
+  }
 }
 
 /// Marks every absolute path in the prose so `Markdown` can draw it as a link.

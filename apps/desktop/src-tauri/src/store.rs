@@ -1520,6 +1520,18 @@ mod tests {
                 from: None,
                 cwd: None,
             }),
+            // Already carried a cwd, so this copy is a fork of a fork. The
+            // first ancestor to record one is the tree the message was
+            // actually written in, and it has to survive every copy after.
+            event(AgentEventPayload::UserMessage {
+                text: "and this".into(),
+                images: vec![],
+                issues: vec![],
+                baseline: None,
+                queued: false,
+                from: None,
+                cwd: Some("/repo/grandparent".into()),
+            }),
             event(AgentEventPayload::ToolCallCompleted {
                 call_id: "c1".into(),
                 result: ToolResult {
@@ -1547,6 +1559,10 @@ mod tests {
         assert!(matches!(
             &events[0].payload,
             AgentEventPayload::UserMessage { cwd: Some(cwd), .. } if cwd == "/repo/parent"
+        ));
+        assert!(matches!(
+            &events[1].payload,
+            AgentEventPayload::UserMessage { cwd: Some(cwd), .. } if cwd == "/repo/grandparent"
         ));
 
         let paths: Vec<_> = events

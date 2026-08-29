@@ -124,6 +124,37 @@ describe("rehypeFilePaths", () => {
     expect(span.properties?.className).toEqual([FILE_PATH_CLASS, FILE_LINK_CLASS]);
   });
 
+  /// The one way to write a path holding a space as a markdown link, since a
+  /// bare space there ends the href.
+  it("decodes an escaped href before judging it", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "/Users/me/My%20Project/x.ts" },
+        children: [{ type: "text", value: "x.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("/Users/me/My Project/x.ts");
+  });
+
+  /// A malformed escape throws, and a link nobody can decode is still a link.
+  it("survives an href that will not decode", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "/Users/me/100%/x.ts" },
+        children: [{ type: "text", value: "x.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("/Users/me/100%/x.ts");
+  });
+
   it("leaves a markdown link to a real URL as a link", () => {
     const tree = paragraph([
       {

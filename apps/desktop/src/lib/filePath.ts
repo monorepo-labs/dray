@@ -16,6 +16,24 @@ const OPENS_PATH = /[\s([{<"']/;
 /// right, so `(/Users/me/a.ts)` is a path and the bracket stays prose.
 const TRAILING = new Set([...".,;:!?)]}>\"'"]);
 
+/// Any whitespace but a line break.
+///
+/// The match itself stops on `\s`, so the read that looks for a broken path has
+/// to resume on the same set — checking the ASCII space alone left a path cut
+/// by a tab or a non-breaking space halved, which is the one failure this whole
+/// rule exists to prevent. `&nbsp;` in agent HTML makes that an ordinary input.
+/// A line break stays the bound, since a path does not span one.
+const GAP = /[^\S\r\n]/;
+
+/// A trailing `:12`, `:12:5` or `#L12`.
+///
+/// The app's own harness prompt asks for `file_path:line_number`, so this is
+/// the commonest shape an absolute path takes in a transcript. `open -a` cannot
+/// be handed a line, so the number stays prose and the path is what opens —
+/// left on, the link named a file that does not exist and the click did
+/// nothing.
+const LOCATOR = /(?::\d+(?::\d+)?|#L\d+)$/;
+
 export type FilePathMatch = { start: number; end: number; path: string };
 
 /// Whether `path` is an absolute path worth offering to open.
@@ -48,6 +66,11 @@ export function findFilePaths(text: string): FilePathMatch[] {
     let end = stop;
     while (end > i && TRAILING.has(text[end - 1])) end -= 1;
 
+    // After the punctuation strip, so `(/a/b.ts:12)` loses the bracket first
+    // and the locator second.
+    const locator = LOCATOR.exec(text.slice(i, end));
+    if (locator) end -= locator[0].length;
+
     const path = text.slice(i, end);
     if (!isFilePath(path)) continue;
     // A scan that stops at whitespace cuts `/Users/me/My Project/a.ts` in half,
@@ -76,6 +99,10 @@ function namesAFile(path: string): boolean {
 /// Whether what follows `stop` looks like the rest of a path this scan cut in
 /// half.
 ///
+/// Reads over any whitespace but a line break, not the ASCII space alone: the
+/// match stops on `\s`, so a tab or a non-breaking space breaks a path exactly
+/// as a space does.
+///
 /// The word straight after the break decides it wherever it can, and it can
 /// twice over. One holding a slash is the rest of this path, so the match is a
 /// truncation — that holds however finished the match looks, which is what
@@ -97,7 +124,7 @@ function continuesPath(text: string, stop: number, path: string): boolean {
   const finished = namesAFile(path);
 
   let at = stop;
-  while (text[at] === " ") {
+  while (GAP.test(text[at] ?? "")) {
     let end = at + 1;
     while (end < text.length && !/\s/.test(text[end])) end += 1;
 
