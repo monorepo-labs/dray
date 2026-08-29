@@ -158,7 +158,8 @@ struct IssueLinkArgs {
 
 #[derive(Subcommand)]
 enum SkillCommand {
-    /// Write the skill to ~/.claude/skills/dray/, where Claude Code finds it.
+    /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
+    /// where Claude Code and Codex find it.
     Install,
 }
 
@@ -484,20 +485,28 @@ fn download(url: &str, path: &Path) -> Result<(), String> {
     Err("curl or wget is required to update.".into())
 }
 
+/// Both agents read the same SKILL.md format from their own home dir, so one
+/// file lands in two places. Every install writes both: which agent the user
+/// runs is not something the CLI can know, and a Codex session with no skill
+/// is told by its prompt to read one.
+const SKILL_HOMES: [&str; 2] = [".claude", ".codex"];
+
 fn install_skill() -> Result<(), String> {
-    let dir = dirs::home_dir()
-        .ok_or("could not resolve your home directory")?
-        .join(".claude")
-        .join("skills")
-        .join("dray");
+    let home = dirs::home_dir().ok_or("could not resolve your home directory")?;
 
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    for agent_home in SKILL_HOMES {
+        let dir = home.join(agent_home).join("skills").join("dray");
 
-    let path = dir.join("SKILL.md");
-    std::fs::write(&path, SKILL).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
 
-    eprintln!("Installed the dray skill to {}", path.display());
+        let path = dir.join("SKILL.md");
+        std::fs::write(&path, SKILL)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+
+        eprintln!("Installed the dray skill to {}", path.display());
+    }
+
     Ok(())
 }
 

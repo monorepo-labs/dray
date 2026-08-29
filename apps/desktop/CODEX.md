@@ -32,7 +32,7 @@ spawn `codex app-server`
 initialize  →  ←  {userAgent, codexHome}      handshake, once per connection
 initialized →                                  (a notification, not a request)
   ↓
-thread/start {cwd, model, approvalPolicy, sandbox}
+thread/start {cwd, model, approvalPolicy, sandbox, developerInstructions}
   ←  {thread: {id}}                            ← recorded on the index entry
   ↓
 turn/start {threadId, input, model, effort, approvalPolicy}

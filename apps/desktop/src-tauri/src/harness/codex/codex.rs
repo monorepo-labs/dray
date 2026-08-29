@@ -44,6 +44,13 @@ use rpc::{Incoming, RpcClient};
 /// compliance log, and an unnamed client is an unattributable one.
 const CLIENT_NAME: &str = "dray";
 
+/// Dray's own rules, appended to Codex's prompt the way `--append-system-prompt`
+/// appends them to Claude's. `developerInstructions`, not `baseInstructions`:
+/// the second *replaces* the built-in prompt, tool docs and all. Sent on
+/// resume as well as start — the rollout does not carry it. Verified live:
+/// a codeword placed here comes back when asked for.
+const DEVELOPER_INSTRUCTIONS: &str = include_str!("developer_instructions.md");
+
 /// The conversation every write is addressed to, and what each write restates.
 ///
 /// Cloneable, and the read loop holds a clone: both halves have to agree about
@@ -294,6 +301,7 @@ async fn start_thread(client: &RpcClient, settings: &TurnSettings, cwd: &str) ->
         "model": settings.model,
         "approvalPolicy": settings.approval_policy,
         "sandbox": settings.sandbox,
+        "developerInstructions": DEVELOPER_INSTRUCTIONS,
     });
 
     let answer = client.request("thread/start", params).await?;
@@ -321,6 +329,7 @@ async fn resume_thread(
                 "model": settings.model,
                 "approvalPolicy": settings.approval_policy,
                 "sandbox": settings.sandbox,
+                "developerInstructions": DEVELOPER_INSTRUCTIONS,
             }),
         )
         .await?;
@@ -747,6 +756,17 @@ mod tests {
             Some("01a0497b-87e6-78a3-99a2-15b783b3db75")
         );
         assert_eq!(thread_id_from(&json!({"thread": {}})), None);
+    }
+
+    /// The Claude prompt names tools Codex does not have. A copy that still
+    /// names them tells the model to reach for something that is not there,
+    /// and the skill path it names is Codex's own.
+    #[test]
+    fn the_developer_instructions_name_nothing_codex_lacks() {
+        assert!(!DEVELOPER_INSTRUCTIONS.contains("AskUserQuestion"));
+        assert!(!DEVELOPER_INSTRUCTIONS.contains("Agent tool"));
+        assert!(DEVELOPER_INSTRUCTIONS.contains("~/.codex/skills/dray"));
+        assert!(DEVELOPER_INSTRUCTIONS.contains("dray issue link"));
     }
 
     /// Replays a real capture through the parser and the mapper.

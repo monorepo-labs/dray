@@ -538,7 +538,7 @@ impl SessionManager {
             // until the CLI creates it, and `current_dir` on a missing path
             // fails the spawn outright. Nothing waits on this, so that took
             // every worktree session's title with it in silence.
-            crate::title::spawn_title_generation(session_id, prompt, cwd, app);
+            crate::title::spawn_title_generation(session_id, harness, prompt, cwd, app);
 
             // Taken before the child exists, so nothing it does can end up
             // inside its own baseline. A worktree the CLI has yet to create has

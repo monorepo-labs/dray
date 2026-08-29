@@ -1,13 +1,18 @@
 import { useCallback } from "react";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import type { ModelByHarness } from "@/lib/model";
 import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
 
 /// Seeds for a first run with nothing stored. Once the user picks anything, their
 /// pick is the default — these are never read again.
+///
+/// No model is seeded: an empty map means "never picked one", which
+/// `rememberedModel` answers per harness. A single seeded id could only ever be
+/// right for one of them.
 const SEED: ComposerPrefs = {
   harness: "claude_code",
-  modelId: "haiku",
+  modelByHarness: {},
   effortByModel: {},
   permissionMode: "auto",
   useWorktree: false,
@@ -25,7 +30,10 @@ export type ComposerPrefs = {
   /// Which agent a new session starts on. Sticky like the rest of this row —
   /// somebody who works in Codex should not re-pick it every time.
   harness: Harness;
-  modelId: ModelId;
+  /// Keyed by harness, because a harness cannot run the other's models at all.
+  /// One id here was the whole of the bug it replaced: switching agent and back
+  /// found a pick the new list could not run and fell to whatever led it.
+  modelByHarness: ModelByHarness;
   effortByModel: EffortByModel;
   permissionMode: ApprovalPolicy;
   useWorktree: boolean;
