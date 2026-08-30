@@ -378,18 +378,37 @@ impl SessionManager {
         from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
-        let model_spec = find_model(&model).with_context(|| format!("unknown model {model}"))?;
+        // Resolved against whichever table can name it. The two single-vendor
+        // harnesses have one written here; pi's list is answered by the machine,
+        // so its models are looked up in what the probe last reported.
+        //
+        // `None` is legal for pi alone and means "let pi decide" — its own
+        // settings already name a model, and Dray naming one it might have no
+        // key for is the worst possible first run.
+        let model_spec = match harness {
+            Harness::Pi => crate::harness::pi::models::find(&model).await,
+            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
+        };
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
         // defaults and the `dray` CLI's own flags — so nothing upstream makes
         // them agree. Refused rather than quietly repaired: a session running on
         // a model nobody picked is the failure that looks like success.
-        if !runs_on(&model, harness) {
-            bail!("{} is not a {} model", model_spec.label, harness.label());
+        //
+        // The unset sentinel is exempt: it names no model, so there is nothing
+        // to be wrong about, and refusing it would refuse pi's own default.
+        if !model.is_unset() && !runs_on(&model, harness) {
+            let named = model_spec
+                .as_ref()
+                .map(|m| m.label.clone())
+                .unwrap_or_else(|| model.to_string());
+            bail!("{named} is not a {} model", harness.label());
         }
 
-        let effort = resolve_effort(&model_spec, effort);
+        let effort = model_spec
+            .as_ref()
+            .and_then(|spec| resolve_effort(spec, effort));
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -567,7 +586,7 @@ impl SessionManager {
             let mut session = Session::init(
                 session_id,
                 harness,
-                &model_spec,
+                model_spec.as_ref(),
                 effort,
                 permission_mode,
                 spawn_cwd,
@@ -754,7 +773,13 @@ impl SessionManager {
             let caps = s.harness.caps();
 
             if caps.applies_model_in_place && s.model != model {
-                s.set_model(&model_spec).await?;
+                // A harness that applies a model in place is one Dray names a
+                // default for, so the spec is there by construction — the table
+                // and `default_model_for` agree on which harnesses those are.
+                let spec = model_spec
+                    .as_ref()
+                    .context("no model to switch the session to")?;
+                s.set_model(spec).await?;
             }
             if caps.applies_permission_in_place && s.permission_mode != permission_mode {
                 s.set_permission_mode(permission_mode).await?;
@@ -800,7 +825,7 @@ impl SessionManager {
         let mut session = Session::init(
             session_id,
             harness,
-            &model_spec,
+            model_spec.as_ref(),
             effort,
             permission_mode,
             &spawn_cwd,
@@ -1132,6 +1157,10 @@ pub enum Transport {
     /// The conversation every Codex write is addressed to, and the settings
     /// each one restates. See [`Thread`](crate::harness::codex::Thread).
     Rpc(crate::harness::codex::Thread),
+    /// pi's connection. A peer like Codex's, but not JSON-RPC and with nothing
+    /// to address a write to: pi has one conversation per process, so the
+    /// client is the whole of it.
+    Pi(crate::harness::pi::rpc::PiClient),
 }
 
 impl Transport {
@@ -1144,7 +1173,9 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) => bail!("this control is not wired for this harness"),
+            Transport::Rpc(_) | Transport::Pi(_) => {
+                bail!("this control is not wired for this harness")
+            }
         }
     }
 }
@@ -1174,12 +1205,16 @@ pub struct Session {
 }
 
 impl Session {
-    /// Spawns the child process for the given harness. Only `ClaudeCode` is
-    /// implemented; other harnesses bail.
+    /// Spawns the child process for the given harness.
+    ///
+    /// `model` is optional because pi's is: it is multi-provider, so Dray names
+    /// no default it could be wrong about and lets pi's own settings decide.
+    /// The other two name one in `default_model_for`, so `None` reaching them
+    /// is a caller that skipped resolution rather than a state to spawn in.
     pub async fn init(
         session_id: &str,
         harness: Harness,
-        model: &Model,
+        model: Option<&Model>,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
         cwd: &str,
@@ -1195,7 +1230,7 @@ impl Session {
             Harness::ClaudeCode => {
                 claude_code::init(
                     session_id,
-                    model,
+                    model.context("a Claude Code session needs a model")?,
                     effort,
                     permission_mode,
                     cwd,
@@ -1224,6 +1259,34 @@ impl Session {
 
                 crate::harness::codex::init(
                     session_id,
+                    model.context("a Codex session needs a model")?,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
+            Harness::Pi => {
+                // A worktree reaches pi as a directory that already exists,
+                // never as a name to create — pi has no `-w`, so `send_msg`
+                // resolves a base and makes the tree itself. A name arriving
+                // here is a caller that skipped that, and a session that
+                // silently ran in the wrong tree is worth refusing outright.
+                if worktree_name.is_some() {
+                    bail!("pi cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("pi sessions cannot be forked yet");
+                }
+
+                // `None` where pi picked for itself. The spawn omits `--model`
+                // there, which is the honest answer for a multi-provider CLI
+                // whose user has already configured one.
+                crate::harness::pi::init(
+                    session_id,
                     model,
                     effort,
                     permission_mode,
@@ -1234,13 +1297,6 @@ impl Session {
                 )
                 .await
             }
-            // Unreachable in practice, and deliberately still here: the
-            // composer refuses the send because `agent_available` reports pi
-            // unavailable, so nothing should get this far. If something does,
-            // the index row for this session is already written — so the honest
-            // answer is a sentence naming why, not a row pointing at an agent
-            // that can never start.
-            Harness::Pi => bail!("pi sessions are not implemented yet"),
             // A session some newer build wrote into the shared index. Its
             // transcript still reads and its row still draws — that is what the
             // tolerant read bought — but there is no CLI here to carry it on,
@@ -1675,6 +1731,13 @@ async fn deliver_prompt(
     // ride a different shape there and are not wired yet; the text still goes.
     if let Transport::Rpc(thread) = transport {
         return crate::harness::codex::start_turn(thread, &text).await;
+    }
+    // pi takes a prompt as a command whose answer says it was accepted, so the
+    // write is the send rather than a line the child picks up on its own
+    // schedule. Images ride a different shape there and are not wired yet; the
+    // text still goes.
+    if let Transport::Pi(client) = transport {
+        return crate::harness::pi::send_prompt(client, &text).await;
     }
     let stdin = transport.lines()?;
 

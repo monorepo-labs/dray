@@ -404,6 +404,11 @@ mod tests {
     }
 
     const LIVE_TURN: &str = include_str!("fixtures/live_turn.jsonl");
+    /// The same shape a version later, captured against pi 0.84.4 while
+    /// wiring the spawn — the version floor `binpath` deliberately does not
+    /// hardcode, so a corpus that is all 0.80 would say nothing about the pi a
+    /// reader actually has.
+    const LIVE_TURN_0_84: &str = include_str!("fixtures/live_turn_0_84.jsonl");
     const NO_APPROVALS: &str = include_str!("fixtures/no_approvals.jsonl");
     const ABORT: &str = include_str!("fixtures/abort_and_queue.jsonl");
     const FAILED_TURN: &str = include_str!("fixtures/failed_turn_live.jsonl");
@@ -412,6 +417,7 @@ mod tests {
     /// rather than the four a mapper happens to need.
     const EVERY_FIXTURE: &[(&str, &str)] = &[
         ("live_turn", LIVE_TURN),
+        ("live_turn_0_84", LIVE_TURN_0_84),
         ("no_approvals", NO_APPROVALS),
         ("abort_and_queue", ABORT),
         ("failed_turn_live", FAILED_TURN),

@@ -341,12 +341,12 @@ impl Harness {
 pub struct Capabilities {
     /// Whether this build can drive the harness at all.
     ///
-    /// pi's wire format is typed and nothing spawns it yet, so it is reported
-    /// unavailable rather than left to fail at the spawn: the index row is
-    /// written *before* the child starts, so a harness that bails inside
-    /// `Session::init` leaves a sidebar row pointing at an agent that can never
-    /// run. It is also why the composer's notice offers no install command for
-    /// it — the CLI is not what is missing.
+    /// Answered *before* a session exists, because the index row is written
+    /// ahead of the spawn: a harness that bails inside `Session::init` leaves a
+    /// sidebar row pointing at an agent that can never run, and every retry
+    /// fails against it identically. All three are true today; the field stays
+    /// because the next harness is typed before it is driven, and that window
+    /// is exactly what this closes.
     pub drivable: bool,
     /// Whether the CLI creates a worktree itself, given a name.
     ///
@@ -401,13 +401,14 @@ impl Harness {
                 applies_permission_in_place: false,
                 forkable: false,
             },
-            // Nothing drives pi yet, so every answer is the conservative one.
-            // Two are permanent rather than pending: pi has no worktree flag,
-            // and its own `fork` cannot serve Dray's — `clone` hijacks the
-            // running process, and `--fork` and `--session` are refused
-            // together, so pi names the file rather than taking one.
+            // Two of these are permanent rather than pending: pi has no
+            // worktree flag, and its own `fork` cannot serve Dray's — `clone`
+            // hijacks the running process, and `--fork` and `--session` are
+            // refused together, so pi names the file rather than taking one.
+            // The rest are settings pi takes at spawn and nowhere else, so a
+            // change to any of them is a respawn.
             Harness::Pi => Capabilities {
-                drivable: false,
+                drivable: true,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,

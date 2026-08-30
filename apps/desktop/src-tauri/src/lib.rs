@@ -191,11 +191,30 @@ struct AgentAvailability {
     login_command: String,
 }
 
+/// The models a harness can run here.
+///
+/// Async because one harness's answer is not a table: pi is multi-provider, so
+/// its list depends on which providers the reader has logged into and only pi
+/// can say. That read is cached and cheap after the first, and it answers empty
+/// rather than erroring — a reader with no provider configured is in an
+/// ordinary state, and the picker draws its own empty row for it.
 #[tauri::command]
-fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
     // Defaulted rather than required so a caller that predates the second
     // harness still gets the list it always got.
-    models::models_for(harness.unwrap_or(harness::Harness::ClaudeCode))
+    match harness.unwrap_or(harness::Harness::ClaudeCode) {
+        harness::Harness::Pi => harness::pi::models::list().await,
+        other => models::models_for(other),
+    }
+}
+
+/// Drops pi's cached model list, so the next read asks pi again.
+///
+/// For the refresh a reader asks for by hand: they have just logged a provider
+/// in, and waiting out the freshness window would read as the list being wrong.
+#[tauri::command]
+async fn refresh_models() {
+    harness::pi::models::forget().await;
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
@@ -682,6 +701,7 @@ pub fn run() {
             send_msg,
             read_attachments,
             list_models,
+            refresh_models,
             agent_availability,
             get_settings,
             set_analytics_enabled,

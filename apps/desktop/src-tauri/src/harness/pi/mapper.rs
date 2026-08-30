@@ -126,6 +126,13 @@ impl Mapper {
                 vec![self.event(AgentEventPayload::TurnCompleted {
                     status,
                     stop_reason,
+                    // Never claimed for pi. Its providers each fail in their
+                    // own words, so there is no one sentence to recognise —
+                    // and there is nothing to offer if we did, since pi has no
+                    // login command: credentials come from the environment or
+                    // from `pi config`. The prose still reaches the reader on
+                    // the failed-turn row, which is the half that matters.
+                    auth_failed: false,
                     final_text,
                     usage,
                     duration_ms: None,

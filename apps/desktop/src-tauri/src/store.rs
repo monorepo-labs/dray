@@ -210,6 +210,28 @@ pub async fn get_sessions_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// `~/.dray/pi-sessions`, creating it if needed.
+pub async fn get_pi_sessions_dir() -> Result<PathBuf> {
+    let path = get_home_app_dir().await?.join("pi-sessions");
+
+    fs::create_dir_all(&path).await?;
+
+    Ok(path)
+}
+
+/// Where pi writes this session's own transcript.
+///
+/// pi's resume handle is the *file*, not an id it adopts: it mints its own
+/// session id and reports it back, so the path is the one thing Dray gets to
+/// choose and the one thing a resume needs. Its own directory rather than
+/// beside Dray's `<id>.jsonl` logs, because two unrelated formats under one
+/// name pattern can only be told apart by whoever remembers the difference.
+pub async fn pi_session_file(session_id: &str) -> Result<PathBuf> {
+    Ok(get_pi_sessions_dir()
+        .await?
+        .join(format!("{session_id}.jsonl")))
+}
+
 /// Reads and parses `index.json`. Missing or empty file reads as no sessions,
 /// not an error.
 pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {

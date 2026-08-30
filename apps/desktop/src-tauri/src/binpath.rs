@@ -137,8 +137,7 @@ static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// question actually worth asking, which is whether *this* pi answers the
 /// commands Dray drives it with — and the model probe already has to spawn
 /// `pi --mode rpc` and ask, so the real check costs nothing extra there and a
-/// constant here would be a second thing to keep true. Nothing reaches this
-/// gate yet in any case: pi is not drivable, so the composer refuses first.
+/// constant here would be a second thing to keep true.
 pub async fn pi() -> PathBuf {
     if let Some(path) = PI_PATH.get() {
         return path.clone();

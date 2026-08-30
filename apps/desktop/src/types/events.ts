@@ -776,7 +776,23 @@ efforts: Array<Effort>, defaultEffort: Effort | null,
  * table at all. That table, moved onto the row it describes, so a
  * discovered model carries its own alias instead of needing an arm here.
  */
-arg: string, };
+arg: string, 
+/**
+ * Who serves it, where the harness has more than one.
+ *
+ * Empty for the two single-vendor harnesses, which is what the picker
+ * reads as "do not group". pi's ids are `provider/model`, so the split is
+ * its own and made once, in `harness/pi/models.rs`.
+ */
+provider: string, 
+/**
+ * Whether the composer's image tray can send to this model at all.
+ *
+ * A real one says no: `gpt-5.3-codex-spark` reports `input: ["text"]`, and
+ * a tray that offers to attach a screenshot to it fails at the send with a
+ * sentence the reader cannot act on.
+ */
+acceptsImages: boolean, };
 
 /**
  * What an index entry records for a session's model.
