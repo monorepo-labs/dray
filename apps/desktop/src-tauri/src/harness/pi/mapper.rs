@@ -20,8 +20,8 @@
 //! `0`.
 
 use crate::events::{
-    AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, SessionInfo, ToolResult,
-    ToolType, TurnStatus, Usage,
+    AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, ErrorSource, SessionInfo,
+    ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::Harness;
 use serde_json::Value;
@@ -201,13 +201,90 @@ impl Mapper {
                 },
             })],
 
+            // A failed model request being tried again. It drives the retry
+            // indicator, which takes the working one's place — the turn is
+            // genuinely open and drawing nothing, so every working test passes,
+            // but the agent is not thinking, it is waiting on a retry.
+            //
+            // Both counts are defaulted rather than dropped: the indicator's
+            // whole message is "attempt N of M", and a retry that arrives
+            // without them still has to draw something. `1` is the honest floor
+            // for an attempt nobody numbered.
+            PiEvent::AutoRetryStart {
+                attempt,
+                max_attempts,
+                error_message,
+            } => vec![self.event(AgentEventPayload::ApiRetry {
+                // Defaulted rather than dropped: the indicator's whole message
+                // is "attempt N of M", so a retry that arrives without them
+                // still has to draw something, and `1` is the honest floor for
+                // a count nobody sent.
+                attempt: attempt.unwrap_or(1),
+                max_retries: max_attempts.unwrap_or(1),
+                // pi reports no HTTP status, and a cause it could not name is
+                // one absence rather than two spellings of it — the same reading
+                // that drops Claude Code's literal `unknown` on the way in.
+                status: None,
+                reason: error_message.filter(|m| !m.trim().is_empty()),
+            })],
+
+            PiEvent::CompactionStart => {
+                vec![self.event(AgentEventPayload::ContextCompactionStarted)]
+            }
+
+            // Closes the indicator its start opened, always — an aborted
+            // compaction and one whose shape this build cannot read both end
+            // here, and either left unmapped spins the indicator forever.
+            PiEvent::CompactionEnd {
+                reason,
+                result,
+                aborted,
+            } => {
+                // Dropped where the compaction did not finish: the numbers
+                // describe a context that was kept, and reporting a saving for
+                // one that was thrown away is worse than reporting none.
+                let saved = result.filter(|_| !aborted);
+
+                vec![self.event(AgentEventPayload::ContextCompacted {
+                    trigger: reason,
+                    pre_tokens: saved.as_ref().and_then(|r| r.tokens_before),
+                    post_tokens: saved.as_ref().and_then(|r| r.estimated_tokens_after),
+                    // pi times no compaction. Absent rather than zero, which the
+                    // UI would draw as one that took no time at all.
+                    duration_ms: None,
+                })]
+            }
+
+            // An extension threw, and pi carried on. Drawn where the rest of
+            // that group is not, because nothing else on screen will say so —
+            // a permission extension that throws simply stops gating, which
+            // looks exactly like it working. `fatal: false` is the literal
+            // truth: the session is still running, and this is the reader's
+            // own tooling to fix.
+            PiEvent::ExtensionError {
+                extension_path,
+                error,
+            } => {
+                let said = error.unwrap_or_else(|| "the extension failed".to_string());
+                let message = match extension_path {
+                    Some(path) => format!("{path}: {said}"),
+                    None => said,
+                };
+
+                vec![self.event(AgentEventPayload::Error {
+                    source: ErrorSource::Harness,
+                    message,
+                    fatal: false,
+                })]
+            }
+
             // Modelled, drawn as nothing. See `PiEvent::is_ignored` for why each
             // is here rather than left unknown.
             other if other.is_ignored() => Vec::new(),
 
-            // Everything else is either not wired yet — approvals, compaction,
-            // retries — or a line this build has never seen. Neither draws a
-            // row, and the read loop files the unknown ones.
+            // Everything else is either not wired yet — approvals — or a line
+            // this build has never seen. Neither draws a row, and the read loop
+            // files the unknown ones.
             _ => Vec::new(),
         }
     }
@@ -631,6 +708,128 @@ mod tests {
         assert_eq!(result.text, "hello\nworld\n");
         assert!(result.structured.is_some());
         assert!(!result.is_error);
+    }
+
+    fn map_one(line: &str) -> Vec<AgentEvent> {
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        mapper.map(super::super::parser::parse_line(line).expect("parses"))
+    }
+
+    /// A retry drives the indicator that already exists for one.
+    ///
+    /// The field names are the whole risk and none of them would fail loudly:
+    /// pi sends `maxAttempts` where Claude Code sends `maxRetries`, and
+    /// `#[serde(default)]` turns a misspelling into an absent count, so the
+    /// indicator would read "attempt 1 of 1" on every retry instead of
+    /// breaking. Taken from pi's own `agent-session.d.ts`, pinned here.
+    #[test]
+    fn a_retry_carries_its_count_and_the_cause_pi_named() {
+        let events = map_one(
+            r#"{"type":"auto_retry_start","attempt":3,"maxAttempts":10,
+                "delayMs":2000,"errorMessage":"overloaded"}"#,
+        );
+
+        let [event] = &events[..] else {
+            panic!("one retry, one row: {events:?}");
+        };
+        assert!(matches!(
+            &event.payload,
+            AgentEventPayload::ApiRetry {
+                attempt: 3,
+                max_retries: 10,
+                status: None,
+                reason: Some(cause),
+            } if cause == "overloaded"
+        ));
+    }
+
+    /// A retry that named nothing still draws, because the count is the message.
+    #[test]
+    fn a_retry_with_no_numbers_still_says_something() {
+        let events = map_one(r#"{"type":"auto_retry_start"}"#);
+
+        assert!(matches!(
+            events[0].payload,
+            AgentEventPayload::ApiRetry {
+                attempt: 1,
+                max_retries: 1,
+                reason: None,
+                ..
+            }
+        ));
+    }
+
+    /// A compaction closes its own indicator, and the trigger rides the event.
+    ///
+    /// `reason` is on `compaction_end` itself, not inside `result` — reading it
+    /// from the result would have left every compaction unattributed while
+    /// looking like it worked.
+    #[test]
+    fn a_compaction_reports_what_it_saved() {
+        let events = map_one(
+            r#"{"type":"compaction_end","reason":"threshold","aborted":false,
+                "result":{"summary":"…","firstKeptEntryId":"e1",
+                          "tokensBefore":120000,"estimatedTokensAfter":18000}}"#,
+        );
+
+        let [event] = &events[..] else {
+            panic!("one boundary, one row: {events:?}");
+        };
+        assert!(matches!(
+            &event.payload,
+            AgentEventPayload::ContextCompacted {
+                trigger: Some(reason),
+                pre_tokens: Some(120000),
+                post_tokens: Some(18000),
+                duration_ms: None,
+            } if reason == "threshold"
+        ));
+    }
+
+    /// An aborted compaction closes the indicator and reports no saving.
+    ///
+    /// Both halves matter. Left unmapped the indicator spins forever, and the
+    /// numbers describe a context that was thrown away — reporting a saving for
+    /// one is worse than reporting none.
+    #[test]
+    fn an_aborted_compaction_still_closes_and_claims_nothing() {
+        let events = map_one(
+            r#"{"type":"compaction_end","reason":"manual","aborted":true,
+                "result":{"tokensBefore":120000,"estimatedTokensAfter":18000}}"#,
+        );
+
+        assert!(matches!(
+            events[0].payload,
+            AgentEventPayload::ContextCompacted {
+                pre_tokens: None,
+                post_tokens: None,
+                ..
+            }
+        ));
+    }
+
+    /// An extension that throws gets a row, because nothing else would say so.
+    ///
+    /// A permission extension that fails simply stops gating, which looks
+    /// exactly like it working — and `fatal: false` is the literal truth, since
+    /// pi carries on and so does the session.
+    #[test]
+    fn an_extension_that_throws_is_drawn_and_is_not_fatal() {
+        let events = map_one(
+            r#"{"type":"extension_error","extensionPath":"/e/gate.js",
+                "event":"tool_call","error":"boom"}"#,
+        );
+
+        let [event] = &events[..] else {
+            panic!("one failure, one row: {events:?}");
+        };
+        let AgentEventPayload::Error { message, fatal, .. } = &event.payload else {
+            panic!("expected an error row: {:?}", event.payload);
+        };
+
+        assert!(message.contains("/e/gate.js"), "{message}");
+        assert!(message.contains("boom"), "{message}");
+        assert!(!fatal, "the session is still running");
     }
 
     /// A tool an extension registered arrives as an ordinary tool call, under

@@ -144,19 +144,81 @@ pub enum PiEvent {
     },
 
     CompactionStart,
+    /// A compaction finished, whether or not it produced anything.
+    ///
+    /// `reason` is the trigger and rides the *event*, not the result —
+    /// `manual`, `threshold` or `overflow`. `aborted` and a missing `result`
+    /// are the two ways it can end with nothing to report, and both still have
+    /// to close the indicator its start opened.
     CompactionEnd {
         #[serde(default)]
-        result: Option<Value>,
+        reason: Option<String>,
+        #[serde(default)]
+        result: Option<CompactionResult>,
+        #[serde(default)]
+        aborted: bool,
     },
 
     /// A failed model request being tried again.
+    ///
+    /// `maxAttempts`, not the `maxRetries` Claude Code sends. Nothing would
+    /// have caught the wrong spelling: `#[serde(default)]` turns it into an
+    /// absent count, and the indicator would have drawn "attempt 1 of 1" on
+    /// every retry rather than failing.
     AutoRetryStart {
         #[serde(default)]
         attempt: Option<u32>,
         #[serde(default)]
-        max_retries: Option<u32>,
+        max_attempts: Option<u32>,
+        /// Why the request failed. pi names one where Claude Code mostly does
+        /// not, so this is the cause the indicator gets to show.
+        #[serde(default)]
+        error_message: Option<String>,
     },
     AutoRetryEnd,
+
+    /// One entry appended to pi's own session file.
+    ///
+    /// Read off `agent-session.d.ts` rather than from a capture, and modelled
+    /// for the reason `tool_execution_update` is: it fires for **every** entry
+    /// pi writes, so left unknown it would be most of the parse-failure file,
+    /// and that file is only useful while everything in it is a real gap.
+    /// Nothing to draw either — it is pi's copy of what the mapper has already
+    /// turned into events.
+    EntryAppended,
+    /// pi's own name for the session changed. Dray writes and owns titles, so
+    /// there is nothing here to adopt — the same call `model_changed` makes.
+    SessionInfoChanged,
+    /// Partial output from a bash tool call, one delta at a time. The tool row
+    /// already shimmers for exactly as long as the call is pending, so there is
+    /// no row for this to fill yet.
+    BashExecutionUpdate,
+    /// A command the reader ran in pi's own TUI. Unreachable from Dray, which
+    /// has no TUI to type one into, and modelled so that stays true visibly.
+    UserBash,
+
+    /// The retries *inside* a compaction, which is itself a model call and can
+    /// fail like any other.
+    ///
+    /// Not folded into the retry indicator: that draws "the turn is waiting on
+    /// a retry", and a compaction is already drawing its own indicator for the
+    /// same stretch. Two indicators over one wait says less than one.
+    SummarizationRetryScheduled,
+    SummarizationRetryAttemptStart,
+    SummarizationRetryFinished,
+
+    /// An extension threw. pi carries on, and so does the session.
+    ///
+    /// Worth a row where the rest of this group is not: it is the reader's own
+    /// extension failing in their own session, and nothing else on screen will
+    /// say so — a permission extension that throws simply stops gating, which
+    /// looks exactly like it working.
+    ExtensionError {
+        #[serde(default)]
+        extension_path: Option<String>,
+        #[serde(default)]
+        error: Option<String>,
+    },
 
     /// A line this build has never seen. Filed, and costs nothing else.
     #[serde(other)]
@@ -171,14 +233,43 @@ impl PiEvent {
     pub fn is_ignored(&self) -> bool {
         matches!(
             self,
+            // A retry that succeeded is simply the request going through, so
+            // the next event is what clears the indicator — the same rule
+            // Claude Code's `api_retry` follows, and it needs no line of its
+            // own to say so.
             PiEvent::AutoRetryEnd
-                | PiEvent::CompactionStart
                 | PiEvent::ToolExecutionUpdate
+                | PiEvent::BashExecutionUpdate
+                | PiEvent::EntryAppended
+                | PiEvent::SessionInfoChanged
+                | PiEvent::UserBash
+                | PiEvent::SummarizationRetryScheduled
+                | PiEvent::SummarizationRetryAttemptStart
+                | PiEvent::SummarizationRetryFinished
                 | PiEvent::ModelChanged { .. }
                 | PiEvent::ThinkingLevelChanged { .. }
                 | PiEvent::QueueUpdate { .. }
         )
     }
+}
+
+/// What a compaction saved, where it got far enough to say.
+///
+/// Every field optional and unknown ones ignored, which is the rule the whole
+/// parser follows: pi's own type carries a summary, a first-kept entry id and a
+/// usage block this app has no use for, and a field it adds later must cost
+/// nothing. A compaction whose numbers cannot be read still closes the
+/// indicator — the UI drops a saving it cannot compute rather than reporting a
+/// wrong one.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionResult {
+    #[serde(default)]
+    pub tokens_before: Option<u64>,
+    /// Estimated, and pi says so in its own field name. It is what the model
+    /// will actually be handed next turn, which is the number the ring wants.
+    #[serde(default)]
+    pub estimated_tokens_after: Option<u64>,
 }
 
 /// The answer to one command.

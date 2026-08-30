@@ -197,7 +197,27 @@ does not create its own worktree, so a base ref makes `send_msg` build the tree
 and spawn into it with no worktree name, which is the same path an ordinary pi
 worktree session already takes. Untested is untested.
 
-**Slice 4 — not started.**
+**Slice 4 — retries, compaction and the rest of pi's vocabulary.** `auto_retry_start`
+drives the retry indicator and `compaction_start`/`compaction_end` drive the
+compacting one, both of which already existed for Claude Code. Field names came
+off pi's own `agent-session.d.ts`, not from a capture, and two would have failed
+*silently*: pi sends `maxAttempts` where Claude Code sends `maxRetries`, and a
+compaction's trigger rides the event as `reason` rather than sitting in
+`result`. `#[serde(default)]` turns either mistake into an absent field, so the
+indicator draws "attempt 1 of 1" forever and every compaction reads as
+untriggered — both pinned by test now.
+
+Six more event types were read out of the same file and modelled: `entry_appended`,
+`bash_execution_update`, `session_info_changed`, `user_bash` and the three
+`summarization_retry_*`. All drawn as nothing, all high-volume or meaningless
+here, and all modelled for `tool_progress`'s reason — the parse-failure file is
+only useful while everything in it is a real gap. `extension_error` is the one
+of the group that draws a row: nothing else on screen would say a permission
+extension had stopped gating, which looks exactly like it working.
+
+Still not started there: the `/` picker from `get_commands`, `accepts_images`
+and the tray gate, non-image attachments as a named line, and fork at a chosen
+message.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had
