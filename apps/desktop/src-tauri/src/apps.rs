@@ -15,6 +15,8 @@ use std::{
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::harness::Harness;
+
 /// Which run of the menu an app belongs to. Not cosmetic: "open in Cursor" and
 /// "open in Ghostty" are different asks, and a flat list of both reads as one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -321,9 +323,141 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     })
 }
 
+/// Terminal.app, and never the terminal the reader picked in the panel beside
+/// this.
+///
+/// Measured, because `open` reports nothing either way: handed a `.command`
+/// file, Terminal.app runs it, while Ghostty and Warp accept the open, exit 0
+/// and run nothing at all. Ghostty wants `open -na <bundle> --args -e <cmd>`
+/// and every other terminal its own argv, so honouring the pick means a second
+/// table — and the [`KNOWN`] one above promises only `open -a <bundle> <dir>`,
+/// which is a different shape from this. A button that silently does nothing
+/// on two of the five terminals that table lists is worse than one that always
+/// works, the same reading `pick_file_opener` takes with Finder.
+///
+/// Every mac has it, so there is no case where this resolves to nothing.
+const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
+
+/// Opens a terminal at `cwd` running the harness's login command.
+///
+/// No shell string crosses the bridge: the caller names a [`Harness`] and the
+/// command is composed here, from the resolved binary and
+/// [`Harness::login_args`]. Same reading `permissions.rs` takes — the rule
+/// never leaves Rust, so nothing the frontend holds can widen it.
+///
+/// The mechanism is a throwaway `.command` script rather than
+/// `osascript -e 'tell application "Terminal" to do script …'`, which needs
+/// macOS Automation permission: that prompts, can be denied, and a denial is
+/// silent. A `.command` file needs no permission at all.
+#[tauri::command]
+pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
+    }
+
+    let binary = crate::binpath::agent_binary(harness).await;
+    let mut command = sh_quote(&binary.to_string_lossy());
+    for arg in harness.login_args() {
+        command.push(' ');
+        command.push_str(arg);
+    }
+
+    // Terminal runs a `.command` from the reader's home, not from the script's
+    // own directory, so the `cd` is what puts the login in the session's tree.
+    // Self-delete last: a reader who closes the window mid-login leaks one file
+    // into a temp dir macOS reaps on its own.
+    let script = format!(
+        "#!/bin/sh\ncd {} || exit 1\n{}\nrm -f -- \"$0\"\n",
+        sh_quote(&cwd),
+        command
+    );
+
+    let path = std::env::temp_dir().join(format!("dray-login-{}.command", uuid::Uuid::now_v7()));
+    write_script(&path, &script)
+        .map_err(|err| format!("could not write the login script: {err}"))?;
+
+    let out = tokio::process::Command::new("open")
+        .arg("-a")
+        .arg(TERMINAL)
+        .arg("--")
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|err| format!("could not run open: {err}"))?;
+
+    if out.status.success() {
+        return Ok(());
+    }
+
+    let _ = std::fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        "could not open Terminal".to_string()
+    } else {
+        stderr
+    })
+}
+
+/// Writes the script at `0700` on the *create*, never by a `chmod` after.
+///
+/// Same reading the tracker key's own write records (`issues.rs`): `fs::write`
+/// creates at the process umask, so any other order leaves a window where the
+/// file is world-readable — and this one is also world-*executable*, which is a
+/// file Terminal will run. `create_new` beside it because a leftover from a
+/// crashed write could be somebody else's at whatever mode they chose. `0700`
+/// is what makes it executable at all, which `.command` needs.
+fn write_script(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut file = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o700)
+                .open(path)?
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?
+        }
+    };
+
+    file.write_all(body.as_bytes())
+}
+
+/// Quotes one word for `/bin/sh`.
+///
+/// The cwd is a real path from the index and can hold a space, a quote or a
+/// dollar sign, and it is being written into a file that gets executed — so
+/// single quotes, with the only character they cannot carry spliced in from
+/// outside them.
+fn sh_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The quoted word is written into a file that gets executed, so a cwd
+    /// holding a quote must stay one argument rather than becoming a command.
+    #[test]
+    fn sh_quote_contains_a_quote() {
+        assert_eq!(sh_quote("/tmp/plain"), "'/tmp/plain'");
+        assert_eq!(sh_quote("/tmp/my project"), "'/tmp/my project'");
+        assert_eq!(sh_quote("/tmp/$HOME"), "'/tmp/$HOME'");
+        assert_eq!(sh_quote("/tmp/it's"), r"'/tmp/it'\''s'");
+        assert_eq!(
+            sh_quote("/tmp/a'; rm -rf /; echo '"),
+            r"'/tmp/a'\''; rm -rf /; echo '\'''"
+        );
+    }
 
     /// The table is matched on exact file names, so an extension-less entry is
     /// one that can never be found and nothing else would say so.

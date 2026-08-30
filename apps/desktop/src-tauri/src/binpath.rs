@@ -142,9 +142,16 @@ pub async fn codex() -> PathBuf {
 /// and it is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
+    agent_binary(harness).await.is_absolute()
+}
+
+/// The resolved binary, for the callers that need to name it rather than spawn
+/// it — the login launcher writes it into a shell script, where the bare name
+/// would be looked up under launchd's `PATH` and not found.
+pub async fn agent_binary(harness: Harness) -> PathBuf {
     match harness {
-        Harness::ClaudeCode => claude().await.is_absolute(),
-        Harness::Codex => codex().await.is_absolute(),
+        Harness::ClaudeCode => claude().await,
+        Harness::Codex => codex().await,
     }
 }
 

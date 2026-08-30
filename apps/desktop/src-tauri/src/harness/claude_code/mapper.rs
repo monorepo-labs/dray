@@ -735,6 +735,7 @@ impl Mapper {
                 Ok(AgentEventPayload::TurnCompleted {
                     status,
                     stop_reason,
+                    auth_failed: is_error && is_auth_failure(&result),
                     final_text: Some(result),
                     usage: Some(self.map_result_usage(&usage, total_cost_usd, &model_usage)),
                     duration_ms: Some(duration_ms),
@@ -755,6 +756,10 @@ impl Mapper {
             } => Ok(AgentEventPayload::TurnCompleted {
                 status: TurnStatus::Error,
                 stop_reason: Some(terminal_reason),
+                // This variant carries no sentence at all, so nothing here
+                // could name a login. An auth failure arrives as `Success`
+                // with `is_error`, which is where the read happens.
+                auth_failed: false,
                 final_text: None,
                 usage: Some(self.map_result_usage(&usage, total_cost_usd, &model_usage)),
                 duration_ms: Some(duration_ms),
@@ -834,6 +839,32 @@ impl Mapper {
 /// transcript, not a lost turn-end.
 fn is_interrupt_notice(text: &str) -> bool {
     text.starts_with("[Request interrupted by user")
+}
+
+/// Whether the harness's own closing sentence says the turn died for want of a
+/// login. Claude Code offers nothing structured here — no subtype, no error
+/// code, only prose on `result` — so this is sentence matching and the needles
+/// stay narrow deliberately.
+///
+/// The three below are every auth wording carried by the 2.1.251 binary:
+/// "Failed to authenticate: OAuth session expired and could not be refreshed",
+/// the "· Please run /login" the composed errors append, and the bare "Not
+/// logged in". `invalid api key` is left out on purpose — a session running on
+/// `ANTHROPIC_API_KEY` is not cured by `claude auth login`, and the OAuth case
+/// that is arrives with "Please run /login" attached anyway.
+///
+/// Being wrong is cheap in one direction only, which is why it leans this way:
+/// the failed-turn row draws the sentence whatever this answers, so a wording
+/// we miss costs the button and keeps the report, while a wording we claim
+/// wrongly sends the reader to log in over something else entirely.
+fn is_auth_failure(text: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "please run /login",
+        "failed to authenticate",
+        "not logged in",
+    ];
+    let text = text.to_lowercase();
+    NEEDLES.iter().any(|needle| text.contains(needle))
 }
 
 /// Claude Code wraps a failed tool's message in `<tool_use_error>` tags. That is
@@ -1125,6 +1156,77 @@ fn system_event_subagent_info(e: &SystemEvent) -> (Option<String>, Option<String
 mod tests {
     use super::*;
     use crate::events::PermissionOptionKind;
+
+    /// Every wording is one the 2.1.251 binary carries, read out of it rather
+    /// than imagined — the sentence a reader actually meets is the first.
+    #[test]
+    fn recognises_the_auth_failures_the_cli_writes() {
+        for sentence in [
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
+            "Failed to authenticate through the broker: connection refused",
+            "Not logged in · Please run /login",
+            "Please run /login to sign in again.",
+            "OAuth token has expired · Please run /login",
+        ] {
+            assert!(is_auth_failure(sentence), "missed {sentence:?}");
+        }
+    }
+
+    /// The other half, and the one that matters more: a wrong claim here sends
+    /// the reader to log in over a limit or an outage they cannot fix that
+    /// way. The API-key case is deliberate — `claude auth login` is not its
+    /// cure.
+    #[test]
+    fn leaves_other_failures_to_the_ordinary_row() {
+        for sentence in [
+            "You've hit your session limit · resets 9:05pm",
+            "API Error: 529 Overloaded",
+            "Invalid API key format. API key must contain only alphanumeric characters",
+            "Error: ENOENT: no such file or directory",
+            "",
+        ] {
+            assert!(!is_auth_failure(sentence), "wrongly claimed {sentence:?}");
+        }
+    }
+
+    /// The flag rides the same event the sentence does, and only when the turn
+    /// actually failed: a successful turn whose text happens to quote one of
+    /// these needles must not raise the notice.
+    ///
+    /// Built by editing a captured `result` line rather than writing one, so
+    /// the rest of that payload stays whatever the CLI really sends.
+    #[test]
+    fn auth_failure_rides_the_failed_turn_only() {
+        let captured: serde_json::Value = include_str!("fixtures/printed.jsonl")
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|line| line["type"] == "result")
+            .expect("the fixture carries a result line");
+
+        let auth_failed = |is_error: bool, text: &str| {
+            let mut line = captured.clone();
+            line["is_error"] = serde_json::json!(is_error);
+            line["result"] = serde_json::json!(text);
+
+            let events = Mapper::default()
+                .map(parser::parse_line(&line.to_string()).unwrap())
+                .unwrap();
+
+            events.iter().any(|e| {
+                matches!(
+                    e.payload,
+                    AgentEventPayload::TurnCompleted {
+                        auth_failed: true,
+                        ..
+                    }
+                )
+            })
+        };
+
+        assert!(auth_failed(true, "Failed to authenticate"));
+        assert!(!auth_failed(false, "Failed to authenticate"));
+        assert!(!auth_failed(true, "API Error: 529 Overloaded"));
+    }
 
     fn map_fixture(mapper: &mut Mapper, fixture: &str) -> Vec<AgentEvent> {
         fixture
