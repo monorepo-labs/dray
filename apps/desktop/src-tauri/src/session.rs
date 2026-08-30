@@ -1963,10 +1963,9 @@ async fn deliver_prompt(
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
-    // schedule. Images ride a different shape there and are not wired yet; the
-    // text still goes.
+    // schedule.
     if let Transport::Pi(client) = transport {
-        return crate::harness::pi::send_prompt(client, &text, delivery).await;
+        return crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await;
     }
     let stdin = transport.lines()?;
 

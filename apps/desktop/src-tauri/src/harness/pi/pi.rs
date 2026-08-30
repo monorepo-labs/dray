@@ -274,8 +274,15 @@ pub enum Delivery {
 /// second response. So awaiting this proves the prompt was taken and nothing
 /// else — still worth awaiting, because a refusal then reaches the caller as an
 /// error instead of as a prompt that vanished.
-pub async fn send_prompt(client: &PiClient, text: &str, delivery: Delivery) -> Result<()> {
-    client.request("prompt", prompt_request(text, delivery)).await?;
+pub async fn send_prompt(
+    client: &PiClient,
+    text: &str,
+    delivery: Delivery,
+    images: &[crate::attachments::PreparedImage],
+) -> Result<()> {
+    client
+        .request("prompt", prompt_request(text, delivery, images))
+        .await?;
     Ok(())
 }
 
@@ -285,8 +292,36 @@ pub async fn send_prompt(client: &PiClient, text: &str, delivery: Delivery) -> R
 /// refused by pi — an unknown field is dropped in silence — so the failure is a
 /// steered prompt quietly waiting for the whole run instead, which reads as
 /// steering not being wired at all.
-fn prompt_request(text: &str, delivery: Delivery) -> Value {
+fn prompt_request(
+    text: &str,
+    delivery: Delivery,
+    images: &[crate::attachments::PreparedImage],
+) -> Value {
     let mut request = json!({"message": text});
+
+    // Omitted when there are none, because `prompt`'s own `images` is optional
+    // and an empty array is this build stating something pi already assumes.
+    //
+    // Not gated on the model taking images: pi resolves the model itself when
+    // Dray names none, so the app's copy of that answer can be absent or wrong,
+    // and a provider refusing an image is a sentence the reader can act on
+    // where silently dropping one is not. Before this the images were dropped —
+    // the transcript drew the screenshot the reader attached and the model was
+    // never given it.
+    if !images.is_empty() {
+        request["images"] = Value::Array(
+            images
+                .iter()
+                .map(|image| {
+                    json!({
+                        "type": "image",
+                        "data": image.data,
+                        "mimeType": image.mime_type,
+                    })
+                })
+                .collect(),
+        );
+    }
 
     // Omitted rather than sent as a default value: `models_and_steering.jsonl`
     // captures a prompt with no `streamingBehavior` at all landing in the
@@ -586,14 +621,44 @@ mod tests {
     #[test]
     fn only_a_steered_prompt_names_a_streaming_behavior() {
         assert_eq!(
-            prompt_request("go", Delivery::WhenIdle),
+            prompt_request("go", Delivery::WhenIdle, &[]),
             json!({"message": "go"}),
             "absent is pi's own default, so naming one restates its decision"
         );
 
         assert_eq!(
-            prompt_request("go", Delivery::Steer),
+            prompt_request("go", Delivery::Steer, &[]),
             json!({"message": "go", "streamingBehavior": "steer"})
+        );
+    }
+
+    /// An attached screenshot reaches the model.
+    ///
+    /// It did not before: `prompt`'s `images` was never sent, so the transcript
+    /// drew the picture the reader attached and pi was handed the text alone.
+    /// Silent in both directions, which is what makes it worth a test rather
+    /// than a glance — the field is optional, so its absence is not an error at
+    /// either end.
+    #[test]
+    fn an_attached_image_rides_the_prompt() {
+        let image = crate::attachments::PreparedImage {
+            stored_path: "/tmp/shot.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data: "aGk=".to_string(),
+        };
+
+        assert_eq!(
+            prompt_request("look", Delivery::WhenIdle, std::slice::from_ref(&image)),
+            json!({
+                "message": "look",
+                "images": [{"type": "image", "data": "aGk=", "mimeType": "image/png"}],
+            })
+        );
+
+        assert_eq!(
+            prompt_request("go", Delivery::WhenIdle, &[]),
+            json!({"message": "go"}),
+            "an empty array states what pi already assumes"
         );
     }
 

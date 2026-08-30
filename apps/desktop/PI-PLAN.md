@@ -215,9 +215,17 @@ only useful while everything in it is a real gap. `extension_error` is the one
 of the group that draws a row: nothing else on screen would say a permission
 extension had stopped gating, which looks exactly like it working.
 
-Still not started there: the `/` picker from `get_commands`, `accepts_images`
-and the tray gate, non-image attachments as a named line, and fork at a chosen
-message.
+**An attached image now reaches the model, and before this it did not.** The
+prompt carried the text alone, so the transcript drew the screenshot the reader
+attached and pi was never given it — silent at both ends, because `prompt`'s
+`images` is optional. It is sent ungated on `accepts_images`: pi resolves the
+model itself where Dray names none, so the app's copy of that answer can be
+absent or wrong, and a provider refusing an image is a sentence the reader can
+act on where dropping one is not.
+
+Still not started there: the `/` picker from `get_commands`, the composer-side
+tray gate on `accepts_images`, non-image attachments as a named line rather than
+an `@path` pi does not expand, and fork at a chosen message.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had
@@ -1322,7 +1330,7 @@ not persisted, or a surface Dray does not have.
 | permission mode | **Plan is shown** (§6) — unlike Codex. `acceptEdits` stays gone, as everywhere. `Auto` means something weaker than it does elsewhere and its copy should say so |
 | project / branch pickers | unchanged |
 | worktree toggle | unchanged (§11) |
-| image tray | images work — `prompt.images` takes base64 with a mime type, the same shape Claude takes. New: gate on the picked model's `input` including `image`. **Non-image attachments have no route**: Claude's `@/abs/path` convention is Claude's own parser, and pi expands no mentions inside an RPC prompt (below), so a dropped CSV would silently attach nothing. Codex answered this by appending a plain line naming the file, and pi should do the same |
+| image tray | **done** — `prompt.images` takes base64 with a mime type, the same shape Claude takes, and an attached screenshot rides it. Still to do: gate the composer's tray on the picked model's `input` including `image`. **Non-image attachments have no route**: Claude's `@/abs/path` convention is Claude's own parser, and pi expands no mentions inside an RPC prompt (below), so a dropped CSV would silently attach nothing. Codex answered this by appending a plain line naming the file, and pi should do the same |
 | `/` picker | **better than Claude's.** `get_commands` answers on the live connection, so no throwaway child. Sources are `extension`, `prompt` and `skill` — and pi reads `~/.agents/skills`, which is the same directory Claude reads, so a reader's skills are already there |
 | `@` picker | dark (§9) |
 
