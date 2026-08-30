@@ -37,6 +37,22 @@ const HIDDEN_BY_HARNESS: Partial<Record<Harness, ApprovalPolicy[]>> = {
   codex: ["plan"],
 };
 
+/// Whether this harness has a stance to pick at all.
+///
+/// pi has **no permission system**. Not a different one — none: it runs what
+/// the model asks for, and Dray's gate for it is an extension that is not
+/// built. So every entry in the menu would be a promise nothing keeps, which
+/// is the rule the composer already follows for the branch picker in worktree
+/// mode: a control offering something the CLI does not honour is worse than no
+/// control.
+///
+/// The stance recorded for a pi session is `bypassPermissions`, because that is
+/// what is actually happening. Saying `auto` would be the same lie written into
+/// the index, where a later build could read it back and believe it.
+export function offersPermissionModes(harness: Harness): boolean {
+  return harness !== "pi";
+}
+
 export default function PermissionSelector({
   harness,
   value,

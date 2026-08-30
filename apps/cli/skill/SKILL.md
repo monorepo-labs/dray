@@ -41,9 +41,9 @@ Options:
 | flag | meaning |
 |---|---|
 | `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
-| `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku`. Defaults to the current session's model — see *Model and effort*. |
+| `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku` on Claude Code; a `provider/model` id on pi. Defaults to the current session's model — see *Model and effort*. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`. Defaults to the current session's — see *Model and effort*. |
-| `--harness <name>` | `claude_code` or `codex`. Defaults to the current session's. |
+| `--harness <name>` | `claude_code`, `codex` or `pi`. Defaults to the current session's. |
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
 
@@ -69,10 +69,22 @@ costs like Opus, so the choice between Codex's models is not worth a turn.
 Ask **once for the whole batch**, not once per session, and start them all on
 the answer.
 
-Changing harness carries nothing across, because the two ladders are not one
-scale. A Codex session spawned from a Claude one takes Codex's own default, and
-the reverse likewise: Claude Code is Opus 5 on High, Codex is Sol on Medium.
-Pass `--model` and `--effort` there only when the user named them.
+Changing harness carries nothing across, because the ladders are not one scale.
+A Codex session spawned from a Claude one takes Codex's own default, and the
+reverse likewise: Claude Code is Opus 5 on High, Codex is Sol on Medium. Pass
+`--model` and `--effort` there only when the user named them.
+
+**pi names no default at all**, and that is deliberate rather than a gap: it is
+multi-provider, so which models exist depends on which providers the user has
+logged into, and any name this skill picked might be one they have no key for.
+A pi session started with no `--model` runs whatever pi's own settings say,
+which is the choice they already made. Pass one only when the user named it,
+and pass it whole — `xai/grok-4.6`, not `grok-4.6`, since two providers can
+serve the same model name.
+
+**pi runs without a permission gate.** It has no approval system, and Dray's
+own is not built for it yet, so a pi session does what the model asks. Say so
+when you start one for work that writes.
 
 ### Tagging a session with its issue
 

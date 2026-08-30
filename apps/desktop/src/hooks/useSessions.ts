@@ -358,7 +358,13 @@ const handleSendMsg = async (
       harness,
       model: modelId,
       effort,
-      permissionMode,
+      // pi has no permission system, so the stance it actually runs under is
+      // bypass whatever the picker last held. Recorded as that rather than as
+      // the pick, because the index is read back — by a later build, and by
+      // `dray new` when it inherits a parent's stance — and a stance nothing
+      // enforces is worse there than on screen, where the control is at least
+      // hidden.
+      permissionMode: harness === "pi" ? "bypassPermissions" : permissionMode,
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
       // worktree session, whose branch the CLI names itself.

@@ -4,7 +4,9 @@ import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
 import ModelSelector from "@/components/composer/ModelSelector";
-import PermissionSelector from "@/components/composer/PermissionSelector";
+import PermissionSelector, {
+  offersPermissionModes,
+} from "@/components/composer/PermissionSelector";
 import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
@@ -187,11 +189,13 @@ export default function ComposerToolbar({
 
       {/* Last of the pickers: it is the one control here most sessions set once
           and never touch, so it sits furthest from where the eye lands. */}
-      <PermissionSelector
-        harness={harness}
-        value={permissionMode}
-        onChange={onPermissionModeChange}
-      />
+      {offersPermissionModes(harness) && (
+        <PermissionSelector
+          harness={harness}
+          value={permissionMode}
+          onChange={onPermissionModeChange}
+        />
+      )}
 
       {/* `ml-auto` rather than a spacer, so a long branch name still gets the
           whole middle of the row and this stays pinned to the right edge. */}
