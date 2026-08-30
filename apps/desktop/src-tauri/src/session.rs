@@ -1608,7 +1608,22 @@ impl Session {
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
 
-        write_line(self.stdin.lines()?, &answer_response(request_id, &pending, &answers)).await?;
+        // Answered on the channel that asked, and in the shape that channel
+        // reads. pi's extension dialogs are not a permission verdict at all —
+        // each resolves the promise its own `ctx.ui` call returned — so they
+        // carry their method here rather than share one envelope.
+        match (&self.stdin, &pending.pi_dialog_method) {
+            (Transport::Pi(client), Some(method)) => {
+                client.send(&crate::harness::pi::dialog::response(method, request_id, &answers))?;
+            }
+            _ => {
+                write_line(
+                    self.stdin.lines()?,
+                    &answer_response(request_id, &pending, &answers),
+                )
+                .await?;
+            }
+        }
 
         let payload = AgentEventPayload::PermissionDecided {
             request_id: request_id.to_string(),

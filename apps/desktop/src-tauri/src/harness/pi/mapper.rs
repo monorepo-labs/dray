@@ -39,7 +39,7 @@ use super::parser::{AssistantEvent, ContentBlock, PiEvent, PiMessage};
 /// plain one that is merely less specific.
 fn tool_type(name: &str) -> ToolType {
     match name {
-        "bash" | "shell" => ToolType::Shell,
+        "bash" | "shell" | "powershell" => ToolType::Shell,
         "read" | "cat" => ToolType::FileRead,
         "edit" | "write" | "apply_patch" => ToolType::FileEdit,
         "glob" | "grep" | "find" | "ls" => ToolType::Search,
@@ -404,6 +404,7 @@ mod tests {
     }
 
     const LIVE_TURN: &str = include_str!("fixtures/live_turn.jsonl");
+    const EXTENSION_TOOL: &str = include_str!("fixtures/extension_tool_and_dialogs.jsonl");
     const ABORT: &str = include_str!("fixtures/abort_and_queue.jsonl");
     const FAILED: &str = include_str!("fixtures/failed_turn_live.jsonl");
 
@@ -630,5 +631,52 @@ mod tests {
         assert_eq!(result.text, "hello\nworld\n");
         assert!(result.structured.is_some());
         assert!(!result.is_error);
+    }
+
+    /// A tool an extension registered arrives as an ordinary tool call, under
+    /// the name its author gave it.
+    ///
+    /// This is the whole of what Dray has to do to support one, and it is why
+    /// there is no extension-tool code path: pi runs the tool itself and
+    /// reports it on the same two lines a built-in uses, so a transcript draws
+    /// it already. The capture is a probe extension registering `probe_tool`
+    /// (`fixtures/extension_tool_and_dialogs.probe.js`), which is the only way
+    /// to observe this — no shipped extension can be relied on to be installed.
+    ///
+    /// `ToolType::Other` is the honest classification and deliberately not a
+    /// guess: only the author knows whether their tool edits a file, and a
+    /// wrong type draws a diff viewer over something that is not a diff.
+    #[test]
+    fn an_extension_registered_tool_arrives_as_an_ordinary_tool_call() {
+        let events = mapped(EXTENSION_TOOL);
+
+        let (call_id, tool_type, input) = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                AgentEventPayload::ToolCallStarted {
+                    call_id,
+                    name,
+                    tool_type,
+                    input,
+                    ..
+                } if name == "probe_tool" => Some((call_id, tool_type, input)),
+                _ => None,
+            })
+            .expect("the extension's own tool reaches the wire");
+
+        assert_eq!(*tool_type, ToolType::Other);
+        assert_eq!(
+            input.get("note").and_then(|v| v.as_str()),
+            Some("hello"),
+            "its arguments ride the same field a built-in's do"
+        );
+
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.payload,
+                AgentEventPayload::ToolCallCompleted { call_id: done, .. } if done == call_id
+            )),
+            "and it completes like one, so the row settles"
+        );
     }
 }

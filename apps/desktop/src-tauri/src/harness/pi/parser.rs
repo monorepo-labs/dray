@@ -428,6 +428,10 @@ mod tests {
         ),
         ("resume", include_str!("fixtures/resume.jsonl")),
         (
+            "extension_tool_and_dialogs",
+            include_str!("fixtures/extension_tool_and_dialogs.jsonl"),
+        ),
+        (
             "models_and_steering",
             include_str!("fixtures/models_and_steering.jsonl"),
         ),
@@ -444,6 +448,47 @@ mod tests {
             include_str!("fixtures/session_id_not_adopted.jsonl"),
         ),
     ];
+
+    /// Every shape an extension can put on the wire when it wants the reader.
+    ///
+    /// `extension_ui_request` is the single channel every extension's UI goes
+    /// through — there is no per-package protocol — so covering these five
+    /// covers every package anyone installs, written or not yet written. Three
+    /// block until they are answered (`select`, `confirm`, `input`) and two are
+    /// announcements pi expects nothing back for (`notify`, `setStatus`).
+    ///
+    /// The distinction is the load-bearing half: an unanswered blocking request
+    /// hangs the turn with nothing on screen saying why, which is why the read
+    /// loop refuses what it cannot draw rather than ignoring it.
+    #[test]
+    fn an_extension_asks_the_reader_over_one_channel() {
+        let asked: Vec<(String, Option<String>)> =
+            out_lines(include_str!("fixtures/extension_tool_and_dialogs.jsonl"))
+                .iter()
+                .filter_map(|line| match parse_line(line) {
+                    Ok(PiEvent::ExtensionUiRequest { method, title, .. }) => Some((method, title)),
+                    _ => None,
+                })
+                .collect();
+
+        let methods: Vec<&str> = asked.iter().map(|(m, _)| m.as_str()).collect();
+        for wanted in ["setStatus", "notify", "select", "confirm", "input"] {
+            assert!(
+                methods.contains(&wanted),
+                "the probe extension asked over {wanted}, and the parser lost it: {methods:?}"
+            );
+        }
+
+        let select = asked
+            .iter()
+            .find(|(m, _)| m == "select")
+            .expect("a select was asked");
+        assert_eq!(
+            select.1.as_deref(),
+            Some("Allow probe_tool?"),
+            "a blocking request names what it is asking, which is what a card draws"
+        );
+    }
 
     /// Every line of every capture parses, and none of them lands in `Unknown`.
     ///

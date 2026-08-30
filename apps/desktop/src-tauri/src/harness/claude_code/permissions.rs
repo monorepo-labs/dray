@@ -49,6 +49,18 @@ pub struct PendingRequest {
     /// it — and an answer aimed at the wrong id is ignored in silence on both
     /// protocols.
     pub rpc_id: Option<i64>,
+    /// pi's dialog method (`select`, `confirm`, `input`), for a request an
+    /// *extension* asked rather than a permission gate.
+    ///
+    /// Held because pi has no one verdict envelope: each dialog is answered in
+    /// its own shape, and `confirm` reads a different field from the other two.
+    /// The id the answer names is the request id this entry is already filed
+    /// under, so only the method has to be remembered.
+    ///
+    /// `None` for both other harnesses, and a pi permission gate — should one
+    /// ever exist — would set it too, because what varies is the reply shape and
+    /// not who asked.
+    pub pi_dialog_method: Option<String>,
 }
 
 /// A button, plus the wire payload picking it sends.
@@ -84,6 +96,7 @@ impl PendingRequest {
             // Claude answers on the control channel, addressed by the request
             // id this entry is already filed under.
             rpc_id: None,
+            pi_dialog_method: None,
         };
 
         (pending, offered)
@@ -100,6 +113,7 @@ impl PendingRequest {
             input: request.input.clone(),
             options: HashMap::new(),
             rpc_id: None,
+            pi_dialog_method: None,
         }
     }
 }

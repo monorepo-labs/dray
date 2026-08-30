@@ -1070,7 +1070,19 @@ multiSelect: boolean,
  * not to offer an "Other" option because of it — so a renderer that shows
  * only these takes an answer away.
  */
-options: Array<QuestionOption>, };
+options: Array<QuestionOption>, 
+/**
+ * Whether an answer outside [`options`](Self::options) is one the asker can
+ * take.
+ *
+ * True for `AskUserQuestion`, where the CLI promises the user a box and
+ * tells the model not to offer an "Other" option because of it. False for
+ * pi's `select` and `confirm`, which are a closed list and a boolean: the
+ * extension that asked will be handed whatever comes back, and a typed
+ * sentence where it expected one of its own labels is an answer it cannot
+ * use.
+ */
+freeText: boolean, };
 
 export type QuestionOption = { 
 /**

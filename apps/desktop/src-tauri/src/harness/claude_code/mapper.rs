@@ -1099,6 +1099,10 @@ fn as_questions(
                     preview: o.preview,
                 })
                 .collect(),
+            // The CLI promises the user a box and tells the model not to offer
+            // an "Other" option because of it, so dropping this takes an answer
+            // away rather than tidying the card.
+            free_text: true,
         })
         .collect();
 

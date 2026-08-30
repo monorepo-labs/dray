@@ -137,15 +137,24 @@ export default function QuestionRequest({
                 </QuestionnaireChoice>
               ))}
 
-              {/* Always offered, never optional. The harness promises the user a
-                  free-text box and tells the model not to add an "Other" option
-                  because of it, so leaving this out removes an answer the
-                  question was written to allow. */}
-              <QuestionnaireInput
-                aria-label="Another answer"
-                placeholder="Something else…"
-                className="min-h-0 h-8"
-              />
+              {/* Offered wherever the asker can take an answer that isn't on
+                  the list, which is every `AskUserQuestion`: the harness
+                  promises the user a box and tells the model not to add an
+                  "Other" option because of it, so dropping it there removes an
+                  answer the question was written to allow.
+
+                  pi's extension dialogs are the exception and the flag is
+                  theirs. A `select` resolves to one of the extension's own
+                  labels and a `confirm` to a boolean, so a typed sentence is
+                  not an answer either can be given — the extension would be
+                  handed a string it has no branch for. */}
+              {question.freeText && (
+                <QuestionnaireInput
+                  aria-label="Another answer"
+                  placeholder="Something else…"
+                  className="min-h-0 h-8"
+                />
+              )}
             </QuestionnaireChoices>
           </QuestionnaireItem>
         ))}

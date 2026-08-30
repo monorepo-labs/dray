@@ -1,0 +1,333 @@
+//! Extension dialogs, turned into the question Dray already draws.
+//!
+//! pi is extensible, and an extension is where its permission gates, its
+//! approval classifiers and its path guards actually live — there is no gate in
+//! pi itself. Every one of those packages asks the reader the same way, over
+//! `extension_ui_request`, because [`createExtensionUIContext`] is the single
+//! bridge each of them is handed. So supporting *the channel* supports every
+//! package anyone installs, including ones nobody has written yet, and Dray
+//! ships no gate of its own to compete with them.
+//!
+//! Three of the six methods block until they are answered and are what this
+//! module builds a card for. `notify` and `setStatus` are announcements pi
+//! registers no waiter for, and `custom` carries a payload only its own author
+//! can render.
+//!
+//! The card is [`QuestionsAsked`](crate::events::AgentEventPayload::QuestionsAsked),
+//! not a permission request, and that is the honest reading rather than a reuse
+//! of convenience: nothing is being consented to, the call runs either way, and
+//! the answer *is* the reply. An Allow/Deny pair over "Which framework?" would
+//! describe the wrong act, and picking Allow would send the string `"allow"` to
+//! an extension expecting one of its own labels.
+//!
+//! [`createExtensionUIContext`]: https://pi.dev
+
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+use super::parser::PiEvent;
+use crate::events::{Question, QuestionOption};
+use crate::harness::claude_code::permissions::PendingRequest;
+
+/// The methods that block. Kept as one list because the read loop and this
+/// module have to agree on which lines get a card and which get dropped, and
+/// disagreeing either hangs a turn or files an announcement as a coverage gap.
+pub const BLOCKING: [&str; 3] = ["select", "confirm", "input"];
+
+/// pi's own wording for a yes/no. `confirm` carries no labels on the wire — it
+/// resolves to a boolean — so these are Dray's, and they are what maps back.
+const YES: &str = "Yes";
+const NO: &str = "No";
+
+/// Builds the card an extension's question is drawn as, or `None` where the
+/// line is not one that blocks.
+///
+/// The dialog's own id becomes the request id, so the map entry is already
+/// filed under the id the answer has to name and nothing extra has to be
+/// remembered to address the reply.
+pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Question>)> {
+    let PiEvent::ExtensionUiRequest {
+        id,
+        method,
+        title,
+        message,
+        options,
+    } = event
+    else {
+        return None;
+    };
+
+    if !BLOCKING.contains(&method.as_str()) {
+        return None;
+    }
+
+    // The substance goes in the question and the short line becomes the chip,
+    // which is the split the two fields were built for: `confirm` sends
+    // "Confirm?" as its title and the sentence that matters as its message.
+    let (header, question) = match (title, message) {
+        (Some(title), Some(message)) => (Some(title.clone()), message.clone()),
+        (Some(title), None) => (None, title.clone()),
+        (None, Some(message)) => (None, message.clone()),
+        (None, None) => (None, format!("The extension is asking for a {method}")),
+    };
+
+    let choices: Vec<QuestionOption> = match method.as_str() {
+        "select" => options
+            .iter()
+            .flatten()
+            .map(|option| QuestionOption {
+                // An option is a bare string on the wire, and a non-string is
+                // rendered rather than dropped: losing one silently would offer
+                // a list the extension will not recognise an answer from.
+                label: match option {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                },
+                description: None,
+                preview: None,
+            })
+            .collect(),
+        "confirm" => [YES, NO]
+            .into_iter()
+            .map(|label| QuestionOption {
+                label: label.to_string(),
+                description: None,
+                preview: None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    let pending = PendingRequest {
+        // No tool call to hang this off: an extension may ask from a
+        // `tool_call` hook, from a command, or from nothing at all, and the
+        // wire carries no correlation to one. The dialog's own id stands in, so
+        // the retiring `PermissionDecided` still names something real.
+        tool_use_id: id.clone(),
+        tool_name: method.clone(),
+        input: Value::Null,
+        options: HashMap::new(),
+        rpc_id: None,
+        pi_dialog_method: Some(method.clone()),
+    };
+
+    let questions = vec![Question {
+        question,
+        header,
+        multi_select: false,
+        // Only `input` takes an answer that is not on the list. A box beside a
+        // `select` would let the reader send the extension a sentence where it
+        // expects one of its own options.
+        free_text: choices.is_empty(),
+        options: choices,
+    }];
+
+    Some((id.clone(), pending, questions))
+}
+
+/// The line that answers one, in the shape its own method reads.
+///
+/// A dialog is answered in its own shape rather than through one envelope, so
+/// this is where the three diverge: `confirm` reads `confirmed`, the other two
+/// read `value`. A reply in the wrong shape is dropped in silence and the turn
+/// stays blocked, which is why the method is remembered rather than guessed at
+/// from what came back.
+///
+/// No answer is `cancelled`, which every dialog understands and resolves to the
+/// default it was constructed with. That is the truthful answer to a skip: the
+/// alternative is sending an empty string, which `confirm` would read as `false`
+/// and `select` would hand its extension as a choice nobody made.
+pub fn response(method: &str, id: &str, answers: &HashMap<String, String>) -> Value {
+    let Some(answer) = answers.values().next() else {
+        return json!({"type": "extension_ui_response", "id": id, "cancelled": true});
+    };
+
+    match method {
+        "confirm" => json!({
+            "type": "extension_ui_response",
+            "id": id,
+            "confirmed": answer == YES,
+        }),
+        _ => json!({"type": "extension_ui_response", "id": id, "value": answer}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(method: &str, title: Option<&str>, options: Option<Vec<&str>>) -> PiEvent {
+        PiEvent::ExtensionUiRequest {
+            id: "d-1".to_string(),
+            method: method.to_string(),
+            title: title.map(str::to_string),
+            message: None,
+            options: options.map(|o| o.into_iter().map(|s| json!(s)).collect()),
+        }
+    }
+
+    fn answers(text: &str, question: &str) -> HashMap<String, String> {
+        HashMap::from([(question.to_string(), text.to_string())])
+    }
+
+    /// A `select` draws the extension's own options and nothing beside them.
+    #[test]
+    fn a_select_offers_exactly_what_the_extension_listed() {
+        let event = request(
+            "select",
+            Some("Allow probe_tool?"),
+            Some(vec!["Allow once", "Allow always", "Deny"]),
+        );
+
+        let (id, pending, questions) = for_request(&event).expect("a select blocks");
+
+        assert_eq!(id, "d-1", "the dialog's id is the request id");
+        assert_eq!(pending.pi_dialog_method.as_deref(), Some("select"));
+        assert_eq!(questions[0].question, "Allow probe_tool?");
+
+        let labels: Vec<&str> = questions[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Allow once", "Allow always", "Deny"]);
+
+        assert!(
+            !questions[0].free_text,
+            "a typed sentence is not an answer this extension can use"
+        );
+    }
+
+    /// The answer is the label, which is what `ctx.ui.select` resolves to.
+    #[test]
+    fn a_select_answers_with_the_label_that_was_picked() {
+        let sent = response("select", "d-1", &answers("Allow always", "Allow probe_tool?"));
+
+        assert_eq!(
+            sent,
+            json!({"type": "extension_ui_response", "id": "d-1", "value": "Allow always"})
+        );
+    }
+
+    /// `confirm` resolves to a boolean, so its two buttons map back to one.
+    #[test]
+    fn a_confirm_answers_with_a_boolean_and_not_a_label() {
+        let event = request("confirm", Some("Confirm?"), None);
+        let (_, _, questions) = for_request(&event).expect("a confirm blocks");
+
+        let labels: Vec<&str> = questions[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
+        assert_eq!(labels, [YES, NO], "pi sends no labels, so these are ours");
+
+        assert_eq!(
+            response("confirm", "d-1", &answers(YES, "Confirm?")),
+            json!({"type": "extension_ui_response", "id": "d-1", "confirmed": true})
+        );
+        assert_eq!(
+            response("confirm", "d-1", &answers(NO, "Confirm?")),
+            json!({"type": "extension_ui_response", "id": "d-1", "confirmed": false})
+        );
+    }
+
+    /// `input` is the one dialog whose answer is not on a list.
+    #[test]
+    fn an_input_is_the_only_one_that_takes_free_text() {
+        let event = request("input", Some("Name it"), None);
+        let (_, _, questions) = for_request(&event).expect("an input blocks");
+
+        assert!(questions[0].options.is_empty());
+        assert!(questions[0].free_text);
+
+        assert_eq!(
+            response("input", "d-1", &answers("typed by dray", "Name it")),
+            json!({"type": "extension_ui_response", "id": "d-1", "value": "typed by dray"})
+        );
+    }
+
+    /// Skipping still answers, because pi is blocked either way.
+    ///
+    /// `cancelled` and not an empty string: `confirm` would read `""` as `false`
+    /// and act on a decision the reader never made.
+    #[test]
+    fn a_skipped_dialog_is_cancelled_rather_than_answered_emptily() {
+        for method in BLOCKING {
+            assert_eq!(
+                response(method, "d-1", &HashMap::new()),
+                json!({"type": "extension_ui_response", "id": "d-1", "cancelled": true}),
+                "{method} left unanswered has to unblock the turn"
+            );
+        }
+    }
+
+    /// An announcement gets no card, because nothing is waiting on one.
+    #[test]
+    fn an_announcement_is_not_a_question() {
+        for method in ["notify", "setStatus", "custom"] {
+            assert!(
+                for_request(&request(method, Some("hi"), None)).is_none(),
+                "{method} registers no waiter, so a card would ask about nothing"
+            );
+        }
+    }
+
+    /// The real capture, run through the builder that will answer it.
+    ///
+    /// The unit tests above are written against shapes; this is written against
+    /// a pi that actually ran one. The extension is committed beside the
+    /// capture (`fixtures/extension_tool_and_dialogs.probe.js`) and every
+    /// answer in that session was accepted — the extension's closing `notify`
+    /// echoed all three back — so this pins the builder to a conversation that
+    /// demonstrably worked rather than to a reading of pi's source.
+    #[test]
+    fn the_captured_dialogs_each_get_the_card_they_need() {
+        #[derive(serde::Deserialize)]
+        struct Record {
+            dir: String,
+            line: String,
+        }
+
+        let drawn: Vec<(String, bool, usize)> =
+            include_str!("fixtures/extension_tool_and_dialogs.jsonl")
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| serde_json::from_str::<Record>(l).expect("fixture record"))
+                .filter(|r| r.dir == "out")
+                .filter_map(|r| super::super::parser::parse_line(&r.line).ok())
+                .filter_map(|event| {
+                    let (_, pending, questions) = for_request(&event)?;
+                    Some((
+                        pending.pi_dialog_method.unwrap_or_default(),
+                        questions[0].free_text,
+                        questions[0].options.len(),
+                    ))
+                })
+                .collect();
+
+        assert_eq!(
+            drawn,
+            vec![
+                ("select".to_string(), false, 3),
+                ("confirm".to_string(), false, 2),
+                ("input".to_string(), true, 0),
+            ],
+            "three blocking dialogs get cards; the two announcements beside \
+             them get none"
+        );
+    }
+
+    /// A dialog that names nothing still says what it is.
+    ///
+    /// An extension may call `ctx.ui.input()` with no title at all, and a card
+    /// with an empty question reads as a rendering failure rather than as a
+    /// question.
+    #[test]
+    fn a_dialog_with_no_words_in_it_still_asks_something() {
+        let event = request("input", None, None);
+        let (_, _, questions) = for_request(&event).expect("an input blocks");
+
+        assert!(questions[0].question.contains("input"));
+    }
+}

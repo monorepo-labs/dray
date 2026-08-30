@@ -16,12 +16,14 @@
 //! killing a pi is paid by the *next* one, which is why nothing here kills one
 //! it can ask to leave — see [`shutdown`] and [`PiClient::close`].
 
+pub mod dialog;
 pub mod mapper;
 pub mod models;
 pub mod parser;
 pub mod rpc;
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy, TurnStatus};
+use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::harness::Harness::Pi;
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
@@ -135,6 +137,10 @@ pub async fn init(
     let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
     let queued: QueuedMessages = Arc::new(Mutex::new(Vec::new()));
+    // Built here rather than at `Session` construction because the reader is
+    // what registers entries and it starts first: an extension can ask before
+    // the handshake even returns.
+    let pending: PendingPermissions = Default::default();
 
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
@@ -147,9 +153,10 @@ pub async fn init(
         let status = status.clone();
         let queued = queued.clone();
         let seq = seq.clone();
+        let pending = pending.clone();
         async move {
             if let Err(error) = read_stdout(
-                stdout, client, session_id, session_cwd, events, status, queued, seq, app,
+                stdout, client, session_id, session_cwd, events, status, queued, pending, seq, app,
             )
             .await
             {
@@ -204,7 +211,7 @@ pub async fn init(
         events,
         seq,
         status,
-        pending_permissions: Default::default(),
+        pending_permissions: pending,
         queued,
     })
 }
@@ -275,6 +282,7 @@ async fn read_stdout(
     events: Arc<Mutex<Vec<AgentEvent>>>,
     status: Arc<Mutex<StatusTracker>>,
     queued: QueuedMessages,
+    pending: PendingPermissions,
     seq: Arc<AtomicU64>,
     app: AppHandle,
 ) -> Result<()> {
@@ -329,42 +337,52 @@ async fn read_stdout(
             continue;
         }
 
-        // Refused from here rather than ignored, exactly as Claude Code's
-        // unmodelled control requests are and for the same reason: pi blocks
-        // the tool call until an `extension_ui_response` carrying this id comes
-        // back, and `ctx.ui.confirm` has no timeout. Silence is not neutral —
-        // it stalls the session with a complete transcript on screen and
-        // nothing saying why, which reads as Dray having hung.
-        //
-        // The answer is **no**, because there is no card to ask on yet: saying
-        // yes would grant on the reader's behalf something they were never
-        // shown. A refusal reaches the model as the tool's own error, which is
-        // a sentence the reader can act on.
+        // An extension asking the reader something. Answered from here and
+        // never merely ignored: pi blocks the tool call until an
+        // `extension_ui_response` carrying this id comes back, and
+        // `ctx.ui.confirm` has no timeout, so silence stalls the session with a
+        // complete transcript on screen and nothing saying why.
         if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
-            // Two of the six methods are output, not questions: pi mints an id
-            // for `notify` and `setStatus` and registers no waiter, so nothing
-            // is waiting and a reply is dropped. Refusing them would file two
-            // ordinary UI messages as coverage gaps and say a reader was
-            // refused something they were only being told. Drawing them is
-            // wanted and not built; dropping them quietly is the honest
-            // interim.
-            if matches!(method.as_str(), "notify" | "setStatus") {
+            // Three of the six block. `notify` and `setStatus` are output — pi
+            // mints an id for them and registers no waiter, so a reply is
+            // dropped — and `custom` carries a payload only its own author can
+            // render. Drawing the first two is wanted and not built; dropping
+            // them quietly is the honest interim.
+            let Some((request_id, request, questions)) = dialog::for_request(&event) else {
+                if !matches!(method.as_str(), "notify" | "setStatus") {
+                    let asked = title.clone().unwrap_or_else(|| method.clone());
+                    record_failure(&session_id, "unsupported_request", &asked, &line).await;
+
+                    // `cancelled` is the one answer every dialog understands,
+                    // resolving each to the default it was built with. A refusal
+                    // reaches the extension as its own dialog being dismissed,
+                    // which is a state its author already had to handle.
+                    let _ = client.send(&json!({
+                        "type": "extension_ui_response",
+                        "id": id,
+                        "cancelled": true,
+                    }));
+                }
                 continue;
+            };
+
+            let tool_use_id = request.tool_use_id.clone();
+            pending
+                .lock()
+                .expect("pending permissions mutex poisoned")
+                .insert(request_id.clone(), request);
+
+            // Registered before it is emitted, so a reader answering the frame
+            // it appears cannot beat the entry that resolves the answer.
+            let asked = mapper.synthesize(AgentEventPayload::QuestionsAsked {
+                request_id,
+                tool_use_id,
+                questions,
+            });
+
+            if let Err(error) = app.emit("agent_event", &asked) {
+                eprintln!("[pi emit err] {error}");
             }
-
-            let asked = title.clone().unwrap_or_else(|| method.clone());
-            record_failure(&session_id, "unsupported_request", &asked, &line).await;
-
-            // Refused rather than ignored, because pi blocks the tool call
-            // until an answer carrying this id comes back. The reply shape is
-            // per method — `confirm` reads `confirmed`, `select` and `input`
-            // read `value` — and `cancelled` is the one every dialog
-            // understands, resolving each to the default it was built with.
-            let _ = client.send(&json!({
-                "type": "extension_ui_response",
-                "id": id,
-                "cancelled": true,
-            }));
             continue;
         }
 

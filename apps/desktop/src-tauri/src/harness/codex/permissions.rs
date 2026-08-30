@@ -65,6 +65,7 @@ pub fn pending_for(
         input: Value::Null,
         options,
         rpc_id: Some(rpc_id),
+        pi_dialog_method: None,
     };
 
     (pending, offered)

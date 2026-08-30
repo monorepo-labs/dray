@@ -136,13 +136,26 @@ the discovered model list and per-model effort ladders, the three lifecycles,
 deltas, tool calls, failure from `stopReason`, resume, Stop, the system prompt,
 `~/.agents/skills/dray/`, and `dray new --harness pi` end to end.
 
-The gap: **the stance picker is hidden and every pi session runs ungated.** §14
-called for Plan and Bypass, where Plan is `--tools read,grep,find,ls` — a flag,
-no extension, genuinely read-only. Only Bypass shipped, so a reader who wants a
-pi session that cannot write has no way to ask for one. Slice 2 is what fixes
-this properly; Plan is the cheap half and should not wait for it.
+The gap: **the stance picker is hidden and every pi session runs ungated.**
+That is now a stated position rather than an omission — see slice 2 — but
+`Plan` is the one stance pi can enforce and it is still not offered, so a
+reader who wants a pi session that cannot write has no way to ask for one.
 
-**Slice 2 — not started.** No approvals, no extension, no gate.
+**Slice 2 — the part that matters is done, and it is not what §14 planned.**
+No gate ships, deliberately: pi is extensible, permission extensions already
+exist, and Dray renders *the channel* every extension asks over rather than
+competing with them. So `select`, `confirm` and `input` each draw the
+questionnaire card Dray already had, answered in the shape their own method
+reads, and an extension-registered tool needs no code at all — it arrives as an
+ordinary tool call. §6 is rewritten around this; the embedded gate extension it
+used to describe is cut. Not built there: `opts.timeout`, so a card can outlive
+the dialog it draws; `notify` and `setStatus`, which are dropped rather than
+shown.
+
+Follows from that: **`Plan` is the only stance pi could ever honour** (`--tools
+read,grep,find,ls` at spawn, enforced by pi), and it is still not built. Until
+it is, the picker stays hidden and pi runs ungated, which is pi's own default
+and is now said out loud rather than implied.
 
 **Slice 3 — half.** Worktrees and orchestration work. Fork is refused outright,
 `--from` is untested against pi, and steering is not wired.
@@ -150,9 +163,7 @@ this properly; Plan is the cheap half and should not wait for it.
 **Slice 4 — not started.**
 
 Smaller things known missing, none of them blocking: the pi session file is not
-deleted with its session, pi's lowercase tool names (`bash`, `read`, `edit`)
-have no `TOOL_VERBS` entry so rows draw the raw name, and pi's mark has no
-credit in the root README.
+deleted with its session, and pi's mark has no credit in the root README.
 
 **Two rules that are only remembered, and both fail silently.** Never kill a pi
 — every teardown goes through `pi::shutdown`, and a fourth path reaching for
@@ -481,7 +492,7 @@ what the field is for. Not in the first three slices; named because it is the
 one capability pi has that neither other harness does, and because the field
 that would carry it is being added anyway.
 
-## 6. Permissions — the sharp edge
+## 6. Permissions — and why Dray ships no gate
 
 ### pi has no permission system. At all.
 
@@ -498,144 +509,32 @@ command, an edit and a write — and not one request of any kind. pi ran them.
 `--tools`/`--no-tools` at spawn is the only gate pi ships, and it is an
 allowlist fixed for the process, not a question.
 
-### So Dray ships the gate
+### The gate is an extension's job, and several already exist
 
-pi's extension API has exactly the seam needed. `pi.on("tool_call", …)` fires
-after `tool_execution_start` and **before the tool runs**, it can `await`, and
-returning `{ block: true, reason, terminate? }` stops the call. In RPC mode a
-`ctx.ui` dialog emits `extension_ui_request` on stdout and blocks until an
-`extension_ui_response` with the matching id comes back on stdin.
+An earlier draft of this section had Dray ship its own gate: an extension
+embedded in the binary with `include_str!`, written under `~/.dray/pi/` on
+spawn, passed as `-e <path>`, hooking `tool_call` and raising a consent card.
+It was designed in full and **not built**, and the reason it was not is the
+whole shape of this section.
 
-That is the whole mechanism, and `extension_approvals.jsonl` is it working end
-to end against a five-line extension. The capture uses `confirm`, because it
-was probing whether the channel works at all; the shipped gate uses `select`
-for the reason two subsections down:
+pi is extensible on purpose, and permissions are one of the things people
+extend it with. `@gotgenes/pi-permission-system` and
+`@hank-warren/pi-auto-permissions` are both published; so are `pi-web-access`
+and `pi-mcp-adapter`, which add capabilities rather than gate them. A gate
+Dray shipped would compete with whichever of those the reader installed —
+two hooks on one `tool_call`, two cards for one call, and load order deciding
+which one's rewrite of `event.input` actually runs.
 
-```
-out  {"type":"extension_ui_request","id":"6d40…","method":"confirm",
-      "title":"Allow read?","message":"{\"path\":\"notes.txt\"}"}
-in   {"type":"extension_ui_response","id":"6d40…","confirmed":true}
-…
-out  {"type":"extension_ui_request","id":"a33b…","method":"confirm","title":"Allow bash?", …}
-in   {"type":"extension_ui_response","id":"a33b…","confirmed":false}
-out  {"type":"tool_execution_end","toolCallId":"call_bash_1","toolName":"bash",
-      "result":{"content":[{"type":"text","text":"Denied by Dray"}]},"isError":true}
-```
+So Dray renders **the channel** instead. Every extension's UI goes through
+`extension_ui_request`, and a card that draws one works for every package
+anyone installs, including ones nobody has written yet, with no Dray change
+per extension. It is the same bargain `permission_suggestions` already make
+for Claude Code: the options are the harness's, and Dray draws what it is
+given.
 
-Five things that capture settles:
-
-- **A denial lands where a tool error already lands.** `isError: true` with the
-  reason as the text, so the transcript row draws the refusal without any new
-  vocabulary. Dray's own rule — "a settled request draws no row either way:
-  approval is visible in the tool simply running, refusal in the tool's own
-  error" — holds exactly.
-- **Requests arrive one at a time, and Dray should still not rely on that.**
-  The capture shows them strictly serialised — `read` answered at t=11008,
-  `bash` asked at t=11032 — and pi's docs say why: sibling tool calls from one
-  assistant message "are preflighted sequentially, then executed concurrently",
-  and `tool_call` is the preflight. So the gate is a queue by construction.
-  `buildTranscript`'s `pendingAsks` is already a list and stays one, because
-  the serialisation is pi's behaviour rather than a guarantee it publishes.
-  (An earlier draft claimed the capture showed two open at once. It does not —
-  the driver answered each request before the next was asked, so the capture
-  could not have shown overlap whether or not pi allows it.)
-- **A reply for an id that is gone is ignored in silence** — the driver
-  re-sent answered ids and nothing broke. Same property Claude's
-  `control_response` has, and the same consequence: a regression here presents
-  as a hung turn, not an error.
-- **`cancelled: true` on a `confirm` reads as `false`.** So Dray's card needs no
-  third button and the window-closed case is a denial.
-- **The extension sees pi's normalized input, not the model's.** The stub sent
-  `edit` as `{path, oldText, newText}`; the hook received
-  `{path, edits: [{oldText, newText}]}`. The card should draw what the hook
-  saw, because that is what will run.
-
-### Where the extension comes from
-
-Embedded in the Rust binary with `include_str!` and written under `~/.dray/pi/`
-on spawn, then passed as `-e <path>`. This is the `dray skill install` pattern
-and it is chosen for that pattern's reason: the extension and the code that
-answers its requests travel in the same binary, so one describing a protocol
-the other does not speak is impossible.
-
-Not `~/.pi/agent/extensions/` — that is the user's own directory and a globally
-installed extension would gate their terminal sessions too.
-
-**The filename carries a hash of the contents**
-(`dray-approvals-<hash>.ts`), written temp-then-rename and never rewritten once
-it exists. A fixed name breaks the "same binary" claim outright: two Dray builds
-share `~/.dray` by design, so whichever spawned last owns the file, and a
-release binary answering a dev build's extension is exactly the disagreement
-this section says is impossible. The `dray-dev.sock` split is the same problem
-already solved once, and the precedent to follow rather than repeat.
-
-**The gate fails open, and there is no sandbox underneath.** If `-e` fails to
-load — a syntax error, a pi release that renames `tool_call`, a half-written
-file — pi runs every tool with nothing asking, under a stance whose whole
-promise is that it asks. Codex could survive the same failure because
-`workspace-write` was still enforced by the OS. pi has nothing.
-
-So loading has to be *observed*, not assumed: the extension fires a
-fire-and-forget `notify` marker as it registers, and `pi.rs` refuses to deliver
-the first prompt under any gated stance until it has seen it, with a readable
-timeout naming the extension path. One marker, one line, and it turns a silent
-ungated session into a session that will not start.
-
-The `#[ignore]`d live test in §13 is not a substitute. It catches drift on the
-machine of whoever runs it; the handshake catches it on the reader's.
-
-### The options are Dray's own, for the first time
-
-Claude sends `permission_suggestions` and Codex sends `availableDecisions`.
-CLAUDE.md's rule — "options the user sees are the CLI's, not ours" — has no
-counterpart here, because pi composes nothing. So the card's list is written in
-Rust and honest about being narrow:
-
-**The gate asks with `select`, not `confirm`, and that is forced.** A three-way
-question needs a three-way answer, and pi's `confirm` bridge cannot carry one:
-
-```ts
-confirm: (title, message, opts) =>
-  createDialogPromise(opts, false, {…}, (r) =>
-    "cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false),
-```
-
-Every response is collapsed to a boolean before the extension sees it, so any
-extra field Dray added — a `remember` flag, say — is discarded in the bridge
-and never reaches the handler. `select` is built the other way: its bridge
-returns `r.value`, the chosen string, verbatim. So the option strings are the
-transport.
-
-| option id | label | kind | the `value` sent back |
-|---|---|---|---|
-| `once` | Allow once | `Once` | `"allow-once"` |
-| `tool` | Always allow `<tool>` | `AlwaysRule` | `"allow-tool"` |
-| `deny` | Deny | `Deny` | `"deny"` → `{block: true, reason: "Denied in Dray"}` |
-
-Cancelled or timed out → `undefined` → denied, the same fail-closed reading
-`confirm` gives.
-
-**The allow set lives in the extension, not in Rust**, and that is a real
-decision rather than an implementation detail. If Rust held it, Rust would have
-to answer the next request for that tool without asking — which works, but
-means every remembered grant still costs a full round trip through a process
-boundary, and means the *extension* cannot tell an allowed call from an ungated
-one. Held in the extension, a remembered grant means no request is ever
-emitted. The frontend still answers with an option id and nothing else, which
-is the invariant that actually matters; Rust maps that id to one of the three
-strings above.
-
-An earlier draft put the grant in a field on the reply. It could not have
-worked, and it would have failed in the quietest way available: the grant is
-dropped in pi's bridge, the extension asks again on the next call, and "always
-allow" reads as a button that does nothing.
-
-Per-session, never persisted. A standing grant that outlives the window is a
-promise pi gives Dray no way to keep — there is no rule store to write to and
-no policy for a next session to read.
-
-`AlwaysDirectory` and `SwitchMode` are not offered: pi has no path scoping and
-no mode to switch into mid-session.
+The honest default falls out of it. No permission extension means no gate,
+and Dray says so rather than implying one — see *The modes cannot be honoured*
+below.
 
 ### The whole extension UI surface, read out of the RPC bridge
 
@@ -670,123 +569,130 @@ Three things follow that are easy to get wrong:
 - **`opts.signal` aborts the same way**, which is how a cancelled tool call
   takes its dialog back.
 
-**So there is one channel, and every extension shares it.** That is the whole of
-what "support what people add to their pi" needs: a card that can draw a
-`select`, a `confirm` and an `input` and answer it works for
-`@gotgenes/pi-permission-system`, for `@hank-warren/pi-auto-permissions`, and
-for extensions nobody has written yet — with no Dray change per extension. It is
-the same bargain Claude Code's `permission_suggestions` already make here: the
-options are the CLI's, and Dray draws what it is given.
+### It is a question, not a consent card
 
-**Which makes Dray's own gate extension worth deleting rather than building.**
-It duplicates packages that already exist, it competes with whatever the reader
-installed, and it earns nothing the generic card does not. The honest default is
-pi's own: no permission extension means no gate, and Dray says so instead of
-implying one. Not yet done — §6 above still describes the embedded extension,
-and this paragraph is the argument for cutting it.
+`dialog.rs` turns the three blocking methods into one
+`AgentEventPayload::QuestionsAsked` each, which is the payload Dray already
+draws a form for. Not `PermissionRequested`, and that is the honest reading
+rather than reuse of convenience: nothing is being consented to, the call runs
+either way, and the answer *is* the reply. `QuestionsAsked`'s own doc comment
+says exactly that, written for `AskUserQuestion` before pi existed.
 
-**Still unverified:** whether a tool an extension registers reaches the wire as
-an ordinary `tool_execution_start` under its registered name. If it does, Dray
-already draws it (as `ToolType::Other`) and the only gap is a `TOOL_VERBS`
-entry. Settled by installing `pi-web-access`, running one turn, and reading the
-capture.
+An Allow/Deny pair over "Which framework?" would describe the wrong act, and
+picking Allow would send the string `"allow"` to an extension expecting one of
+its own labels.
 
-### Not every request is Dray's
+Three consequences, each pinned by a test:
 
-`extension_ui_request` carries no extension identity — an `id`, a `method` and
-the dialog's own fields, and nothing saying who asked. The user's own
-extensions can call `ctx.ui.confirm` too; pi's docs use "Trust project?" as
-their worked example. Drawn through Dray's card that arrives as a consent
-prompt offering "Always allow \<tool\>" for a question that is not about a tool.
+- **`Question` grew `free_text`.** `AskUserQuestion` promises the user a box
+  and tells the model not to offer an "Other" option because of it, so the box
+  is not optional there. pi's `select` is a closed list and its `confirm` is a
+  boolean, so a typed sentence is an answer neither can be given — the
+  extension is handed a string it has no branch for. `input` is the one pi
+  dialog that takes one.
+- **Each method is answered in its own shape.** `confirm` reads `confirmed`,
+  the other two read `value`. `PendingRequest` carries the method for this
+  alone; the id the answer names is the request id the entry is already filed
+  under. A reply in the wrong shape is dropped in silence and the turn stays
+  blocked, which is why the method is remembered rather than guessed at from
+  what came back.
+- **A skip sends `cancelled: true`**, which every dialog understands and
+  resolves to the default it was constructed with. Not an empty string:
+  `confirm` would read `""` as `false` and act on a decision nobody made.
 
-Two decisions follow, and the first is a real trade:
+`confirm` has no labels on the wire, so its two buttons are Dray's own — `Yes`
+and `No` — and mapping back to the boolean happens in the same file that wrote
+them.
 
-- **User extensions load.** `--no-extensions` would settle the identity problem
-  by leaving Dray's the only one — and it would also silently disable whatever
-  the reader has installed, which is their configuration, not ours. It would
-  also make `Auto`'s allowlist argument moot by removing the tools it exists to
-  catch. So they load, and the ambiguity is handled rather than avoided.
-- **Dray's own requests are recognised by their option strings**, which the
-  three values above already make unique. A `select` carrying them is a consent
-  card; anything else — a foreign `confirm`, a foreign `select` — draws a
-  generic question card with that extension's own title and options, and no
-  "always allow". Recognition by shape, since shape is the only thing on the
-  wire.
+### An extension's own tools need nothing at all
 
-**And a later extension can rewrite what the card approved.** `event.input` is
-mutable, handlers run in extension load order, and later handlers see earlier
-mutations — so an extension loaded after Dray's can change the command between
-the approval and the run. Dray's should load first, which `-e` ordering ought to
-control and which wants a capture before slice 2 rather than an assumption.
+`extension_tool_and_dialogs.jsonl` settles what an earlier draft left open. A
+tool registered with `pi.registerTool` reaches the wire as an ordinary
+`tool_execution_start` under the name its author gave it, with its arguments in
+the same field a built-in's use, and completes the same way:
 
-### The modes map onto *what gets gated*, not onto a setting
+```
+tool_execution_start {"toolName":"probe_tool","args":{"note":"hello"},"toolCallId":"call-f3f7…"}
+tool_execution_end   {"toolName":"probe_tool","result":{"output":"probe_tool ran with note=hello"}}
+```
 
-Every other harness takes a stance as a flag. pi has no flag, so Dray's
-`ApprovalPolicy` becomes an instruction to the extension and to the spawn:
+So a transcript draws it already. It classifies as `ToolType::Other`, which is
+deliberate and not a shortfall: only the author knows whether their tool edits
+a file, and a wrong type draws a diff viewer over something that is not a diff.
+The only gap was a `TOOL_VERBS` entry, and an unknown name falling through to
+itself is the right answer there too.
 
-| `ApprovalPolicy` | how it is achieved |
-|---|---|
-| `Plan` | `--tools read,grep,find,ls` at spawn, and the extension loaded. Genuinely read-only, enforced by pi not by prose |
-| `Manual` | extension loaded, gate **every** tool call |
-| `Auto` | extension loaded, gate everything **except** a named read-only set (`read`, `grep`, `find`, `ls`). Reads run |
-| `DontAsk` | extension loaded, gate nothing, but keep the hook so a future rule has somewhere to live |
-| `BypassPermissions` | no `-e` at all |
+The capture and the probe extension that produced it are committed together
+(`fixtures/extension_tool_and_dialogs.probe.js`), because no shipped extension
+can be relied on to be installed on the machine running the tests.
 
-**`Auto`'s gate is an allowlist of what may skip the card, never a blocklist of
-what must raise one.** Naming `bash`, `write` and `edit` was the first draft and
-it fails open on the one thing pi is built around: **extensions register their
-own tools**, and any of them can write files or run commands under a name this
-table has never seen. A blocklist lets every one of those through silently under
-a stance the reader chose because it asks about changes. The allowlist gets that
-wrong in the safe direction — an unknown read-only tool costs one card.
+### What the earlier `extension_approvals` capture still settles
 
-`Plan` is the same rule one layer down, and it is stronger because pi enforces
-it: `--tools` is itself an allowlist, so an extension tool is not merely ungated
-there, it is not loaded.
+That capture was taken against a five-line gate extension, and the gate is
+gone. What it establishes about the *channel* holds regardless:
 
-This wants a capture before slice 2 lands — an extension registering a mutating
-tool, confirming that its call reaches `tool_call` under the same name it
-registered. Nothing in the current fixtures exercises a custom tool at all.
+- **A denial lands where a tool error already lands.** `isError: true` with the
+  reason as the text, so the transcript row draws the refusal without any new
+  vocabulary. Dray's own rule — "a settled request draws no row either way:
+  approval is visible in the tool simply running, refusal in the tool's own
+  error" — holds exactly.
+- **Requests arrive one at a time, and Dray should still not rely on that.**
+  pi's docs say sibling tool calls from one assistant message "are preflighted
+  sequentially, then executed concurrently", and `tool_call` is the preflight.
+  `buildTranscript`'s `pendingAsks` is already a list and stays one, because
+  the serialisation is pi's behaviour rather than a guarantee it publishes.
+- **A reply for an id that is gone is ignored in silence** — the driver
+  re-sent answered ids and nothing broke. Same property Claude's
+  `control_response` has, and the same consequence: a regression here presents
+  as a hung turn, not an error.
+- **`cancelled: true` on a `confirm` reads as `false`.**
+- **An extension sees pi's normalized input, not the model's.** The stub sent
+  `edit` as `{path, oldText, newText}`; the hook received
+  `{path, edits: [{oldText, newText}]}`.
 
-Two more things fall out and both are worth saying plainly.
+### The modes cannot be honoured, so pi runs ungated and says so
 
-**Plan mode works better here than on Codex.** Codex hides it because
-read-only-and-ask is a stance Codex never names. pi's `--tools` allowlist is
-exactly a read-only agent, fixed at spawn, and cannot be talked past. So the
-composer *shows* Plan for pi.
+Every other harness takes a stance as a flag. pi has none, and with no gate of
+Dray's own there is nothing left to implement one with — so `send_msg` sends
+`bypassPermissions` for pi and the composer hides the mode picker
+(`offersPermissionModes`). A picker offering four stances that all behave
+identically is a control that cannot do anything.
 
-**`Auto` is a weaker promise than it is elsewhere.** On Codex, "approve for me"
-is backed by an OS sandbox: a command that steps outside the workspace fails
-whether or not anyone was asked. pi has no sandbox, so an approved `bash` can
-do anything the user can. The composer's label is the same word for a different
-guarantee, and that difference belongs in the mode picker's own copy for pi,
-not only in this document. It is also the one place where "run pi in a
-container" — pi's own advice — is the real answer, and Dray has nothing to say
-about it yet.
+`--tools read,grep,find,ls` at spawn would give a genuine read-only agent and
+is the one stance pi *can* enforce, which makes Plan mode the natural first
+thing to add back. It is not built, and it is not built rather than half-built:
+one honoured stance beside three that are not reads as a picker that works.
 
-**And a stance change means a respawn.** `--tools` is fixed for the process and
-the extension is loaded at spawn, so nothing about a mode applies in place.
-That is the same conclusion Codex reached for a different reason, so
-`send_msg`'s existing respawn path covers it.
+Two things worth saying plainly whenever a stance does come back:
 
-### Questions
+- **`Auto` would be a weaker promise than it is elsewhere.** On Codex, "approve
+  for me" is backed by an OS sandbox: a command that steps outside the
+  workspace fails whether or not anyone was asked. pi has no sandbox, so an
+  approved `bash` can do anything the user can. The same word for a different
+  guarantee belongs in the mode picker's own copy, not only in this document.
+  It is also the one place where "run pi in a container" — pi's own advice — is
+  the real answer.
+- **A stance change means a respawn**, because `--tools` is fixed for the
+  process. Same conclusion Codex reached for a different reason, so
+  `send_msg`'s existing respawn path covers it.
 
-pi's `extension_ui_request` also carries `confirm`, `input` and `editor`
-alongside the `select` Dray's own gate uses, each blocking for a value. A
-foreign `select` or `confirm` is a natural home for `QuestionsAsked` — a
-`select` with `options` is Dray's `Question` almost field for field — and it
-arrives only when an extension the reader installed asks something.
+### What is not built
 
-For the first three slices those draw a generic question card (above) rather
-than being refused, because refusing them blocks an extension the reader chose
-to run. `input` and `editor` have no card yet and are answered from the reader
-task with `{cancelled: true}`, filed as `unsupported_request` — the same stage
-and the same reasoning Claude's refusals use, because it is the only stage that
-changes what the agent does.
-
-The fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`,
-`set_editor_text`) get no reply, by protocol. Parsed and dropped, so the
-failure log stays a signal — the `tool_progress` treatment.
+- **`opts.timeout` is ignored.** A card can outlive the dialog it draws, and
+  answering a closed one is a reply pi drops in silence — so the card stays up
+  offering buttons that do nothing. The cure is the one Claude Code's
+  `control_cancel_request` already has: retire the card automatically and mint
+  `PermissionDecided { automatic: true }`. The field is on the wire; nothing
+  reads it.
+- **`notify` and `setStatus` draw nothing.** They are dropped quietly, which is
+  the honest interim — refusing them would file two ordinary UI messages as
+  coverage gaps — but a reader is meant to see them.
+- **`custom` is refused.** It carries a payload only its own author can render,
+  so `cancelled: true` and a `unsupported_request` line is the truthful answer.
+- **Load order is unexamined.** `event.input` is mutable and later handlers see
+  earlier mutations, so two permission extensions installed together can
+  disagree about what runs. That is between them and the reader now that Dray
+  ships none.
 
 ## 7. Models — the biggest question
 
