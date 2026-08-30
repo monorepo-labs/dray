@@ -249,6 +249,24 @@ pub async fn init(
     })
 }
 
+/// Where a prompt sent into a running turn lands.
+///
+/// pi keeps two queues and `streamingBehavior` picks which one, verified live:
+/// a steered prompt was read at the **next tool-call boundary inside the run**,
+/// before the model call after it, and the answer came back mid-turn. The
+/// default waits for the whole run to end.
+///
+/// Both are pi's, not Dray's, which is why steering needs no queue on this side
+/// at all — see [`Session::steer`](crate::session::Session::steer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// pi's own default: this prompt starts a run, or waits for the one running
+    /// to finish. What `dray send` and an idle composer both want.
+    WhenIdle,
+    /// Into the turn already running, at its next tool-call boundary.
+    Steer,
+}
+
 /// Writes one prompt.
 ///
 /// pi answers `success: true` the moment it *accepts* one, and its docs say
@@ -256,9 +274,29 @@ pub async fn init(
 /// second response. So awaiting this proves the prompt was taken and nothing
 /// else — still worth awaiting, because a refusal then reaches the caller as an
 /// error instead of as a prompt that vanished.
-pub async fn send_prompt(client: &PiClient, text: &str) -> Result<()> {
-    client.request("prompt", json!({"message": text})).await?;
+pub async fn send_prompt(client: &PiClient, text: &str, delivery: Delivery) -> Result<()> {
+    client.request("prompt", prompt_request(text, delivery)).await?;
     Ok(())
+}
+
+/// The `prompt` command's body.
+///
+/// Split out to be tested. A misspelled or misplaced `streamingBehavior` is not
+/// refused by pi — an unknown field is dropped in silence — so the failure is a
+/// steered prompt quietly waiting for the whole run instead, which reads as
+/// steering not being wired at all.
+fn prompt_request(text: &str, delivery: Delivery) -> Value {
+    let mut request = json!({"message": text});
+
+    // Omitted rather than sent as a default value: `models_and_steering.jsonl`
+    // captures a prompt with no `streamingBehavior` at all landing in the
+    // follow-up queue, so absent *is* the default and naming one would be this
+    // build restating a decision pi already makes.
+    if delivery == Delivery::Steer {
+        request["streamingBehavior"] = json!("steer");
+    }
+
+    request
 }
 
 /// How long a pi asked to exit is given before it is killed.
@@ -537,6 +575,26 @@ mod tests {
                 "{mutating} can change the tree, so plan mode cannot offer it"
             );
         }
+    }
+
+    /// Steering is one field, and pi drops an unknown one in silence.
+    ///
+    /// So a misspelling here does not fail — the prompt lands on the follow-up
+    /// queue and waits out the whole run, which is exactly what steering not
+    /// being wired at all looks like. Both spellings come from
+    /// `models_and_steering.jsonl`, which captured a prompt of each kind.
+    #[test]
+    fn only_a_steered_prompt_names_a_streaming_behavior() {
+        assert_eq!(
+            prompt_request("go", Delivery::WhenIdle),
+            json!({"message": "go"}),
+            "absent is pi's own default, so naming one restates its decision"
+        );
+
+        assert_eq!(
+            prompt_request("go", Delivery::Steer),
+            json!({"message": "go", "streamingBehavior": "steer"})
+        );
     }
 
     /// Nothing here kills a pi except the one function allowed to.

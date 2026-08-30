@@ -744,6 +744,18 @@ impl SessionManager {
                 // The cost is that there is no window to cancel in — which the
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
+                // pi holds a steering queue of its own and drains it at the next
+                // tool-call boundary inside the run, so there is nothing for
+                // Dray's queue to do here and no boundary for it to race for —
+                // whether or not a tool happens to be running right now.
+                if matches!(s.stdin, Transport::Pi(_)) {
+                    s.steer(prompt, attachment_paths, issues, from, app).await?;
+                    return Ok(SendOutcome {
+                        issues: linked,
+                        ..Default::default()
+                    });
+                }
+
                 if tool_in_flight {
                     s.queue_and_flush(prompt, attachment_paths, issues, from, app)
                         .await;
@@ -1375,6 +1387,7 @@ impl Session {
             issues,
             baseline,
             false,
+            crate::harness::pi::Delivery::WhenIdle,
             from,
             &self.seq,
             &self.events,
@@ -1422,6 +1435,53 @@ impl Session {
     /// learns so from the `user_message` that follows.
     pub async fn cancel_queued(&self) -> Option<QueuedMessage> {
         self.queued.lock().await.pop()
+    }
+
+    /// Sends a prompt *into* the turn already running, for a harness that takes
+    /// one.
+    ///
+    /// pi does, and it is the reason this is not a queue. `streamingBehavior:
+    /// "steer"` puts the prompt on pi's own steering queue, which it drains at
+    /// the next tool-call boundary inside the run — before the model call after
+    /// it, verified live. So the boundary is pi's to find and the prompt is
+    /// pi's to hold, where Dray's queue exists precisely because Claude Code
+    /// offers neither.
+    ///
+    /// Written through rather than held, which trades the same thing
+    /// [`queue_and_flush`](Self::queue_and_flush) trades and buys more for it:
+    /// there is no window to cancel in, and in exchange the prompt lands at a
+    /// boundary pi guarantees rather than one this side raced for. The UI
+    /// states the trade by itself — a prompt written straight through draws no
+    /// pending row, so it offers no Esc.
+    pub async fn steer(
+        &mut self,
+        prompt: &str,
+        attachment_paths: &[String],
+        issues: &[IssueRef],
+        from: Option<MessageSender>,
+        app: &AppHandle,
+    ) -> Result<()> {
+        deliver_prompt(
+            &self.id,
+            self.harness,
+            prompt,
+            attachment_paths,
+            issues,
+            // No baseline, for the reason a flushed prompt has none: the
+            // changes panel pairs the newest baseline with the newest head
+            // after it, so a snapshot taken mid-turn would cut the running
+            // turn's range in two and credit it with only the work that
+            // followed this prompt.
+            None,
+            false,
+            crate::harness::pi::Delivery::Steer,
+            from,
+            &self.seq,
+            &self.events,
+            &self.stdin,
+            app,
+        )
+        .await
     }
 
     /// Holds a prompt and immediately hands it over, for the case where a tool
@@ -1753,6 +1813,9 @@ async fn deliver_prompt(
     issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
+    // Where this lands on a harness that can take a prompt into a turn already
+    // running. Ignored by every other transport, which has one way in.
+    delivery: crate::harness::pi::Delivery,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
@@ -1818,7 +1881,7 @@ async fn deliver_prompt(
     // schedule. Images ride a different shape there and are not wired yet; the
     // text still goes.
     if let Transport::Pi(client) = transport {
-        return crate::harness::pi::send_prompt(client, &text).await;
+        return crate::harness::pi::send_prompt(client, &text, delivery).await;
     }
     let stdin = transport.lines()?;
 
@@ -2091,6 +2154,8 @@ pub async fn flush_queued(
             &message.issues,
             None,
             true,
+            // A flush runs at a boundary, so there is no turn to steer into.
+            crate::harness::pi::Delivery::WhenIdle,
             message.from,
             seq,
             events,

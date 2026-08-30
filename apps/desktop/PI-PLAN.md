@@ -175,7 +175,19 @@ was keyed on `fork_from`**, so a fork with no instruction to leave — pi's — 
 spawned straight into a directory nobody had made. It now reads the directory
 itself, and makes the tree where the harness cannot.
 
-Left: `--from` is untested against pi, and steering is not wired.
+**Steering is wired, and it removed code rather than adding it.** A prompt
+typed into a running pi turn goes straight out with
+`streamingBehavior: "steer"`, so pi holds it and drains it at the next
+tool-call boundary inside the run — before the model call after it, verified
+live. Dray's own queue exists because Claude Code offers neither the boundary
+nor the hold, and pi needs neither half of it. The trade is
+`queue_and_flush`'s: no window to cancel in, in exchange for a boundary pi
+guarantees rather than one this side races for.
+
+Left: `--from` is untested against pi. Reading the code it should work — pi
+does not create its own worktree, so a base ref makes `send_msg` build the tree
+and spawn into it with no worktree name, which is the same path an ordinary pi
+worktree session already takes. Untested is untested.
 
 **Slice 4 — not started.**
 
