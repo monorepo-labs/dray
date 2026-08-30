@@ -9,6 +9,9 @@ pub mod claude_code;
 #[path = "codex/codex.rs"]
 pub mod codex;
 
+#[path = "pi/pi.rs"]
+pub mod pi;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
