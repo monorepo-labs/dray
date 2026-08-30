@@ -105,7 +105,7 @@ export default function ToolGroupRow({
             around it. */}
         {changes && (changes.added > 0 || changes.removed > 0) && (
           <span className="shrink-0 font-mono tabular-nums">
-            {changes.added > 0 && <span className="text-emerald-400">+{changes.added}</span>}
+            {changes.added > 0 && <span className="text-accent-add">+{changes.added}</span>}
             {changes.added > 0 && changes.removed > 0 && " "}
             {changes.removed > 0 && <span className="text-destructive">-{changes.removed}</span>}
           </span>

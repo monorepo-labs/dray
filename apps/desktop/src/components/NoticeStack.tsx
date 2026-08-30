@@ -53,16 +53,16 @@ const ACTION: Record<NoticeKind, string> = {
 /// — so its bar is the destructive colour instead, and reads as what it is: the
 /// time left on an offer to delete something.
 const BAR: Record<NoticeKind, string> = {
-  completed: "bg-emerald-500/70",
+  completed: "bg-accent-add/70",
   asking: "bg-accent-command/70",
   worktree: "bg-destructive/70",
   // The colour of the glyph the row is wearing, which is the rule the other
-  // bars follow — GitHub's emerald for an open pull request. It shares that
+  // bars follow — `--accent-add`, the app's green. It shares that
   // with `completed`, and the two are told apart by what the card says rather
   // than by hue: both are good news about a session, and inventing a fourth
   // colour to separate them would spend the palette on a distinction the label
   // already makes.
-  pr: "bg-emerald-500/70",
+  pr: "bg-accent-add/70",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to

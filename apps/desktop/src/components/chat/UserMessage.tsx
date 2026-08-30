@@ -105,7 +105,13 @@ export default function UserMessage({
       <ImageRow images={images} variant="sent" align="end" />
 
       {body && (
-        <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground">
+        // `none` in dark, where the bubble already reads as raised by being
+        // lighter than the transcript behind it. In light every surface sits
+        // within a few percent of white, so this is what separates the bubble
+        // from the page. `--shadow-card`, not the composer's `--shadow-surface`:
+        // this sits *in* the transcript rather than floating at the window's
+        // edge, and the crisper one read as an edge cut under it.
+        <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)">
           {/* `wrap-anywhere` because a pasted path or URL has no whitespace to
               wrap at, and the bubble's `max-w` caps the box and not what is
               drawn in it — so the glyphs run out over the transcript's own

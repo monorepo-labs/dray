@@ -17,12 +17,12 @@ import type { PrChecksState } from "@/types/events";
 ///
 /// GitHub's own colours, because the glyph is recognised before it is read:
 /// purple for merged, red for closed, muted for a draft that isn't asking to
-/// land yet, and the same emerald the merge button uses for open.
+/// land yet, and `--accent-add` — the app's own green — for open.
 const STATES = {
-  MERGED: { Icon: GitMerge, tone: "text-purple-500", label: "Merged" },
+  MERGED: { Icon: GitMerge, tone: "text-accent-merged", label: "Merged" },
   CLOSED: { Icon: GitPullRequestClosed, tone: "text-destructive", label: "Closed" },
   DRAFT: { Icon: GitPullRequestDraft, tone: "text-muted-foreground", label: "Draft" },
-  OPEN: { Icon: GitPullRequest, tone: "text-emerald-500", label: "Open" },
+  OPEN: { Icon: GitPullRequest, tone: "text-accent-add", label: "Open" },
 } as const;
 
 /// Takes the fields rather than a whole PR, so the panel's `PullRequest` and

@@ -54,7 +54,7 @@ type PrPanelProps = PrData & {
 };
 
 const TONE_TEXT: Record<Tone, string> = {
-  ready: "text-emerald-500",
+  ready: "text-accent-add",
   blocked: "text-accent-command",
   conflict: "text-destructive",
   pending: "text-accent-command",
@@ -282,7 +282,7 @@ function PrRow({
 function Counts({ added, removed }: { added: number; removed: number }) {
   return (
     <span className="shrink-0 font-mono text-ui">
-      {added > 0 && <span className="text-emerald-500">+{added}</span>}
+      {added > 0 && <span className="text-accent-add">+{added}</span>}
       {added > 0 && removed > 0 && " "}
       {removed > 0 && <span className="text-destructive">−{removed}</span>}
     </span>
@@ -586,7 +586,7 @@ function Section({
 }
 
 const CHECK_ICON: Record<PrCheck["state"], { Icon: typeof Check; tone: string }> = {
-  success: { Icon: Check, tone: "text-emerald-500" },
+  success: { Icon: Check, tone: "text-accent-add" },
   failure: { Icon: X, tone: "text-destructive" },
   // Spins, because a running check is the one row on this pane that is going to
   // change on its own — and the poll that changes it is invisible otherwise.
@@ -631,7 +631,7 @@ function CheckRow({ check }: { check: PrCheck }) {
 /// gets none — "commented" beside a comment is the row saying its own type.
 const VERDICT: Record<PrComment["kind"], { word?: string; tone?: string }> = {
   comment: {},
-  approved: { word: "approved", tone: "text-emerald-500" },
+  approved: { word: "approved", tone: "text-accent-add" },
   changes_requested: { word: "requested changes", tone: "text-destructive" },
   reviewed: { word: "reviewed", tone: "text-muted-foreground" },
 };

@@ -669,8 +669,13 @@ export default function ChatInput({
             ref={cardRef}
             className={cn(
               "relative rounded-2xl transition-colors",
+              // `--shadow-surface` is `none` in dark, where the card already reads
+              // as raised by being lighter than the transcript behind it. In light
+              // every surface sits within a few percent of white, so the shadow is
+              // the only thing left that says the composer floats over the page it
+              // scrolls under.
               !isNewTask &&
-                "border border-hairline bg-composer backdrop-blur-xl focus-within:border-hairline-strong",
+                "bg-composer shadow-(--shadow-surface) backdrop-blur-xl focus-within:border-hairline-strong",
             )}
           >
             {/* Covers the card rather than replacing anything, so the text and
@@ -683,7 +688,7 @@ export default function ChatInput({
                 Drop to attach
               </div>
             )}
-  
+
             {/* Inside the card and above the text, so an attachment reads as part
                 of the message being composed rather than as a separate control.
                 Padded on the same edges as the textarea below it. */}
@@ -695,7 +700,7 @@ export default function ChatInput({
                 />
               </div>
             )}
-  
+
             {/* Both buttons sit on the last line. At one line that reads as
                 centered anyway, because the textarea's vertical padding below is
                 tuned to match the buttons' own height — no `self-center` needed,
@@ -750,10 +755,10 @@ export default function ChatInput({
                         return;
                       }
                     }
-  
+
                     // Esc is not read here — it is the document listener's, so it
                     // works with the composer unfocused too.
-  
+
                     // Shift+Enter is the only way to get a newline; plain Enter sends.
                     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
@@ -776,13 +781,13 @@ export default function ChatInput({
                     highlighted ? "text-transparent caret-foreground" : "text-foreground",
                   )}
                 />
-  
+
                 {/* Draws the text the textarea is hiding, so a command or a file
                     mention can take a colour — a textarea has no way to style part
                     of its value. Painted *over* the textarea rather than under it,
                     so a selection band sits behind these glyphs instead of covering
                     them; the caret still shows, since it falls between them.
-  
+
                     Mounted only alongside `text-transparent` above, and built from
                     the same segments the transcript renders, so neither the two
                     copies of the text nor the two surfaces can disagree about what
@@ -805,7 +810,7 @@ export default function ChatInput({
                       // transcript is where it collapses to the filename.
                       if (segment.kind === "mention") {
                         const { dir, name } = splitMention(segment.text);
-  
+
                         return (
                           <span key={i} className={SEGMENT_COLOR.mention}>
                             <span className="opacity-45">{dir}</span>
@@ -813,7 +818,7 @@ export default function ChatInput({
                           </span>
                         );
                       }
-  
+
                       return (
                         <span key={i} className={SEGMENT_COLOR[segment.kind]}>
                           {segment.text}
@@ -823,13 +828,13 @@ export default function ChatInput({
                   </div>
                 )}
               </div>
-  
+
               {/* One button, two jobs, and what is typed decides which. Stopping
                   is what an empty composer during a turn is for; with text in it
                   the prompt is queued onto the running turn instead, so Send has
                   to stay reachable — refusing it is the behaviour this replaced.
                   `type="button"` on Stop so pressing it can't also submit.
-  
+
                   Enter-to-send lives in `onKeyDown`, not in this button being the
                   form's submitter, so the empty state can drop it for the hint
                   below without losing the keyboard path. Neither `busy` nor a
@@ -838,7 +843,7 @@ export default function ChatInput({
               {!isNewTask &&
                 (() => {
                   const stopping = busy && !canSend;
-  
+
                   return (
                     <Button
                       type={stopping ? "button" : "submit"}

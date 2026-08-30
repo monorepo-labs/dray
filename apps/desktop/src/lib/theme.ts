@@ -24,10 +24,13 @@ export type ResolvedMode = "light" | "dark";
 /// contrast. This was a switch in Settings for about an hour; it asked the reader a
 /// question that belongs to the theme, in a dialog, about a state they were not in.
 ///
-/// `darkOnly`: a theme has both palettes unless it says otherwise. Only Default sets
-/// it, and only because its light side is unbuilt rather than unwanted — so the row
-/// in Settings is disabled and says so, rather than hidden. A light palette is a
-/// second full ramp, not an inversion, which is why it is not free.
+/// `darkOnly`: a theme has both palettes unless it says otherwise. **No theme sets it
+/// today** — Default was the last, and its light side is built. It stays because the
+/// case it covers is real and silent: a palette with no light block matches nothing,
+/// so the app falls through to the light ramp's own neutrals, which is legible and is
+/// not the theme anyone chose. The flag is what turns that into a Settings row that is
+/// disabled and says why. A light palette is a second full ramp, not an inversion,
+/// which is why the next ported theme may well arrive without one.
 export type Theme = {
   id: ThemeName;
   label: string;
@@ -38,7 +41,7 @@ export type Theme = {
 };
 
 export const THEMES: Theme[] = [
-  { id: "default", label: "Default", flatInFullscreen: true, darkOnly: true },
+  { id: "default", label: "Default", flatInFullscreen: true },
   {
     id: "catppuccin",
     label: "Catppuccin",
