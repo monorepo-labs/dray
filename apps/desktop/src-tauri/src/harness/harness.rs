@@ -106,6 +106,42 @@ mod wire_tests {
 }
 
 #[cfg(test)]
+mod capability_tests {
+    use super::Harness;
+
+    /// Claude Code is the only CLI with a worktree flag, and a harness wrongly
+    /// marked here never gets a tree at all — it bails inside `Session::init`
+    /// with its index row already written.
+    #[test]
+    fn only_claude_code_makes_its_own_worktree() {
+        assert!(Harness::ClaudeCode.caps().creates_own_worktree);
+
+        for harness in Harness::ALL {
+            if harness != Harness::ClaudeCode {
+                assert!(
+                    !harness.caps().creates_own_worktree,
+                    "{harness:?} has no `-w`, so Dray has to make the tree"
+                );
+            }
+        }
+    }
+
+    /// No CLI here has a `set_effort`, so an effort change always replaces the
+    /// child. Stated because it is the one field that is `false` for a reason
+    /// nothing else in the table shares, and a `true` here would silently drop
+    /// the change.
+    #[test]
+    fn an_effort_change_always_replaces_the_child() {
+        for harness in Harness::ALL {
+            assert!(
+                !harness.caps().applies_effort_in_place,
+                "{harness:?} claims an effort route no CLI here has"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod install_tests {
     use super::Harness;
 
@@ -279,6 +315,101 @@ impl Harness {
     /// tolerant read is protecting against, not a milder version of it.
     pub fn names_a_cli(self) -> bool {
         !matches!(self, Harness::Other(_))
+    }
+
+}
+
+/// What [`crate::session`] has to know about a harness, in one place.
+///
+/// Every field here was an equality test against a *named* harness scattered
+/// through that file. Two of the eight branch sites are `match` arms the
+/// compiler checks; the other six were `==`, and a third harness slips past
+/// every one of them silently and in the wrong direction — the worktree rule
+/// kept treating "make the tree myself" as Codex's alone, so a pi worktree
+/// session would have bailed inside `Session::init` with its index row already
+/// written.
+///
+/// **These describe what Dray does, not what the CLI can do.** pi answers
+/// `set_model` on a live connection and this build still respawns for one,
+/// because nothing here drives that connection yet. A `false` is safe in a way
+/// a `true` is not: replacing a child always applies the change, where applying
+/// it in place is only correct if the wire really carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Whether the CLI creates a worktree itself, given a name.
+    ///
+    /// Claude Code's `-w` does. Nothing else has such a flag, so Dray resolves
+    /// a base ref and makes the tree before the spawn — and a harness wrongly
+    /// marked `true` here never gets a tree at all.
+    pub creates_own_worktree: bool,
+    /// Whether a running child can be moved onto another model without being
+    /// replaced.
+    pub applies_model_in_place: bool,
+    /// Whether a running child can be moved onto another effort.
+    ///
+    /// False for Claude Code, and that is the CLI's own fact rather than a
+    /// choice here: there is no `set_effort` control request, and an `effort`
+    /// field on `set_model` is accepted and ignored.
+    pub applies_effort_in_place: bool,
+    /// Whether a running child can be moved onto another permission mode.
+    pub applies_permission_in_place: bool,
+    /// Whether a session can be forked.
+    pub forkable: bool,
+}
+
+impl Harness {
+    /// The one table. Exhaustive, so a harness added later is asked every
+    /// question the last one was asked.
+    pub fn caps(self) -> Capabilities {
+        match self {
+            // Both switches are control requests on its own channel, verified
+            // against the CLI: the reply after `set_model` comes from the new
+            // model, so no respawn is needed.
+            Harness::ClaudeCode => Capabilities {
+                creates_own_worktree: true,
+                applies_model_in_place: true,
+                applies_effort_in_place: false,
+                applies_permission_in_place: true,
+                forkable: true,
+            },
+            // `turn/start` carries model, effort and approval policy on every
+            // turn, so this is not for want of a per-turn override. A stance is
+            // *two* settings and only one has a turn-level form: `sandbox` is
+            // thread-level, so applying a change in place would move the
+            // approval policy and leave the sandbox where it was — exactly the
+            // half-applied setting that makes a session freer than was asked
+            // for. Respawning settles both, and `thread/resume` carries the
+            // conversation across it.
+            Harness::Codex => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                forkable: false,
+            },
+            // Nothing drives pi yet, so every answer is the conservative one.
+            // Two are permanent rather than pending: pi has no worktree flag,
+            // and its own `fork` cannot serve Dray's — `clone` hijacks the
+            // running process, and `--fork` and `--session` are refused
+            // together, so pi names the file rather than taking one.
+            Harness::Pi => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                forkable: false,
+            },
+            // Nothing spawns for it — `names_a_cli` refuses it one layer up —
+            // so there is no child for any of these to be true of. All false is
+            // the honest answer rather than a defensive one.
+            Harness::Other(_) => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                forkable: false,
+            },
+        }
     }
 
     /// What to call it in a sentence somebody reads.

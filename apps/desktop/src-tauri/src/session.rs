@@ -428,20 +428,21 @@ impl SessionManager {
                 );
             }
 
-            // Codex has no `-w`, so its worktree has to be one Dray makes — the
-            // same route `--from` already takes, started where the CLI would
-            // have started it. Without this the tree is never created, and the
-            // session bails inside `Session::init` with its row already in the
-            // index: a sidebar row pointing at a directory that never existed
-            // and can never start. `HEAD` where there is no remote, matching
-            // what the CLI itself falls back to when the fetch fails.
-            let codex_base = match (harness, use_worktree, base_ref) {
-                (Harness::Codex, true, None) => {
+            // Only Claude Code's `-w` makes its own tree. For everything else
+            // the tree has to be one Dray makes — the same route `--from`
+            // already takes, started where the CLI would have started it.
+            // Without this the tree is never created, and the session bails
+            // inside `Session::init` with its row already in the index: a
+            // sidebar row pointing at a directory that never existed and can
+            // never start. `HEAD` where there is no remote, matching what the
+            // CLI itself falls back to when the fetch fails.
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
+                (false, true, None) => {
                     Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
                 }
                 _ => None,
             };
-            let base_ref = base_ref.or(codex_base.as_deref());
+            let base_ref = base_ref.or(resolved_base.as_deref());
 
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
@@ -650,9 +651,11 @@ impl SessionManager {
         // `thread/resume` carries the conversation across it.
         let respawn_needed = !busy
             && sessions_guard.get(session_id).is_some_and(|s| {
-                s.effort != effort
-                    || (s.harness == Harness::Codex
-                        && (s.model != model || s.permission_mode != permission_mode))
+                let caps = s.harness.caps();
+
+                (s.effort != effort && !caps.applies_effort_in_place)
+                    || (s.model != model && !caps.applies_model_in_place)
+                    || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
             });
 
         if respawn_needed {
@@ -739,18 +742,22 @@ impl SessionManager {
                 });
             }
 
-            // Claude's alone: both are control requests on its own channel, and
-            // Codex has neither. Reaching here with a Codex session whose pick
-            // changed means the respawn above was skipped because work was
-            // outstanding — the index still records the pick, so the next idle
-            // send applies it, exactly as it does for effort.
-            if s.harness == Harness::ClaudeCode {
-                if s.model != model {
-                    s.set_model(&model_spec).await?;
-                }
-                if s.permission_mode != permission_mode {
-                    s.set_permission_mode(permission_mode).await?;
-                }
+            // The other side of the respawn rule above, and read off the same
+            // table so the two cannot disagree. They were two equality tests
+            // against two different harnesses, which is one edit away from a
+            // pick that neither respawns for nor applies — recorded in the
+            // index and never reaching the child.
+            //
+            // Reaching here with a changed pick at all means the respawn was
+            // skipped because work was outstanding. The index still records it,
+            // so the next idle send applies it.
+            let caps = s.harness.caps();
+
+            if caps.applies_model_in_place && s.model != model {
+                s.set_model(&model_spec).await?;
+            }
+            if caps.applies_permission_in_place && s.permission_mode != permission_mode {
+                s.set_permission_mode(permission_mode).await?;
             }
 
             // Last thing before the prompt goes down the pipe: the child is idle
@@ -871,8 +878,8 @@ impl SessionManager {
         // the log and appends an index entry before any child exists, so a
         // refusal that late leaves a row in the sidebar holding a whole
         // conversation it can never carry on.
-        if parent.harness == Harness::Codex {
-            bail!("Codex sessions cannot be forked yet");
+        if !parent.harness.caps().forkable {
+            bail!("{} sessions cannot be forked yet", parent.harness.label());
         }
         if !parent.harness.names_a_cli() {
             bail!(
@@ -1130,13 +1137,14 @@ pub enum Transport {
 impl Transport {
     /// The line-writing pipe, for the paths that only Claude Code has.
     ///
-    /// An error rather than a silent no-op: reaching one of those with a Codex
-    /// session is a wiring mistake, and a control that quietly does nothing is
-    /// the failure mode `control.rs` exists to warn about.
+    /// An error rather than a silent no-op: reaching one of those with a
+    /// session that writes some other way is a wiring mistake, and a control
+    /// that quietly does nothing is the failure mode `control.rs` exists to
+    /// warn about.
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) => bail!("this control is not wired for Codex yet"),
+            Transport::Rpc(_) => bail!("this control is not wired for this harness"),
         }
     }
 }
