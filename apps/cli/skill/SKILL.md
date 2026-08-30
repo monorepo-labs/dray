@@ -142,6 +142,10 @@ This is what makes review possible. Spawn a session with a different model or a
 different harness, point it at yours with `--from`, and it gets its own checkout
 of the same commits — so it collides with nobody while it reads.
 
+A session spawned to review this one's work must be told to send its findings
+back to this session — the user asked *you* for the review, so that is where it
+has to land. No other kind of session reports back unless the user says so.
+
 Three things to know:
 
 - **Committed work only.** The new worktree starts at a commit. Anything the

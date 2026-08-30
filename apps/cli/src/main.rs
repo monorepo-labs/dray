@@ -898,6 +898,21 @@ mod tests {
         assert!(SKILL.contains("Committed work only"));
     }
 
+    /// A review session is spawned because the user asked *this* session for a
+    /// review, so its findings have to arrive back here — landing them only in
+    /// another session's transcript is a session that ran for nothing. Nothing
+    /// in the app carries them: a spawned session's opening prompt names no
+    /// sender, so the caller has to ask for the report in the prompt. Which
+    /// makes the skill saying it the whole rule, same as the inheritance
+    /// thresholds above. The second half is pinned with it — a rule that read
+    /// as "always report back" would cost a turn per fanned-out session to say
+    /// what the sidebar already says.
+    #[test]
+    fn the_skill_says_a_review_session_reports_its_findings_back() {
+        assert!(SKILL.contains("must be told to send its findings"));
+        assert!(SKILL.contains("No other kind of session reports back unless the user says so."));
+    }
+
     /// A spawned session inherits model and effort, and two inherited answers
     /// are wrong often enough to be worth a question: Fable, which somebody
     /// picked for one chat, and a raised effort, which fanning out multiplies.
