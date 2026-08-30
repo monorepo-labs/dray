@@ -43,6 +43,22 @@ function jsonl(stream, onLine) {
   });
 }
 
+// Every way a capture can come out incomplete. Collected rather than thrown on,
+// so the file still lands for inspection — but the exit code is what the
+// documented workflow chains sanitize.py behind, and an incomplete capture
+// sanitized into the fixtures tree is indistinguishable from a good one.
+const failures = [];
+
+let exited = null;
+child.on("exit", (code, signal) => {
+  exited = signal ? `signal ${signal}` : `code ${code}`;
+});
+// ENOENT on a bad ${PI_BIN} arrives here, not as a throw we could catch.
+child.on("error", (err) => {
+  exited = err.message;
+  failures.push(`could not spawn pi: ${err.message}`);
+});
+
 const seen = [];
 jsonl(child.stdout, (l) => {
   rec("out", l);
@@ -71,32 +87,48 @@ const send = (o) => {
   child.stdin.write(l + "\n");
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Only ever looks forward. A scenario that waits for `agent_settled` twice must
+// wait for two of them, and rescanning from the start would satisfy the second
+// wait on the first event — a capture that stops mid-turn while reporting that
+// it saw what it was told to.
+let cursor = 0;
 const waitFor = async (pred, ms) => {
   const end = Date.now() + ms;
-  while (Date.now() < end) {
-    for (const l of seen) {
+  for (;;) {
+    while (cursor < seen.length) {
+      const line = seen[cursor];
+      cursor += 1;
       try {
-        if (pred(JSON.parse(l))) return true;
+        if (pred(JSON.parse(line))) return true;
       } catch {}
     }
+    if (exited) return false;
+    if (Date.now() >= end) return false;
     await sleep(80);
   }
-  return false;
 };
 
 for (const step of scenario.steps) {
+  if (exited) {
+    failures.push(`pi exited (${exited}) with steps left to run`);
+    break;
+  }
   if (step.send) send(step.send);
   if (step.sleep) await sleep(step.sleep);
   if (step.waitFor) {
+    const want = JSON.stringify(step.waitFor);
     const ok = await waitFor(
       (e) => Object.entries(step.waitFor).every(([k, v]) => e[k] === v),
       step.timeout || 180000,
     );
-    console.error(
-      ok
-        ? `-- saw ${JSON.stringify(step.waitFor)}`
-        : `-- TIMEOUT ${JSON.stringify(step.waitFor)}`,
-    );
+    if (ok) {
+      console.error(`-- saw ${want}`);
+    } else {
+      failures.push(exited ? `pi exited (${exited}) waiting for ${want}` : `timed out waiting for ${want}`);
+      console.error(`-- TIMEOUT ${want}`);
+      break;
+    }
   }
   // Answer any extension_ui_request that is still unanswered, if asked to.
   if (step.answerUi) {
@@ -119,5 +151,14 @@ child.stdin.end();
 child.kill("SIGTERM");
 await sleep(400);
 out.end();
+
+// A capture with nothing in it is the quietest failure of all: sanitize.py
+// writes an empty fixture and every test over it passes vacuously.
+if (seen.length === 0) failures.push("pi said nothing at all");
+
 console.error(`\n== ${seen.length} out-lines -> ${outFile}`);
-process.exit(0);
+if (failures.length) {
+  console.error("== INCOMPLETE CAPTURE, do not sanitize:");
+  for (const f of failures) console.error(`   - ${f}`);
+}
+process.exit(failures.length ? 1 : 0);

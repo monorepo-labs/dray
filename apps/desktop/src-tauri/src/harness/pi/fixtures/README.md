@@ -64,12 +64,13 @@ been believed:
 | file | pi | model | what it pins |
 |---|---|---|---|
 | `no_approvals.jsonl` | 0.84.4 | stub | **The answer to "what happens with no extension installed": pi runs the tool.** Four tool calls — `read`, `bash`, `edit`, `write` — and not one `extension_ui_request`. Also the whole streaming vocabulary: `thinking_*`, `text_*` and `toolcall_*` deltas keyed by `contentIndex`, four `turn_start`/`turn_end` pairs inside one `agent_start`…`agent_settled`, and the `toolResult` message echo that has to be dropped. |
-| `extension_approvals.jsonl` | 0.84.4 | stub | The only approval route pi has: a `tool_call` extension hook calling `ctx.ui.confirm`. `extension_ui_request{method: "confirm"}` out, `extension_ui_response` in, and a denial landing as `tool_execution_end{isError: true}` carrying the reason. Two requests are outstanding at once. Answers for ids already answered are ignored in silence. |
+| `extension_approvals.jsonl` | 0.84.4 | stub | The only approval route pi has: a `tool_call` extension hook calling `ctx.ui.confirm`. `extension_ui_request{method: "confirm"}` out, `extension_ui_response` in, and a denial landing as `tool_execution_end{isError: true}` carrying the reason. Requests are strictly serialised — `read` is answered before `bash` asks — which matches pi's documented "preflighted sequentially". The capture cannot show otherwise: the driver answers each before the next is asked. Answers for ids already answered are ignored in silence. |
 | `abort_and_queue.jsonl` | 0.84.4 | stub | `abort` mid-`bash`, and **the trap**: the aborted turn's assistant message carries `stopReason: "error"` with `errorMessage: "This operation was aborted"` — not the `"aborted"` the docs list. Also `steer`, `follow_up`, `queue_update` and `clear_queue` returning the queued text. |
 | `models_and_steering.jsonl` | 0.84.4 | stub | `get_available_models` listing **only providers with resolvable auth** — a third provider with no key is configured and absent. `get_available_thinking_levels` answering per model: five levels for the reasoning one, `["off"]` for the other, which still accepts `set_thinking_level: "max"` with `success: true`. And the mid-turn prompt rule: bare `prompt` refused with a sentence naming the cure, `streamingBehavior: "steer"` accepted. **`abort` with a steer queued delivers the steer anyway.** |
 | `resume.jsonl` | 0.84.4 | stub | Resume: a second process spawned with `--session <the same path>` comes back with **the same `sessionId`** and all nine messages. `contextUsage.tokens` (2840) against cumulative `tokens.total` (8960) — the occupancy trap, already answered by name. Also `compaction_start`/`compaction_end` on the failure path, where `result` is absent rather than null. |
 | `commands_and_clone.jsonl` | 0.84.4 | stub | Command error shapes (`Unknown command`, `Model not found`), `get_entries`' typed session tree, and **`clone` hijacking the running process**: `get_state` afterwards names a new session id and a file path pi chose, not the one `--session` was given. |
 | `fork_flag_refused.jsonl` | 0.84.4 | — | Three lines, and they settle the fork design: `--fork cannot be combined with --session`. pi will not let a client name the path a fork lands at. |
+| `session_id_not_adopted.jsonl` | 0.84.4 | — | `--session` pointed at a file named `019a0000-dead-7000-8000-000000000001.jsonl`. pi writes the session there and reports a `sessionId` of its own. The path is a handle Dray can choose; the id is not. Two lines, and PI-PLAN.md §4 rests on them. |
 | `live_turn.jsonl` | 0.84.4 | **real** (xai/grok-4.6) | The same scenario as `no_approvals.jsonl` against a real model. Three model calls, a `read` and a `write`. **Zero usage on every `message_update`**, and **one `toolcall_delta` per call** carrying the whole argument object — both differ from the stub, and both matter. Also 41 thinking deltas of real reasoning text, where Claude Code's thinking blocks arrive empty. `contextUsage.tokens` 2139 against cumulative `tokens.total` 6288. |
 | `live_models.jsonl` | 0.84.4 | **real** | `get_available_models` on a machine with two providers logged in: 11 models across `openai-codex` and `xai`, context windows from 128k to 1M. It grew from 10 to 11 the moment a second provider was added, which is the whole argument of PI-PLAN.md §7. `gpt-5.3-codex-spark` reports `input: ["text"]` — a real model that takes no images, which is what `accepts_images` is for. |
 | `failed_turn_live.jsonl` | 0.74.2 | **real** | A failed turn against a real provider with expired credentials. There is no error *event* in pi: the failure is `stopReason: "error"` plus `errorMessage` on the assistant message, and `agent_end` closes the run normally. The sentence — "No API key for provider: openai-codex" — is the one a row should draw. Also the user-message echo, on the live wire rather than the stub's. |
@@ -88,6 +89,14 @@ is what the captures exist to stop:
   Anthropic or OpenAI through pi fragment tool arguments, or report usage
   mid-stream, is one capture each and neither changes a mapping — only how much
   the streaming preview buys.
+- **A custom tool from an extension.** Every tool in these captures is a
+  built-in. PI-PLAN.md §6 gates `Auto` on an allowlist precisely because an
+  extension can register a mutating tool under any name, and nothing here shows
+  such a call reaching `tool_call` under the name it registered. Wanted before
+  slice 2.
+- **Two approval requests open at once.** The driver answers each before the
+  next is asked, so this capture could not show overlap whether or not pi
+  allows it. pi's docs say preflight is sequential, which suggests it does not.
 - **A subagent.** pi has none built in; one arrives only through an extension,
   so there is nothing to capture until an extension is chosen.
 - **Auto-compaction, and an auto-retry.** `compaction_end` is captured only on

@@ -5,7 +5,7 @@ Architecture plan. Written against pi's own `docs/rpc.md`, `docs/extensions.md`,
 as of `main` at `ca9c268c`.
 
 **Captured live against `@earendil-works/pi-coding-agent` 0.84.4**, with one
-capture on 0.74.2 kept deliberately. Six of the ten captures ran against a
+capture on 0.74.2 kept deliberately. Six of the eleven captures ran against a
 scripted OpenAI-completions provider rather than a real model: the pi process,
 the RPC framing, the tool execution and the extension host are all real, only
 the tokens are canned. Three reached the network — `live_turn.jsonl` and
@@ -75,8 +75,9 @@ And four things the docs do not say at all:
   permission options are Dray's own.
 - **Session identity: `--session <path>`.** Dray picks the path from its own
   session id, so it stays derivable and index-before-spawn is untouched. One
-  index field is still worth adding, and the existing `thread_id` should be
-  generalised into it rather than a second one added beside it.
+  new nullable field covers the fork case. Generalising the existing
+  `thread_id` instead looked tidier and would strand every Codex session in
+  silence — the key on disk is `threadId`, so the alias matches nothing.
 - **Models: the list is a property of the machine, so it has to be asked for.**
   A throwaway `pi --mode rpc` child answers `get_available_models` and
   `get_available_thinking_levels` with no model call — the same trick
@@ -262,8 +263,8 @@ states.
 
 pi mints its own session id and there is no way to make it adopt one: passing
 `--session /…/019a0000-dead-7000-8000-000000000001.jsonl` writes the session
-to exactly that file and still reports `sessionId: "01a051ea-d746-7ce3-…"`.
-Verified.
+to exactly that file and still reports a `sessionId` of its own
+(`session_id_not_adopted.jsonl`).
 
 But the id is not the handle. **The path is.** A second process spawned with
 the same `--session` comes back with the *same* `sessionId` and the whole
@@ -282,33 +283,57 @@ read back from anywhere.
 Against Codex, this is the easy case. Against Claude Code it is very nearly the
 same case — `--session-id` there, a path here.
 
-### One index field, and it should be a rename
-
-`SessionIndexItem.thread_id` already exists, `#[serde(default)]`, documented as
-"Codex's own id for this conversation". pi's durable handle is a path, and a
-path in a field called `thread_id` is exactly the drift CLAUDE.md warns about
-everywhere else.
-
-Proposed: rename it to `agent_handle: Option<String>`, with
-`#[serde(alias = "thread_id")]` so every existing entry loads unchanged — the
-idiom `ApprovalPolicy` already uses to keep `acceptEdits` entries loading. One
-field, two meanings, both documented on it:
+### One index field, and it must be a new one
 
 ```rust
-/// The harness's own handle for this conversation, when it has one Dray did
-/// not choose. Codex's thread id, recorded from `thread/start`. pi's session
-/// **file path**, which Dray does choose — recorded anyway, because a pi-side
-/// fork lands at a path pi names and this is where that lands. `None` for
-/// Claude Code, which adopts Dray's id outright.
-#[serde(default, alias = "thread_id")]
-pub agent_handle: Option<String>,
+/// Where pi keeps this session's own log, when that is not the path Dray
+/// derived from the session id. `None` is the ordinary case and means the
+/// derived path — so resume reads this only for a session whose file pi named
+/// itself, which today is a fork at a chosen message (§5).
+#[serde(default)]
+pub pi_session_path: Option<String>,
 ```
 
-For an ordinary pi session the recorded value equals the derived one, and the
-derivation is what resume reads. Recording it is not redundancy: it is the only
-place a fork-at-message could put the path pi picked (§5), and it is what makes
-"the path Dray chose" and "the path pi is using" two facts that can be compared
-rather than one that is assumed.
+`None` for every session that has one, which is nearly all of them. Resume
+reads `pi_session_path` if set and the derived path otherwise, so a session
+created before the field existed resumes on the derivation and needs no
+migration at all.
+
+**The rename was the first proposal and it is a bug.** `thread_id` already
+exists and is documented as "the id the harness knows this session by, where
+that is not our own" — which reads like it was written for exactly this, so
+generalising it to `agent_handle` with `#[serde(alias = "thread_id")]` looked
+free.
+
+It is not free, and the reason is one attribute two lines above the field:
+
+```rust
+#[serde(rename_all = "camelCase")]
+pub struct SessionIndexItem {
+```
+
+So the key on disk is **`threadId`**, not `thread_id`, and an alias naming the
+snake_case spelling matches nothing. Checked against the real index rather than
+reasoned about: 240 entries, 240 carrying `threadId`, none carrying
+`thread_id`.
+
+What that costs is the whole point. `SessionIndexItem` carries
+`#[serde(flatten)] unknown`, so the unmatched `threadId` would not error — it
+would be swallowed into the unknown-keys map and written straight back out. The
+data would sit on disk, intact, and be invisible to resume. **Every existing
+Codex session would answer "no thread to resume" while its thread id was right
+there in the file.** That is the exact failure `unknown` was added to prevent,
+reintroduced by the field that was supposed to be tidier.
+
+Spelling the alias `threadId` fixes the match and leaves a worse hazard: after
+the rename, an older build writing the same index puts `threadId` back beside
+the new `agentHandle`, and a field with an alias reads a duplicate key as an
+error rather than a preference. Two builds share `~/.dray` by design — that is
+why `unknown` exists — so this is an ordinary state, not an edge.
+
+A second nullable field costs one line and cannot do any of that. Each field
+then means exactly one thing, which is what the rest of this struct already
+manages.
 
 **What each feature does under this choice:**
 
@@ -353,7 +378,7 @@ because copying a file another process is appending to yields half a turn.
 
 **Fork at a chosen message is reachable and costs one thing.** Spawn a
 throwaway child on the copy, send `fork {entryId}`, read
-`get_state.sessionFile`, record *that* on `agent_handle`, kill the child. The
+`get_state.sessionFile`, record *that* on `pi_session_path`, kill the child. The
 cost is that the fork's path is pi's rather than derivable, which is exactly
 what the field is for. Not in the first three slices; named because it is the
 one capability pi has that neither other harness does, and because the field
@@ -405,10 +430,16 @@ Five things that capture settles:
   vocabulary. Dray's own rule — "a settled request draws no row either way:
   approval is visible in the tool simply running, refusal in the tool's own
   error" — holds exactly.
-- **More than one request can be outstanding.** `read`'s confirm was still open
-  when `bash`'s went out, because sibling tool calls are preflighted
-  sequentially and then run concurrently. `buildTranscript`'s `pendingAsks` is
-  already a list, so this costs nothing.
+- **Requests arrive one at a time, and Dray should still not rely on that.**
+  The capture shows them strictly serialised — `read` answered at t=11008,
+  `bash` asked at t=11032 — and pi's docs say why: sibling tool calls from one
+  assistant message "are preflighted sequentially, then executed concurrently",
+  and `tool_call` is the preflight. So the gate is a queue by construction.
+  `buildTranscript`'s `pendingAsks` is already a list and stays one, because
+  the serialisation is pi's behaviour rather than a guarantee it publishes.
+  (An earlier draft claimed the capture showed two open at once. It does not —
+  the driver answered each request before the next was asked, so the capture
+  could not have shown overlap whether or not pi allows it.)
 - **A reply for an id that is gone is ignored in silence** — the driver
   re-sent answered ids and nothing broke. Same property Claude's
   `control_response` has, and the same consequence: a regression here presents
@@ -474,11 +505,27 @@ Every other harness takes a stance as a flag. pi has no flag, so Dray's
 |---|---|
 | `Plan` | `--tools read,grep,find,ls` at spawn, and the extension loaded. Genuinely read-only, enforced by pi not by prose |
 | `Manual` | extension loaded, gate **every** tool call |
-| `Auto` | extension loaded, gate `bash`, `write`, `edit` — the tools that change something. Reads run |
+| `Auto` | extension loaded, gate everything **except** a named read-only set (`read`, `grep`, `find`, `ls`). Reads run |
 | `DontAsk` | extension loaded, gate nothing, but keep the hook so a future rule has somewhere to live |
 | `BypassPermissions` | no `-e` at all |
 
-Two things fall out and both are worth saying plainly.
+**`Auto`'s gate is an allowlist of what may skip the card, never a blocklist of
+what must raise one.** Naming `bash`, `write` and `edit` was the first draft and
+it fails open on the one thing pi is built around: **extensions register their
+own tools**, and any of them can write files or run commands under a name this
+table has never seen. A blocklist lets every one of those through silently under
+a stance the reader chose because it asks about changes. The allowlist gets that
+wrong in the safe direction — an unknown read-only tool costs one card.
+
+`Plan` is the same rule one layer down, and it is stronger because pi enforces
+it: `--tools` is itself an allowlist, so an extension tool is not merely ungated
+there, it is not loaded.
+
+This wants a capture before slice 2 lands — an extension registering a mutating
+tool, confirming that its call reaches `tool_call` under the same name it
+registered. Nothing in the current fixtures exercises a custom tool at all.
+
+Two more things fall out and both are worth saying plainly.
 
 **Plan mode works better here than on Codex.** Codex hides it because
 read-only-and-ask is a stance Codex never names. pi's `--tools` allowlist is
@@ -622,6 +669,21 @@ dropped rather than added to `Effort` — `off` is what an empty list already
 means, and `minimal` is folded to `low` by `thinkingLevelMap` on the models
 that have it.
 
+**That command describes the *current* model, so one call does not fill a
+list.** `models_and_steering.jsonl` is the proof: the same connection answered
+five levels, then `["off"]` after a `set_model` to a non-reasoning one. So the
+probe has to `set_model` and query per model — N round trips on one child that
+is already running, still with no model call in any of them. Reading it once
+and applying the answer to every row would give every model the *default*
+model's ladder, and be wrong precisely for the model a reader switched to
+because it was different.
+
+If N ever gets large enough to matter, the cheap approximation is `reasoning:
+true` → the five levels, `false` → none, which matched every model on the probe
+box. It is an approximation and should be named as one: `thinkingLevelMap`
+varies per model (`gpt-5.5` carries `{xhigh: "xhigh", minimal: "low"}`), so
+pi clearly does not treat every reasoning model alike.
+
 **Three.** The list is discovered, and there is a precedent for exactly how.
 
 `models.rs` says today that a static list is kept "rather than read from
@@ -662,6 +724,24 @@ overriding that from a third-party wrapper is presumptuous.
 what the index entry records. Which means the composer's model picker for pi
 starts on a value it *read* rather than one it seeded — a first for that
 component, and one `usableModel` needs to be taught.
+
+**And `None` needs somewhere to live, because the index entry is written
+first.** `SessionIndexItem.model` is `ModelId`, not `Option<ModelId>`, and it
+is written before spawn — so "let pi decide" has to be a value that field can
+hold for the window between the entry landing and `get_state` answering.
+Today that window is covered by `ModelId::default()` returning `Unknown`, and
+this proposal deletes `Unknown`.
+
+So `ModelId` keeps a `Default`, and it becomes `Named(String::new())`: not yet
+known, the CLI's own default. One value, one meaning, and it is already what
+the empty string reads as everywhere it could reach — `find_model` rejects it
+and `as_arg` yields nothing to pass. The real model is written when `get_state`
+answers, through a `set_session_model` beside the `set_session_thread_id` that
+already exists for exactly this shape of after-the-fact record.
+
+Making the field `Option<ModelId>` is the alternative and it is worse: it is a
+persisted schema change on a field every session has, to express a state that
+lasts a few hundred milliseconds.
 
 **Five.** `runs_on(id, Harness::Pi)` answers `matches!(id, Named(_))`.
 
@@ -985,7 +1065,7 @@ Codex, `/` is not prose here.
 
 ## 12. Fixtures and testing
 
-`harness/pi/fixtures/` holds ten captures, wrapped both directions:
+`harness/pi/fixtures/` holds eleven captures, wrapped both directions:
 `{"dir": "in"|"out"|"err", "t": <ms>, "line": "<raw>"}`. The wrapper is the
 Codex convention and `t` is added, because it is what shows that a `*_end`
 delta lands after two later blocks have started.
@@ -1031,11 +1111,29 @@ Nothing runs a real model in CI.
 - `default_model_for` returns `Option<ModelId>`; `send_msg` omits `--model`
   on `None`.
 - `list_models` takes a harness and may probe.
-- `SessionIndexItem.thread_id` → `agent_handle`, with `#[serde(alias)]`.
+- `SessionIndexItem.pi_session_path`, `#[serde(default)]`. **Not** a rename of
+  `thread_id` — see §4 for why that loses every Codex session's handle.
 - `Harness::Pi` with its label, install command and docs URL; `binpath` learns
   `pi` and its version floor.
 
-Its own PR. Every change is pinned by tests that already exist.
+Its own PR, and **three tests have to be written before it is shippable.** The
+existing suite does not cover this slice, and an earlier draft claimed it did:
+
+- **A whole-index round trip.** Every field of a real `SessionIndexItem` out and
+  back with no loss, including `threadId` and the `unknown` map. This is the one
+  that would have caught the rename (§4), and nothing like it exists — the
+  `store.rs` tests build items and assert on behaviour, never on the bytes.
+- **`ModelId` round-tripping every shipped alias.** The untagged enum must
+  deserialize `"opus"` to the closed half and `"anthropic/claude-…"` to the open
+  one, and `Default` must be the empty `Named`. `model_ids_serialize_as_bare_aliases`
+  covers the Claude half of the serialize direction only.
+- **`every_agent_names_its_own_cure` over every variant.** It iterates a
+  hardcoded `[ClaudeCode, Codex]`, so a third harness with no install command
+  passes it. It should iterate the variants rather than a literal, which turns
+  it into the test its doc comment already claims to be.
+
+The rest of the slice — the `Copy` removal, `list_models` taking a harness — is
+pinned by the compiler and by tests that do exist.
 
 ### Slice 1 — a pi session on screen
 
@@ -1091,6 +1189,8 @@ question and currently outside what Dray says anything about.
 |---|---|
 | Do other providers through pi fragment tool arguments, or report usage mid-stream? xAI does neither | one capture each against Anthropic and OpenAI. Neither changes a mapping — only how much the streaming preview buys |
 | Does `fork {entryId}` hijack the running process the way `clone` does? | one capture; assumed yes, written against the pattern |
+| Does a tool registered by an extension reach `tool_call` under its registered name? §6's `Auto` allowlist assumes so | a capture with an extension registering a mutating tool. Wanted before slice 2 |
+| Can two `extension_ui_request`s ever be outstanding at once? The docs say preflight is sequential | a capture that leaves the first unanswered while a sibling call preflights |
 | What does an unanswered `extension_ui_request` do to the turn — block forever, or is there a floor timeout? | a capture that answers nothing and waits |
 | Does `--tools read,grep,find,ls` really refuse a write, or does the model get a tool that errors? | a capture under Plan mode asking for a write |
 | Is `~/.dray/pi-sessions/<id>.jsonl` safe as a session path when `--session-dir` is not passed, or does pi expect its own layout? | it worked in every capture here; confirm against a resumed session with compaction history |

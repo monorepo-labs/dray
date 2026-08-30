@@ -31,10 +31,19 @@ cp probe-approvals.ts "$PROBE/agentdir/dray-approvals.ts"
   && printf 'export const a = 1;\nexport const b = 2;\n' > src.ts )
 
 node stub-server.mjs &
-node drive.mjs "$PROBE/raw/tools.jsonl" scenarios/tools.json
-./sanitize.py "$PROBE/raw/tools.jsonl" \
-  ../../src-tauri/src/harness/pi/fixtures/no_approvals.jsonl
+node drive.mjs "$PROBE/raw/tools.jsonl" scenarios/tools.json \
+  && ./sanitize.py "$PROBE/raw/tools.jsonl" \
+       ../../src-tauri/src/harness/pi/fixtures/no_approvals.jsonl
 ```
+
+**The `&&` is the point, not a habit.** `drive.mjs` exits non-zero when a
+`waitFor` times out, when pi dies with steps left, when it cannot be spawned at
+all, or when it said nothing — and every one of those produces a *plausible*
+capture file. An incomplete capture sanitized into the fixtures tree reads
+exactly like a good one, and the tests over it pass by describing less than
+they claim to. This happened during the original capture run: a scenario timed
+out waiting for `agent_settled` because the stub's script was exhausted, and
+the driver reported `22 out-lines` and exited 0.
 
 Every scenario writes to `$PROBE/raw/<name>.jsonl`; the fixtures README maps
 each one to the fixture it becomes.
