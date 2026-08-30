@@ -26,7 +26,7 @@ import type { ApiRetryState, StreamingBlock, Working } from "@/hooks/useSessions
 import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
-import { FIRST_MOUNT, grow, mountedTurns } from "@/lib/turnWindow";
+import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { QueuedMessage, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -307,13 +307,17 @@ export default function Chat({
   // measurement. Keyed on the session inside the state rather than reset by an
   // effect, so a switch draws the new session's window on its very first
   // commit instead of one full render later.
-  const [mount, setMount] = useState<{ sessionId: string | null; count: number }>({
+  //
+  // Held as the index of the oldest mounted turn, so a turn the live session
+  // appends is inside the window without moving it — see `firstMount`.
+  const [mount, setMount] = useState<{ sessionId: string | null; start: number }>({
     sessionId: null,
-    count: FIRST_MOUNT,
+    start: 0,
   });
-  const mounted = mount.sessionId === session?.sessionId ? mount.count : FIRST_MOUNT;
+  const mounted =
+    mount.sessionId === session?.sessionId ? mount.start : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
-  const backfilling = mounted < turns.length;
+  const backfilling = mounted > 0;
 
   // The scroller's height before a step lands, for the compensation below.
   const heightBeforeStep = useRef<number | null>(null);
@@ -328,10 +332,10 @@ export default function Chat({
     const sessionId = session.sessionId;
     const timer = setTimeout(() => {
       heightBeforeStep.current = scrollRef.current?.scrollHeight ?? null;
-      setMount({ sessionId, count: grow(mounted, turns.length) });
+      setMount({ sessionId, start: grow(mounted) });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backfilling, mounted, turns.length, session?.sessionId]);
+  }, [backfilling, mounted, session?.sessionId]);
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
@@ -403,7 +407,7 @@ export default function Chat({
     if (!node) {
       if (session && backfilling) {
         pendingJump.current = key;
-        setMount({ sessionId: session.sessionId, count: turns.length });
+        setMount({ sessionId: session.sessionId, start: 0 });
       }
       return;
     }

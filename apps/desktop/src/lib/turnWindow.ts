@@ -14,14 +14,23 @@ export const FIRST_MOUNT = 8;
 /// finishes in under ten.
 export const MOUNT_STEP = 8;
 
-/// The newest `mounted` turns, in transcript order. Fewer turns than that is
-/// every turn.
-export function mountedTurns<T>(turns: readonly T[], mounted: number): T[] {
-  return turns.slice(Math.max(0, turns.length - mounted));
+/// The window is the index of the oldest mounted turn, not a count from the
+/// end. A count would re-anchor on every turn the live session appends —
+/// evicting the oldest mounted turn until the next step put it back, losing
+/// its expansion state and shifting an unpinned reader's view. An index only
+/// ever moves down, and a turn appended at the end is inside the window by
+/// construction.
+export function firstMount(total: number): number {
+  return Math.max(0, total - FIRST_MOUNT);
 }
 
-/// How many turns the next step draws. Never past the total, so a session that
-/// finishes backfilling stops scheduling steps.
-export function grow(mounted: number, total: number): number {
-  return Math.min(total, mounted + MOUNT_STEP);
+/// Every turn from `start` on, in transcript order.
+export function mountedTurns<T>(turns: readonly T[], start: number): T[] {
+  return start <= 0 ? [...turns] : turns.slice(start);
+}
+
+/// Where the next step begins. Stops at 0, so a finished backfill schedules
+/// nothing.
+export function grow(start: number): number {
+  return Math.max(0, start - MOUNT_STEP);
 }
