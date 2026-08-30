@@ -14,7 +14,7 @@ against an expired one. The fixtures README says which is which and
 `scripts/pi-capture/` re-runs any of them.
 
 The stub was more generous than a real provider in two places and both are
-called out where they matter (§7, §8). That is the whole reason the live pair
+called out where they matter (§7, §9). That is the whole reason the live pair
 exists: a design written against the stub alone would have derived the context
 ring from streamed usage that a real provider leaves at zero.
 
@@ -58,7 +58,7 @@ And four things the docs do not say at all:
 - **`usage` on `message_update` is zero for the whole stream** on a real
   provider. The docs hedge — "may remain zero until completion" — and xAI does
   exactly that, on all 54 deltas of a three-call turn. So the context ring
-  cannot be derived from streaming, which makes §8's pull-not-push design
+  cannot be derived from streaming, which makes §9's pull-not-push design
   necessary rather than merely tidier.
 - **pi streams real reasoning text.** 41 non-empty `thinking_delta` frames in
   one turn. Claude Code streams `thinking_delta` frames carrying `""` — the bug
@@ -67,12 +67,15 @@ And four things the docs do not say at all:
 
 ## TLDR for human
 
-- **Approvals: pi has none, so Dray ships one.** A five-line pi extension,
-  embedded in the binary and written to disk on spawn, hooks `tool_call` and
-  calls `ctx.ui.confirm`. That surfaces as `extension_ui_request` on stdout and
-  Dray's existing card answers it. Verified working, including denial. There is
-  no rule composition and no suggestion list, so for the first time the
-  permission options are Dray's own.
+- **Approvals: pi has none, so Dray ships one.** A small pi extension, embedded
+  in the binary and written to a content-hashed path on spawn, hooks
+  `tool_call` and asks with `ctx.ui.select` — not `confirm`, whose bridge
+  collapses every reply to a boolean and would drop a remembered grant on the
+  floor. That surfaces as `extension_ui_request` and Dray's existing card
+  answers it. For the first time the permission options are Dray's own, because
+  pi composes none. **The gate fails open with no sandbox under it**, so the
+  extension announces itself on load and a gated session refuses to start until
+  it has.
 - **Session identity: `--session <path>`.** Dray picks the path from its own
   session id, so it stays derivable and index-before-spawn is untouched. One
   new nullable field covers the fork case. Generalising the existing
@@ -81,14 +84,26 @@ And four things the docs do not say at all:
 - **Models: the list is a property of the machine, so it has to be asked for.**
   A throwaway `pi --mode rpc` child answers `get_available_models` and
   `get_available_thinking_levels` with no model call — the same trick
-  `commands.rs` already uses for Claude's slash commands. `ModelId` stops being
-  a closed enum and gains an open string form; `default_model_for` starts
-  returning `Option`, because for pi the honest default is pi's own.
+  `commands.rs` already uses for Claude's slash commands. `ModelId` becomes a
+  `ModelId(String)` newtype — the shape it already serializes as — and
+  `default_model_for` starts returning `Option`, because for pi the honest
+  default is pi's own. **A shipped 0.9.x opened beside this build rewrites every
+  pi model id to `"unknown"`**, which cannot be fixed from this side and is
+  written down rather than papered over.
 - Turn boundary is `agent_start` → `TurnStarted`, `agent_settled` →
   `TurnCompleted`, `turn_start` → `ModelRequestStarted`, `agent_end` → nothing.
   Getting this wrong is the single most likely way to strand a session.
-- Stop is `clear_queue` then `abort`, and the aborted turn must be suppressed on
-  Dray's own knowledge that it asked, not on a stop reason.
+- Stop answers every outstanding permission request, then `clear_queue`, then
+  `abort` — release what the child is blocked on before telling it to stop. The
+  aborted turn is suppressed on Dray's own knowledge that it asked, not on a
+  stop reason.
+- **A third harness is what makes the seam worth lifting.** `session.rs` branches
+  on harness in eight places and six of them are equality tests a new variant
+  slips past silently. One per-harness driver, in slice 0.
+- **Dray's own rules have to reach the agent.** Both existing harnesses inject
+  them at spawn and none of this document did; without
+  `--append-system-prompt` and a skill directory pi reads, a pi session runs and
+  cannot be orchestrated.
 - Worktrees are free — the `create_worktree` path Codex already takes, and with
   no sandbox to fight, the linked-worktree `.git` question Codex opened does not
   arise.
@@ -249,7 +264,7 @@ Stop as the only exit, and nothing on screen saying why.
 
 `pi --version` prints a bare semver and costs one spawn, cached in the
 `OnceLock` like every other resolution. Refusal reaches the reader as the
-missing-agent notice §9 describes, with a version in the sentence.
+missing-agent notice §10 describes, with a version in the sentence.
 
 Worth knowing while writing that resolver: the package is `@earendil-works/pi-coding-agent`,
 the old `@mariozechner/pi-coding-agent` is deprecated but still publishing, and
@@ -405,12 +420,14 @@ allowlist fixed for the process, not a question.
 
 pi's extension API has exactly the seam needed. `pi.on("tool_call", …)` fires
 after `tool_execution_start` and **before the tool runs**, it can `await`, and
-returning `{ block: true, reason, terminate? }` stops the call. In RPC mode
-`ctx.ui.confirm()` emits `extension_ui_request` on stdout and blocks until an
+returning `{ block: true, reason, terminate? }` stops the call. In RPC mode a
+`ctx.ui` dialog emits `extension_ui_request` on stdout and blocks until an
 `extension_ui_response` with the matching id comes back on stdin.
 
 That is the whole mechanism, and `extension_approvals.jsonl` is it working end
-to end against a five-line extension:
+to end against a five-line extension. The capture uses `confirm`, because it
+was probing whether the channel works at all; the shipped gate uses `select`
+for the reason two subsections down:
 
 ```
 out  {"type":"extension_ui_request","id":"6d40…","method":"confirm",
@@ -453,16 +470,37 @@ Five things that capture settles:
 
 ### Where the extension comes from
 
-Embedded in the Rust binary with `include_str!` and written to
-`~/.dray/pi/dray-approvals.ts` on spawn, then passed as `-e <path>`. This is
-the `dray skill install` pattern and it is chosen for that pattern's reason:
-the extension and the code that answers its requests travel in the same binary,
-so one describing a protocol the other does not speak is impossible.
+Embedded in the Rust binary with `include_str!` and written under `~/.dray/pi/`
+on spawn, then passed as `-e <path>`. This is the `dray skill install` pattern
+and it is chosen for that pattern's reason: the extension and the code that
+answers its requests travel in the same binary, so one describing a protocol
+the other does not speak is impossible.
 
 Not `~/.pi/agent/extensions/` — that is the user's own directory and a globally
-installed extension would gate their terminal sessions too. `-e` is explicitly
-documented to work even under `--no-extensions`, which is what lets Dray load
-its own gate and nothing else.
+installed extension would gate their terminal sessions too.
+
+**The filename carries a hash of the contents**
+(`dray-approvals-<hash>.ts`), written temp-then-rename and never rewritten once
+it exists. A fixed name breaks the "same binary" claim outright: two Dray builds
+share `~/.dray` by design, so whichever spawned last owns the file, and a
+release binary answering a dev build's extension is exactly the disagreement
+this section says is impossible. The `dray-dev.sock` split is the same problem
+already solved once, and the precedent to follow rather than repeat.
+
+**The gate fails open, and there is no sandbox underneath.** If `-e` fails to
+load — a syntax error, a pi release that renames `tool_call`, a half-written
+file — pi runs every tool with nothing asking, under a stance whose whole
+promise is that it asks. Codex could survive the same failure because
+`workspace-write` was still enforced by the OS. pi has nothing.
+
+So loading has to be *observed*, not assumed: the extension fires a
+fire-and-forget `notify` marker as it registers, and `pi.rs` refuses to deliver
+the first prompt under any gated stance until it has seen it, with a readable
+timeout naming the extension path. One marker, one line, and it turns a silent
+ungated session into a session that will not start.
+
+The `#[ignore]`d live test in §13 is not a substitute. It catches drift on the
+machine of whoever runs it; the handshake catches it on the reader's.
 
 ### The options are Dray's own, for the first time
 
@@ -471,23 +509,44 @@ CLAUDE.md's rule — "options the user sees are the CLI's, not ours" — has no
 counterpart here, because pi composes nothing. So the card's list is written in
 Rust and honest about being narrow:
 
-| option id | label | kind | what happens |
+**The gate asks with `select`, not `confirm`, and that is forced.** A three-way
+question needs a three-way answer, and pi's `confirm` bridge cannot carry one:
+
+```ts
+confirm: (title, message, opts) =>
+  createDialogPromise(opts, false, {…}, (r) =>
+    "cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false),
+```
+
+Every response is collapsed to a boolean before the extension sees it, so any
+extra field Dray added — a `remember` flag, say — is discarded in the bridge
+and never reaches the handler. `select` is built the other way: its bridge
+returns `r.value`, the chosen string, verbatim. So the option strings are the
+transport.
+
+| option id | label | kind | the `value` sent back |
 |---|---|---|---|
-| `once` | Allow once | `Once` | `{confirmed: true}` |
-| `tool` | Always allow `<tool>` | `AlwaysRule` | `{confirmed: true}`, and the tool name goes into a per-session allow set |
-| `deny` | Deny | `Deny` | `{confirmed: false}` → `{block: true, reason: "Denied in Dray"}` |
+| `once` | Allow once | `Once` | `"allow-once"` |
+| `tool` | Always allow `<tool>` | `AlwaysRule` | `"allow-tool"` |
+| `deny` | Deny | `Deny` | `"deny"` → `{block: true, reason: "Denied in Dray"}` |
+
+Cancelled or timed out → `undefined` → denied, the same fail-closed reading
+`confirm` gives.
 
 **The allow set lives in the extension, not in Rust**, and that is a real
 decision rather than an implementation detail. If Rust held it, Rust would have
-to answer the next `extension_ui_request` for that tool without asking — which
-works, but means every remembered grant still costs a full round trip through a
-process boundary, and means the *extension* cannot tell an allowed call from an
-ungated one. Held in the extension, a remembered grant means no request is ever
-emitted. So Dray sends the grant down once, inside the response
-(`{confirmed: true, remember: "tool"}` — a field the extension reads and pi
-passes through untouched), and the rule never leaves the pair of processes that
-own it. The frontend still answers with an option id and nothing else, which is
-the invariant that actually matters.
+to answer the next request for that tool without asking — which works, but
+means every remembered grant still costs a full round trip through a process
+boundary, and means the *extension* cannot tell an allowed call from an ungated
+one. Held in the extension, a remembered grant means no request is ever
+emitted. The frontend still answers with an option id and nothing else, which
+is the invariant that actually matters; Rust maps that id to one of the three
+strings above.
+
+An earlier draft put the grant in a field on the reply. It could not have
+worked, and it would have failed in the quietest way available: the grant is
+dropped in pi's bridge, the extension asks again on the next call, and "always
+allow" reads as a button that does nothing.
 
 Per-session, never persisted. A standing grant that outlives the window is a
 promise pi gives Dray no way to keep — there is no rule store to write to and
@@ -495,6 +554,34 @@ no policy for a next session to read.
 
 `AlwaysDirectory` and `SwitchMode` are not offered: pi has no path scoping and
 no mode to switch into mid-session.
+
+### Not every request is Dray's
+
+`extension_ui_request` carries no extension identity — an `id`, a `method` and
+the dialog's own fields, and nothing saying who asked. The user's own
+extensions can call `ctx.ui.confirm` too; pi's docs use "Trust project?" as
+their worked example. Drawn through Dray's card that arrives as a consent
+prompt offering "Always allow \<tool\>" for a question that is not about a tool.
+
+Two decisions follow, and the first is a real trade:
+
+- **User extensions load.** `--no-extensions` would settle the identity problem
+  by leaving Dray's the only one — and it would also silently disable whatever
+  the reader has installed, which is their configuration, not ours. It would
+  also make `Auto`'s allowlist argument moot by removing the tools it exists to
+  catch. So they load, and the ambiguity is handled rather than avoided.
+- **Dray's own requests are recognised by their option strings**, which the
+  three values above already make unique. A `select` carrying them is a consent
+  card; anything else — a foreign `confirm`, a foreign `select` — draws a
+  generic question card with that extension's own title and options, and no
+  "always allow". Recognition by shape, since shape is the only thing on the
+  wire.
+
+**And a later extension can rewrite what the card approved.** `event.input` is
+mutable, handlers run in extension load order, and later handlers see earlier
+mutations — so an extension loaded after Dray's can change the command between
+the approval and the run. Dray's should load first, which `-e` ordering ought to
+control and which wants a capture before slice 2 rather than an assumption.
 
 ### The modes map onto *what gets gated*, not onto a setting
 
@@ -548,15 +635,18 @@ That is the same conclusion Codex reached for a different reason, so
 
 ### Questions
 
-pi's `extension_ui_request` also carries `select`, `input` and `editor`, each
-blocking for a value. Those are a natural home for `QuestionsAsked` — a
-`select` with `options` is Dray's `Question` almost field for field — but
-**nothing in pi sends one unless an extension does**, and Dray's own extension
-will not. So `QuestionsAsked` is unreachable for pi in the first three slices,
-and the four dialog methods that are not `confirm` are answered from the reader
-task with `{cancelled: true}` and filed as `unsupported_request` — the same
-stage and the same reasoning Claude's refusals use, because it is the only
-stage that changes what the agent does.
+pi's `extension_ui_request` also carries `confirm`, `input` and `editor`
+alongside the `select` Dray's own gate uses, each blocking for a value. A
+foreign `select` or `confirm` is a natural home for `QuestionsAsked` — a
+`select` with `options` is Dray's `Question` almost field for field — and it
+arrives only when an extension the reader installed asks something.
+
+For the first three slices those draw a generic question card (above) rather
+than being refused, because refusing them blocks an extension the reader chose
+to run. `input` and `editor` have no card yet and are answered from the reader
+task with `{cancelled: true}`, filed as `unsupported_request` — the same stage
+and the same reasoning Claude's refusals use, because it is the only stage that
+changes what the agent does.
 
 The fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`,
 `set_editor_text`) get no reply, by protocol. Parsed and dropped, so the
@@ -601,6 +691,33 @@ Four properties decide the design:
   and the same cure: this drives the UI and keeps the persisted value honest
   rather than preventing a crash.
 
+### An older build erases pi's model ids, and nothing can stop it
+
+§4 works through what happens when two Dray builds share `~/.dray`, and then
+fails to apply its own conclusion one field over. `#[serde(flatten)] unknown`
+preserves unknown **keys**. `model` is a known key, so what it protects is
+nothing here.
+
+Every shipped build carries `#[serde(other)] Unknown` on `ModelId`, and that
+variant serializes as `"unknown"`. So a released 0.9.x opened beside a pi build
+reads `"xai/grok-4.6"` as `Unknown` and writes `"unknown"` back on the next
+whole-index rewrite. The pi build then reads `"unknown"` as an id naming no
+model, `find_model` rejects it, and `send_msg` bails before the spawn — for
+every pi session at once.
+
+This is the `thread_id` erasure of 0.8.2 exactly, one field over, and it cannot
+be fixed from this side: the destroying build already shipped.
+
+What can be done is degrade honestly. `"unknown"` and `""` read as the same
+sentinel — *this build cannot name the model* — and a pi session holding one
+resumes with no `--model` at all, taking pi's own default rather than refusing
+to start. The reader loses their model pick and keeps their session, which is
+the right way round.
+
+Written down here rather than only in code, because the cure for the reader is
+"don't run an old Dray beside this one", and nothing in either build can say so
+at the moment it matters.
+
 ### `models.rs` cannot hold this, and the reason is one line
 
 `ModelId` is a **closed enum, and it is persisted** — on the index entry, and
@@ -610,32 +727,55 @@ per machine.
 
 ### Proposal: open the id, discover the list, and let pi pick the default
 
-**One.** `ModelId` gains an open form and loses `Unknown`:
+**One.** `ModelId` becomes a newtype over the string it already is on disk:
 
 ```rust
-/// What `--model` receives, and what an index entry records.
+/// What `--model` receives, and what an index entry records. Every value the
+/// index has ever held is a bare string, so this is the shape it was always
+/// serializing as — the enum was a validation layer wearing a type's clothes.
 ///
-/// Closed for the single-vendor harnesses, whose aliases are a short fixed
-/// list where a typo is worth reporting. Open for pi, whose model set is a
-/// property of the machine rather than of the CLI.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ModelId {
-    Known(KnownModel),  // today's unit variants, serializing exactly as today
-    Named(String),      // "anthropic/claude-sonnet-4-5"
-}
+/// Validity is `find_model`'s question, not this type's: an id names a model
+/// this build can run, or it does not, and only the model table knows which.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+pub struct ModelId(pub String);
 ```
 
-`#[serde(other)]` comes off `KnownModel` for this to work, and losing it is a
-gain rather than a cost. Today a retired alias reads back as `Unknown`, which
-`find_model` rejects — the string is thrown away, so nothing can say *which*
-model a stranded session wanted. With the untagged fallthrough it reads back as
-`Named("opus-4-1-20250805")`, `find_model` rejects it for exactly the same
-reason, and the sentence can name it. The existing test keeps its guarantee and
-changes its name.
+The alias table moves onto `Model` as an `arg` field — which it half is
+already, since `as_arg` exists precisely because the persisted spelling and the
+wire spelling differ (`gpt56_sol` on disk, `gpt-5.6-sol` on the command line).
+`find_model` and `runs_on` stay exactly the gate they are.
 
-The real cost is that **`ModelId` stops being `Copy`.** It is passed by value
-in a dozen places. Mechanical, tedious, and slice-0 work.
+**An untagged enum was the first proposal and it has a bug in it.** The shape
+was `Known(KnownModel) | Named(String)`, keeping the closed half for the
+single-vendor harnesses. Two spellings of one value then exist —
+`Known(Opus)` and `Named("opus")` are identical on the wire and *unequal* under
+the derived `PartialEq` — and that equality is not decorative:
+
+```rust
+// session.rs:655 — decides whether to replace the child
+&& (s.model != model || s.permission_mode != permission_mode))
+// session.rs:748 — decides whether to send set_model
+if s.model != model {
+```
+
+So a model that reached one side through the index and the other through the
+composer would compare unequal and respawn a live session, or fire a `set_model`
+for a model already running. Silent, intermittent, and impossible to reproduce
+from the wire, where the two are the same eight bytes.
+
+A `ModelRef { harness, provider, id }` struct was the other candidate and is
+worse: it rewrites what all 240 existing entries carry, to add a field that is
+`None` for every one of them.
+
+`ModelId` stops being `Copy` under any of these. It is ~12 sites
+(`store.rs`, `session.rs`, `orchestration.rs`, `lib.rs`, `codex.rs`), the
+compiler names every one, and ts-rs emits `string` either way.
+
+**Two things come off `Model` that the first draft added.** `provider`
+duplicates the id — pi's `set_model` takes the halves separately, so the split
+belongs at the call site, on the **first** `/` (OpenRouter ids carry more than
+one). `context_window` has no reader: the ring takes occupancy from
+`get_session_stats`, not from the model table.
 
 **Two.** `Model` grows what a discovered entry knows and a static one can leave
 empty:
@@ -646,21 +786,18 @@ pub struct Model {
     pub label: String,
     pub efforts: Vec<Effort>,
     pub default_effort: Option<Effort>,
-    /// pi's provider half. `None` for the single-vendor harnesses, where the
-    /// harness *is* the provider.
-    pub provider: Option<String>,
-    /// From the harness, where it reports one. Nothing needs it yet; the
-    /// context ring reads occupancy from the session, not from here.
-    pub context_window: Option<u32>,
+    /// What `--model` receives, where that differs from the persisted id.
+    /// `as_arg`'s table, moved onto the row it describes.
+    pub arg: String,
     /// Whether the composer's image tray can send to this model at all.
     pub accepts_images: bool,
 }
 ```
 
-`accepts_images` earns its place immediately: pi is the first harness where a
-picked model may not take images, and a real one on the probe box
-(`gpt-5.3-codex-spark`) says so with `input: ["text"]`. The tray should degrade
-an image to a path mention there rather than send bytes a provider will reject.
+`accepts_images` is real and is the one field pi genuinely adds: a picked model
+may not take images, and one on the probe box (`gpt-5.3-codex-spark`) says so
+with `input: ["text"]`. It lands with the tray gate in slice 4, not in slice 0 —
+nothing reads it before then, and a field with no reader is a field with no test.
 
 Efforts come from `get_available_thinking_levels`: `["off"]` alone → `efforts:
 vec![]`, which is already Dray's convention for a model with no levels.
@@ -695,9 +832,30 @@ sound and it is already contradicted elsewhere in this repo:
 model call — precisely because the slash-command picker has to exist before a
 session does.
 
-pi's probe is cheaper than that one. `pi --mode rpc`, `get_available_models`,
-`get_available_thinking_levels`, kill. No handshake to wait through, no model
-call, and the answers are the whole picker.
+pi's probe is cheaper than that one. `pi --mode rpc --no-session`,
+`get_available_models`, then `set_model` + `get_available_thinking_levels` per
+model, kill. No handshake to wait through, no model call, and the answers are
+the whole picker.
+
+Four conditions on it, each of which is a bug if left implicit:
+
+- **`--no-session` is mandatory**, or every probe writes a session file into the
+  reader's `~/.pi/agent/sessions/` and their session list fills with empty runs
+  Dray started. The capture scenarios pass it; an earlier draft of this section
+  did not.
+- **`set_model` on the probe must not reach `settings.json`.** §16 promises Dray
+  writes nothing under `~/.pi/agent/`, and stepping a probe child through every
+  model is exactly the call that would break it. Unverified — it is in the
+  open-questions table, and if it does persist, the ladder comes from
+  `reasoning` instead.
+- **`get_state` needs a timeout**, for the reason Codex's `initialize` has one:
+  a binary that answers nothing wedges the picker, and pi says nothing on spawn
+  so silence is indistinguishable from a slow start.
+- **The cache needs a way to expire.** Nothing invalidates it, so a provider
+  logged into after Dray started is unpickable — while `runs_on` still accepts
+  its ids from `dray new`, so the CLI can start a session on a model the picker
+  will not show. A freshness window like `usePrMarks`', or a refresh on the
+  picker opening, rather than the command cache's never.
 
 So `list_models` takes a harness and, for pi, returns a probed list rather than
 a constant. Cached per process on the Rust side and across mounts on the
@@ -732,18 +890,26 @@ hold for the window between the entry landing and `get_state` answering.
 Today that window is covered by `ModelId::default()` returning `Unknown`, and
 this proposal deletes `Unknown`.
 
-So `ModelId` keeps a `Default`, and it becomes `Named(String::new())`: not yet
-known, the CLI's own default. One value, one meaning, and it is already what
-the empty string reads as everywhere it could reach — `find_model` rejects it
-and `as_arg` yields nothing to pass. The real model is written when `get_state`
-answers, through a `set_session_model` beside the `set_session_thread_id` that
-already exists for exactly this shape of after-the-fact record.
+So `ModelId::default()` becomes the empty string, reading as *this build cannot
+name the model* — the same sentinel `"unknown"` maps to above, since both mean
+the same thing and two spellings of one state is how they drift. `find_model`
+rejects it and the spawn omits `--model`.
 
 Making the field `Option<ModelId>` is the alternative and it is worse: it is a
 persisted schema change on a field every session has, to express a state that
 lasts a few hundred milliseconds.
 
-**Five.** `runs_on(id, Harness::Pi)` answers `matches!(id, Named(_))`.
+**In practice that sentinel should be rare, because the composer already knows.**
+`send_msg` calls `find_model` *before* the spawn and needs the effort ladder for
+`resolve_effort`, so the probe has to have run by then anyway — which means
+every composer path and every `dray new` can record a real model on the entry
+from the start. The sentinel narrows to one case: the probe itself failed. Worth
+stating because it changes what the frontend must handle — and the frontend must
+never draw the empty string as a model name.
+
+**Five.** `runs_on(id, Harness::Pi)` answers "not one of the other two
+harnesses' aliases" — with the newtype, a lookup against the static tables
+rather than a variant match.
 
 It cannot do better without asking the machine, and it does not need to: the
 real check is pi's own `Model not found: nope/nope`, a sentence naming exactly
@@ -761,11 +927,61 @@ fallback. That is correct — silently running a different model is the thing
 is meaningfully less portable than a Claude one's, and orchestration inherits
 it. Worth a line in the `dray` skill.
 
-## 8. Event mapping
+## 8. The seam, and where a third harness actually lands
+
+This document spent seven sections on the wire and none on the file that has to
+carry it. `session.rs` branches on harness in **eight** places, and pi touches
+every one:
+
+| line | what branches |
+|---|---|
+| 1108 | `Transport`, whose `lines()` bails for anything not Claude |
+| 1172 / 1187 | `Session::init`, one arm per harness |
+| 1641 | `deliver_prompt` — the write itself, and the `harness` it stamps |
+| 1345 | `interrupt` |
+| 1321 | `set_model`, Claude-only |
+| 654 | the respawn rule, spelled `s.harness == Harness::Codex` |
+| 874 | the fork guard |
+| 439 | the worktree route, spelled `(Harness::Codex, true, None)` |
+
+Two of those are match arms that a third variant makes the compiler check. The
+other six are equality tests against a named harness, and a third one slips past
+every one of them **silently, in the wrong direction**: line 439 keeps treating
+"make the tree myself" as Codex's alone, so a pi worktree session bails inside
+`init` with its index row already written — the empty-row failure §10's
+missing-agent notice exists to prevent, reached by a different road.
+
+**So the third harness is the second user, and the thing to lift is a driver.**
+CLAUDE.md's rule is create the shared thing when the second user exists; three
+arms scattered across eight `if`s is past that. One trait per harness answering:
+spawn, deliver a prompt, steer, interrupt, apply settings, fork policy, worktree
+route, resume handle. Each of those is a question `session.rs` already asks in
+prose, and the compiler cannot check prose.
+
+This is slice-0 work and it is pinned by tests that already exist — Claude's and
+Codex's behaviour through the same seam is what proves the lift did not change
+either.
+
+**And `harness/pi/rpc.rs` is not "nothing shared with Codex".** An earlier draft
+claimed pi's framing is a line reader and a response map and shares nothing.
+Half true: the framing differs, the *correlation* does not. Both have outbound
+requests carrying an id and a response arriving later on the same pipe, which is
+the pending-map CODEX-PLAN.md §4 said would lift "when a second JSON-RPC harness
+exists". pi is not JSON-RPC, but it is the second correlated harness, and the
+id counter plus pending map plus demux is the part worth sharing. The typing
+stays per harness.
+
+That matters immediately for one thing: §9's "`get_session_stats` folded into
+`TurnCompleted` before it is emitted" **cannot be an `await` inside the reader
+task**, because the reader is the only thing that will ever see the response
+line. It deadlocks. The turn has to settle into a pending state, and close when
+the stats response arrives — which is exactly what a pending map is for.
+
+## 9. Event mapping
 
 `turn_id` stays `None` — pi has no turn identifier on the wire and Dray's
 transcript groups by user message anyway, which is the reasoning Claude Code
-already documents. `subagent` is always `None` (§9). `harness: Pi`.
+already documents. `subagent` is always `None` (§10). `harness: Pi`.
 
 ### `BlockRef` has to be minted
 
@@ -810,7 +1026,7 @@ block" variable.
 | `message_update` `*_end` | `Delta(BlockStop)` | Order is not nesting order; see above |
 | `message_end` `role: assistant` | `Reasoning{block, text}` + `AssistantText{block, text}` per content block | Committed wins. `thinkingSignature` dropped. Tool calls in `content` are **not** mapped here — `tool_execution_start` is the one that draws the row |
 | `message_end` `role: toolResult` | `None` | **The second copy.** `tool_execution_end` already carried it, with `isError` beside it. Mapping both draws every tool result twice |
-| `tool_execution_start` | `ToolCallStarted{call_id: toolCallId, name: toolName, tool_type, input: args}` | `tool_type` from the name: `read`/`ls` → `FileRead`, `bash` → `Shell`, `write`/`edit` → `FileEdit`, `grep`/`find` → `Search`, else `Other` |
+| `tool_execution_start` | `ToolCallStarted{call_id: toolCallId, name: toolName, tool_type, input: args}` | `tool_type` from the name: `read`/`ls` → `FileRead`, `bash` → `Shell`, `write`/`edit` → `FileEdit`, `grep`/`find` → `Search`, else `Other`. **Every one of those names also needs a `TOOL_VERBS` row in the same change** — `toolLabel` returns the raw name on a miss, which is how Codex's `shell` and `apply_patch` shipped as lowercase wire tokens beside Claude's "Bash" and "Edited" |
 | `tool_execution_update` | `None` | `partialResult` is accumulated, not a delta. Parsed and dropped, so the failure log stays a signal. Same gap Codex's `outputDelta` leaves — see *No home* |
 | `tool_execution_end` | `ToolCallCompleted{result: {text: flattened content, is_error: isError}}` | A blocked call arrives here with `isError: true` and the reason as its text (§6) |
 | `bash_execution_update` | `None` | Output of the RPC `bash` command, which Dray never sends |
@@ -897,11 +1113,14 @@ Each costs a parsed-and-`None` so the failure log stays a signal.
 **pi → Dray, no home and worth one later:**
 
 - **Live tool output.** `tool_execution_update.partialResult` is the accumulated
-  output of a running command. Codex leaves the same gap with `outputDelta`, so
-  this is now two harnesses wanting one variant — `ToolCallProgress{call_id,
-  text}`, emitted and never persisted, like `Delta`. CLAUDE.md's rule for
-  `packages/` applies: the second user is what earns the shared thing, and it
-  has arrived.
+  output of a running command, and Codex leaves the same gap with `outputDelta`.
+  An earlier draft read that as CLAUDE.md's "second user earns the shared thing"
+  and concluded the variant should land now. That is the rule inverted: there
+  are two *producers* and still **zero consumers** — no row draws live output
+  for any harness. The second user of a variant is the second thing that reads
+  it. So slice 4, when a row exists, and then in pi's accumulated shape rather
+  than Codex's delta: replace-on-update is idempotent, so a dropped or
+  reordered frame costs a stale frame instead of a corrupted buffer.
 - **Cost.** pi reports it per message and per session. No surface.
 - **The session tree.** `get_entries` returns an append-only tree with stable
   ids, including pre-compaction history and abandoned branches. Dray's log is
@@ -936,7 +1155,7 @@ Each costs a parsed-and-`None` so the failure log stays a signal.
 **No new persisted variant in slices 0–3.** Every candidate above is either
 not persisted, or a surface Dray does not have.
 
-## 9. What the composer has to change
+## 10. What the composer has to change
 
 | control | pi |
 |---|---|
@@ -945,10 +1164,10 @@ not persisted, or a surface Dray does not have.
 | effort picker | driven by the picked model's `get_available_thinking_levels`. A model with `["off"]` shows none, which is the existing empty-`efforts` path |
 | permission mode | **Plan is shown** (§6) — unlike Codex. `acceptEdits` stays gone, as everywhere. `Auto` means something weaker than it does elsewhere and its copy should say so |
 | project / branch pickers | unchanged |
-| worktree toggle | unchanged (§10) |
-| image tray | works — `prompt.images` takes base64 with a mime type, the same shape Claude takes. New: gate on the picked model's `input` including `image` |
+| worktree toggle | unchanged (§11) |
+| image tray | images work — `prompt.images` takes base64 with a mime type, the same shape Claude takes. New: gate on the picked model's `input` including `image`. **Non-image attachments have no route**: Claude's `@/abs/path` convention is Claude's own parser, and pi expands no mentions inside an RPC prompt (below), so a dropped CSV would silently attach nothing. Codex answered this by appending a plain line naming the file, and pi should do the same |
 | `/` picker | **better than Claude's.** `get_commands` answers on the live connection, so no throwaway child. Sources are `extension`, `prompt` and `skill` — and pi reads `~/.agents/skills`, which is the same directory Claude reads, so a reader's skills are already there |
-| `@` picker | dark (§8) |
+| `@` picker | dark (§9) |
 
 ### Subagents
 
@@ -962,9 +1181,39 @@ extension provides, and no built-in tool spawns one. So:
   carries nothing to correlate them by. Drawn inline as tool calls, which is
   honest, and better than a panel that shows a run nothing can close.
 
-`ToolType::SubagentSpawn` is therefore unreachable for pi, and Dray's own
-orchestration is unaffected: `dray new` spawns *sessions*, not subagents, and a
-pi session can spawn them exactly as a Claude one can.
+`ToolType::SubagentSpawn` is therefore unreachable for pi. Dray's own
+orchestration is a separate question and the next section is why it is not
+unaffected.
+
+### Dray's own rules have to reach the agent, and nothing here sent them
+
+Both existing harnesses inject Dray's instructions at spawn — Claude through
+`--append-system-prompt` (`claude_code.rs:86`), Codex through
+`developerInstructions` on `thread/start` (`codex.rs:304`). That text is what
+tells an agent the `dray` CLI exists, how to link an issue, and what to do
+instead of asking a question the harness cannot ask. Six sections of this
+document described pi's wire and none of them sent it.
+
+Left as written, a pi session would run and would not be part of the product:
+`dray new` and `dray send` unknown to it, so it can neither fan work out nor
+report back; issue linking never happening, so the Issue tab never appears; and
+no instruction to answer in the reply when it wants to ask something.
+
+pi takes `--append-system-prompt`, and it takes it as text or a file path. So
+this is one flag and one file — `harness/pi/system_prompt.md`, pi's own, not
+Claude's shared: Claude's names `AskUserQuestion` and the Agent tool, and Codex
+needed its own for exactly that reason. Pinned by the same tests that pin
+Codex's.
+
+**And `dray skill install` writes to two directories, neither of which is
+pi's.** It writes `~/.claude/skills/dray/` and `~/.codex/skills/dray/`
+(`cli/src/main.rs:161`), because the CLI cannot know which agent the reader
+runs and writes both. pi reads skills from `~/.agents/skills` — observed in a
+capture, where `get_commands` listed a skill from there — so a third directory
+is needed, and the CLI's "write them all" rule already says which.
+
+Both belong in slice 1. A session that runs but cannot be orchestrated is not a
+harness Dray supports; it is a demo.
 
 ### The missing-CLI notice
 
@@ -978,7 +1227,7 @@ answers "can this run here". For pi there is a third state: installed, runnable,
 and too old (§3). The notice has to say *upgrade*, not *install*, or the reader
 runs an install command for something they already have.
 
-## 10. Worktrees
+## 11. Worktrees
 
 Free, and freer than for Codex.
 
@@ -1006,7 +1255,7 @@ The path convention is unchanged — `<project>/.claude/worktrees/` on branch
 that shape. It is Dray's convention now, not Claude's, and a third harness is
 not a reason to split four functions.
 
-## 11. Sending, steering, stopping
+## 12. Sending, steering, stopping
 
 ### Send
 
@@ -1037,7 +1286,7 @@ prompt does not abandon open tool calls still holds — it is the same turn.
 `set_steering_mode` defaults to `one-at-a-time`, which matches how Dray's queue
 already behaves. Left alone.
 
-### Stop is two commands, and one is not optional
+### Stop is three commands, and two of them are not optional
 
 `abort` takes no arguments — simpler than Codex, which refuses `turn/interrupt`
 without a `turnId`. But `abort` alone does not stop a session that has anything
@@ -1045,11 +1294,26 @@ queued: pi's own docs say "abort continues queued messages when they remain in
 the session", and `models_and_steering.jsonl` shows it — an abort, then a
 `turn_start` for the steer that was waiting.
 
-So **Stop is `clear_queue` then `abort`**, in that order, which is also the
-order pi's docs recommend for a client's Esc key. `clear_queue` returns the
-text it dropped, which Dray should put back in the composer draft rather than
-discard — `useDraft` already keys by session and this is the same restore the
-docs describe.
+**And it says nothing about a `tool_call` hook that is currently awaiting an
+answer.** That hook is an `await` inside pi, blocking the turn on a reply only
+Dray can send, and nothing in the docs or the captures says `abort` unblocks it.
+The likely shape is the worst one: Stop acknowledges, the turn stays parked on
+the question, and the card is still on screen — so pressing Allow runs the tool
+*after* Stop, which is the one thing Stop exists to prevent.
+
+So Stop **answers every outstanding request first**, each with
+`{cancelled: true}` — already the fail-closed reading — then `clear_queue`,
+then `abort`. Each answered request retires its card with
+`PermissionDecided{automatic: true}`, the path `control_cancel_request` already
+built for Claude and `serverRequest/resolved` for Codex.
+
+Ordering is load-bearing and it is the same reasoning both times: release what
+the child is blocked on before telling it to stop, or the stop lands on a
+process that cannot act on it.
+
+`clear_queue` returns the text it dropped, which Dray should put back in the
+composer draft rather than discard — `useDraft` already keys by session and this
+is the same restore the docs describe.
 
 This is structurally the same conclusion Claude's Stop reached: an interrupt
 plus a fan-out, because the interrupt alone left the session held open by
@@ -1063,7 +1327,7 @@ missed — a Stop that acknowledges and changes nothing.
 is a real pi command, expanded by pi itself from `get_commands` — so unlike
 Codex, `/` is not prose here.
 
-## 12. Fixtures and testing
+## 13. Fixtures and testing
 
 `harness/pi/fixtures/` holds eleven captures, wrapped both directions:
 `{"dir": "in"|"out"|"err", "t": <ms>, "line": "<raw>"}`. The wrapper is the
@@ -1101,20 +1365,32 @@ the scripted provider. `scripts/pi-capture/` re-runs any of them.
 
 Nothing runs a real model in CI.
 
-## 13. Staging
+## 14. Staging
 
 ### Slice 0 — make room (no pi code)
 
-- `ModelId` opens (§7). `Copy` comes off; callers follow. `Unknown` goes, and
-  its test keeps its guarantee under a new name.
-- `Model` grows `provider`, `context_window`, `accepts_images`.
+- `ModelId` becomes a newtype (§7). `Copy` comes off; the compiler names the
+  ~12 callers. `Unknown` goes; `""` and `"unknown"` both read as the sentinel.
+- `Model` grows `arg`. **Not** `provider` or `context_window` — neither has a
+  reader — and `accepts_images` waits for the tray gate in slice 4.
 - `default_model_for` returns `Option<ModelId>`; `send_msg` omits `--model`
   on `None`.
-- `list_models` takes a harness and may probe.
+- `list_models` takes a harness.
 - `SessionIndexItem.pi_session_path`, `#[serde(default)]`. **Not** a rename of
   `thread_id` — see §4 for why that loses every Codex session's handle.
+- **The per-harness driver (§8).** Eight scattered `harness ==` sites become one
+  trait, so the compiler asks the third variant every question the second one
+  was asked. This is the largest piece of slice 0 and the reason it is worth
+  shipping alone.
 - `Harness::Pi` with its label, install command and docs URL; `binpath` learns
   `pi` and its version floor.
+
+**Slice 0 is not quite pi-free, and the two places it leaks need deciding
+here.** `list_models` cannot probe without pi's parser, so it takes a harness
+now and grows the pi arm in slice 1. And `Harness::Pi` exists while
+`Session::init` still bails on it — which is the empty-indexed-row failure §10
+exists to prevent, unless `agent_availability` reports pi unavailable until
+slice 1 lands. It should, and that is one line rather than an open question.
 
 Its own PR, and **three tests have to be written before it is shippable.** The
 existing suite does not cover this slice, and an earlier draft claimed it did:
@@ -1123,9 +1399,8 @@ existing suite does not cover this slice, and an earlier draft claimed it did:
   back with no loss, including `threadId` and the `unknown` map. This is the one
   that would have caught the rename (§4), and nothing like it exists — the
   `store.rs` tests build items and assert on behaviour, never on the bytes.
-- **`ModelId` round-tripping every shipped alias.** The untagged enum must
-  deserialize `"opus"` to the closed half and `"anthropic/claude-…"` to the open
-  one, and `Default` must be the empty `Named`. `model_ids_serialize_as_bare_aliases`
+- **`ModelId` round-tripping every shipped alias**, byte-identical, over a real
+  index rather than a constructed one. `model_ids_serialize_as_bare_aliases`
   covers the Claude half of the serialize direction only.
 - **`every_agent_names_its_own_cure` over every variant.** It iterates a
   hardcoded `[ClaudeCode, Codex]`, so a third harness with no install command
@@ -1137,17 +1412,31 @@ pinned by the compiler and by tests that do exist.
 
 ### Slice 1 — a pi session on screen
 
-- `harness/pi/{pi.rs, parser.rs, mapper.rs}`. No `rpc.rs`: pi's framing is a
-  line reader and a response map, which is smaller than Codex's client and
-  shares nothing with it.
-- Spawn, `get_state` handshake, `--session` path, `BypassPermissions`
-  regardless of the picked mode — nothing asks, nothing stalls, and the
-  permission layer is not built yet.
+- `harness/pi/{pi.rs, parser.rs, mapper.rs}`, over the pending-map core lifted
+  from Codex's client (§8). The framing differs; the correlation does not.
+- Spawn, `get_state` handshake, `--session` path, the probe behind
+  `list_models`.
+- **Plan and Bypass only**, and the composer offers no other stance for pi.
+  Plan is `--tools read,grep,find,ls` — a flag, no extension, genuinely
+  read-only — so the slice ships with one honest gated stance instead of none.
+- `harness/pi/system_prompt.md` through `--append-system-prompt`, and
+  `~/.agents/skills/dray/` from `dray skill install` (§10). Without these a pi
+  session cannot be orchestrated at all.
 - Map: the three lifecycles, deltas, `tool_execution_*`, the two echoes
-  dropped, failure from `stopReason`, `get_session_stats` on settle.
-- Resume by respawning on the same path. Stop as `clear_queue` + `abort`.
+  dropped, failure from `stopReason`, `get_session_stats` on settle,
+  `TOOL_VERBS` rows for pi's tool names.
+- Resume by respawning on the same path. Stop as answer-pending +
+  `clear_queue` + `abort`. Session file deleted with the session.
 - Composer: harness picker, discovered model list, discovered effort levels.
 - Fixtures: `no_approvals`, `abort_and_queue`, `resume`, `failed_turn_live`.
+
+**Slice 1 must not ship with the stance picker unrestricted.** An earlier draft
+had it spawn under `BypassPermissions` whatever the reader picked, which is what
+Codex's slice 1 did — but Codex did it *inside* `workspace-write`, so the worst
+case was an unasked command that still could not leave the workspace. pi has no
+sandbox, so the same shortcut means a reader who picks "Ask every time" gets an
+agent that asks nothing and can do anything. Restricting the picker costs one
+stance for one slice.
 
 Done when a pi session runs a multi-tool turn, the transcript draws it with a
 streaming preview, the ring fills, Stop stops it, and reopening the app resumes
@@ -1155,27 +1444,31 @@ it.
 
 ### Slice 2 — approvals
 
-- The embedded extension, written on spawn, loaded with `-e`.
+- The embedded extension, content-hashed filename, loaded with `-e`, with the
+  registration handshake that refuses to start a gated session without it.
 - `PermissionRequested` from `confirm`, the three options, the per-session
   allow set, `{cancelled: true}` for the other dialog methods.
 - The mode table: `--tools` for Plan, gate sets for the rest, no `-e` for
-  Bypass. Mode change respawns.
-- Fixtures: `extension_approvals`.
+  Bypass. Mode change respawns. The full stance picker comes back here.
+- Stop answers every outstanding request before `clear_queue` + `abort`.
+- Foreign `extension_ui_request`s draw a generic question card.
+- Fixtures: `extension_approvals`, plus the three §15 wants first — a custom
+  tool from an extension, `-e` ordering, and a Stop with a request open.
 
 ### Slice 3 — worktrees, fork, orchestration
 
 - `owned_worktree` for every pi worktree; base from `base_ref_tree`.
 - Fork by copying the session file. Guard on `turn_in_flight`.
-- `dray new --harness pi` end to end, including `--from`.
+- `dray new --harness pi` end to end, including `--from`. An older app meeting
+  `--harness pi` refuses readably and names `dray update` as the cure.
 - Steering for queued prompts.
-- Session file deleted with the session.
 
 ### Slice 4 — the rest
 
 - `/` picker from `get_commands`. Compaction events. `auto_retry_*` into the
-  retry indicator. `ToolCallProgress` for live tool output, shared with Codex
-  since the second user now exists. Image gating on the model's `input`.
-  Fork at a chosen message.
+  retry indicator. `ToolCallProgress` for live tool output — when a row exists
+  to read it, in pi's accumulated shape. `accepts_images` and the tray gate.
+  Non-image attachments as a named line. Fork at a chosen message.
 
 ### Later, and not promised
 
@@ -1183,7 +1476,7 @@ Cost reporting. Reading `get_entries` for a fork-at-message picker. Anything to
 do with running pi in a container, which is pi's own answer to the sandbox
 question and currently outside what Dray says anything about.
 
-## 14. Open questions, and what settles each
+## 15. Open questions, and what settles each
 
 | question | settled by |
 |---|---|
@@ -1192,12 +1485,16 @@ question and currently outside what Dray says anything about.
 | Does a tool registered by an extension reach `tool_call` under its registered name? §6's `Auto` allowlist assumes so | a capture with an extension registering a mutating tool. Wanted before slice 2 |
 | Can two `extension_ui_request`s ever be outstanding at once? The docs say preflight is sequential | a capture that leaves the first unanswered while a sibling call preflights |
 | What does an unanswered `extension_ui_request` do to the turn — block forever, or is there a floor timeout? | a capture that answers nothing and waits |
+| **Does `abort` release a `tool_call` hook that is awaiting an answer?** If not, Stop leaves a card whose Allow still runs the tool (§12) | a capture that sends `abort` with a request open, then answers it |
+| Does `-e` load before the reader's own extensions? A later handler can rewrite `event.input` after the card approved it | a capture with two extensions, both logging their load order and mutating |
+| Does `set_model` on a probe child write through to the reader's `settings.json`? §16 promises it does not | a probe run against a copied agent dir, diffed after |
+| Does pi's `--append-system-prompt` accept a path as well as text, and does it survive a resume the way `developerInstructions` does not? | one capture with a codeword, resumed |
 | Does `--tools read,grep,find,ls` really refuse a write, or does the model get a tool that errors? | a capture under Plan mode asking for a write |
 | Is `~/.dray/pi-sessions/<id>.jsonl` safe as a session path when `--session-dir` is not passed, or does pi expect its own layout? | it worked in every capture here; confirm against a resumed session with compaction history |
 | How long does the model probe take on a machine with several providers configured? | timing on a real multi-provider install; if it is slow, the picker needs the command cache's freshness window rather than a plain `OnceLock` |
 | Does pi's own `settings.json` default model change under the reader while Dray holds a cached list? | the same restart bargain the command cache makes; confirm it reads acceptably |
 
-## 15. What this deliberately does not do
+## 16. What this deliberately does not do
 
 - **No sandbox, and no pretending.** pi does not have one and Dray will not
   build one. The approval gate is a gate on *asking*, not on *capability*, and

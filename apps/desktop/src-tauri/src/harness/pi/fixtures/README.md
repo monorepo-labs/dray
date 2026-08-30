@@ -64,7 +64,7 @@ been believed:
 | file | pi | model | what it pins |
 |---|---|---|---|
 | `no_approvals.jsonl` | 0.84.4 | stub | **The answer to "what happens with no extension installed": pi runs the tool.** Four tool calls — `read`, `bash`, `edit`, `write` — and not one `extension_ui_request`. Also the whole streaming vocabulary: `thinking_*`, `text_*` and `toolcall_*` deltas keyed by `contentIndex`, four `turn_start`/`turn_end` pairs inside one `agent_start`…`agent_settled`, and the `toolResult` message echo that has to be dropped. |
-| `extension_approvals.jsonl` | 0.84.4 | stub | The only approval route pi has: a `tool_call` extension hook calling `ctx.ui.confirm`. `extension_ui_request{method: "confirm"}` out, `extension_ui_response` in, and a denial landing as `tool_execution_end{isError: true}` carrying the reason. Requests are strictly serialised — `read` is answered before `bash` asks — which matches pi's documented "preflighted sequentially". The capture cannot show otherwise: the driver answers each before the next is asked. Answers for ids already answered are ignored in silence. |
+| `extension_approvals.jsonl` | 0.84.4 | stub | The only approval route pi has: a `tool_call` extension hook calling a `ctx.ui` dialog. It probes `confirm`, which proves the channel; the shipped gate uses `select`, because pi's `confirm` bridge collapses every reply to a boolean and cannot carry a third answer (PI-PLAN.md §6). A capture of `select` is wanted before slice 2. `extension_ui_request{method: "confirm"}` out, `extension_ui_response` in, and a denial landing as `tool_execution_end{isError: true}` carrying the reason. Requests are strictly serialised — `read` is answered before `bash` asks — which matches pi's documented "preflighted sequentially". The capture cannot show otherwise: the driver answers each before the next is asked. Answers for ids already answered are ignored in silence. |
 | `abort_and_queue.jsonl` | 0.84.4 | stub | `abort` mid-`bash`, and **the trap**: the aborted turn's assistant message carries `stopReason: "error"` with `errorMessage: "This operation was aborted"` — not the `"aborted"` the docs list. Also `steer`, `follow_up`, `queue_update` and `clear_queue` returning the queued text. |
 | `models_and_steering.jsonl` | 0.84.4 | stub | `get_available_models` listing **only providers with resolvable auth** — a third provider with no key is configured and absent. `get_available_thinking_levels` answering per model: five levels for the reasoning one, `["off"]` for the other, which still accepts `set_thinking_level: "max"` with `success: true`. And the mid-turn prompt rule: bare `prompt` refused with a sentence naming the cure, `streamingBehavior: "steer"` accepted. **`abort` with a steer queued delivers the steer anyway.** |
 | `resume.jsonl` | 0.84.4 | stub | Resume: a second process spawned with `--session <the same path>` comes back with **the same `sessionId`** and all nine messages. `contextUsage.tokens` (2840) against cumulative `tokens.total` (8960) — the occupancy trap, already answered by name. Also `compaction_start`/`compaction_end` on the failure path, where `result` is absent rather than null. |
@@ -89,6 +89,13 @@ is what the captures exist to stop:
   Anthropic or OpenAI through pi fragment tool arguments, or report usage
   mid-stream, is one capture each and neither changes a mapping — only how much
   the streaming preview buys.
+- **A `select` dialog, and `-e` load order.** The shipped gate asks with
+  `select` and needs to load before the reader's own extensions, since a later
+  `tool_call` handler can rewrite `event.input` after the card approved it.
+  Neither is captured.
+- **`abort` with a request outstanding.** Nothing here says whether it releases
+  a blocked `tool_call` hook. If it does not, Stop leaves a card whose Allow
+  still runs the tool.
 - **A custom tool from an extension.** Every tool in these captures is a
   built-in. PI-PLAN.md §6 gates `Auto` on an allowlist precisely because an
   extension can register a mutating tool under any name, and nothing here shows
