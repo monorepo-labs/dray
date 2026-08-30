@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, SquareTerminal, TriangleAlert } from "lucide-react";
+import { Check, Copy, KeyRound, SquareTerminal, TriangleAlert } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,11 @@ const FAILED_MS = 4000;
 /// with this", so both count. If they were not, the next turn fails on auth
 /// and the notice returns under a new id: self-correcting, with no polling and
 /// no retry button to explain.
+///
+/// **Log in trails, against its sibling's order.** There the two buttons are
+/// alternatives — copy the command or read the guide — so the likelier one
+/// leads. Here they are one action and its escape hatch, and the action the
+/// notice exists for belongs where the row ends rather than where it starts.
 ///
 /// **The launch is Terminal.app's, the copy is anyone's.** Only Terminal runs
 /// a command handed to `open` (measured — Ghostty and Warp accept it and run
@@ -86,11 +91,23 @@ export default function LoginExpiredNotice({
 
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
+      {/* The one notice in this slot that takes a mark. Its sibling
+          [AgentMissingNotice] spends a whole sentence on the consequence and
+          needs none; this line is four words, so the glyph carries what they
+          dropped. A key rather than an alert: the row's other glyph is
+          [TriangleAlert] on a failed launch, and two warning marks a gap apart
+          would read as one thing having gone wrong twice. */}
+      <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-        {agent.label} isn&rsquo;t logged in, so this session can&rsquo;t send.
+        {agent.label} isn&rsquo;t logged in
       </p>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        <Button variant="ghost" size="sm" onClick={() => void copy()}>
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          {copied ? "Copied" : "Copy command"}
+        </Button>
+
         {/* Keyed so a settled failure starts a fresh instance: flipping `open`
             between `true` and `undefined` swaps controlled for uncontrolled and
             Radix keeps its stale open state across it. Same treatment
@@ -119,11 +136,6 @@ export default function LoginExpiredNotice({
             {error ?? `Runs ${agent.loginCommand} in Terminal`}
           </TooltipContent>
         </Tooltip>
-
-        <Button variant="ghost" size="sm" onClick={() => void copy()}>
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          {copied ? "Copied" : "Copy command"}
-        </Button>
       </div>
     </div>
   );
