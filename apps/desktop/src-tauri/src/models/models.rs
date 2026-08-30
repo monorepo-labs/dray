@@ -317,8 +317,9 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
         Harness::ClaudeCode => claude_models().iter().any(|m| &m.id == id),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
         Harness::Pi => find_model(id).is_none(),
-        // Nothing runs for it, so nothing runs on it. False rather than an
-        // empty list scanned, which is the same answer said less directly.
+        // Nothing runs on a harness this build cannot spawn, and `false` is
+        // the safe direction: it refuses a model rather than recording one
+        // against a session that could never use it.
         Harness::Other(_) => false,
     }
 }

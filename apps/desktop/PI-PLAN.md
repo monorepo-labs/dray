@@ -113,6 +113,56 @@ And four things the docs do not say at all:
 
 ---
 
+## Where the build is
+
+Kept here rather than in a second file: the slice lists are in §14, and a status
+doc that lived apart from them would drift the first time one changed. Update
+this section in the same commit that moves a line of it.
+
+Branch `pi-harness-plan`, Linear **DRA-102**. Verified live against pi **0.84.4**:
+a multi-tool turn reaches the transcript with reasoning, tool call, result,
+answer, token usage and `completed`.
+
+**Slice 0 — done**, except one item deliberately dropped and one not needed yet.
+`ModelId` is a newtype, `Model` carries `arg`/`provider`/`accepts_images`,
+`default_model_for` answers `Option`, `list_models` takes a harness (and is now
+async, since pi's list is a read). The eight scattered `harness ==` sites are one
+capability table. `binpath` finds pi. **No version floor** — see §3, the model
+probe asks the real question. **`pi_session_path` not added**: the derived path
+is enough until fork needs pi's own, so the field lands with slice 3.
+
+**Slice 1 — done, with one gap that matters.** Spawn, handshake, `--session`,
+the discovered model list and per-model effort ladders, the three lifecycles,
+deltas, tool calls, failure from `stopReason`, resume, Stop, the system prompt,
+`~/.agents/skills/dray/`, and `dray new --harness pi` end to end.
+
+The gap: **the stance picker is hidden and every pi session runs ungated.** §14
+called for Plan and Bypass, where Plan is `--tools read,grep,find,ls` — a flag,
+no extension, genuinely read-only. Only Bypass shipped, so a reader who wants a
+pi session that cannot write has no way to ask for one. Slice 2 is what fixes
+this properly; Plan is the cheap half and should not wait for it.
+
+**Slice 2 — not started.** No approvals, no extension, no gate.
+
+**Slice 3 — half.** Worktrees and orchestration work. Fork is refused outright,
+`--from` is untested against pi, and steering is not wired.
+
+**Slice 4 — not started.**
+
+Smaller things known missing, none of them blocking: the pi session file is not
+deleted with its session, pi's lowercase tool names (`bash`, `read`, `edit`)
+have no `TOOL_VERBS` entry so rows draw the raw name, and pi's mark has no
+credit in the root README.
+
+**Two rules that are only remembered, and both fail silently.** Never kill a pi
+— every teardown goes through `pi::shutdown`, and a fourth path reaching for
+`child.kill()` regresses with no test firing (see *A pi must be asked to leave*
+in §3). And an unmodelled inbound request hangs the session forever:
+`PiEvent::Unknown` is a unit variant, so a request type pi adds later loses its
+id and cannot be refused, where `extension_ui_request` is answered.
+
+---
+
 ## 1. What RPC mode is, in Dray's terms
 
 Claude Code is a pipe with a control channel bolted on. `codex app-server` is a

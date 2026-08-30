@@ -423,9 +423,11 @@ impl Harness {
                 applies_permission_in_place: false,
                 forkable: false,
             },
-            // Nothing spawns for it — `names_a_cli` refuses it one layer up —
-            // so there is no child for any of these to be true of. All false is
-            // the honest answer rather than a defensive one.
+            // A session some other build wrote and this one cannot run. `false`
+            // throughout, and `drivable` is what this variant exists for: the
+            // row still draws, so the reader can see the session is there and
+            // read its transcript, and nothing will try to spawn a child for a
+            // CLI it cannot name.
             Harness::Other(_) => Capabilities {
                 drivable: false,
                 creates_own_worktree: false,
