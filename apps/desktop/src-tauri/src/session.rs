@@ -1912,7 +1912,7 @@ async fn deliver_prompt(
     // Ahead of the event, because it is what decides the event's own text:
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
-    let prepared = attachments::prepare(session_id, prompt, attachment_paths).await?;
+    let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
 
     let payload = AgentEventPayload::UserMessage {

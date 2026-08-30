@@ -232,9 +232,16 @@ either. `list_slash_commands` takes a harness now, and the hook keys its cache o
 one. Verified live: pi answered in **0.25s** with 10 commands, all of them from
 the reader's own extensions and skills.
 
-Still not started there: the composer-side tray gate on `accepts_images`,
-non-image attachments as a named line rather than an `@path` pi does not expand,
-and fork at a chosen message.
+**A non-image attachment is named in prose now, not as an `@path`.** Claude
+Code's own parser expands one into the file's contents before the model turn,
+with no tool call on the wire — which is what makes a 40MB CSV cost a path
+rather than a context window. Neither other harness has that parser, so the same
+string reached the model as punctuation it had to guess the meaning of.
+`expands_at_mentions` on the capability table decides, so Codex was fixed by the
+same line.
+
+Still not started there: the composer-side tray gate on `accepts_images`, and
+fork at a chosen message.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had

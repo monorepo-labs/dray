@@ -373,6 +373,16 @@ pub struct Capabilities {
     pub applies_effort_in_place: bool,
     /// Whether a running child can be moved onto another permission mode.
     pub applies_permission_in_place: bool,
+    /// Whether the CLI expands an `@path` mention in a prompt into the file's
+    /// contents.
+    ///
+    /// Claude Code's own parser does, before the model turn and with no tool
+    /// call on the wire, which is what makes a non-image attachment cost a path
+    /// rather than a context window. Neither other harness has such a parser, so
+    /// an `@path` sent there reaches the model as literal punctuation it has to
+    /// guess the meaning of — the file is named in prose instead, which any
+    /// model can read and act on with its own tools.
+    pub expands_at_mentions: bool,
     /// Whether a session can be forked.
     pub forkable: bool,
     /// Whether a fork has a second half only the CLI can perform.
@@ -404,6 +414,7 @@ impl Harness {
                 applies_model_in_place: true,
                 applies_effort_in_place: false,
                 applies_permission_in_place: true,
+                expands_at_mentions: true,
                 forkable: true,
                 fork_needs_cli: true,
             },
@@ -421,6 +432,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,
             },
@@ -440,6 +452,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                expands_at_mentions: false,
                 forkable: true,
                 fork_needs_cli: false,
             },
@@ -454,6 +467,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,
             },
