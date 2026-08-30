@@ -243,29 +243,18 @@ nothing was sent, so retrying after the fix is safe.
 
 ## When a command cannot reach the app
 
-Every `dray` command talks to the app over a unix socket, so every one of them
-needs permission to reach it — `ls` as much as `new`. Three answers, and they
-want three different things from you.
+Every `dray` command reaches the app over a unix socket — `ls` as much as `new` —
+so a failure to connect is one of three things, and the line tells you which.
 
-> permission denied reaching Dray at … The app may well be running: a sandbox,
-> or the filesystem permissions on that path, blocked the connection. If this
-> command is sandboxed, retry this one command with escalated permissions.
-
-**This is not the app telling you it is closed.** Usually a sandbox is refusing
-the connection, and retrying with escalated permissions goes through. Ask for
-the escalation on that one command: do not ask for a sandbox-free shell, and do
-not go looking for another route in. If the retry is refused the same way it is
-the other cause — ordinary permissions on the socket path, which no escalation
-fixes. Say so and name the path.
-
-> Dray isn't running. Start the app and try again.
-
-The app is closed, and you cannot fix that from here. Tell the user.
-
-> could not connect to Dray at … : *reason*
-
-Something else failed, and the line names it. Report it as written. It says
-nothing about whether the app is running, so do not tell the user it is down.
+- **`permission denied reaching Dray at …`** — something blocked the connection,
+  usually a sandbox. If this command is sandboxed, retry this one command with
+  escalated permissions; ask on that command alone, never for a sandbox-free
+  shell. A retry refused the same way is the socket path's own permissions, which
+  no escalation fixes — say so and name the path.
+- **`Dray isn't running. Start the app and try again.`** — the app is closed and
+  you cannot fix it from here. Only this sentence means that.
+- **`could not connect to Dray at …`** — the line names its own reason. Report it
+  as written; it says nothing about whether the app is up.
 
 Nothing was created and nothing was sent in any of the three, so retrying after
 the cure is safe.
