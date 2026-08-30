@@ -378,14 +378,14 @@ impl SessionManager {
         from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
-        let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
+        let model_spec = find_model(&model).with_context(|| format!("unknown model {model}"))?;
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
         // defaults and the `dray` CLI's own flags — so nothing upstream makes
         // them agree. Refused rather than quietly repaired: a session running on
         // a model nobody picked is the failure that looks like success.
-        if !runs_on(model, harness) {
+        if !runs_on(&model, harness) {
             bail!("{} is not a {} model", model_spec.label, harness.label());
         }
 
@@ -697,7 +697,7 @@ impl SessionManager {
         if let Some(s) = sessions_guard.get_mut(session_id) {
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model, effort, permission_mode).await?;
+            touch_session_index_item(session_id, model.clone(), effort, permission_mode).await?;
 
             // A model call is open, so this prompt is held rather than sent, and
             // none of the live controls below fire with it. `set_model` and
@@ -1226,6 +1226,13 @@ impl Session {
                 )
                 .await
             }
+            // Unreachable in practice, and deliberately still here: the
+            // composer refuses the send because `agent_available` reports pi
+            // unavailable, so nothing should get this far. If something does,
+            // the index row for this session is already written — so the honest
+            // answer is a sentence naming why, not a row pointing at an agent
+            // that can never start.
+            Harness::Pi => bail!("pi sessions are not implemented yet"),
             // A session some newer build wrote into the shared index. Its
             // transcript still reads and its row still draws — that is what the
             // tolerant read bought — but there is no CLI here to carry it on,
@@ -1342,14 +1349,12 @@ impl Session {
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
     pub async fn set_model(&mut self, model: &Model) -> Result<()> {
-        let model_arg = model.id.as_arg().context("model has no CLI alias")?;
-
         write_line(
             self.stdin.lines()?,
-            &ControlLine::new(ControlRequest::SetModel { model: model_arg }),
+            &ControlLine::new(ControlRequest::SetModel { model: &model.arg }),
         )
         .await?;
-        self.model = model.id;
+        self.model = model.id.clone();
 
         Ok(())
     }

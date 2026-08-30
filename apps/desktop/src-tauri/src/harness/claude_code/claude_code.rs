@@ -70,9 +70,7 @@ pub async fn init(
         "--verbose",
         "--include-partial-messages",
         "--model",
-        // Infallible for a `Model`: only `claude_models()` builds one, and none
-        // of those carry `Unknown`.
-        model.id.as_arg().context("model has no CLI alias")?,
+        &model.arg,
     ];
 
     // Omitted for models with no effort levels. The CLI accepts and ignores the
@@ -220,7 +218,7 @@ pub async fn init(
         child,
         stdin: crate::session::Transport::Lines(stdin),
         harness: ClaudeCode,
-        model: model.id,
+        model: model.id.clone(),
         effort,
         permission_mode,
         events,

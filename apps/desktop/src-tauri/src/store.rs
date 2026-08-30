@@ -359,7 +359,7 @@ impl SessionIndexItem {
             // has one of its own and reads HEAD straight.
             worktree_removed: worktree_name.is_none() && self.worktree_removed,
             title: fork_title(&self.title),
-            model: self.model,
+            model: self.model.clone(),
             effort: self.effort,
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
@@ -1279,6 +1279,120 @@ mod tests {
         assert!(item.unknown.get("sessionId").is_none());
     }
 
+    /// Every field of a fully populated entry, out and back, byte for byte.
+    ///
+    /// The index is rewritten *whole*, so a field this build reads into the
+    /// wrong place, or writes under a different key, is not a parse error — it
+    /// is silent data loss on the next write, and the reader finds out when
+    /// resume answers "no thread to resume" for work that is still alive.
+    ///
+    /// Deliberately a JSON literal rather than a constructed struct: a
+    /// constructed one round-trips through the same field list twice and so
+    /// agrees with itself whatever it is called on disk. This names the wire.
+    #[test]
+    fn a_whole_index_entry_round_trips_with_nothing_lost() {
+        let on_disk = serde_json::json!({
+            "sessionId": "0198c0de-dead-7000-8000-00000000beef",
+            "harness": "codex",
+            "cwd": "/work/proj/.claude/worktrees/calm-owl",
+            "projectPath": "/work/proj",
+            "branch": "worktree-calm-owl",
+            "worktreeName": "calm-owl",
+            "worktreeRemoved": true,
+            "title": "Add the issue panel (fork)",
+            "model": "gpt56_sol",
+            "effort": "xhigh",
+            "permissionMode": "plan",
+            "status": "completed",
+            "forkFrom": "0198c0de-dead-7000-8000-00000000cafe",
+            "threadId": "thread_01JABCDEF",
+            "issues": [{
+                "tracker": "linear",
+                "id": "b8f1e0aa-0000-4000-8000-000000000001",
+                "identifier": "DRA-53",
+                "title": "Add the issue panel",
+                "url": "https://linear.app/drayhq/issue/DRA-53",
+            }],
+            "parentSessionId": "0198c0de-dead-7000-8000-00000000f00d",
+            "created": "2026-08-30T09:00:00Z",
+            "modified": "2026-08-30T09:41:00Z",
+            "archived": false,
+            "pinned": true,
+            "somethingWeHaveNotShippedYet": {"keep": [1, 2]},
+        });
+
+        let item: SessionIndexItem = serde_json::from_value(on_disk.clone()).unwrap();
+        let written: Value = serde_json::to_value(&item).unwrap();
+
+        assert_eq!(
+            written, on_disk,
+            "a field changed shape between reading the index and writing it back"
+        );
+
+        // And it landed in the fields rather than all of it in the catch-all,
+        // which would satisfy the comparison above and lose every rule that
+        // reads one of these.
+        assert_eq!(item.model.as_str(), "gpt56_sol");
+        assert_eq!(item.thread_id.as_deref(), Some("thread_01JABCDEF"));
+        assert_eq!(item.issues.len(), 1);
+        assert!(item.worktree_removed);
+        assert_eq!(item.unknown.len(), 1);
+    }
+
+    /// The model id is the field this slice changed, so every spelling on disk
+    /// has to survive the trip that rewrites the index around it.
+    ///
+    /// These are the ten the closed enum could write, plus the two sentinels.
+    /// A pi model id joins them the day pi ships, and it is the reason the
+    /// closed enum had to go: no arm here could have named it.
+    #[test]
+    fn every_model_id_on_disk_survives_a_rewrite() {
+        for spelling in [
+            "opus",
+            "sonnet",
+            "fable",
+            "haiku",
+            "gpt56_sol",
+            "gpt56_terra",
+            "gpt56_luna",
+            "gpt55",
+            "gpt54",
+            "gpt54_mini",
+            "anthropic/claude-sonnet-4-5",
+            "opus-4-1-20250805",
+        ] {
+            let on_disk = serde_json::json!({
+                "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+                "branch": null, "worktreeName": null, "title": "t", "model": spelling,
+                "created": "c", "modified": "m", "archived": false, "pinned": false,
+            });
+
+            let item: SessionIndexItem = serde_json::from_value(on_disk.clone()).unwrap();
+            let written: Value = serde_json::to_value(&item).unwrap();
+
+            assert_eq!(
+                written.get("model"),
+                on_disk.get("model"),
+                "{spelling} did not survive being written back"
+            );
+        }
+
+        // Both spellings of "this build cannot name it" write as one, so the
+        // sentinel cannot drift into two values that compare unequal.
+        for sentinel in ["unknown", ""] {
+            let on_disk = serde_json::json!({
+                "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+                "branch": null, "worktreeName": null, "title": "t", "model": sentinel,
+                "created": "c", "modified": "m", "archived": false, "pinned": false,
+            });
+
+            let item: SessionIndexItem = serde_json::from_value(on_disk).unwrap();
+
+            assert!(item.model.is_unset());
+            assert_eq!(serde_json::to_value(&item.model).unwrap(), Value::from(""));
+        }
+    }
+
     #[test]
     fn index_entries_written_before_these_fields_still_read() {
         let legacy = r#"{"sessionId":"a","harness":"claude_code","cwd":"/p","projectPath":"/p",
@@ -1289,8 +1403,8 @@ mod tests {
 
         assert_eq!(item.status, SessionStatus::Idle);
         // Reads back as a model no build lists, so it can never reach a spawn.
-        assert_eq!(item.model, ModelId::Unknown);
-        assert!(crate::models::find_model(item.model).is_none());
+        assert!(item.model.is_unset());
+        assert!(crate::models::find_model(&item.model).is_none());
         // Absent reads as the composer's own default, so an old session resumes
         // under the mode its picker would show.
         assert_eq!(item.permission_mode, ApprovalPolicy::Auto);
@@ -1360,7 +1474,7 @@ mod tests {
             Some("wt"),
             None,
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
             None,
@@ -1399,7 +1513,7 @@ mod tests {
             Some("wt"),
             None,
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1428,7 +1542,7 @@ mod tests {
             Some("calm-owl"),
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1453,7 +1567,7 @@ mod tests {
             None,
             Some("feature"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1486,7 +1600,7 @@ mod tests {
             None,
             None,
             "work the issue",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             Some("orchestrator"),
@@ -1515,7 +1629,7 @@ mod tests {
             None,
             Some("main"),
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1660,7 +1774,7 @@ mod tests {
                 None,
                 None,
                 "hi",
-                ModelId::Opus,
+                ModelId::new("opus"),
                 None,
                 ApprovalPolicy::Auto,
                 None,
@@ -1703,7 +1817,7 @@ mod tests {
             Some("calm-owl"),
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1752,7 +1866,7 @@ mod tests {
                 worktree,
                 branch,
                 "hi",
-                ModelId::Opus,
+                ModelId::new("opus"),
                 None,
                 ApprovalPolicy::Auto,
                 None,
@@ -1789,7 +1903,7 @@ mod tests {
             None,
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
             None,

@@ -130,7 +130,14 @@ instruction to you:\n\n<prompt>\n{user_prompt}\n</prompt>"
 /// The prompt is always a separate argv element, never concatenated into a
 /// command line — no shell is involved, so a prompt containing quotes or
 /// `$(...)` is inert data rather than something to escape.
-async fn title_command(harness: Harness, prompt: &str) -> Result<Command> {
+/// `Err` for a harness with no cheap model to name. That is not a failure the
+/// reader sees: [`generate_title`] is an upgrade to the prompt-derived title,
+/// never a prerequisite, so every caller already keeps that one on `Err`.
+///
+/// The working directory is set here rather than by the caller, so "how does
+/// this harness write a title" is answered in one match. It was two, and a
+/// harness added to one and not the other reads as correct in both.
+async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Command> {
     let prompt = build_prompt(prompt);
 
     Ok(match harness {
@@ -157,6 +164,7 @@ async fn title_command(harness: Harness, prompt: &str) -> Result<Command> {
                 "--permission-mode",
                 "auto",
             ]);
+            cmd.current_dir(Path::new(cwd));
             cmd
         }
         Harness::Codex => {
@@ -203,8 +211,15 @@ async fn title_command(harness: Harness, prompt: &str) -> Result<Command> {
                 "never",
                 &prompt,
             ]);
+            // Not the project: [`SCRATCH_DIR`] is where Codex's `cwd` argument
+            // stops applying, and it is the half a sandbox cannot close.
+            cmd.current_dir(scratch_dir().await?);
             cmd
         }
+        // pi picks its own model, so this build cannot name a cheap one until
+        // the probe that discovers the list lands. `models.rs` says why there
+        // is no constant to reach for here.
+        Harness::Pi => bail!("pi has no cheap model to title with yet"),
         // A harness only some other build knows, so there is no binary to name
         // — the same refusal `Session::init` makes, one turn earlier.
         Harness::Other(name) => bail!("no title model for {name}"),
@@ -235,18 +250,8 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
         bail!("cwd for title generation does not exist: {cwd}");
     }
 
-    let cwd = match harness {
-        Harness::ClaudeCode => Path::new(cwd).to_path_buf(),
-        Harness::Codex => scratch_dir().await?,
-        // No CLI to spawn, so no title to write. The caller keeps its
-        // prompt-derived title on `Err`, which is the right answer here as well
-        // as the cheap one.
-        Harness::Other(name) => bail!("no title model for {name}"),
-    };
-
-    let child = title_command(harness, prompt)
+    let child = title_command(harness, prompt, cwd)
         .await?
-        .current_dir(cwd)
         // Closed, not inherited: with the prompt in argv there's nothing to
         // write. Codex is why this is load-bearing rather than tidy — `codex
         // exec` reads a piped stdin to append as a `<stdin>` block, so an
@@ -517,9 +522,9 @@ mod command_tests {
     use super::*;
 
     async fn args_for(harness: Harness) -> Vec<String> {
-        title_command(harness, "add a dark mode toggle")
+        title_command(harness, "add a dark mode toggle", ".")
             .await
-            .expect("every offered harness names a title model")
+            .expect("this harness titles")
             .as_std()
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())

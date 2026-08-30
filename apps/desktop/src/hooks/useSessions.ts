@@ -12,7 +12,7 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { DEFAULT_MODEL_FOR, rememberedModel, usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
@@ -572,9 +572,12 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   // The raw setter, like the rest of this function: a session's harness is the
   // session's, and clicking through old ones must not rewrite the default.
   setHarnessState(item.harness);
-  // Sessions indexed before the model was recorded read back as "unknown".
-  // Answered from the session's own harness, since a model belongs to one.
-  const restored = item.model === "unknown" ? DEFAULT_MODEL_FOR[item.harness] : item.model;
+  // A session indexed before the model was recorded, or one whose id this build
+  // cannot name, reads back as the unset sentinel. Answered from the session's
+  // own harness, since a model belongs to exactly one — and for a harness that
+  // names no default the sentinel stands, which is what the picker reads as
+  // "not chosen yet".
+  const restored = isUnsetModel(item.model) ? DEFAULT_MODEL_FOR[item.harness] : item.model;
   setModelId(restored);
   // The index stores one model/effort pair, so it can only seed that model's
   // entry; the rest of the map falls back to per-model defaults.

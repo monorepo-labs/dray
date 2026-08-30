@@ -152,6 +152,13 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
     match harness {
         Harness::ClaudeCode => claude().await,
         Harness::Codex => codex().await,
+        // Not "pi is missing" — nothing here can drive it yet. The bare name is
+        // relative, so it reads as unavailable through `is_absolute` above and
+        // the composer refuses the send. The alternative is `Session::init`
+        // bailing with the index row already written, which leaves an empty
+        // session row pointing at an agent that can never start. The resolver
+        // and its version floor land with the harness.
+        Harness::Pi => PathBuf::from("pi"),
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" through `is_absolute` above
         // — the refusal has to happen here rather than by falling back to

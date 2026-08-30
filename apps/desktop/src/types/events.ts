@@ -541,7 +541,7 @@ unreadable: Unreadable | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex";
+export type Harness = "claude_code" | "codex" | "pi";
 
 export type HookPhase = "started" | "finished";
 
@@ -747,7 +747,7 @@ export type MessageSender = { sessionId: string, title: string, };
 
 export type Model = { 
 /**
- * What `--model` receives.
+ * What an index entry records.
  */
 id: ModelId, label: string, 
 /**
@@ -755,15 +755,34 @@ id: ModelId, label: string,
  * on such a model and ignores it, so this drives the UI and keeps the
  * persisted value honest rather than preventing a crash.
  */
-efforts: Array<Effort>, defaultEffort: Effort | null, };
+efforts: Array<Effort>, defaultEffort: Effort | null, 
+/**
+ * What `--model` receives, where that differs from the persisted id.
+ *
+ * The two genuinely differ — `gpt56_sol` on disk, `gpt-5.6-sol` on the
+ * command line — which is why the enum this replaces needed an `as_arg`
+ * table at all. That table, moved onto the row it describes, so a
+ * discovered model carries its own alias instead of needing an arm here.
+ */
+arg: string, };
 
 /**
- * The `--model` alias, typed. `Unknown` exists so an index entry naming a
- * model this build no longer lists still deserializes — losing one session's
- * model beats failing the whole index read and emptying the sidebar. It maps
- * to no alias, so [`find_model`] rejects it and it can't reach a spawn.
+ * What an index entry records for a session's model.
+ *
+ * A newtype over the string it has always serialized as. The closed enum this
+ * replaces was a validation layer wearing a type's clothes: validity is
+ * [`find_model`]'s question, since only the model table knows whether an id
+ * names something this build can run — and a harness whose model list is
+ * answered at runtime has ids no enum written here could hold.
+ *
+ * An untagged `Known(..) | Named(String)` enum was the first proposal and has
+ * a bug in it. Two spellings of one value would exist, identical on the wire
+ * and unequal under a derived `PartialEq`, and that equality is what decides
+ * whether [`crate::session`] replaces a live child or sends `set_model`. A
+ * model reaching one side through the index and the other through the composer
+ * would respawn a running session, silently and unreproducibly.
  */
-export type ModelId = "opus" | "sonnet" | "fable" | "haiku" | "gpt56_sol" | "gpt56_terra" | "gpt56_luna" | "gpt55" | "gpt54" | "gpt54_mini" | "unknown";
+export type ModelId = string;
 
 /**
  * What one model has consumed **for the session so far** — cumulative and

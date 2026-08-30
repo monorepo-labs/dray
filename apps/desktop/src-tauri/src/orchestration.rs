@@ -16,7 +16,7 @@
 use crate::{
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
-    models::{default_model_for, models_for, runs_on, Effort, ModelId},
+    models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
     session::{Harness, SessionManager},
     store::{self, SessionIndexItem},
 };
@@ -490,22 +490,22 @@ fn resolve_model(
     harness: Harness,
 ) -> Result<ModelId> {
     if let Some(alias) = requested {
-        let id = ModelId::from_arg(alias)
-            .filter(|id| runs_on(*id, harness))
-            .with_context(|| {
-                let known: Vec<_> = models_for(harness)
-                    .into_iter()
-                    .filter_map(|m| m.id.as_arg())
-                    .collect();
-                format!("unknown model {alias:?} — try {}", known.join(", "))
-            })?;
+        let id = id_for_arg(alias, harness).with_context(|| {
+            let known: Vec<_> = models_for(harness).into_iter().map(|m| m.arg).collect();
+            format!("unknown model {alias:?} — try {}", known.join(", "))
+        })?;
         return Ok(id);
     }
 
     Ok(parent
-        .map(|p| p.model)
-        .filter(|id| runs_on(*id, harness))
-        .unwrap_or_else(|| default_model_for(harness)))
+        .map(|p| p.model.clone())
+        .filter(|id| runs_on(id, harness))
+        // `None` is pi's answer and means "pass no `--model`": pi is
+        // multi-provider, so any constant named here might not exist on the
+        // machine, and its own settings already say which model the reader
+        // wants. The unset sentinel is what carries that through the index.
+        .or_else(|| default_model_for(harness))
+        .unwrap_or_default())
 }
 
 /// The caller's level if it gave one, else the parent's, else `None` — which
@@ -705,7 +705,7 @@ mod tests {
             None,
             None,
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
             parent,

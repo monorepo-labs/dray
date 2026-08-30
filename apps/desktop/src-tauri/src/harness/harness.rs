@@ -129,12 +129,20 @@ mod install_tests {
         }
 
         // And they are not each other's. One `match` arm copied and left
-        // unedited is the way this goes wrong, and it reads as correct.
-        assert_ne!(
-            Harness::ClaudeCode.install_command(),
-            Harness::Codex.install_command()
-        );
-        assert_ne!(Harness::ClaudeCode.docs_url(), Harness::Codex.docs_url());
+        // unedited is the way this goes wrong, and it reads as correct. Over
+        // every pair rather than the one pair, or the third harness ships
+        // Codex's installer and this still passes.
+        for (i, a) in Harness::ALL.iter().enumerate() {
+            for b in &Harness::ALL[i + 1..] {
+                assert_ne!(
+                    a.install_command(),
+                    b.install_command(),
+                    "{a:?} and {b:?} share an install command"
+                );
+                assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
+                assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
+            }
+        }
     }
 
     /// The login command is stated twice — once for the reader to copy, once
@@ -189,6 +197,7 @@ use ts_rs::TS;
 pub enum Harness {
     ClaudeCode,
     Codex,
+    Pi,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -243,7 +252,7 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 2] = [Harness::ClaudeCode, Harness::Codex];
+    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::Pi];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
     /// index entry holds.
@@ -251,6 +260,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude_code".to_string(),
             Harness::Codex => "codex".to_string(),
+            Harness::Pi => "pi".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -276,6 +286,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "Claude Code",
             Harness::Codex => "Codex",
+            Harness::Pi => "pi",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -299,6 +310,10 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
             Harness::Codex => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            // pi also publishes to npm, and the page below names that route for
+            // anyone who wants it. This is the one that needs nothing already
+            // installed, which is the rule the other two follow.
+            Harness::Pi => "curl -fsSL https://pi.dev/install.sh | sh",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -314,6 +329,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "https://code.claude.com/docs/en/quickstart",
             Harness::Codex => "https://learn.chatgpt.com/docs/codex/cli",
+            Harness::Pi => "https://pi.dev/docs/latest",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -331,6 +347,14 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude auth login",
             Harness::Codex => "codex login",
+            // pi has no login at all. Verified against `pi auth --help`, which
+            // offers `print-api-key`, `print-bearer-token` and `check` and
+            // nothing that signs anyone in: credentials are per provider, and
+            // they arrive from the environment or from `pi config`'s TUI. So
+            // there is no one command to name, and naming the nearest thing
+            // would send a reader to a subcommand that only reads back what
+            // they have not got.
+            Harness::Pi => "",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -348,6 +372,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => &["auth", "login"],
             Harness::Codex => &["login"],
+            Harness::Pi => &[],
             Harness::Other(_) => &[],
         }
     }

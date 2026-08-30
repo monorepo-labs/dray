@@ -97,11 +97,7 @@ impl TurnSettings {
         let (approval_policy, sandbox) = approval_for(permission_mode);
 
         Ok(Self {
-            model: model
-                .id
-                .as_arg()
-                .context("model has no CLI alias")?
-                .to_string(),
+            model: model.arg.clone(),
             effort: effort.map(Effort::as_arg),
             approval_policy,
             sandbox,
@@ -233,7 +229,7 @@ pub async fn init(
         child,
         stdin: Transport::Rpc(thread),
         harness: Codex,
-        model: model.id,
+        model: model.id.clone(),
         effort,
         permission_mode,
         events,
@@ -1393,8 +1389,9 @@ mod tests {
 
         handshake(&client).await.expect("handshake should succeed");
 
-        let model = crate::models::find_model(crate::models::default_model_for(Codex))
-            .expect("the default Codex model should be listed");
+        let default = crate::models::default_model_for(Codex).expect("Codex names a default model");
+        let model =
+            crate::models::find_model(&default).expect("the default Codex model should be listed");
         let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto)
             .expect("the default Codex model has an alias");
 
