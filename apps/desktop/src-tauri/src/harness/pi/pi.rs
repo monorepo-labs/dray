@@ -16,6 +16,7 @@
 //! killing a pi is paid by the *next* one, which is why nothing here kills one
 //! it can ask to leave — see [`shutdown`] and [`PiClient::close`].
 
+pub mod commands;
 pub mod dialog;
 pub mod mapper;
 pub mod models;

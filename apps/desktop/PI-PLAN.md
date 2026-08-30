@@ -223,9 +223,18 @@ model itself where Dray names none, so the app's copy of that answer can be
 absent or wrong, and a provider refusing an image is a sentence the reader can
 act on where dropping one is not.
 
-Still not started there: the `/` picker from `get_commands`, the composer-side
-tray gate on `accepts_images`, non-image attachments as a named line rather than
-an `@path` pi does not expand, and fork at a chosen message.
+**The `/` picker reads `get_commands`, and building it turned up a bug older
+than pi.** Every picker was filled from Claude Code's `initialize` whatever the
+session ran on — so a pi session offered `/compact`, `/dataviz` and 145 others
+pi has never heard of, and typing one sent it as a prompt, because pi expands no
+command it does not know. Codex had the same picker and answers none of them
+either. `list_slash_commands` takes a harness now, and the hook keys its cache on
+one. Verified live: pi answered in **0.25s** with 10 commands, all of them from
+the reader's own extensions and skills.
+
+Still not started there: the composer-side tray gate on `accepts_images`,
+non-image attachments as a named line rather than an `@path` pi does not expand,
+and fork at a chosen message.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had

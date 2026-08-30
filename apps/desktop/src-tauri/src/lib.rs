@@ -253,13 +253,28 @@ fn settings_view() -> settings::SettingsView {
     }
 }
 
-/// The slash commands available in a directory. Cached per directory in the
-/// backend, so the composer may call this whenever the project changes.
+/// The slash commands available in a directory, for the harness that will run
+/// there. Cached per directory in the backend, so the composer may call this
+/// whenever the project or the harness changes.
+///
+/// The harness is what makes this answer anything true. Every picker used to be
+/// filled from Claude Code's `initialize` whatever the session ran on, so a pi
+/// session offered `/compact`, `/dataviz` and 145 others pi has never heard of
+/// — and typing one sent it as a prompt, because pi expands no command it does
+/// not know.
+///
+/// Codex answers none, and that is its own fact rather than a gap here: nothing
+/// in `codex app-server` publishes a command list, so an empty picker is the
+/// honest one.
 #[tauri::command]
-async fn list_slash_commands(cwd: &str) -> Result<Vec<SlashCommand>, String> {
-    harness::claude_code::commands::list_commands(cwd)
-        .await
-        .map_err(|e| e.to_string())
+async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, String> {
+    Ok(match harness {
+        Harness::ClaudeCode => harness::claude_code::commands::list_commands(cwd)
+            .await
+            .map_err(|e| e.to_string())?,
+        Harness::Pi => harness::pi::commands::list_commands(cwd).await,
+        Harness::Codex | Harness::Other(_) => Vec::new(),
+    })
 }
 
 /// Starts indexing a directory's files so the `@` picker opens on a warm index.

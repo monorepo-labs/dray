@@ -504,7 +504,7 @@ function App() {
   // resolves against the same directory for the same reason, and off the same
   // expression so the two can't answer for different trees.
   const composerCwd = selectedSession?.cwd ?? projectPath;
-  const slashCommands = useSlashCommands(composerCwd);
+  const slashCommands = useSlashCommands(composerCwd, harness);
 
   const { baseline, head } = useMemo(
     () => changeRange(selectedSession?.events ?? []),
