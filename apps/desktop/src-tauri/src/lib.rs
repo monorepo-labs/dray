@@ -123,6 +123,7 @@ async fn agent_availability() -> Vec<AgentAvailability> {
             label: harness.label().to_string(),
             install_command: harness.install_command().to_string(),
             docs_url: harness.docs_url().to_string(),
+            login_command: harness.login_command().to_string(),
         });
     }
     out
@@ -137,6 +138,10 @@ struct AgentAvailability {
     label: String,
     install_command: String,
     docs_url: String,
+    /// Read by a different notice from the two fields above it: those cure a
+    /// CLI that is missing, this cures one that is logged out. Both are facts
+    /// about the harness rather than about the machine, so they ride one read.
+    login_command: String,
 }
 
 #[tauri::command]
@@ -676,6 +681,7 @@ pub fn run() {
             quit::dismiss_quit,
             apps::list_open_apps,
             apps::open_in_app,
+            apps::open_login_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

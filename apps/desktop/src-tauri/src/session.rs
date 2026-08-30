@@ -2132,6 +2132,7 @@ mod tests {
         AgentEventPayload::TurnCompleted {
             status: crate::events::TurnStatus::Success,
             stop_reason: None,
+            auth_failed: false,
             final_text: None,
             usage: None,
             duration_ms: None,

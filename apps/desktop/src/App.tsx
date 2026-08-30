@@ -52,11 +52,13 @@ import { pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
-import { useMissingAgent } from "@/hooks/useAgentAvailability";
+import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
+import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import type { Issue, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useUpdater } from "@/hooks/useUpdater";
+import { authFailedTurn } from "@/lib/auth";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { playCelebration } from "@/lib/sound";
@@ -125,6 +127,24 @@ function App() {
   // while the first read is out and null when it is installed — both mean
   // there is nothing to say, so the composer sends as it always did.
   const missingAgent = useMissingAgent(harness);
+
+  // The turn that died for want of a login, and whether the reader has already
+  // been handed the cure for that one. Held by event id rather than by session:
+  // a second failure mints a new id, so the notice comes back on its own
+  // without anything having to clear a flag.
+  const authTurn = useMemo(
+    () => authFailedTurn(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
+  const [loginHandled, setLoginHandled] = useState<string | null>(null);
+  // `useAgentAvailability` rather than `useMissingAgent`: that one answers only
+  // for a CLI that is absent, and this agent's CLI ran well enough to report
+  // being logged out.
+  const agents = useAgentAvailability();
+  const loggedOutAgent =
+    authTurn && authTurn !== loginHandled
+      ? (agents?.find((agent) => agent.harness === harness) ?? null)
+      : null;
 
   const [collapsed, setCollapsed] = useLocalStorage("ade.sidebarCollapsed", false);
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
@@ -956,6 +976,12 @@ function App() {
           notice={
             !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
+            ) : loggedOutAgent && authTurn && selectedSession ? (
+              <LoginExpiredNotice
+                agent={loggedOutAgent}
+                cwd={selectedSession.cwd}
+                onHandled={() => setLoginHandled(authTurn)}
+              />
             ) : null
           }
           toolbar={

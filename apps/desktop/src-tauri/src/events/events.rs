@@ -108,6 +108,17 @@ pub enum AgentEventPayload {
         /// the field existed, which the panel reads as "diff against now".
         #[serde(default)]
         head: Option<String>,
+        /// The turn died for want of a login, so there is a cure to offer
+        /// rather than only a sentence to read. Each harness decides for
+        /// itself — Codex names the case outright, Claude Code only says it in
+        /// prose — and the failed-turn row draws that prose either way, so a
+        /// wording neither recognises costs the button, never the report.
+        ///
+        /// `#[serde(default)]` so turns logged before the field existed read
+        /// as false, which is what a replayed log should say: no child
+        /// survives a restart, so nothing on disk is still blocked on this.
+        #[serde(default)]
+        auth_failed: bool,
     },
     SettingsChanged(Settings),
 

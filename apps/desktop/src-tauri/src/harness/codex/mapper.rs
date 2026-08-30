@@ -20,10 +20,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::parser::{
-    CodexEvent, DeltaNotification, ErrorNotification, FileChangeEntry, ItemNotification, ItemStatus,
-    PlanNotification, ThreadItem, TokenUsageNotification, TurnNotification,
-    TurnStatus as CodexTurnStatus,
-    WebSearchResult,
+    CodexEvent, DeltaNotification, ErrorNotification, FileChangeEntry, ItemNotification,
+    ItemStatus, PlanNotification, ThreadItem, TokenUsageNotification, TurnError, TurnNotification,
+    TurnStatus as CodexTurnStatus, WebSearchResult,
 };
 
 /// Per-session state the mapping needs across lines.
@@ -155,13 +154,16 @@ impl Mapper {
             ..Default::default()
         });
 
-        let (status, stop_reason, final_text) = match turn.turn.status {
+        let (status, stop_reason, final_text, auth_failed) = match turn.turn.status {
             // The user's own Stop. Reported as a success carrying a reason
             // nothing draws, the same way Claude's `aborted_*` are: telling a
             // reader their own interrupt failed is noise.
-            CodexTurnStatus::Interrupted => {
-                (TurnStatus::Success, Some("interrupted".to_string()), None)
-            }
+            CodexTurnStatus::Interrupted => (
+                TurnStatus::Success,
+                Some("interrupted".to_string()),
+                None,
+                false,
+            ),
             CodexTurnStatus::Failed => (
                 TurnStatus::Error,
                 turn.turn
@@ -173,13 +175,15 @@ impl Mapper {
                 // "You've hit your usage limit", "Not logged in" — and the
                 // wire token beside it says nothing to a reader.
                 turn.turn.error.as_ref().map(|e| e.message.clone()),
+                turn.turn.error.as_ref().is_some_and(is_auth_failure),
             ),
-            _ => (TurnStatus::Success, None, None),
+            _ => (TurnStatus::Success, None, None, false),
         };
 
         let event = self.event(AgentEventPayload::TurnCompleted {
             status,
             stop_reason,
+            auth_failed,
             final_text,
             usage,
             duration_ms: turn.turn.duration_ms,
@@ -899,6 +903,27 @@ fn error_kind(info: &serde_json::Value) -> String {
     }
 }
 
+/// Whether a failed turn died for want of a login.
+///
+/// Unlike Claude Code, Codex names the case outright: `codexErrorInfo` carries
+/// `Unauthorized`, so the discriminant leads and prose is the fallback rather
+/// than the rule. The message is read at all only because that field is
+/// optional — an error arriving without one would otherwise be unreadable
+/// where Codex's own wording ("Please run 'codex login'", "Your access token
+/// could not be refreshed. Please sign in again.") says it plainly.
+fn is_auth_failure(err: &TurnError) -> bool {
+    if err
+        .codex_error_info
+        .as_ref()
+        .is_some_and(|info| error_kind(info).eq_ignore_ascii_case("unauthorized"))
+    {
+        return true;
+    }
+
+    let message = err.message.to_lowercase();
+    message.contains("codex login") || message.contains("sign in again")
+}
+
 /// What to call a subagent on its card.
 ///
 /// `agent_path` is the agent's own name (`/root/count_to_three`), not a
@@ -1189,6 +1214,38 @@ mod tests {
         };
         assert_eq!(final_text.as_deref(), Some("You've hit your usage limit."));
         assert_eq!(stop_reason.as_deref(), Some("UsageLimitExceeded"));
+    }
+
+    /// Codex names the case outright, which is the difference worth pinning:
+    /// the discriminant decides on its own, whatever the prose beside it says,
+    /// and a limit is not an auth failure however the message is worded.
+    #[test]
+    fn auth_failure_reads_the_discriminant_first() {
+        let failed = |error: serde_json::Value| {
+            let events = map_one(
+                &mut mapper(),
+                "turn/completed",
+                json!({"threadId": "t", "turn": {"id": "turn_1", "status": "failed", "error": error}}),
+            );
+            let AgentEventPayload::TurnCompleted { auth_failed, .. } = events[0].payload else {
+                panic!("expected a closing turn");
+            };
+            auth_failed
+        };
+
+        assert!(failed(
+            json!({"message": "anything at all", "codexErrorInfo": "Unauthorized"})
+        ));
+        assert!(!failed(
+            json!({"message": "You've hit your usage limit.", "codexErrorInfo": "UsageLimitExceeded"})
+        ));
+
+        // The prose fallback exists because `codexErrorInfo` is optional, not
+        // because the discriminant is doubted.
+        assert!(failed(json!({
+            "message": "Your access token could not be refreshed. Please sign in again."
+        })));
+        assert!(!failed(json!({"message": "Something else went wrong."})));
     }
 
     /// A message streams and then commits. Both have to arrive, and the
