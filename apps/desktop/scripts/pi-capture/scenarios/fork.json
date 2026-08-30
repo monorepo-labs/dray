@@ -1,0 +1,27 @@
+{
+  "bin": "${PI_BIN}",
+  "cwd": "${PROBE}/work",
+  "env": {
+    "PI_CODING_AGENT_DIR": "${PROBE}/agentdir",
+    "PI_OFFLINE": "1",
+    "PATH": "${NODE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin"
+  },
+  "args": [
+    "--fork",
+    "${PROBE}/sessions/dray-tools.jsonl",
+    "--session",
+    "${PROBE}/sessions/dray-fork-chosen.jsonl",
+    "--provider",
+    "stub",
+    "--model",
+    "stub-1",
+    "--no-extensions",
+    "--no-skills",
+    "--no-context-files"
+  ],
+  "steps": [
+    { "sleep": 3000 },
+    { "send": { "id": "q0", "type": "get_state" }, "sleep": 1200 },
+    { "send": { "id": "q1", "type": "get_fork_messages" }, "sleep": 1200 }
+  ]
+}
