@@ -4,4 +4,6 @@
 //! `apps/desktop/PI-PLAN.md` for the design, the rejected alternatives and the
 //! captured protocol the parser was written against.
 
+pub mod mapper;
 pub mod parser;
+pub mod rpc;

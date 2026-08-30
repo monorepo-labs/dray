@@ -917,6 +917,51 @@ what was wrong, arriving on a `set_model` response that Dray is already
 awaiting. The function's job is only to stop a Claude alias reaching a pi spawn,
 and it does that.
 
+### The composer's list is the reader's shortlist, not pi's
+
+A flat picker is right for four models and wrong for forty, and pi is the first
+harness on the wrong side of that line. Claude Code offers four, Codex three —
+small enough that the list *is* the menu. `live_models.jsonl` answered **11
+across two providers** on an ordinary machine, and it grew by one the moment a
+second provider was logged into. One OpenRouter key puts hundreds behind a
+single provider name. At that size a menu stops being a picker and becomes a
+list to be searched, which is not what a composer control is for.
+
+So the composer's model list for pi is **what the reader has starred**, and
+discovery moves to a dialog of its own.
+
+- **The picker groups by provider**, since a bare model name is ambiguous
+  across them and pi's own ids are `provider/model` already. The group header
+  is the provider; the row is the model.
+- **With nothing starred it offers one row — "Choose models…"** — which opens
+  the dialog. An empty menu is a control that reads as broken; a row naming the
+  cure is the same shape the missing-agent notice already uses.
+- **The dialog is search plus a starred toggle**, over every model pi reported,
+  grouped by provider. Discovery is its whole job, so it is the one surface
+  here that may be long.
+
+Three rules that are not obvious and each of which is a bug if left implicit:
+
+- **A session's own model is drawn whether or not it is starred.** Stars are a
+  menu preference; the model a session is *running* is a fact about that
+  session. A resumed session whose model the reader never starred must still
+  name it, or the composer shows one model while the child runs another. This
+  is the one that would ship broken.
+- **A star for a model pi no longer offers is kept, not dropped.** Logging out
+  of a provider should not silently forget the shortlist — it is not a
+  correction, and logging back in should restore it. It is filtered out of the
+  composer's list (nothing can run it) and shown unavailable in the dialog,
+  which is where the reason belongs.
+- **Stars are the reader's, not the session's.** They live in local storage
+  beside `ade.openWith` and `ade.diffStyle`, for those keys' reason: which
+  models you use is a fact about you. Not on `SessionIndexItem`, which records
+  what a session *ran*.
+
+Claude and Codex keep their flat lists. The dialog is offered where the list is
+long enough to need it, which today is pi alone — gating on harness rather than
+on a count, because a count makes the control appear and disappear as providers
+come and go.
+
 ### What this does not solve
 
 Model *identity across machines*. A session created by `dray new --model
