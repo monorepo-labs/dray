@@ -1450,6 +1450,41 @@ prompt does not abandon open tool calls still holds — it is the same turn.
 `set_steering_mode` defaults to `one-at-a-time`, which matches how Dray's queue
 already behaves. Left alone.
 
+**Measured end to end, against a real model**, because the paragraph above was
+a quote from pi's own doc comment and `abort_and_queue.jsonl` never settles it
+— that capture clears the queue before the turn can deliver anything.
+
+Prompt: run `sleep 25 && echo done`, then say DONE. Steered 2s into the tool
+call with "ignore the command and reply with exactly BANANA".
+
+```
+ 3.80s  queue_update  steering: ["…BANANA"]      ← queued, tool still running
+26.81s  tool_execution_end
+26.82s  turn_end / turn_start                    ← same run, next model call
+26.82s  queue_update  steering: []               ← dequeued here
+26.82s  message_end   role=user                  ← delivered as a user message
+28.53s  agent_settled
+```
+
+The answer was `BANANA`, and the original instruction was dropped — so it is
+*delivered and acted on*, not merely dequeued. Three things that follow, each
+of which someone will otherwise assume the other way round:
+
+- The boundary is **inside the run**, between two `turn_start`/`turn_end`
+  pairs. It is not "the queue flushes when the turn ends" — by Dray's
+  vocabulary the turn had not ended, and `agent_settled` was still 2s away.
+- **`steer` and `follow_up` are two queues, not one.** `follow_up` is the one
+  that waits for the whole run ("delivered only when the agent has no more tool
+  calls or steering messages"). Reaching for it where `steer` was wanted costs
+  a whole run of latency.
+- **No extension is involved.** The only extension rule here is that a
+  `/`-prefixed *extension command* cannot be queued, which errors rather than
+  waiting.
+
+`{"type":"steer","message":"…"}` is a top-level command in its own right, as
+well as `prompt` carrying `streamingBehavior`. Either works; the standalone one
+is what the capture above used.
+
 ### Stop is three commands, and two of them are not optional
 
 `abort` takes no arguments — simpler than Codex, which refuses `turn/interrupt`
