@@ -42,7 +42,6 @@ import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
-import { useDoubleTap } from "@/hooks/useDoubleTap";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -678,25 +677,46 @@ function App() {
     // the same condition the toggle itself is drawn under.
     enabled: composingNewSession && projectPath !== null,
   });
-  // No accelerator: Shift+Tab on its own. The CLI spends this chord on
-  // permission mode, which in practice gets set once and left; effort is the
-  // dial actually reached for mid-work, so it takes the cheapest key here.
+  // No accelerator: Shift+Tab on its own, and the model gets it because the
+  // model is the pick reached for most often. The CLI spends this chord on
+  // permission mode, which in practice gets set once and left.
+  //
+  // Cycles rather than opening the picker, which is what makes it worth a
+  // chord at all: a menu that then wants arrows and Enter is three keys to do
+  // what the trigger does in one click. Sane only because the lists are short —
+  // four models on Claude Code, three on Codex — so a wrong landing is one more
+  // press away from right, and this stops being the shape the day a list grows
+  // past a handful. Leaves each model's own remembered effort alone, same as
+  // picking it from the menu.
   useHotkey(
     "Tab",
+    () => {
+      if (models.length < 2) return;
+      const index = models.findIndex((m) => m.id === modelId);
+      const next = models[(index + 1) % models.length];
+      handleModelChange(next.id, null);
+    },
+    { meta: false, shift: true },
+  );
+  // ⌘⇧E for effort, beside ⌘E for the right pane — near enough to remember and
+  // no collision, since `useHotkey` matches Shift exactly and neither listener
+  // answers the other's chord. No `code`: that option is for a chord whose
+  // character *changes* under Shift, and Shift+E is still an E — the matcher
+  // lowercases both sides.
+  useHotkey(
+    "e",
     () => {
       const next = nextEffort(models.find((m) => m.id === modelId), effort);
       if (next) handleModelChange(modelId, next);
     },
-    { meta: false, shift: true },
+    { shift: true },
   );
-  // Double-tap Shift cycles the model, JetBrains-search style — leaves each
-  // model's own remembered effort alone, same as picking it from the menu.
-  useDoubleTap("Shift", () => {
-    if (models.length < 2) return;
-    const index = models.findIndex((m) => m.id === modelId);
-    const next = models[(index + 1) % models.length];
-    handleModelChange(next.id, null);
-  });
+  // Opens, and does nothing where the page is already up — the same answer the
+  // sidebar row gives, since that is the only other route in. Not a toggle:
+  // nothing on that page opens the pane either (⌘E closes only there), and a
+  // chord that closed it would have to pick somewhere to land, which is the
+  // guess `goToSession` exists so nothing has to make.
+  useHotkey("i", () => setIssuesOpen(true));
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
 

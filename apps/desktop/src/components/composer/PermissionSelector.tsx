@@ -70,8 +70,9 @@ export default function PermissionSelector({
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        {/* No chord: Shift+Tab now cycles effort, which gets reached for far
-            more often than a mode most sessions set once and leave. */}
+        {/* No chord: Shift+Tab now cycles the model, which gets reached for far
+            more often than a mode most sessions set once and leave. Effort took
+            the chord first and gave it up to the model for the same reason. */}
         <TooltipContent side="top">Switch permission</TooltipContent>
       </Tooltip>
 

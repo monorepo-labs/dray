@@ -629,6 +629,10 @@ export default function Sidebar({
         >
           <CircleDot />
           Issues
+          <KbdGroup className="ml-auto">
+            <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+            <Kbd>I</Kbd>
+          </KbdGroup>
         </Button>
 
         {/* The button *becomes* the field, on the same row at the same height:
