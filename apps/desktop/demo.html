@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-theme="default" data-mode="dark" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dray — auth notice demo</title>
+    <script>
+      // No `data-transparency` here, unlike index.html. A browser has no window
+      // material behind it, so the veils would composite onto nothing and read
+      // as grey smudge. This is the flat-in-fullscreen case, which is a real
+      // one the app already draws.
+      document.documentElement.style.colorScheme = "dark";
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/demo/main.tsx"></script>
+  </body>
+</html>
