@@ -339,6 +339,15 @@ impl Harness {
 /// it in place is only correct if the wire really carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
+    /// Whether this build can drive the harness at all.
+    ///
+    /// pi's wire format is typed and nothing spawns it yet, so it is reported
+    /// unavailable rather than left to fail at the spawn: the index row is
+    /// written *before* the child starts, so a harness that bails inside
+    /// `Session::init` leaves a sidebar row pointing at an agent that can never
+    /// run. It is also why the composer's notice offers no install command for
+    /// it — the CLI is not what is missing.
+    pub drivable: bool,
     /// Whether the CLI creates a worktree itself, given a name.
     ///
     /// Claude Code's `-w` does. Nothing else has such a flag, so Dray resolves
@@ -369,6 +378,7 @@ impl Harness {
             // against the CLI: the reply after `set_model` comes from the new
             // model, so no respawn is needed.
             Harness::ClaudeCode => Capabilities {
+                drivable: true,
                 creates_own_worktree: true,
                 applies_model_in_place: true,
                 applies_effort_in_place: false,
@@ -384,6 +394,7 @@ impl Harness {
             // for. Respawning settles both, and `thread/resume` carries the
             // conversation across it.
             Harness::Codex => Capabilities {
+                drivable: true,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
@@ -396,6 +407,7 @@ impl Harness {
             // running process, and `--fork` and `--session` are refused
             // together, so pi names the file rather than taking one.
             Harness::Pi => Capabilities {
+                drivable: false,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
@@ -406,6 +418,7 @@ impl Harness {
             // so there is no child for any of these to be true of. All false is
             // the honest answer rather than a defensive one.
             Harness::Other(_) => Capabilities {
+                drivable: false,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,

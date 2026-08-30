@@ -36,6 +36,38 @@ export function OpenAiIcon({ className }: { className?: string }) {
   );
 }
 
+/// pi's own mark, from its press kit, redrawn on `currentColor`.
+///
+/// The primary logo rather than the badge: the badge carries its own `#09090b`
+/// rounded plate, which is a second surface inside a row of chrome that already
+/// has one. Two paths of flat geometry, kept at their native 800 viewBox — the
+/// coordinates are exact multiples of the grid the mark is drawn on, and
+/// rescaling to 24 to match the others buys nothing but rounding.
+///
+/// `fill-rule="evenodd"` is load-bearing: the P's counter is a hole cut by a
+/// second contour in the same path, and the default `nonzero` fills it in —
+/// which reads as a slightly wrong solid blob rather than as a bug.
+///
+/// MIT, © Earendil Inc. & Contributors. Credited in the root README beside the
+/// ported themes.
+export function PiIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 800 800"
+      className={cn("size-4 shrink-0", className)}
+      fill="currentColor"
+      role="img"
+      aria-label="pi"
+    >
+      <path
+        fillRule="evenodd"
+        d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+      />
+      <path d="M517.36 400H634.72V634.72H517.36Z" />
+    </svg>
+  );
+}
+
 /// Claude's own rust. The one saturated colour allowed on these marks, and it
 /// is a brand constant rather than a theme token — no palette should be able to
 /// move it, and no other surface should be able to reach for it. OpenAI's mark
@@ -59,9 +91,14 @@ export default function AgentIcon({
   className?: string;
   brand?: boolean;
 }) {
-  return harness === "codex" ? (
-    <OpenAiIcon className={className} />
-  ) : (
-    <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />
-  );
+  switch (harness) {
+    case "codex":
+      return <OpenAiIcon className={className} />;
+    // Monochrome by design, like OpenAI's, so `brand` leaves it on
+    // `currentColor` and the row still reads as one set.
+    case "pi":
+      return <PiIcon className={className} />;
+    default:
+      return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
+  }
 }

@@ -34,6 +34,7 @@ const EFFORT_LABELS: Record<Effort, string> = {
 const AGENTS: { id: Harness; label: string }[] = [
   { id: "claude_code", label: "Claude Code" },
   { id: "codex", label: "Codex" },
+  { id: "pi", label: "pi" },
 ];
 
 /// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`

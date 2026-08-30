@@ -43,7 +43,11 @@ async fn send_msg(
     session_id: &str,
     prompt: &str,
     attachment_paths: Vec<String>,
-    harness: &str,
+    // Deserialized straight into the enum rather than matched off a string: the
+    // wire spelling is `Harness`'s own `snake_case`, so a third arm here was a
+    // third list to keep in step and its failure was one word — "invalid
+    // harness" — for a name the enum could have named.
+    harness: Harness,
     model: ModelId,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
@@ -55,10 +59,13 @@ async fn send_msg(
     app: AppHandle,
     manager: State<'_, SessionManager>,
 ) -> Result<SendOutcome, String> {
-    // `from_wire_name`, not the tolerant `Deserialize`: this is the composer
-    // naming a harness to *start*, so an unknown one is a caller error, where
-    // off the index it is a session some other build wrote.
-    let harness = Harness::from_wire_name(harness).ok_or("invalid harness")?;
+    // The tolerant `Deserialize` reads a name this build doesn't know as
+    // `Other`, which is right off the index and wrong here: this is the
+    // composer naming a harness to *start*, so an unknown one is a caller
+    // error rather than a session some other build wrote.
+    if !harness.names_a_cli() {
+        return Err("invalid harness".to_string());
+    }
 
     manager
         .send_msg(
@@ -117,12 +124,26 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 async fn agent_availability() -> Vec<AgentAvailability> {
     let mut out = Vec::new();
     for harness in harness::Harness::ALL {
+        // Two different answers wearing one word. A CLI that is not on the
+        // machine is fixed by installing it; a harness this build cannot drive
+        // is not, and offering an installer there sends the reader to fix
+        // something that is not broken.
+        let drivable = harness.caps().drivable;
+
         out.push(AgentAvailability {
             harness,
             available: binpath::agent_available(harness).await,
             label: harness.label().to_string(),
-            install_command: harness.install_command().to_string(),
-            docs_url: harness.docs_url().to_string(),
+            reason: if drivable {
+                format!(
+                    "{} isn't installed, so this session can't start.",
+                    harness.label()
+                )
+            } else {
+                format!("Dray can't run {} sessions yet.", harness.label())
+            },
+            install_command: drivable.then(|| harness.install_command().to_string()),
+            docs_url: drivable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
         });
     }
@@ -136,8 +157,15 @@ struct AgentAvailability {
     harness: harness::Harness,
     available: bool,
     label: String,
-    install_command: String,
-    docs_url: String,
+    /// The sentence the composer's notice draws. Built here for the reason the
+    /// cure travels with the answer: a row saying "unavailable" and nothing
+    /// else is the errno reworded.
+    reason: String,
+    /// What fixes it, where installing is what fixes it. `None` where the CLI
+    /// is not the problem, so the notice draws no buttons rather than buttons
+    /// that change nothing.
+    install_command: Option<String>,
+    docs_url: Option<String>,
     /// Read by a different notice from the two fields above it: those cure a
     /// CLI that is missing, this cures one that is logged out. Both are facts
     /// about the harness rather than about the machine, so they ride one read.

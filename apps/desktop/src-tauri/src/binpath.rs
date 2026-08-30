@@ -142,6 +142,13 @@ pub async fn codex() -> PathBuf {
 /// and it is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
+    // Asked first, so "this build cannot drive it" never reads as "the CLI is
+    // missing" — the two want different sentences and different cures, and only
+    // one of them is fixed by installing something.
+    if !harness.caps().drivable {
+        return false;
+    }
+
     agent_binary(harness).await.is_absolute()
 }
 
