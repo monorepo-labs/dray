@@ -26,6 +26,7 @@ import type { ApiRetryState, StreamingBlock, Working } from "@/hooks/useSessions
 import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { FIRST_MOUNT, grow, mountedTurns } from "@/lib/turnWindow";
 import type { QueuedMessage, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -300,6 +301,56 @@ export default function Chat({
     syncActive();
   }, [session?.sessionId, events.length, streamingAny]);
 
+  // How many of the newest turns are drawn. Opening a long session mounts only
+  // what fits on screen and backfills the rest above it in deferred steps, so
+  // the open costs what a short session costs — see `FIRST_MOUNT` for the
+  // measurement. Keyed on the session inside the state rather than reset by an
+  // effect, so a switch draws the new session's window on its very first
+  // commit instead of one full render later.
+  const [mount, setMount] = useState<{ sessionId: string | null; count: number }>({
+    sessionId: null,
+    count: FIRST_MOUNT,
+  });
+  const mounted = mount.sessionId === session?.sessionId ? mount.count : FIRST_MOUNT;
+  const shownTurns = mountedTurns(turns, mounted);
+  const backfilling = mounted < turns.length;
+
+  // The scroller's height before a step lands, for the compensation below.
+  const heightBeforeStep = useRef<number | null>(null);
+  // A rail jump aimed at a turn not mounted yet, honoured once it is.
+  const pendingJump = useRef<string | null>(null);
+
+  // One step per macrotask, after the previous one has painted. A single
+  // deferred pass would still hold the thread for the whole parse; steps keep
+  // the pane responsive while the rest of the transcript fills in.
+  useEffect(() => {
+    if (!backfilling || !session) return;
+    const sessionId = session.sessionId;
+    const timer = setTimeout(() => {
+      heightBeforeStep.current = scrollRef.current?.scrollHeight ?? null;
+      setMount({ sessionId, count: grow(mounted, turns.length) });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [backfilling, mounted, turns.length, session?.sessionId]);
+
+  // A step mounts turns *above* everything on screen, so left alone it would
+  // shove what the reader is looking at down by their height. Pinned, the
+  // bottom is re-taken; unpinned, the view is moved by exactly what grew.
+  useLayoutEffect(() => {
+    const before = heightBeforeStep.current;
+    heightBeforeStep.current = null;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (followRef.current) el.scrollTop = el.scrollHeight;
+    else if (before !== null) el.scrollTop += el.scrollHeight - before;
+
+    const key = pendingJump.current;
+    if (key && contentRef.current?.querySelector(`[data-turn="${key}"]`)) {
+      pendingJump.current = null;
+      jumpToTurn(key);
+    }
+  }, [mounted]);
+
   // Which turn the rail marks. Measured from the DOM rather than tracked as
   // state per turn: heights move constantly here — Shiki lands async, a turn
   // collapses, a diff expands — so anything cached from a previous layout is
@@ -346,7 +397,16 @@ export default function Chat({
   const jumpToTurn = (key: string) => {
     const scroller = scrollRef.current;
     const node = contentRef.current?.querySelector<HTMLElement>(`[data-turn="${key}"]`);
-    if (!scroller || !node) return;
+    if (!scroller) return;
+    // The rail lists every turn, mounted or not. A tick above the window
+    // mounts everything and jumps once the node exists.
+    if (!node) {
+      if (session && backfilling) {
+        pendingJump.current = key;
+        setMount({ sessionId: session.sessionId, count: turns.length });
+      }
+      return;
+    }
 
     const top =
       node.getBoundingClientRect().top -
@@ -462,7 +522,7 @@ export default function Chat({
           className="h-full overflow-y-auto"
         >
           <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-            {turns.map((turn) => (
+            {shownTurns.map((turn) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
               <div key={turn.key} data-turn={turn.key}>
