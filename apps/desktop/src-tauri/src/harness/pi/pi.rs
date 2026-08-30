@@ -198,6 +198,26 @@ pub async fn send_prompt(client: &PiClient, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stops the running agent and drops whatever was queued behind it.
+///
+/// Order is load-bearing: `abort` ends the agent that is running and leaves
+/// anything steered or followed up behind it to start the moment it does, so
+/// aborting alone reads as Stop having changed nothing. `clear_queue` answers
+/// with what it dropped and that is discarded — the composer takes prompts back
+/// through its own queue, and these are pi's copies of ones already sent.
+///
+/// Neither is fatal on its own. A clear that fails still leaves the abort worth
+/// sending, and an abort that fails is what the caller is told about.
+pub async fn interrupt(client: &PiClient) -> Result<()> {
+    if let Err(error) = client.request("clear_queue", Value::Null).await {
+        eprintln!("[pi] could not clear the queue: {error:#}");
+    }
+
+    client.request("abort", Value::Null).await?;
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn read_stdout(
     stdout: ChildStdout,

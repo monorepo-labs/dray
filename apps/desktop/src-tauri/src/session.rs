@@ -1437,6 +1437,17 @@ impl Session {
             return crate::harness::codex::interrupt_turn(thread).await;
         }
 
+        // Two commands, in this order. `clear_queue` first because `abort`
+        // ends the *running* agent and leaves anything steered or queued
+        // behind it to start the moment it does — so aborting alone reads as
+        // Stop having done nothing. It answers with what it dropped, which is
+        // discarded here: the composer takes prompts back through
+        // `cancel_queued`, and these are pi's own copies of ones the reader
+        // has already seen sent.
+        if let Transport::Pi(client) = &self.stdin {
+            return crate::harness::pi::interrupt(client).await;
+        }
+
         write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
 
         Ok(())

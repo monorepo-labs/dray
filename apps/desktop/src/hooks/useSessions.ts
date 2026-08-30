@@ -98,6 +98,11 @@ export function useSessions() {
     // archived is the exception view, so every launch starts on the active list.
     const [showArchived, setShowArchived] = useState(false);
     const [models, setModels] = useState<Model[]>([]);
+    // pi's list is a read, not a table, so it can be in flight. `0` is the
+    // resting value and every refresh bumps it, which is what re-arms the
+    // effect below without a second copy of the read beside it.
+    const [modelsGeneration, setModelsGeneration] = useState(0);
+    const [loadingModels, setLoadingModels] = useState(false);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
     const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
@@ -986,14 +991,41 @@ useEffect(() => {
 }, [showArchived])
 
 useEffect(() => {
-  invoke<Model[]>("list_models", { harness }).then((list) => {
-    setModels(list);
-    // A model belongs to exactly one harness, so switching harness leaves the
-    // pick naming something the new one cannot run. Repaired here, where the
-    // real list has just landed, rather than guessed at when the toggle moved.
-    setModelId((current) => usableModel(list, current, harness));
-  });
-}, [harness])
+  let cancelled = false;
+  setLoadingModels(true);
+
+  invoke<Model[]>("list_models", { harness })
+    .then((list) => {
+      // Guarded because pi's read spawns a child and can take a moment, so a
+      // reader switching harness twice would otherwise have the first answer
+      // land on the second harness's picker.
+      if (cancelled) return;
+      setModels(list);
+      // A model belongs to exactly one harness, so switching harness leaves the
+      // pick naming something the new one cannot run. Repaired here, where the
+      // real list has just landed, rather than guessed at when the toggle moved.
+      setModelId((current) => usableModel(list, current, harness));
+    })
+    .finally(() => {
+      if (!cancelled) setLoadingModels(false);
+    });
+
+  return () => {
+    cancelled = true;
+  };
+}, [harness, modelsGeneration])
+
+/// Drops whatever pi cached and reads again.
+///
+/// Only pi has a list that can change under the reader — a provider logged in
+/// while Dray is open is exactly the case somebody would then try to use, and
+/// waiting out the cache reads as the list being wrong. The other two are
+/// tables, so this costs them one round trip and answers the same thing.
+const refreshModels = () => {
+  invoke("refresh_models")
+    .catch(() => {})
+    .finally(() => setModelsGeneration((n) => n + 1));
+};
 
 useEffect(() => {
   invoke<Project[]>("list_projects")
@@ -1652,6 +1684,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

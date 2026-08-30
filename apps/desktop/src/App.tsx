@@ -78,6 +78,8 @@ function App() {
     showArchived,
     setShowArchived,
     models,
+    refreshModels,
+    loadingModels,
     harness,
     setHarness,
     modelId,
@@ -1092,6 +1094,8 @@ function App() {
               modelId={modelId}
               effort={effort}
               onModelChange={handleModelChange}
+              onRefreshModels={refreshModels}
+              loadingModels={loadingModels}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
               projects={projects}

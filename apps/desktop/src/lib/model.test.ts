@@ -70,14 +70,18 @@ describe("the unset model", () => {
     expect(isUnsetModel("unknown" as never)).toBe(false);
   });
 
-  /// The sentinel is not a model, so it can never survive a list that has real
-  /// ones in it — it is a stand-in for a pick nobody has made.
+  /// Under a harness Dray names a default for, the sentinel is a pick nobody
+  /// made and gives way to that default.
   it("gives way once a real list arrives", () => {
     expect(usableModel(CLAUDE, UNSET_MODEL, "claude_code")).toBe("opus");
-    // pi names no default of its own, so the head of its discovered list is the
-    // only answer left. It is the one place reading the head is right: the list
-    // came from pi, and pi orders it.
-    expect(usableModel(CODEX, UNSET_MODEL, "pi")).toBe("gpt56_sol");
+  });
+
+  /// Under pi it is a real answer and stands. The spawn omits `--model` there,
+  /// so pi runs whatever its own settings name — where repairing onto the head
+  /// of the list would override a choice the reader already made, with nothing
+  /// on screen saying it happened.
+  it("stands where the harness names no default", () => {
+    expect(usableModel(CODEX, UNSET_MODEL, "pi")).toBe(UNSET_MODEL);
   });
 
   /// An empty list means the models have not arrived yet, so nothing is known

@@ -29,6 +29,8 @@ export type ComposerToolbarProps = {
   modelId: ModelId;
   effort: Effort | null;
   onModelChange: (modelId: ModelId, effort: Effort | null) => void;
+  onRefreshModels: () => void;
+  loadingModels: boolean;
 
   permissionMode: ApprovalPolicy;
   onPermissionModeChange: (mode: ApprovalPolicy) => void;
@@ -77,6 +79,8 @@ export default function ComposerToolbar({
   modelId,
   effort,
   onModelChange,
+  onRefreshModels,
+  loadingModels,
   permissionMode,
   onPermissionModeChange,
   projects,
@@ -130,6 +134,8 @@ export default function ComposerToolbar({
         modelId={modelId}
         effort={effort}
         onChange={onModelChange}
+        onRefreshModels={onRefreshModels}
+        loadingModels={loadingModels}
       />
 
       {isNewSession && (

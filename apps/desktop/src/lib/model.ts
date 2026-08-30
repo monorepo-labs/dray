@@ -64,6 +64,14 @@ export function rememberedModel(remembered: ModelByHarness, harness: Harness): M
 /// reading it as an answer is what put sessions on Fable and Sol.
 export function usableModel(models: Model[], picked: ModelId, harness: Harness): ModelId {
   if (models.length === 0 || models.some((m) => m.id === picked)) return picked;
+
   const fallback = DEFAULT_MODEL_FOR[harness];
+
+  // Unset is a real answer where the harness names no default: pi picks for
+  // itself, and the spawn omits the flag. Without this the repair below reads
+  // it as a pick to replace and lands on whichever model leads the list —
+  // overriding a choice the reader made in pi's own settings.
+  if (isUnsetModel(picked) && isUnsetModel(fallback)) return picked;
+
   return models.some((m) => m.id === fallback) ? fallback : models[0].id;
 }

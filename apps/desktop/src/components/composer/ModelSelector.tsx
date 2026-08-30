@@ -1,11 +1,21 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Sliders } from "lucide-react";
 import AgentIcon from "@/components/AgentIcon";
+import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import {
+  byProvider,
+  shortlist,
+  STARRED_MODELS_KEY,
+  usesShortlist,
+} from "@/lib/starredModels";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -17,6 +27,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -69,6 +80,8 @@ export default function ModelSelector({
   modelId,
   effort,
   onChange,
+  onRefreshModels,
+  loadingModels = false,
 }: {
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
@@ -80,10 +93,28 @@ export default function ModelSelector({
   modelId: ModelId;
   effort: Effort | null;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
+  /// Asks the harness for its list again. Only pi has one that can change
+  /// under the reader — the other two are tables — so it is optional here.
+  onRefreshModels?: () => void;
+  loadingModels?: boolean;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
   const [open, setOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  // One copy, held here and handed down: the dialog and the menu both read it,
+  // and `useLocalStorage` is per-hook state rather than a store, so two
+  // mounted copies would desync the moment one of them wrote.
+  const [starred, setStarred] = useLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
+
+  const shortlisted = usesShortlist(harness);
+  // The whole list for a harness whose models Dray names itself; the reader's
+  // own shortlist for pi, whose list is discovered and unbounded.
+  const listed = useMemo(
+    () => (shortlisted ? shortlist(models, starred, modelId) : models),
+    [shortlisted, models, starred, modelId],
+  );
 
   const selected = models.find((m) => m.id === modelId) ?? null;
   const activeAgent = AGENTS.findIndex((a) => a.id === harness);
@@ -97,6 +128,64 @@ export default function ModelSelector({
   /// in `useSessions`, so the menu can't advertise an effort the send wouldn't use.
   const rowEffort = (model: Model): Effort | null =>
     model.id === modelId ? effort : model.defaultEffort;
+
+  const modelRow = (model: Model) =>
+    model.efforts.length ? (
+      // One row: hover opens the effort submenu (Radix's own behaviour), click
+      // picks the model and leaves its effort alone. Splitting the two into
+      // separate items would give the row two hover states.
+      <DropdownMenuSub key={model.id}>
+        <DropdownMenuSubTrigger
+          className="cursor-pointer gap-1 text-ui"
+          onClick={() => {
+            onChange(model.id, null);
+            setOpen(false);
+          }}
+        >
+          {model.label}
+          {rowEffort(model) && (
+            <span className="text-muted-foreground/60">
+              {EFFORT_LABELS[rowEffort(model)!]}
+            </span>
+          )}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          {/* The chord lives here, on the control it drives, rather than on the
+              model trigger — that tooltip was carrying a shortcut for a thing
+              one level down. No word beside it and no rule under it: the levels
+              below say what it cycles, and a separator would draw a box round
+              a hint. */}
+          <div className="flex px-1.5 py-1">
+            <KbdGroup>
+              <Kbd>⌘</Kbd>
+              <Kbd>Shift</Kbd>
+              <Kbd>E</Kbd>
+            </KbdGroup>
+          </div>
+          {model.efforts.map((level) => (
+            <DropdownMenuItem
+              key={level}
+              className="text-ui"
+              onSelect={() => {
+                onChange(model.id, level);
+                setOpen(false);
+              }}
+            >
+              {EFFORT_LABELS[level]}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    ) : (
+      // No submenu and no chevron for a model with no effort levels.
+      <DropdownMenuItem
+        key={model.id}
+        className="text-ui"
+        onSelect={() => onChange(model.id, null)}
+      >
+        {model.label}
+      </DropdownMenuItem>
+    );
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -114,7 +203,11 @@ export default function ModelSelector({
               <AgentIcon harness={harness} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
                   held back a step rather than reading as one long label. */}
-              <span>{selected?.label ?? modelId}</span>
+              {/* The unset sentinel is not a name and there is no name to
+                  draw, so the placeholder stands in. pi is the one harness
+                  that reaches this: Dray names no default for it, and the
+                  spawn omits the flag so pi's own settings decide. */}
+              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Model" : modelId)}</span>
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
@@ -213,65 +306,48 @@ export default function ModelSelector({
           </div>
         )}
 
-        {models.map((model) =>
-          model.efforts.length ? (
-            // One row: hover opens the effort submenu (Radix's own behaviour),
-            // click picks the model and leaves its effort alone. Splitting the
-            // two into separate items would give the row two hover states.
-            <DropdownMenuSub key={model.id}>
-              <DropdownMenuSubTrigger
-                className="cursor-pointer gap-1 text-ui"
-                onClick={() => {
-                  onChange(model.id, null);
-                  setOpen(false);
-                }}
-              >
-                {model.label}
-                {rowEffort(model) && (
-                  <span className="text-muted-foreground/60">
-                    {EFFORT_LABELS[rowEffort(model)!]}
-                  </span>
-                )}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {/* The chord lives here, on the control it drives, rather than
-                    on the model trigger — that tooltip was carrying a shortcut
-                    for a thing one level down. No word beside it and no rule
-                    under it: the levels below say what it cycles, and a
-                    separator would draw a box round a hint. */}
-                <div className="flex px-1.5 py-1">
-                  <KbdGroup>
-                    <Kbd>⌘</Kbd>
-                    <Kbd>Shift</Kbd>
-                    <Kbd>E</Kbd>
-                  </KbdGroup>
-                </div>
-                {model.efforts.map((level) => (
-                  <DropdownMenuItem
-                    key={level}
-                    className="text-ui"
-                    onSelect={() => {
-                      onChange(model.id, level);
-                      setOpen(false);
-                    }}
-                  >
-                    {EFFORT_LABELS[level]}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          ) : (
-            // No submenu and no chevron for a model with no effort levels.
+        {/* Grouped only where a heading says something: pi answers with a
+            provider per model, and a reader picking between two providers'
+            models needs to know which is which. The other two harnesses have
+            one vendor each, so a heading there names what the agent mark on
+            the trigger already said. */}
+        {shortlisted
+          ? byProvider(listed).map((group) => (
+              <div key={group.provider}>
+                <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
+                  {group.provider}
+                </p>
+                {group.models.map(modelRow)}
+              </div>
+            ))
+          : listed.map(modelRow)}
+
+        {shortlisted && (
+          <>
+            {/* Only where something is above it. An empty shortlist makes this
+                the whole menu, and a rule above the only row draws a line
+                under nothing. */}
+            {listed.length > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem
-              key={model.id}
-              className="text-ui"
-              onSelect={() => onChange(model.id, null)}
+              className="cursor-pointer gap-2 text-ui text-muted-foreground"
+              onSelect={() => setLibraryOpen(true)}
             >
-              {model.label}
+              <Sliders className="size-3.5" />
+              {listed.length > 0 ? "Choose models…" : "Select models…"}
             </DropdownMenuItem>
-          ),
+          </>
         )}
       </DropdownMenuContent>
+
+      <ModelLibraryDialog
+        open={libraryOpen}
+        onOpenChange={setLibraryOpen}
+        models={models}
+        starred={starred}
+        onStarredChange={setStarred}
+        onRefresh={() => onRefreshModels?.()}
+        loading={loadingModels}
+      />
     </DropdownMenu>
   );
 }
