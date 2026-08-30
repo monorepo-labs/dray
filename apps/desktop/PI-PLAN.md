@@ -131,8 +131,7 @@ capability table. `binpath` finds pi. **No version floor** — see §3, the mode
 probe asks the real question. **`pi_session_path` not added**: the derived path
 is enough until fork needs pi's own, so the field lands with slice 3.
 
-**Slice 1 — done, with one gap that matters.** Spawn, handshake, `--session`,
-the discovered model list and per-model effort ladders, the three lifecycles,
+**Slice 1 — done.** Spawn, handshake, `--session`, the discovered model list and per-model effort ladders, the three lifecycles,
 deltas, tool calls, failure from `stopReason`, resume, Stop, the system prompt,
 `~/.agents/skills/dray/`, and `dray new --harness pi` end to end.
 
