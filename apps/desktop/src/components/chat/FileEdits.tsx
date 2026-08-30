@@ -10,7 +10,7 @@ import type { FileEdit } from "@/types/events";
 function diffLineClass(line: string): string {
   if (line.startsWith("@@")) return "text-accent-thinking";
   if (line.startsWith("+++") || line.startsWith("---")) return "text-muted-foreground/60";
-  if (line.startsWith("+")) return "text-emerald-400";
+  if (line.startsWith("+")) return "text-accent-add";
   if (line.startsWith("-")) return "text-destructive";
   return "text-muted-foreground";
 }

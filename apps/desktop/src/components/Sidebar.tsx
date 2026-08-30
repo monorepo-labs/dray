@@ -599,13 +599,21 @@ export default function Sidebar({
       </div>
 
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
-          icons land on the same 12px inset as the toggle above. */}
+          icons land on the same 12px inset as the toggle above.
+
+          All three sit at `/70` rather than at full strength, and `ghost`'s own
+          `hover:text-foreground` brings them back under the cursor — the same
+          bargain the sidebar toggle makes with `opacity-80`. These are ways *in*
+          to the list below them, and the list draws its own rows at `/80`, so at
+          full strength the chrome was the heaviest text in the pane and the
+          sessions read as secondary to the buttons above them. Most visible on a
+          light page, where `--foreground` is a near-black against near-white. */}
       <div className="flex flex-col gap-px px-2">
         <Button
           variant="ghost"
           size="sm"
           onClick={onNewSession}
-          className="w-full justify-start px-1.5 text-ui"
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70"
         >
           <Plus />
           New Task
@@ -625,7 +633,7 @@ export default function Sidebar({
           size="sm"
           onClick={onOpenIssues}
           data-active={issuesOpen || undefined}
-          className="w-full justify-start px-1.5 text-ui data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
         >
           <CircleDot />
           Issues
@@ -673,7 +681,7 @@ export default function Sidebar({
             variant="ghost"
             size="sm"
             onClick={() => setSearching(true)}
-            className="w-full justify-start px-1.5 text-ui"
+            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70"
           >
             <Search />
             Search
@@ -1443,7 +1451,7 @@ function SessionRow({
               aria-label={asking ? "Waiting for you" : "Unread"}
               className={cn(
                 "h-3 w-0.5 rounded-[1px]",
-                asking ? "bg-accent-command" : "bg-emerald-500",
+                asking ? "bg-accent-command" : "bg-accent-add",
               )}
             />
           )}

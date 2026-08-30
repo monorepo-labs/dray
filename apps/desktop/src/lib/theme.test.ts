@@ -65,14 +65,21 @@ describe("modeFor", () => {
     expect(modeFor("gruvbox", "system")).toBe("system");
   });
 
-  // Without this, `[data-theme="default"][data-mode="light"]` matches no block
-  // and the app falls through to the light ramp's own neutral values — legible,
-  // but not the theme anyone picked, and nothing on screen would say why.
-  it("forces dark on a theme with no light palette", () => {
-    expect(hasLightMode("default")).toBe(false);
-    expect(modeFor("default", "light")).toBe("dark");
-    expect(modeFor("default", "system")).toBe("dark");
+  // Default was the last theme to carry `darkOnly`, and its light side is built.
+  // Asserted rather than left implied, because the flag reads as harmless and is
+  // not: it silently takes the whole mode picker away from whichever palette
+  // carries it, and every reader of Dray is on this one.
+  it("lets every shipped theme reach light", () => {
+    for (const t of THEMES) {
+      expect(hasLightMode(t.id)).toBe(true);
+      expect(modeFor(t.id, "light")).toBe("light");
+    }
   });
+
+  // No test for the forcing branch, and that is a statement rather than a gap:
+  // nothing sets `darkOnly` now, so exercising it would mean pushing a fake theme
+  // onto the exported array — a test that edits the thing it is checking. The
+  // branch earns a test again the day a palette arrives without a light side.
 });
 
 describe("THEMES", () => {

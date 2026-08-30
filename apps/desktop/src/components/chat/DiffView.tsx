@@ -96,7 +96,7 @@ export default function DiffView({
             </div>
           ))}
         {sides.newText.split("\n").map((line, i) => (
-          <div key={`+${i}`} className="text-emerald-400">
+          <div key={`+${i}`} className="text-accent-add">
             +{line}
           </div>
         ))}

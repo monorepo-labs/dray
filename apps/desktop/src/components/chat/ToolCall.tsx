@@ -285,7 +285,7 @@ export default function ToolCall({
         {shownChanges && (shownChanges.added > 0 || shownChanges.removed > 0) && (
           <span className="shrink-0 font-mono tabular-nums">
             {shownChanges.added > 0 && (
-              <span className="text-emerald-400">+{shownChanges.added}</span>
+              <span className="text-accent-add">+{shownChanges.added}</span>
             )}
             {shownChanges.added > 0 && shownChanges.removed > 0 && " "}
             {shownChanges.removed > 0 && (

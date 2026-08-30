@@ -62,7 +62,11 @@
      under glass rather than `--veil-float`; the same fill as every other
      surface off it. */
   --picker: var(--surface-card);
-  --secondary: var(--muted);
+  /* Not an alias any more, and set per ramp instead — see either `[data-mode]`
+     block. Dark takes `--muted` as it always did; light takes the card colour,
+     because on a near-white page a grey fill reads as a disabled control rather
+     than as the second action beside a filled one. Both sides still resolve
+     through the palette's own tokens, so a ported theme gets its own white. */
   --accent: var(--muted);
   --card-foreground: var(--foreground);
   --popover-foreground: var(--foreground);
@@ -71,7 +75,15 @@
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: var(--muted);
+  /* The mark saying which session row and which tab are current. **Not**
+     `var(--muted)`, which it was, and that alias is the whole of a bug worth
+     writing down: under glass the transparency block swaps this for a veil, and
+     flat — which is every light window in fullscreen — it kept falling back to
+     `--muted`. So the two drawings of the app disagreed about how strongly a
+     selected row is marked, and every attempt to tune the veil moved one of them
+     and not the other. `--surface-selected` is set per ramp to the value its
+     veil composites to, so windowed and fullscreen land in the same place. */
+  --sidebar-accent: var(--surface-selected);
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-ring: var(--ring);
   /* Nothing draws a chart yet. Aliased rather than invented so a palette does
@@ -129,14 +141,36 @@
   --surface-card: oklch(0.205 calc(var(--chroma) * 1) var(--hue));
   /* Not part of the shadcn set. Sits between `--background` and `--card` for
      tool-call and code chrome that must read as inset rather than as a floating
-     card — so in dark it is *below* the card and in light it is above it. */
+     card. The light ramp puts it on the far side of `--background` instead, and
+     that reordering is the point rather than a slip — see the note there. */
   --surface-raised: oklch(0.19 calc(var(--chroma) * 0.9) var(--hue));
   --muted: oklch(0.269 calc(var(--chroma) * 1.1) var(--hue));
+  /* What it has always been. The light ramp is where this stops being `--muted`. */
+  --secondary: var(--muted);
+  /* A mix rather than a rung, so a ported palette gets one without declaring it
+     — this is the flat twin of `--veil-selected`, and a literal here would be a
+     neutral grey sitting in Catppuccin's selected row. 15% lands within a
+     rounding error of the `--muted` this used to alias, so dark is unmoved. */
+  --surface-selected: color-mix(in oklab, var(--foreground) 15%, var(--background));
   --muted-foreground: oklch(0.708 calc(var(--chroma) * 0.9) var(--hue));
   --primary: oklch(0.922 calc(var(--chroma) * 0.25) var(--hue));
   --primary-foreground: oklch(0.205 calc(var(--chroma) * 1) var(--hue));
   --ring: oklch(0.556 calc(var(--chroma) * 1) var(--hue));
   --destructive: oklch(0.704 0.191 22.216);
+  /* The green, and `--destructive` is the other half of it: added lines against
+     removed ones, an open pull request, an unread session. One value under one
+     name because it was three Tailwind classes under none — `emerald-400` in the
+     transcript, `emerald-500` in the panels and on the sidebar's rail — and a
+     literal cannot flip with the mode, so every one of them went from readable
+     to invisible on a light page (1.6:1 and 2.3:1 measured, against the 4.5 a
+     coloured word needs). Lightness matched to `--destructive` rather than to
+     the Tailwind step it replaces: the pair is read side by side in a diff, and
+     one being lighter than the other reads as emphasis nobody meant. */
+  --accent-add: oklch(0.7 0.15 163);
+  /* A merged pull request, GitHub's purple. Its own token for `--accent-add`'s
+     reason and no other — `purple-500` is legible on both pages, but a literal
+     left beside two tokens is the one the next glyph gets copied from. */
+  --accent-merged: oklch(0.63 0.23 304);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --sidebar-border: oklch(1 0 0 / 8%);
@@ -189,6 +223,11 @@
   --veil-card: oklch(1 0 0 / 5.5%);
   --veil-raised: oklch(1 0 0 / 4%);
   --veil-strong: oklch(1 0 0 / 11.5%);
+  /* Equal to `--veil-strong` here, and a separate token anyway: the two say
+     different things — "this row is current" against "this is a filled chip" —
+     and on a light page they need different numbers to say them. See the light
+     ramp for what pulled them apart. */
+  --veil-selected: oklch(1 0 0 / 11.5%);
   /* Floating surfaces take a wash of their own colour, not a veil of white.
      The other three sit *in* the page, so "the page plus a little light" is
      what raised means there; a menu sits *over* it, and 5.5% white over the
@@ -218,39 +257,112 @@
      spread — a shadow with an offset in x reads as a light source the rest of
      the app doesn't have. */
   --shadow-button: 0 1px 4px oklch(0 0 0 / 45%);
+
+  /* A surface floating at the window's edge — the composer, and whatever else
+     comes to want one. `none` in dark on purpose: depth there is carried by the
+     surface being lighter than the page, and a shadow under a dark card falls on
+     something already darker than itself and shows nothing. It is the light ramp
+     that needs this, where every surface is within a few percent of white and a
+     shadow is the only thing left that can say "above". */
+  --shadow-surface: none;
+  /* The same idea one step down, for a surface that sits *in* the page rather
+     than floating over it — the user's own message bubble, and whatever else
+     wants separating from the transcript without claiming to hover above it. The
+     split is `--veil-card` against `--veil-float` read in shadows: what a surface
+     means decides which it takes. `none` in dark for `--shadow-surface`'s reason. */
+  --shadow-card: none;
 }
 
-/* The light ramp. Not an inversion of the one above — a raised surface in light
-   is *lighter* than the page rather than darker, so the rungs reorder rather than
-   flip, and the accents move a long way down in lightness because a 0.82 yellow on
-   a white page is a highlighter mark rather than a word.
+/* The light ramp. Not an inversion of the one above: the rungs reorder rather than
+   flip, and `--surface-raised` is the one that moves furthest — it crosses to the
+   other side of `--background`, because a box that has to read as cut into a
+   near-white page can only go down. The accents move a long way down in lightness
+   too, since a 0.82 yellow on a white page is a highlighter mark, not a word.
 
-   No theme uses this ramp on its own numbers: Default ships dark-only, and the two
-   ported themes name their own rungs. It is here so a derived light theme is
-   possible and so every alias resolves to something sane. */
+   Default is this ramp, at hue 0 and chroma 0 — the same bargain the dark block
+   makes — so these numbers are the ones almost every reader in light mode is
+   looking at, not a fallback nothing reaches. The two ported themes name their own
+   rungs over the top of it. */
 [data-mode="light"] {
   --hue: 0;
   --chroma: 0;
 
-  --background: oklch(0.97 calc(var(--chroma) * 0.4) var(--hue));
+  /* Not white, deliberately, and this is the rung that gets asked about: the card
+     is white, so the page has to be the thing it sits on. A white page and a white
+     card are one surface, and every panel edge in the app then has to be drawn as
+     a border rather than read as a step. Far enough down to be a step, far enough
+     up to still read as paper. */
+  --background: oklch(0.965 calc(var(--chroma) * 0.4) var(--hue));
   --foreground: oklch(0.22 calc(var(--chroma) * 0.5) var(--hue));
   --surface-card: oklch(1 calc(var(--chroma) * 0.2) var(--hue));
-  --surface-raised: oklch(0.985 calc(var(--chroma) * 0.3) var(--hue));
-  --muted: oklch(0.94 calc(var(--chroma) * 0.5) var(--hue));
+  /* The rung that reorders hardest, and the clearest case of light being a
+     second palette rather than an inverted one. Its job is to read as cut *into*
+     the page — every use is a `<pre>` of tool arguments or output — and on a
+     near-white page the only direction that reads as inset is down. So in dark
+     it sits between the background and the card, and here it sits below the
+     background, on the far side of it from the card. */
+  --surface-raised: oklch(0.94 calc(var(--chroma) * 0.3) var(--hue));
+  --muted: oklch(0.92 calc(var(--chroma) * 0.5) var(--hue));
+  /* The card colour, not `--muted` — this is the one rung that reorders for the
+     same reason `--surface-raised` does. Dark builds a secondary button by adding
+     light to the page; here there is none left to add, so the fill goes the other
+     way and becomes the lightest surface the palette has, with `--shadow-surface`
+     under it doing the separating. A grey fill on a near-white page is what
+     `disabled` already looks like, and having both say the same thing is the
+     whole of why this moved. `var()`, not `oklch(1 0 0)`, so Latte gets its own
+     `base` and Gruvbox its own `bg0_h` rather than a white neither palette has. */
+  --secondary: var(--surface-card);
+  /* 10%, and the number is chosen to composite to the same colour `--veil-selected`
+     does over this page — L 0.891 either way. That equality is the point: a
+     selected row must not change weight when the window goes fullscreen. */
+  --surface-selected: color-mix(in oklab, var(--foreground) 10%, var(--background));
   --muted-foreground: oklch(0.52 calc(var(--chroma) * 0.7) var(--hue));
   --primary: oklch(0.28 calc(var(--chroma) * 0.5) var(--hue));
   --primary-foreground: oklch(0.99 calc(var(--chroma) * 0.1) var(--hue));
   --ring: oklch(0.62 calc(var(--chroma) * 0.9) var(--hue));
   --destructive: oklch(0.55 0.2 25);
+  /* Two rungs below dark's, and the chroma comes down with it — green is where
+     sRGB runs out soonest, so asking for dark's 0.15 here only gets it clipped
+     back to about this anyway, and naming the value that survives is what keeps
+     the swatch honest. 0.02 under `--destructive` in lightness rather than level
+     with it: WCAG weights green far above red, so the pair reads balanced at
+     equal OKLCh lightness and the green would be the one to fall short. */
+  /* Lightened from 0.53/0.114, which sat exactly on the 4.5:1 floor and read as a
+     forest green rather than as the app's own. The chroma rises with the
+     lightness on purpose: green loses its colour fast as it lightens, and 0.575
+     at the old chroma is a grey-green. 0.12 rather than 0.125 because anything
+     above it leaves sRGB at this lightness and clips — the clipped colour is
+     within a hair of this one, so the honest thing is to name the value that
+     survives. Cost, stated: 3.72:1 against the page, under AA for normal text.
+     Every use is a mark beside a word — a check, a `+2535`, a state label whose
+     meaning is also in its text — rather than the only carrier of anything. */
+  --accent-add: oklch(0.575 0.12 163);
+  --accent-merged: oklch(0.56 0.2 304);
   --border: oklch(0 0 0 / 10%);
   --input: oklch(0 0 0 / 14%);
   --sidebar-border: oklch(0 0 0 / 8%);
-  --hairline: oklch(0 0 0 / 6%);
-  --hairline-strong: oklch(0 0 0 / 8%);
+  /* Half again over dark's 6/8, and for the reason every alpha in this block is
+     larger than its twin: the same coverage over a near-white page moves fewer
+     perceptual steps than over a near-black one. At 6% the composer and the
+     picker frame had, for practical purposes, no edge at all — the surfaces read
+     as a lighter patch of page rather than as something with a boundary. */
+  --hairline: oklch(0 0 0 / 9%);
+  --hairline-strong: oklch(0 0 0 / 13%);
 
+  /* The trio drops a full 0.27 from dark's 0.82, and the hues move with it — a
+     yellow this dark turns olive at 90, so it slides to 75 to stay gold, and the
+     blue gains chroma because a light page eats saturation the way a dark one
+     eats lightness. Tuned against the page rather than mirrored: each clears
+     4.5:1 on `--background`, the floor for a coloured word inside ordinary
+     prose. One lightness across all four, so no tag outranks another. */
   --accent-thinking: oklch(0.55 0.05 264);
-  --accent-command: oklch(0.58 0.13 75);
+  --accent-command: oklch(0.55 0.13 75);
   --accent-mention: oklch(0.55 0.16 245);
+  /* Missing here until light mode had a page to be looked at on: the dark ramp
+     declared it, no palette block did, and a token no block sets resolves to
+     nothing at all — so an issue tag drew as plain prose in Latte and Gruvbox
+     light alike, and nothing said why. Violet at the trio's own lightness. */
+  --accent-issue: oklch(0.55 0.16 310);
 
   /* Far shallower than dark's 22%: the same scrim over a near-white surface
      reads as a hole rather than a recess. */
@@ -259,13 +371,45 @@
      has nowhere to go — here the scrim under the thumb is what separates the
      two, which is the same trick read from the other end. */
   --surface-thumb: var(--surface-card);
-  --veil-card: oklch(0 0 0 / 4%);
-  --veil-raised: oklch(0 0 0 / 3%);
+  /* White, and heavily so — the one number that decides whether light mode is a
+     second palette or an inverted one.
+
+     Black was tried first, on the reasoning that a white veil over a light page
+     is invisible. True of dark's 5.5%, and the wrong conclusion: what a light
+     page needs is not a *different colour* of veil but far more of the same one.
+     At 4% black a card came out darker than the page it sits on, which reads as
+     a well rather than a card — and it disagreed with this app's own flat
+     drawing of itself, since light always goes flat in fullscreen and there a
+     card is `--surface-card`, pure white. Windowed and fullscreen looked like
+     two different products. At 60% white the card is white with the backdrop
+     showing faintly through it, which is the same sentence dark's veil says.
+
+     `--veil-raised` stays black, and that pair is the rule rather than an
+     exception to it: a veil that means *raised* goes white here, one that means
+     *inset or highlighted* goes black — the direction each has to move in on a
+     page this bright. `--surface-well` was already black in both modes for
+     exactly this reason, and this is that observation applied to the rest. */
+  --veil-card: oklch(1 0 0 / 60%);
+  --veil-raised: oklch(0 0 0 / 4%);
   /* 10%, against dark's 11.5%, because the percentages are not the whole story:
      the same alpha over a near-white page moves fewer perceptual steps than over
      a near-black one. Measured on the picker's own highlight — 8% black gave 19
      levels of separation where dark's white veil gives 28. */
   --veil-strong: oklch(0 0 0 / 10%);
+  /* Equal to `--veil-strong` today, and a separate token anyway — the two answer
+     different questions and only happen to agree. This one says *which row is
+     current*: the selected session, the active tab in either tab row. That is a
+     standing mark on a row the reader keeps coming back to, where `--veil-strong`
+     fills keycaps, inline code and the highlight tracking the arrow keys down a
+     picker — none of which outlive a glance. The split earned itself on the way
+     here: 20% and 12% were both tried for the row, and each left the picker's
+     moving highlight reading as a slab while one value served both.
+
+     Paired with `--surface-selected` above: both land on L 0.891 over this page,
+     so the mark does not change weight when the window goes fullscreen and the
+     veils come off. Hover is `/50` of this, so whatever is chosen here is halved
+     before the case that needs it most. */
+  --veil-selected: oklch(0 0 0 / 10%);
   /* Tighter than dark's 62%: what shows through a light surface is a bright
      desktop, and the same alpha reads as a washed-out surface rather than a
      glass one. */
@@ -277,6 +421,48 @@
   /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
      reads as dirt against near-white. */
   --shadow-button: 0 1px 3px oklch(0 0 0 / 12%);
+
+  /* GitHub's green, one rung up. The pair in `:root` is GitHub's *dark* button
+     and it is the one thing there that is neither the theme's nor the mode's —
+     but GitHub ships two greens of its own for the same reason this block
+     exists, and a fill tuned to sit on near-black is a slab on near-white. Still
+     not a theme's to repaint: this is the mode answering, and a ported palette
+     reaches neither. Cost, stated: white on this is 3.84:1 rather than the
+     4.64:1 the darker green gave, so the label is under AA for normal text. The
+     button carries an icon and is the widest control on the pane, which is what
+     makes that a trade rather than a regression — but it is the number to put
+     back first if the button ever loses the icon. */
+  --accent-merge: oklch(0.59 0.155 149);
+  --accent-merge-hover: oklch(0.655 0.165 149);
+  /* Where dark has `none`. Crisp rather than soft, and the rule that makes it so
+     is blur no wider than the offset that carries it — the two stops below are
+     1/2 and 4/4. A shadow whose blur runs three or four times its offset, which
+     is what `shadow-md` and every "elevation" scale are built from, spreads into
+     a halo the surface appears to be lit by rather than an edge it casts. Two
+     softer versions were tried on the composer and both read that way. The tight
+     stop draws the lip; the second, pulled back by its spread, is the only part
+     that says how far above the transcript the card sits. */
+  --shadow-surface:
+    0 1px 1px oklch(0 0 1 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 4px oklch(0 0 0 / 8%);
+  /* Lighter and a shade softer than the one above, and both halves are needed:
+     the composer's shadow read as an edge cut under the bubble, because a bubble
+     is not lifted off the page the way a bar at the window's edge is. So the
+     alphas come down to roughly a third, and the blur is let out past the offset
+     that carries it — the exact thing `--shadow-surface` refuses to do, since
+     what reads as a halo on something floating reads as air on something resting.
+     Same two-stop shape, so the two are recognisably one family. */
+  --shadow-card: 0 1px 1px oklch(0 0 1 / 4%), 0 1px 1px oklch(0 0 0 / 6%), 0 1px 4px oklch(0 0 0 / 4%);
+
+  /* Much tighter than dark's 80%, and the reason is one this app cannot fix from
+     the CSS side: the window's material is `sidebar`, and an NSVisualEffectView
+     follows the *system* appearance, not `data-mode`. So a light palette on a Mac
+     set to Dark composites over a dark blur, and at 80% the missing fifth dulls
+     the whole page — the page stops reading as paper and starts reading as a grey
+     that no token in this block names. The two appearances agree far more often
+     than they disagree, but the disagreement is the case that has to look right.
+     Still short of 100: some of the desktop has to survive, or the window stops
+     being glass and the veils above have nothing to sit on. */
+  --vibrancy-alpha: 92%;
 }
 
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
@@ -307,10 +493,15 @@
 
 /* Latte's ladder runs the other way — `base` is its *lightest* token and
    `surface0` is darker than the page — so the rungs are re-ordered rather than
-   re-tinted, which is the whole reason light is a second palette and not a filter. */
+   re-tinted, which is the whole reason light is a second palette and not a filter.
+
+   `crust` is what that reordering buys: `--surface-raised` has to sit below the
+   page here, and Latte has a background token below `mantle` for exactly this. It
+   was `base` before, the same value as the card, which left a tool call's output
+   box invisible inside one. */
 [data-theme="catppuccin"][data-mode="light"] {
   --background: #e6e9ef; /* mantle */
-  --surface-raised: #eff1f5; /* base */
+  --surface-raised: #dce0e8; /* crust */
   --surface-card: #eff1f5; /* base */
   --muted: #ccd0da; /* surface0 */
   --muted-foreground: #6c6f85; /* subtext0 */
@@ -345,9 +536,13 @@
   --accent-thinking: #928374; /* gray */
 }
 
+/* The same three background tokens as the dark side, re-dealt: `bg0_h` is
+   Gruvbox's *hard* background, its darkest in the dark palette and its lightest
+   here, so it takes the card either way, and `bg0_s` — the soft one — drops below
+   the page to be the inset. */
 [data-theme="gruvbox"][data-mode="light"] {
-  --background: #f2e5bc; /* bg0_s */
-  --surface-raised: #fbf1c7; /* bg0 */
+  --background: #fbf1c7; /* bg0 */
+  --surface-raised: #f2e5bc; /* bg0_s */
   --surface-card: #f9f5d7; /* bg0_h */
   --muted: #ebdbb2; /* bg1 */
   --muted-foreground: #7c6f64; /* fg4 */
@@ -394,6 +589,9 @@
   --color-surface-well: var(--surface-well);
   --color-surface-thumb: var(--surface-thumb);
   --color-surface-card: var(--surface-card);
+  --color-veil-selected: var(--veil-selected);
+  --color-accent-add: var(--accent-add);
+  --color-accent-merged: var(--accent-merged);
   --color-accent-thinking: var(--accent-thinking);
   --color-accent-command: var(--accent-command);
   --color-accent-mention: var(--accent-mention);
@@ -558,8 +756,9 @@
      left of vibrancy below is the body's own fill and nothing else.
 
      The values are `--veil-*`, set by the ramp rather than written here, because
-     the colour has to flip with the mode: 5.5% *white* over a light page is
-     nothing at all. Dark's 5.5% white composites to `--card`'s own
+     each one has to be tuned to the page it lands on — the same alpha moves far
+     fewer perceptual steps over near-white than over near-black, and the two that
+     mean *inset* have to change colour outright. Dark's 5.5% white composites to `--card`'s own
      `oklch(0.205 0 0)` over Default's background, so on that theme nothing moves
      and cards only stop being slabs. Under another theme they pick its hue up,
      which is the point — a card is one step above whatever it sits on rather
@@ -601,7 +800,7 @@
        active tab, which shares the token — is drawn straight onto it. The `/50`
        hover survives it: Tailwind compiles the modifier to a `color-mix`, which
        multiplies the alpha rather than replacing it. */
-    --sidebar-accent: var(--veil-strong);
+    --sidebar-accent: var(--veil-selected);
     /* The rest of the scale. `--surface-raised` fills the tool-call argument and
        output boxes; `--muted` fills keycaps, Streamdown's inline code, and every
        ghost button's hover, so it was putting a slab under a word mid-sentence.

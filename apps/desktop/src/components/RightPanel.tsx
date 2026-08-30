@@ -30,7 +30,7 @@ export function PanelToggle({
   changes?: boolean;
   /// Every one of this session's open pull requests is a draft. Draws the draft
   /// glyph rather than the plain one — the mark still appears, because a draft
-  /// is still somewhere for the work to land, and it keeps the emerald so it
+  /// is still somewhere for the work to land, and it keeps `--accent-add` so it
   /// still reads as content rather than as dimmed chrome. Shape carries the
   /// distinction, colour carries the "there is something here".
   draft?: boolean;
@@ -75,15 +75,15 @@ export function PanelToggle({
             pr ? (
               // `--accent-merge` is a button *fill* — dark enough to carry white
               // text — and at 1.5px stroke on a dark background it all but
-              // disappeared. This is the emerald the open-PR glyph uses in the
+              // disappeared. This is `--accent-add`, which the open-PR glyph uses in the
               // panel itself, so the mark and the thing it points at match.
               draft ? (
                 <GitPullRequestDraft
-                  className="size-4 text-emerald-500"
+                  className="size-4 text-accent-add"
                   strokeWidth={1.5}
                 />
               ) : (
-                <GitPullRequest className="size-4 text-emerald-500" strokeWidth={1.5} />
+                <GitPullRequest className="size-4 text-accent-add" strokeWidth={1.5} />
               )
             ) : (
               // Plain foreground, not the command yellow it started as. Yellow
@@ -284,7 +284,17 @@ export default function RightPanel({
                 Three caps, not four: `[ ]` is one key with two ends rather than
                 two alternatives, so splitting it reads as a chord wanting
                 both. */}
-            <KbdGroup className="ml-1.5 shrink-0 opacity-50">
+            {/* `dark:` on the opacity, because holding a keycap back means
+                different things in the two modes. Opacity fades the group toward
+                the page, and a cap's fill is a veil running the page's opposite
+                way: in dark it moves from white toward black and the box softens,
+                which is what was wanted. In light it moves from black toward
+                white and the glyphs wash out while the box stays — a hint that is
+                somehow both faint and still the loudest thing in the row. So
+                light takes no opacity at all; the caps there are already quieter
+                than their dark twins, `--muted` being a black veil on a near-white
+                page rather than a white one on near-black. */}
+            <KbdGroup className="ml-1.5 shrink-0 dark:opacity-50">
               <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
               <Kbd>⇧</Kbd>
               <Kbd>[ ]</Kbd>

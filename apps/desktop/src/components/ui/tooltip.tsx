@@ -31,6 +31,13 @@ function TooltipTrigger({
 // No arrow, by design — one removal here covers every tooltip in the app.
 // `sideOffset` was 0 when the arrow filled the gap; without it the tooltip would
 // sit flush against its trigger, so the gap moves here.
+/// `shadow-xs`, and deliberately not one of the `--shadow-*` tokens. Those are
+/// `none` in dark and tuned for a surface with area — a card, the composer — and
+/// on something this small both read as a drawn edge under the frame rather than
+/// as depth. A fixed alpha is fine here precisely because the tooltip is small:
+/// it does nothing on a dark page, and on a light one it is the least a floating
+/// frame can cast and still separate from what it covers. `shadow-md`, which this
+/// was, is what the menus carry, and at a tooltip's size it read as a smudge.
 function TooltipContent({
   className,
   sideOffset = 6,
@@ -43,7 +50,7 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          "z-50 inline-flex w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-md border border-border bg-popover backdrop-blur-xl px-3 py-1.5 text-xs text-popover-foreground shadow-md has-data-[slot=kbd]:pr-1.5 has-[>[data-slot=kbd]:first-child]:pl-1.5 has-[>[data-slot=kbd-group]:first-child]:pl-1.5 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 inline-flex w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-md border border-border bg-popover backdrop-blur-xl px-3 py-1.5 text-xs text-popover-foreground shadow-xs has-data-[slot=kbd]:pr-1.5 has-[>[data-slot=kbd]:first-child]:pl-1.5 has-[>[data-slot=kbd-group]:first-child]:pl-1.5 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

@@ -46,7 +46,7 @@ export default function StreamingToolCall({
             the content streams is the point — it is the only thing on screen
             that says the wait is progressing rather than stalled. */}
         {added !== null && added > 0 && (
-          <span className="shrink-0 font-mono tabular-nums text-emerald-400">+{added}</span>
+          <span className="shrink-0 font-mono tabular-nums text-accent-add">+{added}</span>
         )}
 
         {/* Holds the caret's width so the row doesn't shift left when the

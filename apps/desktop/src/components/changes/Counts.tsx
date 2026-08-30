@@ -7,7 +7,7 @@
 export default function Counts({ added, removed }: { added: number; removed: number }) {
   return (
     <span className="font-mono text-ui">
-      {added > 0 && <span className="text-emerald-500">+{added}</span>}
+      {added > 0 && <span className="text-accent-add">+{added}</span>}
       {added > 0 && removed > 0 && " "}
       {/* U+2212, not a hyphen: it matches the plus's weight and width. */}
       {removed > 0 && <span className="text-destructive">−{removed}</span>}
