@@ -124,30 +124,49 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 async fn agent_availability() -> Vec<AgentAvailability> {
     let mut out = Vec::new();
     for harness in harness::Harness::ALL {
-        // Two different answers wearing one word. A CLI that is not on the
-        // machine is fixed by installing it; a harness this build cannot drive
-        // is not, and offering an installer there sends the reader to fix
-        // something that is not broken.
-        let drivable = harness.caps().drivable;
+        let (reason, curable) = unavailable_reason(harness).await;
 
         out.push(AgentAvailability {
             harness,
             available: binpath::agent_available(harness).await,
             label: harness.label().to_string(),
-            reason: if drivable {
-                format!(
-                    "{} isn't installed, so this session can't start.",
-                    harness.label()
-                )
-            } else {
-                format!("Dray can't run {} sessions yet.", harness.label())
-            },
-            install_command: drivable.then(|| harness.install_command().to_string()),
-            docs_url: drivable.then(|| harness.docs_url().to_string()),
+            reason,
+            install_command: curable.then(|| harness.install_command().to_string()),
+            docs_url: curable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
         });
     }
     out
+}
+
+/// What to say about an agent that cannot run, and whether the install command
+/// is what fixes it.
+///
+/// Three answers wearing one word before this, and each wants a different cure.
+/// A CLI that is not on the machine is fixed by installing it. One that is
+/// present and too old is fixed by *re-running* the same installer, so the
+/// buttons still help — but a sentence saying "not installed" tells the reader
+/// to fix something they already have. And a harness this build cannot drive
+/// yet is fixed by neither, so it draws the sentence alone: sending someone to
+/// an installer for a CLI that is sitting right there is the worst of the
+/// three.
+async fn unavailable_reason(harness: harness::Harness) -> (String, bool) {
+    let label = harness.label();
+
+    // Asked before drivability, and the order is the whole of it. A CLI that is
+    // not on the machine is missing whatever this build could do with it, and
+    // the install command is the answer — the same one Claude and Codex give.
+    // Checking drivability first told a reader with no pi at all that Dray
+    // cannot run pi, which is true, useless, and hides the one thing they could
+    // have done about it.
+    if !binpath::agent_installed(harness).await {
+        return (
+            format!("{label} isn't installed, so this session can't start."),
+            true,
+        );
+    }
+
+    (format!("Dray can't run {label} sessions yet."), false)
 }
 
 #[derive(serde::Serialize, ts_rs::TS)]
