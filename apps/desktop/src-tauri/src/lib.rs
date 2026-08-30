@@ -545,9 +545,10 @@ async fn fork_session(
 async fn interrupt_session(
     session_id: &str,
     manager: State<'_, SessionManager>,
+    app: AppHandle,
 ) -> Result<(), String> {
     manager
-        .interrupt(session_id)
+        .interrupt(session_id, &app)
         .await
         .map_err(|e| e.to_string())
 }

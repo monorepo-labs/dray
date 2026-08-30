@@ -146,9 +146,12 @@ competing with them. So `select`, `confirm` and `input` each draw the
 questionnaire card Dray already had, answered in the shape their own method
 reads, and an extension-registered tool needs no code at all — it arrives as an
 ordinary tool call. §6 is rewritten around this; the embedded gate extension it
-used to describe is cut. Not built there: `opts.timeout`, so a card can outlive
-the dialog it draws; `notify` and `setStatus`, which are dropped rather than
-shown.
+used to describe is cut. A Stop answers every card still up before it aborts, because `abort` ends the
+agent and does not resolve a promise an extension is awaiting inside its
+`tool_call` hook — so a Stop pressed with a card on screen used to leave the
+extension waiting and the card offering buttons nothing would answer for. Not
+built there: `opts.timeout`, so a card can still outlive the dialog it draws;
+`notify` and `setStatus`, which are dropped rather than shown.
 
 Follows from that: **`Plan` is the only stance pi can honour, and it now
 does.** `--tools read,grep,find,ls` at spawn, which pi's own help gives as its
