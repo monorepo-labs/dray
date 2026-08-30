@@ -36,7 +36,7 @@ const AGENTS: { id: Harness; label: string }[] = [
   { id: "codex", label: "Codex" },
 ];
 
-/// Next effort level for `model`, wrapping — what Shift+Tab lands on. `null`
+/// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
 /// where the model offers nothing to cycle, so the chord no-ops rather than
 /// inventing an effort the CLI would ignore.
 ///
@@ -128,7 +128,7 @@ export default function ModelSelector({
           Switch model
           <KbdGroup>
             <Kbd>Shift</Kbd>
-            <Kbd>Shift</Kbd>
+            <Kbd>Tab</Kbd>
           </KbdGroup>
         </TooltipContent>
       </Tooltip>
@@ -240,8 +240,9 @@ export default function ModelSelector({
                     separator would draw a box round a hint. */}
                 <div className="flex px-1.5 py-1">
                   <KbdGroup>
+                    <Kbd>⌘</Kbd>
                     <Kbd>Shift</Kbd>
-                    <Kbd>Tab</Kbd>
+                    <Kbd>E</Kbd>
                   </KbdGroup>
                 </div>
                 {model.efforts.map((level) => (
