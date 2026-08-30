@@ -637,6 +637,60 @@ no policy for a next session to read.
 `AlwaysDirectory` and `SwitchMode` are not offered: pi has no path scoping and
 no mode to switch into mid-session.
 
+### The whole extension UI surface, read out of the RPC bridge
+
+Everything below is `createExtensionUIContext` in `dist/modes/rpc/rpc-mode.js`,
+so it is what pi *does* rather than what its docs say. Six methods reach the
+wire, all as `extension_ui_request`, and they split in a way Dray has to respect
+because half of them must not be answered:
+
+| method | fields | answered with | on cancel/timeout |
+|---|---|---|---|
+| `select` | `title`, `options`, `timeout?` | `{value}` | `undefined` |
+| `confirm` | `title`, `message`, `timeout?` | `{confirmed}` | `false` |
+| `input` | `title`, `placeholder`, `timeout?` | `{value}` | `undefined` |
+| `notify` | `message`, `notifyType` | **nothing** | — |
+| `setStatus` | `statusKey`, `statusText` | **nothing** | — |
+
+`onTerminalInput`, `setWorkingMessage`, `setWorkingVisible`,
+`setWorkingIndicator` and `setHiddenThinkingLabel` are TUI-only and no-op in RPC
+mode, so nothing reaches the wire for them and Dray never has to care.
+
+Three things follow that are easy to get wrong:
+
+- **`notify` and `setStatus` are fire-and-forget.** pi mints an id for them and
+  registers no waiter, so a response is dropped — but treating them as blocking
+  requests to be refused files two ordinary UI messages as coverage gaps, and
+  loses a line the reader was meant to see. They are output, not questions.
+- **The dialog carries its own deadline.** `opts.timeout` rides the request and
+  pi resolves the promise to the default above when it fires, so a card left up
+  past it is answering a question pi has already closed — the same shape as
+  Claude Code's `control_cancel_request`, arriving as a field rather than a
+  line.
+- **`opts.signal` aborts the same way**, which is how a cancelled tool call
+  takes its dialog back.
+
+**So there is one channel, and every extension shares it.** That is the whole of
+what "support what people add to their pi" needs: a card that can draw a
+`select`, a `confirm` and an `input` and answer it works for
+`@gotgenes/pi-permission-system`, for `@hank-warren/pi-auto-permissions`, and
+for extensions nobody has written yet — with no Dray change per extension. It is
+the same bargain Claude Code's `permission_suggestions` already make here: the
+options are the CLI's, and Dray draws what it is given.
+
+**Which makes Dray's own gate extension worth deleting rather than building.**
+It duplicates packages that already exist, it competes with whatever the reader
+installed, and it earns nothing the generic card does not. The honest default is
+pi's own: no permission extension means no gate, and Dray says so instead of
+implying one. Not yet done — §6 above still describes the embedded extension,
+and this paragraph is the argument for cutting it.
+
+**Still unverified:** whether a tool an extension registers reaches the wire as
+an ordinary `tool_execution_start` under its registered name. If it does, Dray
+already draws it (as `ToolType::Other`) and the only gap is a `TOOL_VERBS`
+entry. Settled by installing `pi-web-access`, running one turn, and reading the
+capture.
+
 ### Not every request is Dray's
 
 `extension_ui_request` carries no extension identity — an `id`, a `method` and

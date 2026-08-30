@@ -341,13 +341,29 @@ async fn read_stdout(
         // shown. A refusal reaches the model as the tool's own error, which is
         // a sentence the reader can act on.
         if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
+            // Two of the six methods are output, not questions: pi mints an id
+            // for `notify` and `setStatus` and registers no waiter, so nothing
+            // is waiting and a reply is dropped. Refusing them would file two
+            // ordinary UI messages as coverage gaps and say a reader was
+            // refused something they were only being told. Drawing them is
+            // wanted and not built; dropping them quietly is the honest
+            // interim.
+            if matches!(method.as_str(), "notify" | "setStatus") {
+                continue;
+            }
+
             let asked = title.clone().unwrap_or_else(|| method.clone());
             record_failure(&session_id, "unsupported_request", &asked, &line).await;
 
+            // Refused rather than ignored, because pi blocks the tool call
+            // until an answer carrying this id comes back. The reply shape is
+            // per method — `confirm` reads `confirmed`, `select` and `input`
+            // read `value` — and `cancelled` is the one every dialog
+            // understands, resolving each to the default it was built with.
             let _ = client.send(&json!({
                 "type": "extension_ui_response",
                 "id": id,
-                "confirmed": false,
+                "cancelled": true,
             }));
             continue;
         }
