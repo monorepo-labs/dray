@@ -209,6 +209,58 @@ function bySeq(a: AgentEvent, b: AgentEvent) {
   return a.seq - b.seq;
 }
 
+/// The `turn_completed` payload, narrowed once so both readers of the failure
+/// rule take the same shape.
+export type TurnCompletedPayload = Extract<
+  AgentEvent["payload"],
+  { type: "turn_completed" }
+>;
+
+/// Whether a closed turn draws the red failure row.
+///
+/// Stated here rather than inline in [EventRow](../components/chat/EventRow.tsx)
+/// because the builder asks the same question: it drops the trailing text block
+/// that row repeats, and dropping it for a turn that draws no row would take the
+/// agent's own words off screen with nothing standing in for them. A user abort
+/// is exactly that case — it closes as an error on the wire and deliberately
+/// draws nothing.
+export function drawsFailure(payload: TurnCompletedPayload): boolean {
+  return payload.status === "error" && !payload.stopReason?.startsWith("aborted");
+}
+
+/// The sentence a failed turn is about to draw in red, or null where the row
+/// falls back to its own words instead. Only the harness's own sentence can be
+/// echoed by a text block, so an empty `finalText` answers null: the row still
+/// says "Turn failed", and nothing in the turn is suppressed for it.
+function failureSentence(completed: AgentEvent | null): string | null {
+  if (completed === null || completed.payload.type !== "turn_completed") return null;
+  if (!drawsFailure(completed.payload)) return null;
+  return completed.payload.finalText?.trim() || null;
+}
+
+/// The trailing text block a failed turn's red row would repeat, or null.
+///
+/// The harness sends its failure sentence twice — once as an ordinary assistant
+/// message and again on `turn_completed.finalText` — so an expired login drew
+/// the same line in white and then in red. The red row wins: it is the one that
+/// says which kind of statement this is.
+///
+/// Two conditions, both narrow on purpose. The block must be the turn's *last
+/// rendered* row, so a genuine message that happens to end the same way as a
+/// later failure keeps its place; and its text must equal the sentence whole,
+/// never contain it, so an agent explaining an error it recovered from is not
+/// swallowed by the turn that later fails with that same wording.
+function echoedFailure(turn: OpenTurn): AgentEvent | null {
+  const sentence = failureSentence(turn.completed);
+  if (sentence === null || !turn.lastWasAssistantText) return null;
+  for (let i = turn.work.length - 1; i >= 0; i--) {
+    const event = turn.work[i];
+    if (event.payload.type !== "assistant_text") continue;
+    return event.payload.text.trim() === sentence ? event : null;
+  }
+  return null;
+}
+
 /// How many consecutive same-tool calls collapse into one group row.
 ///
 /// Any repeat groups. Consistency is the point: the tool name never appears
@@ -368,15 +420,26 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   // per turn rather than on every render.
   const close = (turn: OpenTurn) => {
     const { lastWasAssistantText, ...rest } = turn;
-    const work = groupTools(turn.work, subagentIds);
+    // The one text block the red failure row is about to repeat, dropped here
+    // rather than skipped while drawing: the transcript has three surfaces that
+    // could put it on screen — the expanded walk, the collapsed view's standing
+    // `finalText`, and the summary counts — and taking it out of the turn
+    // settles all three at once.
+    const echoed = echoedFailure(turn);
+    const body = echoed ? turn.work.filter((event) => event !== echoed) : turn.work;
+    const work = groupTools(body, subagentIds);
     // An interrupted or otherwise cut-short turn closes with no `finalText` —
     // the CLI only writes one for a turn that ended on its own terms. Fall back
     // to the turn's last message so the collapsed view still ends on what the
     // agent last said, instead of filing every row including that message
     // behind the summary. Only for a *closed* turn: a running one shows its
     // work anyway, and a turn a dead child never closed does too.
-    let finalText = turn.finalText;
-    if (finalText === null && turn.completed !== null) {
+    //
+    // An echoed failure takes neither route: the red row is what this turn ends
+    // on, so `finalText` is cleared rather than reaching back to an earlier
+    // message that was never the turn's last word.
+    let finalText = echoed ? null : turn.finalText;
+    if (!echoed && finalText === null && turn.completed !== null) {
       for (let i = turn.work.length - 1; i >= 0; i--) {
         const p = turn.work[i].payload;
         if (p.type === "assistant_text") {
@@ -400,7 +463,11 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       ...rest,
       finalText,
       work,
-      messages: turn.messages - duplicated,
+      // An echoed block is gone from `work`, so the row count already excludes
+      // it and only the message tally still has to be told. `duplicated` is
+      // zero there by construction — it needs a `finalText`, and an echoed turn
+      // has none.
+      messages: turn.messages - (echoed ? 1 : duplicated),
       rows: work.filter(rendersRow).length - duplicated - alwaysShown,
     });
   };
