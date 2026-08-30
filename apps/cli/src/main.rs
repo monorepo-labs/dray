@@ -15,7 +15,7 @@ use dray_proto::{
     SessionSummary,
 };
 use std::ffi::OsStr;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -510,14 +510,39 @@ fn install_skill() -> Result<(), String> {
     Ok(())
 }
 
+/// Why the connect failed, in terms the caller can act on.
+///
+/// A missing or unaccepting socket is the ordinary case — the app is closed —
+/// and must read as a fact rather than as a crash. `PermissionDenied` is the one
+/// kind that says nothing about whether the app is running, and folding it into
+/// that sentence was a bug worth naming: an agent under Codex's default
+/// `workspace-write` sandbox reported the user's app closed while it was open,
+/// and the only cure there is went unnamed.
+///
+/// The split is safe because the socket is `0600` and owned by the user who runs
+/// both halves, so `EPERM` on it is a sandbox refusing the connect and nothing
+/// else. macOS seatbelt denies a unix-socket connect that way, where a closed app
+/// leaves `ENOENT` (no socket file) or `ECONNREFUSED` (a file with nobody behind
+/// it). Every other kind keeps the old sentence, so a new errno can only ever
+/// under-report.
+fn connect_failure(kind: ErrorKind, endpoint: &str) -> String {
+    if kind == ErrorKind::PermissionDenied {
+        return format!(
+            "permission denied reaching Dray at {endpoint}. That is a sandbox refusing \
+             the connection, not the app being closed — Dray is very likely running. \
+             Retry this one command with escalated permissions."
+        );
+    }
+
+    "Dray isn't running. Start the app and try again.".to_string()
+}
+
 /// One request, one response, connection closed.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
 
-    // A missing or unaccepting socket is the ordinary case — the app is closed —
-    // and must read as a fact rather than as a crash.
-    let mut stream = UnixStream::connect(&endpoint)
-        .map_err(|_| "Dray isn't running. Start the app and try again.".to_string())?;
+    let mut stream =
+        UnixStream::connect(&endpoint).map_err(|e| connect_failure(e.kind(), &endpoint))?;
 
     let line = encode_line(&Envelope::new(request)).map_err(|e| e.to_string())?;
     stream
@@ -656,6 +681,68 @@ fn main_worktree(porcelain: &str) -> Option<String> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// The bug this split exists for: a sandbox refusing the connect used to
+    /// report the user's app closed, which is a false fact about their machine
+    /// and names no cure. The sentence has to say both — that the app is likely
+    /// up, and what to do about it.
+    #[test]
+    fn permission_denied_blames_the_sandbox_and_names_the_cure() {
+        let message = connect_failure(ErrorKind::PermissionDenied, "/Users/me/.dray/dray.sock");
+
+        assert!(message.contains("/Users/me/.dray/dray.sock"));
+        assert!(message.contains("sandbox"));
+        assert!(message.contains("escalated permissions"));
+        // The old sentence must not survive here, or the caller reads both
+        // answers and reports the wrong one.
+        assert!(!message.contains("isn't running"));
+    }
+
+    /// Both shapes a closed app actually leaves: no socket file at all, and a
+    /// file with nobody behind it. Measured on macOS — `ENOENT` and
+    /// `ECONNREFUSED` respectively.
+    #[test]
+    fn a_closed_app_still_reads_as_a_closed_app() {
+        for kind in [ErrorKind::NotFound, ErrorKind::ConnectionRefused] {
+            assert_eq!(
+                connect_failure(kind, "/Users/me/.dray/dray.sock"),
+                "Dray isn't running. Start the app and try again."
+            );
+        }
+    }
+
+    /// Collapses every run of whitespace to one space, so an assertion about
+    /// prose cannot fail over a line break.
+    fn unwrapped(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// The sentence the agent reads and the skill telling it what to do live in
+    /// two files, so pin the words they share. Reword the error alone and the
+    /// skill is left answering something nothing emits any more — which is how
+    /// the original bug read: a cure that existed and was never named.
+    #[test]
+    fn the_skill_teaches_the_cure_the_sandbox_error_names() {
+        let message = connect_failure(ErrorKind::PermissionDenied, "/tmp/dray.sock");
+        let shared = "permission denied reaching Dray";
+        // Prose, so where a line wraps is the author's business and not this
+        // test's — match on the words, not on the layout.
+        let skill = unwrapped(SKILL);
+
+        assert!(message.contains(shared));
+        assert!(skill.contains(shared));
+        assert!(skill.contains("escalated permissions"));
+    }
+
+    /// The fallback is the closed-app sentence, so an errno nobody anticipated
+    /// under-reports rather than blaming a sandbox that was never involved.
+    #[test]
+    fn an_unanticipated_errno_falls_back_to_the_closed_app_sentence() {
+        assert_eq!(
+            connect_failure(ErrorKind::TimedOut, "/Users/me/.dray/dray.sock"),
+            "Dray isn't running. Start the app and try again."
+        );
+    }
 
     const SESSION: &str = "0198f0a2-1c5e-7000-8000-000000000000";
 

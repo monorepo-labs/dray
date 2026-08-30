@@ -237,6 +237,24 @@ you get a refusal naming the cure. There are only two:
 A refusal is not a failure of the thing you were doing. Nothing was created and
 nothing was sent, so retrying after the fix is safe.
 
+## When the sandbox blocks a command
+
+Every `dray` command talks to the app over a unix socket, so every one of them
+needs permission to reach it — `ls` as much as `new`. A sandbox that denies that
+reads:
+
+> permission denied reaching Dray at … Retry this one command with escalated
+> permissions.
+
+**That is not the app being closed.** Retry the same command with escalated
+permissions and it goes through. Ask for the escalation on that one command:
+do not ask for a sandbox-free shell, and do not go looking for another route in.
+
+Only *"Dray isn't running"* means the app is closed, and that one you cannot fix
+from here — tell the user to start it.
+
+Either way nothing was created and nothing was sent, so retrying is safe.
+
 ## Limits
 
 - **Dray does not write to the tracker.** Tagging records the link on the
@@ -249,6 +267,8 @@ nothing was sent, so retrying after the fix is safe.
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.
 - **Dray must be running.** If it is not, `dray` says so and exits non-zero.
+  A *permission denied* line is a different thing — see above, and retry with
+  escalated permissions rather than reporting the app down.
 - **Nothing updates itself.** A CLI too old for the app is refused with a line
   saying so; `dray update` is how that gets fixed. If the refusal says the *app*
   is behind, tell the user — you cannot update it from here. Updating the app
