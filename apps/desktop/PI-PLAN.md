@@ -253,6 +253,38 @@ pi --mode rpc
 `--no-session` is never passed: Dray wants the file, because the file is the
 resume handle.
 
+### A pi must be asked to leave, never killed
+
+Found while wiring the spawn, and it is the sharpest edge in this whole
+document because everything about it fails *silently and one process late*.
+
+pi takes `~/.pi/agent/auth.json.lock` — a mkdir lock — while it runs. A clean
+exit releases it. A `SIGKILL` does not, and the next pi to start waits that
+stale lock out for **~30s** before it answers a single command. Measured, on
+0.84.4: no lock 0.22s, stale lock 29.33s, and a clean exit restores 0.25s.
+
+So the cost of killing a pi is never paid by that pi. It is paid by the next
+one, which is a different session, usually a different feature, and looks
+exactly like Dray hanging. Three things fell out of one first draft that killed
+its children:
+
+- The model probe killed its child on every picker read, so the session spawned
+  right after the picker opened took 30s.
+- A spawn whose handshake timed out killed its child, so the *retry* inherited
+  a fresh stale lock and failed the same way. A loop that feeds itself.
+- The 10s handshake bound could never be met with a lock in the way, which is
+  what turned a slow start into a session that could not be started at all.
+
+Two rules, and both are needed. Every path that stops a pi goes through
+`pi::shutdown` — close stdin, wait, kill only if it overstays. And the first
+command's bound is **45s**, wide enough that a lock left by something Dray does
+not control (a crash, the reader's own pi in a terminal) costs a slow start
+rather than a failure they can do nothing about.
+
+`DRAY_PI_TRACE=1` echoes every line read off pi. A line that reaches the mapper
+and draws nothing is otherwise invisible — not a parse failure, so not in
+`parse_failures.jsonl`; not a mapped event, so not in the session log.
+
 ### The version gate is not optional
 
 `binpath::pi()` has to ask the binary its version and refuse below **0.80.6**,

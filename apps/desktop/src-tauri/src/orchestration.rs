@@ -643,14 +643,20 @@ async fn sender(send: &SendMessage) -> Option<MessageSender> {
 
 /// The caller's pick, else the parent's, else Claude Code.
 fn resolve_harness(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Result<Harness> {
-    match requested {
-        // Named outright, so it has to resolve to something this build offers.
-        // The tolerant `Deserialize` is for values read *off the index*, and
-        // reusing it here would let `--harness` invent one.
-        Some(name) => Harness::from_wire_name(name)
-            .with_context(|| format!("unknown harness {name:?} — try claude_code or codex")),
-        None => Ok(parent.map(|p| p.harness).unwrap_or(Harness::ClaudeCode)),
-    }
+    let Some(requested) = requested else {
+        return Ok(parent.map(|p| p.harness).unwrap_or(Harness::ClaudeCode));
+    };
+
+    // Named outright, so it has to resolve to something this build offers. The
+    // tolerant `Deserialize` is for values read *off the index*, and reusing it
+    // here would let `--harness` invent one.
+    Harness::from_wire_name(requested).with_context(|| {
+        // Named from the table rather than listed here, or the sentence goes
+        // on offering two of three — which is exactly how `pi` came to be
+        // refused by an app that could already run it.
+        let known: Vec<_> = Harness::ALL.into_iter().map(Harness::wire_name).collect();
+        format!("unknown harness {requested:?} — try {}", known.join(", "))
+    })
 }
 
 fn resolve_project(create: &CreateSession, parent: Option<&SessionIndexItem>) -> Result<String> {
@@ -805,5 +811,33 @@ mod tests {
         assert!(mismatch(PROTOCOL_VERSION - 1).contains("dray update"));
         assert!(mismatch(PROTOCOL_VERSION + 1).contains("update the Dray app"));
         assert!(!mismatch(PROTOCOL_VERSION + 1).contains("dray update"));
+    }
+
+    /// Every harness the app can run is reachable by name from the CLI.
+    ///
+    /// This was a hand-written match of two arms, so `--harness pi` was
+    /// refused by an app that could already spawn one — and the refusal named
+    /// the two it did know, which read as pi not being a harness at all rather
+    /// than as this function being behind.
+    #[test]
+    fn every_harness_can_be_asked_for_by_name() {
+        for harness in Harness::ALL {
+            let name = harness.wire_name();
+            assert_eq!(
+                resolve_harness(Some(&name), None).unwrap(),
+                harness,
+                "{name} is not reachable from the CLI"
+            );
+        }
+    }
+
+    /// And an unknown one is refused with every name it could have taken.
+    #[test]
+    fn an_unknown_harness_is_refused_by_naming_the_real_ones() {
+        let err = resolve_harness(Some("nope"), None).unwrap_err().to_string();
+
+        for harness in Harness::ALL {
+            assert!(err.contains(&harness.wire_name()), "{err} omits a harness");
+        }
     }
 }

@@ -3,13 +3,25 @@
 //! One child per session, speaking LF-delimited JSON in both directions. See
 //! `apps/desktop/PI-PLAN.md` for the design, the rejected alternatives and the
 //! captured protocol the parser was written against.
+//!
+//! **`DRAY_PI_TRACE=1` echoes every line read off pi**, tagged by session. A
+//! line that reaches the mapper and draws nothing is otherwise invisible: it is
+//! not a parse failure, so it is not in `parse_failures.jsonl`, and it is not a
+//! mapped event, so it is not in the session log. That gap cost an afternoon
+//! once already.
+//!
+//! **pi holds `~/.pi/agent/auth.json.lock` while it runs.** It is a mkdir lock;
+//! a clean exit releases it and a `SIGKILL` leaves it, and the next pi to start
+//! waits a stale one out for **~30s** before answering anything. So the cost of
+//! killing a pi is paid by the *next* one, which is why nothing here kills one
+//! it can ask to leave — see [`shutdown`] and [`PiClient::close`].
 
 pub mod mapper;
 pub mod models;
 pub mod parser;
 pub mod rpc;
 
-use crate::events::{AgentEvent, ApprovalPolicy};
+use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy, TurnStatus};
 use crate::harness::Harness::Pi;
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
@@ -19,10 +31,11 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStderr, ChildStdout, Command},
+    process::{Child, ChildStderr, ChildStdout, Command},
     sync::Mutex,
 };
 
@@ -164,8 +177,18 @@ pub async fn init(
         // left to talk to it. Killed rather than dropped: a `Child` is not
         // reaped on drop, so every failed start would leave a pi alive for the
         // life of the app.
-        let _ = child.kill().await;
-        return Err(error).context("pi did not answer the handshake");
+        //
+        // Asked whether it is still there first, because the two failures want
+        // different cures and read identically without this: a child that
+        // *exited* took its reason with it to stderr, where one still running
+        // and silent is pi not answering a command this build sends.
+        let died = child.try_wait().ok().flatten();
+        shutdown(&mut child, &client).await;
+
+        return Err(error).with_context(|| match died {
+            Some(status) => format!("pi exited during the handshake ({status})"),
+            None => "pi did not answer the handshake".to_string(),
+        });
     }
 
     Ok(Session {
@@ -196,6 +219,31 @@ pub async fn init(
 pub async fn send_prompt(client: &PiClient, text: &str) -> Result<()> {
     client.request("prompt", json!({"message": text})).await?;
     Ok(())
+}
+
+/// How long a pi asked to exit is given before it is killed.
+///
+/// Generous, because the point of asking is to let pi release
+/// `~/.pi/agent/auth.json.lock` — see [`PiClient::close`] — and a kill that
+/// beats the release costs the *next* spawn 30 seconds. pi exits on EOF within
+/// a few hundred milliseconds, so reaching this bound means it was already
+/// wedged, and a wedged pi is holding the lock either way.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// Ends a pi, by EOF where it will take one and by force where it will not.
+///
+/// Every path that stops a pi goes through this. A `Child` is not reaped on
+/// drop, so dropping one leaks the process; killing one outright leaks the
+/// auth lock onto the next spawn. This is the only shape that leaks neither.
+pub async fn shutdown(child: &mut Child, client: &PiClient) {
+    client.close();
+
+    if tokio::time::timeout(SHUTDOWN_GRACE, child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
 }
 
 /// Stops the running agent and drops whatever was queued behind it.
@@ -243,6 +291,14 @@ async fn read_stdout(
             continue;
         }
 
+        if std::env::var_os("DRAY_PI_TRACE").is_some() {
+            // By chars, not bytes: slicing a `String` at a byte offset that
+            // lands inside a multi-byte character panics, and this reads lines
+            // an agent wrote.
+            let head: String = line.chars().take(400).collect();
+            eprintln!("[pi {session_id} <<] {head}");
+        }
+
         let raw = match client.accept(&line).await {
             Incoming::Event(raw) => raw,
             Incoming::Response { matched: true } => continue,
@@ -273,6 +329,29 @@ async fn read_stdout(
             continue;
         }
 
+        // Refused from here rather than ignored, exactly as Claude Code's
+        // unmodelled control requests are and for the same reason: pi blocks
+        // the tool call until an `extension_ui_response` carrying this id comes
+        // back, and `ctx.ui.confirm` has no timeout. Silence is not neutral —
+        // it stalls the session with a complete transcript on screen and
+        // nothing saying why, which reads as Dray having hung.
+        //
+        // The answer is **no**, because there is no card to ask on yet: saying
+        // yes would grant on the reader's behalf something they were never
+        // shown. A refusal reaches the model as the tool's own error, which is
+        // a sentence the reader can act on.
+        if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
+            let asked = title.clone().unwrap_or_else(|| method.clone());
+            record_failure(&session_id, "unsupported_request", &asked, &line).await;
+
+            let _ = client.send(&json!({
+                "type": "extension_ui_response",
+                "id": id,
+                "confirmed": false,
+            }));
+            continue;
+        }
+
         let ingest = crate::session::Ingest {
             session_id: &session_id,
             harness: Pi,
@@ -288,6 +367,37 @@ async fn read_stdout(
         for agent_event in mapper.map(event) {
             crate::session::ingest(&ingest, agent_event, &app).await;
         }
+    }
+
+    // The child is gone. `agent_settled` is the only line that closes a turn,
+    // and a pi that dies mid-turn cannot send one — so without this the session
+    // sits `in_progress` forever with a complete-looking transcript, every tool
+    // row shimmering, and a Stop that answers success and does nothing.
+    //
+    // Emitted, never logged, for the reason Claude Code's drained task set is:
+    // this describes a child that no longer exists, a persisted copy would be
+    // replayed against a session that has already been reset to `idle` at
+    // startup, and this runs after a delete may have removed the file, where an
+    // append would quietly recreate it.
+    if status.lock().await.turn_in_flight() {
+        let closed = mapper.synthesize(AgentEventPayload::TurnCompleted {
+            status: TurnStatus::Error,
+            stop_reason: None,
+            // The one sentence that names what happened. `Turn failed` alone is
+            // the fallback for an errored turn carrying no text, and this turn
+            // has a reason worth reading.
+            final_text: Some("pi stopped before the turn finished".to_string()),
+            // A child that went away, which no login fixes.
+            auth_failed: false,
+            usage: None,
+            duration_ms: None,
+            head: None,
+        });
+
+        if let Err(err) = app.emit("agent_event", &closed) {
+            eprintln!("[pi emit err] {err}");
+        }
+        status.lock().await.on_event(&closed.payload);
     }
 
     Ok(())

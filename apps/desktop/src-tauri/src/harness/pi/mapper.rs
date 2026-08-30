@@ -429,6 +429,38 @@ mod tests {
         assert_eq!(completed, 1);
     }
 
+    /// The same run against a real pi a version later, which is the capture the
+    /// spawn was wired with. A mapper that reads only the older shape draws a
+    /// turn that opens and never closes — a session stuck `in_progress` with a
+    /// complete transcript on screen, which reads as Dray having hung.
+    #[test]
+    fn a_real_0_84_turn_draws_its_answer_and_closes() {
+        let events = mapped(include_str!("fixtures/live_turn_0_84.jsonl"));
+
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| match &e.payload {
+                AgentEventPayload::TurnStarted { .. } => "turn_started",
+                AgentEventPayload::TurnCompleted { .. } => "turn_completed",
+                AgentEventPayload::AssistantText { .. } => "assistant_text",
+                AgentEventPayload::Reasoning { .. } => "reasoning",
+                AgentEventPayload::ToolCallStarted { .. } => "tool_call_started",
+                AgentEventPayload::ToolCallCompleted { .. } => "tool_call_completed",
+                AgentEventPayload::Delta { .. } => "delta",
+                _ => "other",
+            })
+            .collect();
+
+        assert!(
+            kinds.contains(&"turn_started") && kinds.contains(&"turn_completed"),
+            "the turn never closed: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"assistant_text"),
+            "the assistant's answer drew nothing: {kinds:?}"
+        );
+    }
+
     /// The tool rows a reader sees come from `tool_execution_*`, not from the
     /// `toolCall` block in the committed message — emitting both draws every
     /// call twice.

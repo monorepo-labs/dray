@@ -41,13 +41,24 @@ use tokio::time::Duration;
 /// otherwise hang with nothing on screen saying why.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The handshake's own bound, tighter than the rest.
+/// The first command's own bound, wider than the rest.
 ///
-/// pi says **nothing at all** on spawn — no banner, no ready line — so silence
-/// is indistinguishable from a slow start, and the first command is the only
-/// thing that proves the child is alive. Thirty seconds of a blank composer is
-/// long enough to read as broken.
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// pi says **nothing at all** on spawn — no banner, no ready line — so the
+/// first command is the only thing that proves the child is alive, and this is
+/// how long it may take to prove it.
+///
+/// It was 10s, on the reasoning that silence reads as broken. Measured, that
+/// number could not work: pi takes `~/.pi/agent/auth.json.lock` while it runs,
+/// and a pi that did not release it — one killed, or crashed, or the reader's
+/// own in a terminal — leaves the next start waiting **~30s** on it before it
+/// answers anything. So a bound under that turned one stale lock into a session
+/// that could not be started at all, and the kill on the way out left the lock
+/// for the retry to fail on too.
+///
+/// [`PiClient::close`] is the half that stops Dray *causing* this. The width
+/// here is the half that survives somebody else causing it: a slow start the
+/// reader waits out, rather than a failure they can do nothing about.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// One line read off pi, sorted by what it is rather than what it says.
 pub enum Incoming {
@@ -68,9 +79,19 @@ pub enum Incoming {
 /// until it is.
 #[derive(Clone, Debug)]
 pub struct PiClient {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicU64>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+}
+
+/// What the writer task accepts.
+///
+/// [`Outbound::Close`] exists because dropping the client cannot close stdin:
+/// every clone holds a sender, and the read loop holds one for the life of the
+/// session. So the only way to hand pi an EOF is to say so.
+enum Outbound {
+    Line(String),
+    Close,
 }
 
 impl PiClient {
@@ -80,10 +101,16 @@ impl PiClient {
     /// read loop writes too, and with a mutex it could block on a write whose
     /// unblocking depends on a line it has not read yet.
     pub fn new(mut stdin: ChildStdin) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
 
         tokio::spawn(async move {
-            while let Some(line) = rx.recv().await {
+            while let Some(message) = rx.recv().await {
+                let Outbound::Line(line) = message else {
+                    // Falling out of the loop drops `stdin`, which closes it —
+                    // the EOF pi ends on. See [`PiClient::close`].
+                    break;
+                };
+
                 if stdin.write_all(line.as_bytes()).await.is_err()
                     || stdin.write_all(b"\n").await.is_err()
                     || stdin.flush().await.is_err()
@@ -164,8 +191,24 @@ impl PiClient {
     /// this client minted, and so must not go near the pending map.
     pub fn send(&self, line: &Value) -> Result<()> {
         self.tx
-            .send(serde_json::to_string(line)?)
+            .send(Outbound::Line(serde_json::to_string(line)?))
             .context("pi's stdin writer has stopped")
+    }
+
+    /// Closes pi's stdin, which is how pi is asked to exit.
+    ///
+    /// **Not a nicety.** pi takes `~/.pi/agent/auth.json.lock` — a mkdir lock —
+    /// while it runs, and a `SIGKILL`ed pi leaves it behind. The next pi to
+    /// start then waits that stale lock out before it answers anything, which
+    /// is **~30s**, measured. So killing a pi does not cost that pi, it costs
+    /// the next one: a model probe that killed its child made the session spawn
+    /// after it look hung, and a failed spawn that killed its child made the
+    /// retry fail the same way. An EOF releases the lock; nothing else does.
+    ///
+    /// Best effort by construction — a writer that has already stopped means
+    /// the child is gone, which is the state this was asking for.
+    pub fn close(&self) {
+        let _ = self.tx.send(Outbound::Close);
     }
 
     /// Routes one line off pi's stdout.
@@ -218,7 +261,7 @@ mod tests {
     /// fail, so a client built without one exercises the write-failure path on
     /// every test rather than the demux these are about.
     fn detached() -> PiClient {
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
         PiClient {
@@ -226,6 +269,38 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// A real child, ended by EOF rather than by force.
+    ///
+    /// The one behaviour worth a live process in this file: pi's auth lock is
+    /// released on a clean exit and left behind on a kill, and the cost of
+    /// leaving it lands on the *next* pi as a ~30s wait. `cat` stands in for
+    /// pi — what is being pinned is that [`PiClient::close`] closes stdin, and
+    /// a reader that ends on EOF is the only witness to that.
+    #[tokio::test]
+    async fn close_ends_the_child_rather_than_leaving_it_running() {
+        let mut child = tokio::process::Command::new("/bin/cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn cat");
+
+        let client = PiClient::new(child.stdin.take().expect("stdin"));
+
+        // Held like the read loop holds one, so this proves `close` rather than
+        // the last clone being dropped.
+        let reader = client.clone();
+
+        client.close();
+
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("the child outlived its EOF")
+            .expect("wait");
+
+        assert!(status.success());
+        drop(reader);
     }
 
     #[tokio::test]
@@ -362,7 +437,7 @@ mod tests {
     /// attempt and none of them can ever be settled.
     #[tokio::test]
     async fn a_failed_write_leaves_no_slot_behind() {
-        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        let (tx, rx) = mpsc::unbounded_channel::<Outbound>();
         drop(rx);
 
         let client = PiClient {

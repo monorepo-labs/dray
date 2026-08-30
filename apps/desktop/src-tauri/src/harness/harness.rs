@@ -295,6 +295,15 @@ impl Harness {
 
     /// How the wire spells it — what `dray new --harness` takes and what an
     /// index entry holds.
+    ///
+    /// Every caller that needs the *set* of spellings builds it from
+    /// [`Harness::ALL`] rather than writing a second list — that second copy is
+    /// what drifts, and `--harness pi` was once refused by a hand-written match
+    /// in `orchestration` for a harness the app could already run.
+    ///
+    /// Spelled out here rather than read back out of the serializer: the enum
+    /// serializes `into = "String"` *through this function*, so asking serde
+    /// would recurse.
     pub fn wire_name(self) -> String {
         match self {
             Harness::ClaudeCode => "claude_code".to_string(),
@@ -319,7 +328,6 @@ impl Harness {
     pub fn names_a_cli(self) -> bool {
         !matches!(self, Harness::Other(_))
     }
-
 }
 
 /// What [`crate::session`] has to know about a harness, in one place.

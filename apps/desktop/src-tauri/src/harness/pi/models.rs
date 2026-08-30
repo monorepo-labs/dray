@@ -123,14 +123,18 @@ async fn probe() -> Result<Vec<Model>> {
     let models = match listed {
         Ok(data) => read_rows(&client, &data).await,
         Err(err) => {
-            let _ = child.kill().await;
+            super::shutdown(&mut child, &client).await;
             return Err(err);
         }
     };
 
-    // Killed rather than dropped: a `Child` is not reaped on drop, so a probe
-    // per picker-open would leave one pi alive each time.
-    let _ = child.kill().await;
+    // Ended by EOF rather than killed, and that is the difference between a
+    // working picker and a broken one. A killed pi leaves its auth lock behind
+    // and the *next* pi waits ~30s on it — so a probe that killed its child
+    // made the session spawned right after it look hung. See
+    // [`PiClient::close`]. Dropped is not an option either: a `Child` is not
+    // reaped on drop, so a probe per picker-open would leak one pi each time.
+    super::shutdown(&mut child, &client).await;
 
     Ok(models)
 }
@@ -181,20 +185,18 @@ async fn ask_levels(client: &PiClient, row: &Value) -> Result<Vec<Effort>> {
         .and_then(Value::as_str)
         .context("row has no provider")?;
 
+    // The ordinary bound, not the handshake's: the first command absorbed
+    // whatever the startup cost, and everything after it is a live child
+    // answering from memory.
     client
-        .request_within(
+        .request(
             "set_model",
             serde_json::json!({"provider": provider, "modelId": id}),
-            HANDSHAKE_TIMEOUT,
         )
         .await?;
 
     let levels = client
-        .request_within(
-            "get_available_thinking_levels",
-            Value::Null,
-            HANDSHAKE_TIMEOUT,
-        )
+        .request("get_available_thinking_levels", Value::Null)
         .await?;
 
     Ok(efforts_from_levels(&levels))
@@ -457,5 +459,28 @@ mod tests {
     fn an_unreadable_ladder_reads_as_none() {
         assert!(efforts_from_levels(&Value::Null).is_empty());
         assert!(efforts_from_levels(&serde_json::json!({})).is_empty());
+    }
+
+    /// The probe against the pi on this machine, printed rather than asserted.
+    ///
+    /// Everything above reads a capture, so it proves the parse and nothing
+    /// about whether the *commands* still answer — which is the half a new pi
+    /// release can break, and the half `binpath` deliberately does not guard
+    /// with a version number. Ignored by default: the answer is a property of
+    /// whoever is running it, and it spawns a child.
+    #[tokio::test]
+    #[ignore]
+    async fn what_the_installed_pi_answers() {
+        let models = probe().await.expect("pi answered the probe");
+
+        for (provider, rows) in by_provider(&models) {
+            println!("{provider}");
+            for row in rows {
+                let efforts: Vec<_> = row.efforts.iter().map(|e| e.as_arg()).collect();
+                println!("  {:<28} {}", row.arg, efforts.join(" "));
+            }
+        }
+
+        assert!(!models.is_empty(), "pi reported no models at all");
     }
 }

@@ -592,7 +592,7 @@ mod command_tests {
     /// since the behaviour being relied on is the runtime's.
     #[tokio::test]
     async fn timing_out_kills_the_child_rather_than_abandoning_it() {
-        let mut child = Command::new("/bin/sleep")
+        let child = Command::new("/bin/sleep")
             .arg("30")
             .kill_on_drop(true)
             .stdout(Stdio::piped())

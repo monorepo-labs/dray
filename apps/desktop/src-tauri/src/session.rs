@@ -1639,9 +1639,21 @@ impl Session {
         Ok(())
     }
 
-    /// Kills the child process. Takes `self` by value — a killed session can't
+    /// Ends the child process. Takes `self` by value — a stopped session can't
     /// be reused.
+    ///
+    /// pi is asked to exit rather than killed, and that is not politeness: it
+    /// holds `~/.pi/agent/auth.json.lock` while it runs and a `SIGKILL`ed one
+    /// leaves it behind, so the cost of killing lands on the **next** pi, which
+    /// waits that stale lock out for ~30s before answering anything. Every
+    /// caller here is one where another pi follows — a respawn for an effort
+    /// change, an update install, a delete and retry.
     pub async fn kill(mut self) -> Result<()> {
+        if let Transport::Pi(client) = &self.stdin {
+            crate::harness::pi::shutdown(&mut self.child, client).await;
+            return Ok(());
+        }
+
         let _ = self.child.kill().await?;
         Ok(())
     }
@@ -2338,7 +2350,7 @@ mod tests {
         let mut mapper = Mapper::default();
         let mut tracker = StatusTracker::default();
 
-        let mut check = |tracker: &StatusTracker| {
+        let check = |tracker: &StatusTracker| {
             assert_eq!(
                 tracker.turn_in_flight(),
                 tracker.status() == SessionStatus::InProgress,
