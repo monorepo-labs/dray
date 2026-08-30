@@ -171,9 +171,14 @@ stopped `SessionIndexItem::fork` writing pi an instruction nothing would carry
 out.
 
 One bug fell out of that and was worth the trip: **a fork into a new worktree
-was keyed on `fork_from`**, so a fork with no instruction to leave — pi's — was
-spawned straight into a directory nobody had made. It now reads the directory
-itself, and makes the tree where the harness cannot.
+was keyed on `fork_from`**, so a fork with no instruction to leave — pi's, on
+the first shape of this — was spawned straight into a directory nobody had
+made. Settled by having *every* fork record its parent and filtering the
+instruction on `fork_needs_cli` at the spawn, so the field's second fact ("this
+fork has not spawned yet") is available to both harnesses. Probing the
+directory instead was tried and is the wrong fix: a tree deleted by hand reads
+the same way, and remaking it runs `worktree add -B`, which resets the branch
+and takes its commits with it.
 
 **Steering is wired, and it removed code rather than adding it.** A prompt
 typed into a running pi turn goes straight out with

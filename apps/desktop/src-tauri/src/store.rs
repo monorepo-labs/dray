@@ -435,17 +435,15 @@ impl SessionIndexItem {
             // against the same work. Tagging one afterwards leaves the other
             // alone — the copy is a session, not a view of its source.
             issues: self.issues.clone(),
-            // An instruction, and only for a harness whose fork has a second
-            // half. Claude Code's does — the CLI's own conversation is forked
-            // lazily on the first send — where pi's resume handle is the file
-            // this fork already copied, so the first send is an ordinary spawn.
-            // Set there, it would be an instruction with nothing to carry it
-            // out, and `send_msg` refuses one it cannot honour.
-            fork_from: self
-                .harness
-                .caps()
-                .fork_needs_cli
-                .then(|| self.session_id.clone()),
+            // Two facts in one field, and the second is why every fork sets
+            // it whatever its harness. It is an *instruction* only where the
+            // fork has a CLI half — Claude Code's conversation is forked lazily
+            // on the first send — and `send_msg` filters it on `fork_needs_cli`
+            // before any spawn reads it that way. It is also the only record
+            // that this fork has not spawned yet, which is what tells `send_msg`
+            // that a worktree fork's directory still has to be made, and what
+            // gets cleared once it has.
+            fork_from: Some(self.session_id.clone()),
             // Inherited, so the copy sits exactly where the original does: the
             // sidebar draws it beside its source under the same parent, not
             // under its source, and the orchestration depth cap counts it at the
@@ -1537,6 +1535,54 @@ mod tests {
         // leaves a newer build's sessions exactly as it found them.
         let rewritten = serde_json::to_string(&items).expect("writes");
         assert!(rewritten.contains(r#""harness":"some_future_agent""#));
+    }
+
+    /// Every fork records where it came from, whatever its harness forks *by*.
+    ///
+    /// The field carries two facts and only one of them is Claude Code's. It is
+    /// an instruction to run `--resume <parent> --fork-session`, which
+    /// `send_msg` filters on `fork_needs_cli` so pi never sees it that way —
+    /// pi's fork is whole the moment its session file is copied. It is also the
+    /// only record that a fork has not spawned yet, and *that* is what tells
+    /// `send_msg` a worktree fork's directory still has to be made.
+    ///
+    /// Leaving it unset for pi was the first shape, and it cost exactly that:
+    /// a pi fork into a new worktree was spawned straight into a directory
+    /// nobody had made. Probing the directory instead is the other wrong fix —
+    /// a tree deleted by hand reads the same way, and remaking it runs
+    /// `worktree add -B`, which resets the branch and takes its commits along.
+    #[test]
+    fn a_fork_records_its_parent_whichever_harness_it_is_on() {
+        for harness in [Harness::ClaudeCode, Harness::Pi] {
+            let parent = SessionIndexItem::new(
+                "parent",
+                harness,
+                "/p",
+                "/p",
+                None,
+                None,
+                "add the PR panel",
+                ModelId::new("opus"),
+                Some(Effort::High),
+                ApprovalPolicy::Auto,
+                None,
+            );
+
+            assert_eq!(
+                parent.fork("child", None).fork_from.as_deref(),
+                Some("parent"),
+                "{harness:?} loses the one record that this fork has not spawned"
+            );
+        }
+
+        assert!(
+            Harness::ClaudeCode.caps().fork_needs_cli,
+            "its conversation is forked lazily, on the first send"
+        );
+        assert!(
+            !Harness::Pi.caps().fork_needs_cli,
+            "copying the session file is the whole of pi's fork"
+        );
     }
 
     /// Forking in place must not claim the parent's tree: `worktree_name` is what

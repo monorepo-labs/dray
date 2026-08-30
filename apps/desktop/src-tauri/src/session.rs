@@ -817,17 +817,20 @@ impl SessionManager {
         let fork_from = indexed.as_ref().and_then(|i| i.fork_from.clone());
 
         // A fork into a *new* worktree is the one resume whose directory does
-        // not exist yet, and a missing directory cannot be `chdir`ed into. Read
-        // off the directory rather than off `fork_from`, because only one of
-        // the two forks leaves an instruction behind: pi's is the copied
-        // session file and carries none, so a fork keyed on `fork_from` was
-        // spawned straight into a tree nobody had made.
-        let unmade_worktree = match &indexed {
-            Some(item) if item.worktree_name.is_some() => {
-                (!tokio::fs::try_exists(&item.cwd).await.unwrap_or(true)).then(|| item.clone())
-            }
-            _ => None,
-        };
+        // not exist yet, and a missing directory cannot be `chdir`ed into.
+        //
+        // Read off `fork_from`, which is why every fork sets it now — pi's has
+        // no CLI half to perform and ignores it, but "this fork has not spawned
+        // yet" is a fact both need and only the entry can carry. Probing the
+        // directory instead looks equivalent and is worse: a tree deleted by
+        // hand would also read as unmade, and remaking it runs
+        // `worktree add -B`, which *resets the branch* and takes any commits on
+        // it with it.
+        let unmade_worktree = fork_from
+            .as_ref()
+            .and(indexed.as_ref())
+            .filter(|item| item.worktree_name.is_some())
+            .cloned();
 
         // Two ways to make it, and which one is the harness's own answer.
         // Claude Code takes `-w` and creates the tree itself after launch, so
@@ -854,6 +857,16 @@ impl SessionManager {
             None => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
         };
 
+        // The CLI's half of a fork, for a harness that has one. pi's fork was
+        // whole the moment its session file was copied, so it gets `None` here
+        // and its spawn is an ordinary resume — while `fork_from` above stays
+        // unfiltered, because both harnesses need the *other* fact in it: that
+        // this is a fork's first send, so a worktree may still have to be made
+        // and the instruction has to be cleared afterwards.
+        let cli_fork = fork_from
+            .as_deref()
+            .filter(|_| harness.caps().fork_needs_cli);
+
         let mut session = Session::init(
             session_id,
             harness,
@@ -864,7 +877,7 @@ impl SessionManager {
             &session_cwd,
             pending_worktree.as_deref(),
             is_new_session,
-            fork_from.as_deref(),
+            cli_fork,
             app,
         )
         .await?;
@@ -1327,12 +1340,13 @@ impl Session {
                 if worktree_name.is_some() {
                     bail!("pi cannot create a worktree — it has to be made first");
                 }
-                // pi forks by copy, so nothing is left for a spawn to carry
-                // out and `SessionIndexItem::fork` writes no instruction. One
-                // arriving here means a caller built the entry by hand and
-                // expects a CLI-side fork pi has no way to perform — and pi's
-                // own `fork` cannot serve it, since `--fork` and `--session`
-                // are refused together.
+                // A fork reaches here as an ordinary resume, because pi's fork
+                // is whole the moment its session file is copied — `send_msg`
+                // filters the instruction out on `fork_needs_cli`. One arriving
+                // anyway is a caller expecting a CLI-side fork pi cannot
+                // perform: its own `fork` names the file rather than taking the
+                // one Dray chose, since `--fork` and `--session` are refused
+                // together.
                 if fork_from.is_some() {
                     bail!("a pi fork is the copied session file — there is nothing to resume from");
                 }
