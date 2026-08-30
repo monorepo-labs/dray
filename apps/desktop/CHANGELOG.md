@@ -5,6 +5,36 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.9.2
+
+### Added
+
+- **Light mode works for the Default theme.** It was the last theme with no
+  light side, so the mode picker sat disabled for anyone who never changed
+  palette. System, Light and Dark all apply now.
+- **A logged-out agent offers a way back in.** An expired login ended every
+  turn with the harness's own sentence and nothing to do about it — `/login`
+  cannot be reached from inside a session. The composer now names the cure and
+  a button opens the login in a terminal. A wording neither harness recognises
+  still reports the failure as before.
+
+### Changed
+
+- **Model takes Shift+Tab**, the cheapest chord, since it is the pick reached
+  for most often; effort moves to ⌘⇧E and double-tap Shift is gone. ⌘I opens
+  the issues page.
+
+### Fixed
+
+- **A failed turn draws its sentence once.** The harness sends it twice, so
+  every failure appeared in white and again in red.
+- **Opening a long session is fast again.** A 61-turn session took ~700ms
+  before anything appeared; the newest turns now draw first and the rest fill
+  in above them.
+- **`dray` tells a sandboxed refusal from a closed app.** Every connect error
+  read as "Dray isn't running", which named no cure when the real cause was
+  the agent's own sandbox. Update the CLI with `dray update`.
+
 ## 0.9.1
 
 ### Added
