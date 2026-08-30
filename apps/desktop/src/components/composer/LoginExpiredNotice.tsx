@@ -97,10 +97,17 @@ export default function LoginExpiredNotice({
           dropped. A key rather than an alert: the row's other glyph is
           [TriangleAlert] on a failed launch, and two warning marks a gap apart
           would read as one thing having gone wrong twice. */}
-      <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-      <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-        {agent.label} isn&rsquo;t logged in
-      </p>
+      {/* The mark and its line are one thing, so they get their own tighter
+          gap — the row's `gap-3` is the distance between the statement and the
+          buttons answering it, and at that width the glyph read as a third
+          item rather than as part of the sentence. `gap-2` is what [Notice]
+          already sets an icon against a sentence at. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+        <p className="min-w-0 truncate text-ui text-foreground">
+          {agent.label} isn&rsquo;t logged in
+        </p>
+      </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
         <Button variant="ghost" size="sm" onClick={() => void copy()}>
