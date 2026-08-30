@@ -1159,7 +1159,7 @@ not persisted, or a surface Dray does not have.
 
 | control | pi |
 |---|---|
-| harness picker | one more entry, and one more agent for `agent_availability` to report on |
+| harness picker | one more entry, one more mark (below), and one more agent for `agent_availability` to report on |
 | model picker | **discovered, not constant** (§7). Async for the first time, and seeded from what pi reports rather than from a Dray default |
 | effort picker | driven by the picked model's `get_available_thinking_levels`. A model with `["off"]` shows none, which is the existing empty-`efforts` path |
 | permission mode | **Plan is shown** (§6) — unlike Codex. `acceptEdits` stays gone, as everywhere. `Auto` means something weaker than it does elsewhere and its copy should say so |
@@ -1168,6 +1168,43 @@ not persisted, or a surface Dray does not have.
 | image tray | images work — `prompt.images` takes base64 with a mime type, the same shape Claude takes. New: gate on the picked model's `input` including `image`. **Non-image attachments have no route**: Claude's `@/abs/path` convention is Claude's own parser, and pi expands no mentions inside an RPC prompt (below), so a dropped CSV would silently attach nothing. Codex answered this by appending a plain line naming the file, and pi should do the same |
 | `/` picker | **better than Claude's.** `get_commands` answers on the live connection, so no throwaway child. Sources are `extension`, `prompt` and `skill` — and pi reads `~/.agents/skills`, which is the same directory Claude reads, so a reader's skills are already there |
 | `@` picker | dark (§9) |
+
+### The mark
+
+`AgentIcon` draws one mark per harness and branches on two, so a third harness
+needs a third — and the picker is where it is the subject rather than a bullet,
+so it is the one surface that would show a gap.
+
+pi's press kit (<https://pi.dev/press-kit>) offers two: a **primary logo** for
+editorial use and a **badge** for favicons. The badge is the wrong one — it
+carries its own `#09090b` rounded plate, which is a second surface inside a row
+of chrome that already has one, and it is exactly what `LinearIcon`'s
+`currentColor` rule exists to refuse. The primary logo is two paths of flat
+geometry with no fill of its own, which is what that rule wants.
+
+Native viewBox is `0 0 800 800` and it should stay that way — the coordinates
+are exact multiples of the grid the mark is drawn on, and rescaling to 24 to
+match the other two buys nothing but rounding. `className` sizes it either way.
+
+```
+<svg viewBox="0 0 800 800" fill="currentColor" role="img" aria-label="pi">
+  <path fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" />
+  <path d="M517.36 400H634.72V634.72H517.36Z" />
+</svg>
+```
+
+`fill-rule="evenodd"` on the first path is load-bearing: the P's counter is a
+hole cut by a second contour in the same path, and the default `nonzero` fills
+it in — which reads as a slightly wrong solid blob rather than as a bug, so it
+would ship.
+
+**No brand colour.** Claude's mark gets `CLAUDE_RUST` because Anthropic's is a
+coloured mark; pi's is monochrome by design, the way OpenAI's is, so `brand`
+leaves it on `currentColor` and the row still reads as one set.
+
+Licensed **MIT**, credited to *Earendil Inc. & Contributors* — so it goes in the
+root README beside the ported themes, whose credit rule already covers exactly
+this and already has a test failing without one.
 
 ### Subagents
 
@@ -1427,7 +1464,8 @@ pinned by the compiler and by tests that do exist.
   `TOOL_VERBS` rows for pi's tool names.
 - Resume by respawning on the same path. Stop as answer-pending +
   `clear_queue` + `abort`. Session file deleted with the session.
-- Composer: harness picker, discovered model list, discovered effort levels.
+- Composer: harness picker with pi's mark and its README credit (§10),
+  discovered model list, discovered effort levels.
 - Fixtures: `no_approvals`, `abort_and_queue`, `resume`, `failed_turn_live`.
 
 **Slice 1 must not ship with the stance picker unrestricted.** An earlier draft
