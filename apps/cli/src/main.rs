@@ -15,7 +15,7 @@ use dray_proto::{
     SessionSummary,
 };
 use std::ffi::OsStr;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -510,14 +510,50 @@ fn install_skill() -> Result<(), String> {
     Ok(())
 }
 
+/// Why the connect failed, in terms the caller can act on.
+///
+/// Three answers, because the caller does three different things with them.
+///
+/// `NotFound` and `ConnectionRefused` are the two shapes a closed app leaves —
+/// no socket file, and a file with nobody behind it — and they are the only
+/// kinds that say anything about whether it is running. Naming them explicitly
+/// rather than using them as the fallback matters: `EAGAIN` from a full listen
+/// backlog, a timeout, an interrupted call are all failures of *this connect*
+/// with the app very much alive, and reporting them as a closed app sends the
+/// reader to restart something that was never down.
+///
+/// `PermissionDenied` is the one that had a bug in it: it used to fall in with
+/// the closed-app sentence, so an agent under Codex's default `workspace-write`
+/// sandbox reported the user's app closed while it was open, and the only cure
+/// there is went unnamed. It is deliberately *not* stated as a sandbox, because
+/// this kind covers `EACCES` as well as `EPERM` — `connect(2)` returns it for
+/// search permission on a path component and for write access to the socket
+/// itself, neither of which any escalation fixes. So the sentence names both
+/// causes and makes the cure conditional on the one escalation can help.
+///
+/// Everything else keeps the underlying error rather than being translated,
+/// since a kind nobody anticipated is better read out than guessed at.
+fn connect_failure(error: &std::io::Error, endpoint: &str) -> String {
+    match error.kind() {
+        ErrorKind::PermissionDenied => format!(
+            "permission denied reaching Dray at {endpoint}. The app may well be \
+             running: a sandbox, or the filesystem permissions on that path, \
+             blocked the connection. If this command is sandboxed, retry this one \
+             command with escalated permissions."
+        ),
+        ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
+            "Dray isn't running. Start the app and try again.".to_string()
+        }
+        _ => format!("could not connect to Dray at {endpoint}: {error}"),
+    }
+}
+
 /// One request, one response, connection closed.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
 
-    // A missing or unaccepting socket is the ordinary case — the app is closed —
-    // and must read as a fact rather than as a crash.
-    let mut stream = UnixStream::connect(&endpoint)
-        .map_err(|_| "Dray isn't running. Start the app and try again.".to_string())?;
+    let mut stream =
+        UnixStream::connect(&endpoint).map_err(|e| connect_failure(&e, &endpoint))?;
 
     let line = encode_line(&Envelope::new(request)).map_err(|e| e.to_string())?;
     stream
@@ -656,6 +692,92 @@ fn main_worktree(porcelain: &str) -> Option<String> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// Collapses every run of whitespace to one space, so an assertion about
+    /// prose cannot fail over a line break.
+    fn unwrapped(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn failure(kind: ErrorKind) -> String {
+        unwrapped(&connect_failure(
+            &std::io::Error::from(kind),
+            "/Users/me/.dray/dray.sock",
+        ))
+    }
+
+    const CURE: &str = "retry this one command with escalated permissions";
+    const CLOSED: &str = "Dray isn't running. Start the app and try again.";
+
+    /// The bug this arm exists for: a sandbox refusing the connect used to
+    /// report the user's app closed, which is a false fact about their machine
+    /// and names no cure.
+    ///
+    /// It must not overcorrect either. This kind is `EACCES` as well as
+    /// `EPERM`, so the sentence has to leave room for plain filesystem
+    /// permissions and make the escalation conditional — asserted here, because
+    /// "that is a sandbox" is exactly what it said before and it was too sure.
+    #[test]
+    fn permission_denied_hedges_the_cause_and_names_the_conditional_cure() {
+        let message = failure(ErrorKind::PermissionDenied);
+
+        assert!(message.contains("/Users/me/.dray/dray.sock"));
+        assert!(message.contains("The app may well be running"));
+        assert!(message.contains("a sandbox, or the filesystem permissions"));
+        assert!(message.contains(CURE));
+        // The closed-app claim must not survive here, or the caller reads both
+        // answers and reports the wrong one.
+        assert!(!message.contains("isn't running"));
+    }
+
+    /// Both shapes a closed app actually leaves, and the only two: no socket
+    /// file at all, and a file with nobody behind it. Measured on macOS —
+    /// `ENOENT` and `ECONNREFUSED` respectively.
+    #[test]
+    fn only_the_two_closed_app_shapes_say_the_app_is_closed() {
+        for kind in [ErrorKind::NotFound, ErrorKind::ConnectionRefused] {
+            assert_eq!(failure(kind), CLOSED);
+        }
+    }
+
+    /// These are failures of *this connect* with the app alive — a full listen
+    /// backlog answers `EAGAIN`, a call can be interrupted or time out. Each
+    /// used to be reported as a closed app, which sends the reader to restart
+    /// something that was never down.
+    #[test]
+    fn a_failure_unrelated_to_liveness_claims_nothing_about_liveness() {
+        for kind in [
+            ErrorKind::TimedOut,
+            ErrorKind::WouldBlock,
+            ErrorKind::Interrupted,
+        ] {
+            let message = failure(kind);
+
+            assert!(message.contains("could not connect to Dray at"));
+            assert!(message.contains("/Users/me/.dray/dray.sock"));
+            assert!(!message.contains("isn't running"));
+            assert!(!message.contains(CURE));
+        }
+    }
+
+    /// The sentence the agent reads and the guidance telling it what to do live
+    /// in separate files, so pin the whole clause they share rather than a word
+    /// out of it. Reword the error alone and the skill is left answering
+    /// something nothing emits any more — which is how the original bug read:
+    /// a cure that existed and was never named.
+    #[test]
+    fn the_skill_teaches_the_cure_the_sandbox_error_names() {
+        let message = failure(ErrorKind::PermissionDenied);
+        let skill = unwrapped(SKILL);
+
+        for clause in [CURE, "permission denied reaching Dray"] {
+            assert!(message.contains(clause), "the error dropped: {clause}");
+            assert!(skill.contains(clause), "the skill dropped: {clause}");
+        }
+        // The skill has to keep the app-closed sentence apart from it, since
+        // telling the two apart is the whole of what it teaches.
+        assert!(skill.contains(CLOSED));
+    }
 
     const SESSION: &str = "0198f0a2-1c5e-7000-8000-000000000000";
 

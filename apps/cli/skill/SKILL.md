@@ -241,6 +241,35 @@ you get a refusal naming the cure. There are only two:
 A refusal is not a failure of the thing you were doing. Nothing was created and
 nothing was sent, so retrying after the fix is safe.
 
+## When a command cannot reach the app
+
+Every `dray` command talks to the app over a unix socket, so every one of them
+needs permission to reach it — `ls` as much as `new`. Three answers, and they
+want three different things from you.
+
+> permission denied reaching Dray at … The app may well be running: a sandbox,
+> or the filesystem permissions on that path, blocked the connection. If this
+> command is sandboxed, retry this one command with escalated permissions.
+
+**This is not the app telling you it is closed.** Usually a sandbox is refusing
+the connection, and retrying with escalated permissions goes through. Ask for
+the escalation on that one command: do not ask for a sandbox-free shell, and do
+not go looking for another route in. If the retry is refused the same way it is
+the other cause — ordinary permissions on the socket path, which no escalation
+fixes. Say so and name the path.
+
+> Dray isn't running. Start the app and try again.
+
+The app is closed, and you cannot fix that from here. Tell the user.
+
+> could not connect to Dray at … : *reason*
+
+Something else failed, and the line names it. Report it as written. It says
+nothing about whether the app is running, so do not tell the user it is down.
+
+Nothing was created and nothing was sent in any of the three, so retrying after
+the cure is safe.
+
 ## Limits
 
 - **Dray does not write to the tracker.** Tagging records the link on the
@@ -252,7 +281,9 @@ nothing was sent, so retrying after the fix is safe.
 - **Two levels deep.** A session you create may create sessions of its own; those
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.
-- **Dray must be running.** If it is not, `dray` says so and exits non-zero.
+- **Dray must be running.** If it is not, `dray` says so in those words and
+  exits non-zero. Only that sentence means it — see above, and do not read any
+  other connection failure as the app being down.
 - **Nothing updates itself.** A CLI too old for the app is refused with a line
   saying so; `dray update` is how that gets fixed. If the refusal says the *app*
   is behind, tell the user — you cannot update it from here. Updating the app

@@ -769,6 +769,25 @@ mod tests {
         assert!(DEVELOPER_INSTRUCTIONS.contains("dray issue link"));
     }
 
+    /// Dray spawns Codex into `workspace-write`, so a `dray` command hitting the
+    /// sandbox is this app's own default path. The instructions have to name the
+    /// cure, or the agent reports the user's running app as closed.
+    #[test]
+    fn the_developer_instructions_name_the_cure_for_a_sandboxed_dray() {
+        // Prose, so match on the words rather than on where a line wraps, and on
+        // whole clauses rather than a word out of one.
+        let prose = DEVELOPER_INSTRUCTIONS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(prose.contains("permission denied reaching Dray"));
+        assert!(prose.contains("Retry that one command with escalated permissions"));
+        // The two answers have to stay apart, since telling them apart is the
+        // whole of what this paragraph teaches.
+        assert!(prose.contains(r#"only "Dray isn't running" says that"#));
+    }
+
     /// Replays a real capture through the parser and the mapper.
     ///
     /// The point is not the assertions below so much as the parse itself: these
