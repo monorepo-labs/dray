@@ -51,6 +51,34 @@ use rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
 /// is per-process and no CLI carries one across a resume.
 const APPEND_SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 
+/// pi's own read-only tools, and the whole of what `Plan` means here.
+///
+/// An allowlist rather than a list of tools to withhold, and that is the half
+/// that matters: **pi extensions register their own tools**, under names this
+/// build has never seen, and any of them can write files or run commands. A
+/// blocklist would let every one of those through under the one stance a reader
+/// picks precisely because it cannot write. An allowlist gets an unknown
+/// read-only tool wrong in the safe direction — it is simply not there.
+const PLAN_TOOLS: [&str; 4] = ["read", "grep", "find", "ls"];
+
+/// The `--tools` allowlist a stance wants, or `None` for every tool pi has.
+///
+/// `Plan` is the one stance pi can enforce, and it enforces it properly:
+/// `--tools` is fixed for the process and applies to extension tools too, so a
+/// plan-mode pi is read-only by construction rather than by instruction. Every
+/// other stance is ungated, which is pi's own default — it ships no permission
+/// system, and the gate belongs to an extension the reader installs.
+///
+/// `stanceFor` in [permission.ts](../../../../src/lib/permission.ts) is the
+/// other half of this and coerces anything else to `BypassPermissions` before
+/// it is recorded, so a session's index entry says what actually happened.
+fn tools_for(mode: ApprovalPolicy) -> Option<Vec<&'static str>> {
+    match mode {
+        ApprovalPolicy::Plan => Some(PLAN_TOOLS.to_vec()),
+        _ => None,
+    }
+}
+
 /// Spawns a session's `pi --mode rpc` and handshakes it.
 ///
 /// Takes a resolved [`Model`] like the other two, except that for pi it may be
@@ -97,6 +125,11 @@ pub async fn init(
     if let Some(effort) = effort {
         args.push("--thinking".into());
         args.push(effort.as_arg().to_string());
+    }
+
+    if let Some(tools) = tools_for(permission_mode) {
+        args.push("--tools".into());
+        args.push(tools.join(","));
     }
 
     args.push("--append-system-prompt".into());
@@ -459,5 +492,81 @@ async fn record_failure(session_id: &str, stage: &str, detail: &str, line: &str)
 
     if let Err(err) = store::record_parse_failure(session_id, stage, detail, line).await {
         eprintln!("[pi parse-failure write err] {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Plan` is the one stance pi can enforce, and it enforces it with a flag.
+    #[test]
+    fn plan_spawns_a_read_only_pi_and_nothing_else_gates() {
+        assert_eq!(
+            tools_for(ApprovalPolicy::Plan),
+            Some(vec!["read", "grep", "find", "ls"])
+        );
+
+        for ungated in [
+            ApprovalPolicy::BypassPermissions,
+            ApprovalPolicy::Manual,
+            ApprovalPolicy::Auto,
+            ApprovalPolicy::DontAsk,
+        ] {
+            assert_eq!(
+                tools_for(ungated),
+                None,
+                "{ungated:?} has nothing behind it on pi, so it must not \
+                 half-apply a restriction"
+            );
+        }
+    }
+
+    /// The allowlist holds no tool that writes.
+    ///
+    /// Read as a list it is obvious; the failure it guards is a later edit
+    /// widening it to "the tools people usually want in plan mode", which is
+    /// how `bash` gets in. `--tools` is what makes plan mode true rather than
+    /// instructed, so every name here has to be one that cannot change the
+    /// tree.
+    #[test]
+    fn the_plan_allowlist_admits_nothing_that_writes() {
+        for mutating in ["bash", "powershell", "write", "edit"] {
+            assert!(
+                !PLAN_TOOLS.contains(&mutating),
+                "{mutating} can change the tree, so plan mode cannot offer it"
+            );
+        }
+    }
+
+    /// Nothing here kills a pi except the one function allowed to.
+    ///
+    /// pi holds `~/.pi/agent/auth.json.lock` while it runs and a `SIGKILL`
+    /// leaves it, so the cost of killing one is paid by the *next* pi, which
+    /// waits the stale lock out for ~30s before answering anything. That is a
+    /// rule with nothing enforcing it — a fourth teardown path reaching for
+    /// `child.kill()` regresses in silence, and the symptom lands in a
+    /// different session from the cause.
+    ///
+    /// So the rule is read off the source. The one permitted call is
+    /// [`shutdown`]'s, after it has asked pi to leave and waited.
+    #[test]
+    fn only_shutdown_may_kill_a_pi() {
+        let source = include_str!("pi.rs");
+        // This module's own prose names the call it is banning, so read only
+        // the half above it.
+        let code = source
+            .split_once("\n#[cfg(test)]")
+            .map(|(code, _)| code)
+            .expect("this file carries a test module");
+
+        let kills = code.matches("child.kill()").count();
+
+        assert_eq!(
+            kills, 1,
+            "every teardown goes through `shutdown`, which asks pi to exit \
+             first — a kill anywhere else leaks the auth lock onto the next \
+             spawn. Found {kills} `child.kill()` calls in this file."
+        );
     }
 }

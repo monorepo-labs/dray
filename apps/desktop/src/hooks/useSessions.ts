@@ -14,6 +14,7 @@ import {
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
+import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -358,13 +359,12 @@ const handleSendMsg = async (
       harness,
       model: modelId,
       effort,
-      // pi has no permission system, so the stance it actually runs under is
-      // bypass whatever the picker last held. Recorded as that rather than as
-      // the pick, because the index is read back — by a later build, and by
-      // `dray new` when it inherits a parent's stance — and a stance nothing
-      // enforces is worse there than on screen, where the control is at least
-      // hidden.
-      permissionMode: harness === "pi" ? "bypassPermissions" : permissionMode,
+      // What will actually happen, not what the picker last held. A stance can
+      // reach here that this harness never offered — a spawned session takes
+      // its parent's — and the index is read back, by a later build and by
+      // `dray new` inheriting it, so a stance nothing enforces is worse there
+      // than on screen, where the control is at least hidden.
+      permissionMode: stanceFor(harness, permissionMode),
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
       // worktree session, whose branch the CLI names itself.

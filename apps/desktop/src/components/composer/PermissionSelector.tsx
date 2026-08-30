@@ -11,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { honoursMode } from "@/lib/permission";
 import { cn } from "@/lib/utils";
 import type { ApprovalPolicy, Harness } from "@/types/events";
 
@@ -29,28 +30,13 @@ const MODES: { id: ApprovalPolicy; label: string }[] = [
   { id: "auto", label: "Auto" },
 ];
 
-/// Codex has no plan mode. Its own three stances are ask / approve-for-me /
-/// full access, and `plan` maps onto read-only-and-ask — close, but a stance
-/// Codex never names, so offering it would promise a mode it does not have.
-/// Hidden rather than disabled: a dead entry in a four-item menu reads as a bug.
-const HIDDEN_BY_HARNESS: Partial<Record<Harness, ApprovalPolicy[]>> = {
-  codex: ["plan"],
-};
-
-/// Whether this harness has a stance to pick at all.
+/// Whether this harness has a stance worth picking between.
 ///
-/// pi has **no permission system**. Not a different one — none: it runs what
-/// the model asks for, and Dray's gate for it is an extension that is not
-/// built. So every entry in the menu would be a promise nothing keeps, which
-/// is the rule the composer already follows for the branch picker in worktree
-/// mode: a control offering something the CLI does not honour is worse than no
-/// control.
-///
-/// The stance recorded for a pi session is `bypassPermissions`, because that is
-/// what is actually happening. Saying `auto` would be the same lie written into
-/// the index, where a later build could read it back and believe it.
+/// One honoured stance is not a menu — it is a control with a single state,
+/// which reads as broken. Nothing hits this today; every harness offers at
+/// least two.
 export function offersPermissionModes(harness: Harness): boolean {
-  return harness !== "pi";
+  return MODES.filter((m) => honoursMode(harness, m.id)).length > 1;
 }
 
 export default function PermissionSelector({
@@ -62,9 +48,9 @@ export default function PermissionSelector({
   value: ApprovalPolicy;
   onChange: (mode: ApprovalPolicy) => void;
 }) {
-  const modes = MODES.filter(
-    (m) => !(HIDDEN_BY_HARNESS[harness] ?? []).includes(m.id),
-  );
+  // Hidden rather than disabled: a dead entry in a four-item menu reads as a
+  // bug, where a shorter menu reads as this harness having fewer stances.
+  const modes = MODES.filter((m) => honoursMode(harness, m.id));
   // Read off the full list, not the filtered one: a session can be on a stance
   // this harness does not offer — a spawned one takes its parent's — and a
   // trigger reading "Permissions" would say less than the stance it is on.

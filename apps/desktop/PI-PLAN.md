@@ -136,10 +136,8 @@ the discovered model list and per-model effort ladders, the three lifecycles,
 deltas, tool calls, failure from `stopReason`, resume, Stop, the system prompt,
 `~/.agents/skills/dray/`, and `dray new --harness pi` end to end.
 
-The gap: **the stance picker is hidden and every pi session runs ungated.**
-That is now a stated position rather than an omission — see slice 2 — but
-`Plan` is the one stance pi can enforce and it is still not offered, so a
-reader who wants a pi session that cannot write has no way to ask for one.
+The gap it shipped with — the stance picker hidden, every pi session
+ungated — is closed on the half that could be closed. See slice 2.
 
 **Slice 2 — the part that matters is done, and it is not what §14 planned.**
 No gate ships, deliberately: pi is extensible, permission extensions already
@@ -152,10 +150,17 @@ used to describe is cut. Not built there: `opts.timeout`, so a card can outlive
 the dialog it draws; `notify` and `setStatus`, which are dropped rather than
 shown.
 
-Follows from that: **`Plan` is the only stance pi could ever honour** (`--tools
-read,grep,find,ls` at spawn, enforced by pi), and it is still not built. Until
-it is, the picker stays hidden and pi runs ungated, which is pi's own default
-and is now said out loud rather than implied.
+Follows from that: **`Plan` is the only stance pi can honour, and it now
+does.** `--tools read,grep,find,ls` at spawn, which pi's own help gives as its
+worked example and which applies to extension and custom tools as well as
+built-in ones. Verified live: a pi asked to write a file under it answers that
+it has no tool that can, and writes nothing.
+
+So the picker is back, offering the two stances that mean something — `plan`,
+enforced by the flag, and `bypassPermissions`, which is what pi does with no
+permission extension loaded. `manual` and `auto` are not offered, and a session
+arriving on one (a spawned session takes its parent's) is recorded as bypass,
+because the index has to say what actually happened.
 
 **Slice 3 — half.** Worktrees and orchestration work. Fork is refused outright,
 `--from` is untested against pi, and steering is not wired.
