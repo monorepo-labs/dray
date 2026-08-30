@@ -232,6 +232,25 @@ pub async fn pi_session_file(session_id: &str) -> Result<PathBuf> {
         .join(format!("{session_id}.jsonl")))
 }
 
+/// Removes pi's transcript for a session being deleted.
+///
+/// A second file per session, so a second thing to delete — without this a
+/// deleted pi session leaves its whole conversation on disk under
+/// `~/.dray/pi-sessions/`, which is every file the agent read and wrote in it.
+/// Nothing would ever read it again, since the index entry naming it is gone.
+///
+/// A missing file is success, not an error: every non-pi session has none, and
+/// so does a pi session whose child never started.
+pub async fn delete_pi_session_file(session_id: &str) -> Result<()> {
+    let path = pi_session_file(session_id).await?;
+
+    match fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("could not delete {}", path.display())),
+    }
+}
+
 /// Reads and parses `index.json`. Missing or empty file reads as no sessions,
 /// not an error.
 pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {

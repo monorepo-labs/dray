@@ -1111,6 +1111,15 @@ impl SessionManager {
             eprintln!("could not delete attachments for {session_id}: {e}");
         }
 
+        // pi keeps its own transcript beside Dray's, because the *file* is its
+        // resume handle. Left behind it is a whole conversation on disk that
+        // nothing can ever reach again, the index entry naming it having just
+        // gone. Best-effort and unconditional: a non-pi session has no such
+        // file, and a missing one reads as done.
+        if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
+            eprintln!("could not delete pi's session file for {session_id}: {e}");
+        }
+
         delete_session(session_id).await
     }
 

@@ -84,3 +84,17 @@ Picking either disables the mode control and says why.
 Ports live in `apps/desktop/src/App.css`, each value commented with the name it
 carries upstream (`surface0`, `bg0_h`) so a port can be checked against its
 source rather than taken on trust.
+
+## Marks
+
+The agent picker draws each harness's own mark, redrawn on `currentColor` so it
+sits in a row of muted chrome rather than shouting over it
+(`apps/desktop/src/components/AgentIcon.tsx`).
+
+| Mark | Licence |
+| ---- | ------- |
+| [pi](https://pi.dev) | MIT, © Earendil Inc. & Contributors |
+
+Claude's and OpenAI's are trademarks of their owners, used to name the agent a
+session runs on and nothing else. pi's is under a licence that asks for
+attribution, which is why it is the only row here.

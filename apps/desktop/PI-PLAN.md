@@ -167,8 +167,9 @@ because the index has to say what actually happened.
 
 **Slice 4 — not started.**
 
-Smaller things known missing, none of them blocking: the pi session file is not
-deleted with its session, and pi's mark has no credit in the root README.
+Both smaller things are done: a deleted session takes pi's own transcript with
+it, and the root README credits pi's mark, which its icon's doc comment had
+been promising it did.
 
 **Two rules that are only remembered, and both fail silently.** Never kill a pi
 — every teardown goes through `pi::shutdown`, and a fourth path reaching for
