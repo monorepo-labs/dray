@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, segmentWork } from "@/lib/transcript";
+import { buildTranscript, isToolGroup, segmentWork, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -49,6 +49,24 @@ function completed(seq: number, finalText: string | null = null): AgentEvent {
     type: "turn_completed",
     status: "success",
     stopReason: null,
+    finalText,
+    usage: null,
+    durationMs: null,
+    head: null,
+  } as AgentEventPayload);
+}
+
+/// A turn that ended badly. `stopReason` is what tells a real failure from the
+/// reader's own Stop, which closes as an error too and draws no row for it.
+function failed(
+  seq: number,
+  finalText: string | null,
+  stopReason: string | null = null,
+): AgentEvent {
+  return event(seq, {
+    type: "turn_completed",
+    status: "error",
+    stopReason,
     finalText,
     usage: null,
     durationMs: null,
@@ -191,6 +209,91 @@ describe("a turn that closed without finalText", () => {
     );
 
     expect(turns[0].finalText).toBeNull();
+  });
+});
+
+describe("a failed turn whose sentence arrived twice", () => {
+  const OAUTH = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+  function textRows(turn: Turn) {
+    return turn.work.filter(
+      (item) => !isToolGroup(item) && item.payload.type === "assistant_text",
+    );
+  }
+
+  /// The harness sends its failure sentence as an ordinary message *and* on
+  /// `finalText`, so an expired login drew the same line in white and again in
+  /// red. The red row wins, so the block is dropped from the turn.
+  it("drops the trailing block the red row repeats", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, OAUTH), failed(2, OAUTH)],
+      false,
+    );
+
+    expect(textRows(turns[0])).toHaveLength(0);
+    expect(turns[0].finalText).toBeNull();
+    expect(turns[0].messages).toBe(0);
+    expect(turns[0].rows).toBe(0);
+  });
+
+  /// Dropping the block must not drop the sentence: the closing event still
+  /// carries it, which is what the red row draws from.
+  it("leaves the sentence on the closing event", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, OAUTH), failed(2, OAUTH)],
+      false,
+    );
+
+    const payload = turns[0].completed?.payload;
+    expect(payload?.type === "turn_completed" && payload.finalText).toBe(OAUTH);
+  });
+
+  /// The match is on the whole block, never a substring — an agent narrating an
+  /// error it went on to recover from keeps its words even when the turn later
+  /// fails with that same wording inside them.
+  it("keeps a message that merely contains the sentence", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, `I tried, but: ${OAUTH}. Retrying.`), failed(2, OAUTH)],
+      false,
+    );
+
+    expect(textRows(turns[0])).toHaveLength(1);
+  });
+
+  /// Only the turn's *last* rendered row can be the echo. A message before the
+  /// agent went back to work is its own statement, whatever the turn failed
+  /// with afterwards.
+  it("keeps a matching message that is not the trailing row", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, OAUTH), callStarted(2, "c1"), failed(3, OAUTH)],
+      false,
+    );
+
+    expect(textRows(turns[0])).toHaveLength(1);
+  });
+
+  /// A user's own Stop closes the turn as an error and deliberately draws no
+  /// red row, so there is nothing to be duplicated by — dropping the block
+  /// there would take the agent's last words off screen entirely.
+  it("keeps the block when the abort draws no row", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, OAUTH), failed(2, OAUTH, "aborted_streaming")],
+      false,
+    );
+
+    expect(textRows(turns[0])).toHaveLength(1);
+  });
+
+  /// A successful turn's `finalText` is the ordinary duplicate the collapsed
+  /// view already handles by standing in for the message, not by dropping it.
+  it("leaves a successful turn's own duplicate alone", () => {
+    const { turns } = buildTranscript(
+      [prompt(0, "go", false), text(1, "all done"), completed(2, "all done")],
+      false,
+    );
+
+    expect(textRows(turns[0])).toHaveLength(1);
+    expect(turns[0].finalText).toBe("all done");
   });
 });
 

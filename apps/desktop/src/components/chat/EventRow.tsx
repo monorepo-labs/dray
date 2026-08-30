@@ -6,6 +6,7 @@ import ToolCall from "@/components/chat/ToolCall";
 import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import { compactTokens, resetTime } from "@/lib/format";
+import { drawsFailure } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, FileEdit, ToolResult } from "@/types/events";
 
@@ -128,11 +129,14 @@ export default function EventRow({
       // Only a failure earns a line. Cost and token counts are accounting, not
       // conversation, and belong in a session-level surface rather than after
       // every message.
-      if (payload.status !== "error") return null;
-      // A user abort ends the turn as an error on the wire (`aborted_streaming`
-      // mid-response, `aborted_tools` mid-call), but the user did it on
-      // purpose — reporting their own stop back as a failure is noise.
-      if (payload.stopReason?.startsWith("aborted")) return null;
+      //
+      // `drawsFailure` also covers the user's own abort, which ends the turn as
+      // an error on the wire (`aborted_streaming` mid-response, `aborted_tools`
+      // mid-call) but was done on purpose — reporting a reader's own stop back
+      // as a failure is noise. It lives in the builder because the builder drops
+      // the text block this row repeats, and it may only do that where this row
+      // actually draws.
+      if (!drawsFailure(payload)) return null;
       // `finalText` is the harness's own sentence about what went wrong, and it
       // is the only thing here worth reading: "You've hit your session limit ·
       // resets 9:05pm", "Not logged in · Please run /login", "API Error: 529
