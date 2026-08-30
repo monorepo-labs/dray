@@ -380,6 +380,41 @@ pub fn parse_line(line: &str) -> Result<PiEvent, serde_json::Error> {
     serde_json::from_str(line)
 }
 
+/// What a line this build could not use called itself, for the failure log.
+///
+/// `#[serde(other)]` needs a unit variant, so [`PiEvent::Unknown`] cannot carry
+/// the type it swallowed and every gap was filed under one word — which made
+/// the triage command in `CLAUDE.md` (`jq … | sort | uniq -c`) count them all
+/// as one thing. The raw line was always recorded beside it; this is the part
+/// that has to be readable without opening the file.
+///
+/// The `id` half is the more urgent of the two. Every line pi sends that
+/// *expects an answer* carries one, and an unanswered request blocks the turn
+/// with a complete transcript on screen and nothing saying why — so an unknown
+/// line with an id is not a missing row, it is a session about to hang. Named
+/// as such, because the alternative is answering a request whose reply shape
+/// this build is guessing at.
+pub fn describe_line(line: &str) -> String {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(default)]
+        r#type: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+    }
+
+    let Ok(head) = serde_json::from_str::<Head>(line) else {
+        return "unmodelled line, and not an object".to_string();
+    };
+
+    let named = head.r#type.unwrap_or_else(|| "no type field".to_string());
+
+    match head.id {
+        Some(_) => format!("unmodelled request `{named}` — the turn may be blocked behind it"),
+        None => format!("unmodelled type `{named}`"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,6 +523,29 @@ mod tests {
             Some("Allow probe_tool?"),
             "a blocking request names what it is asking, which is what a card draws"
         );
+    }
+
+    /// A gap names itself in the log, and says when it is the urgent kind.
+    ///
+    /// Both halves earn their place. Every gap used to be filed under one word,
+    /// so the triage command in `CLAUDE.md` counted them as one thing. And an
+    /// unknown line carrying an `id` is not a missing row — pi is waiting on an
+    /// answer this build cannot compose, so the turn is blocked with a complete
+    /// transcript on screen and nothing saying why.
+    #[test]
+    fn an_unmodelled_line_names_itself_and_says_if_it_blocks() {
+        let plain = describe_line(r#"{"type":"weather_changed","sunny":true}"#);
+        assert!(plain.contains("weather_changed"), "{plain}");
+        assert!(!plain.contains("blocked"), "nothing is waiting on it: {plain}");
+
+        let request = describe_line(r#"{"type":"consent_request","id":"abc"}"#);
+        assert!(request.contains("consent_request"), "{request}");
+        assert!(request.contains("blocked"), "{request}");
+
+        // Both still have to say *something*: this runs on the path that files
+        // the failure, so a panic here would take the read loop with it.
+        assert!(!describe_line("{}").is_empty());
+        assert!(!describe_line("not json at all").is_empty());
     }
 
     /// Every line of every capture parses, and none of them lands in `Unknown`.

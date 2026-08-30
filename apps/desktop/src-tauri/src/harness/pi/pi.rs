@@ -404,7 +404,7 @@ async fn read_stdout(
         // are — it is a coverage gap, and the catch-all only stops it costing
         // the line.
         if matches!(event, parser::PiEvent::Unknown) {
-            record_failure(&session_id, "unknown_line", "unmodelled type", &line).await;
+            record_failure(&session_id, "unknown_line", &parser::describe_line(&line), &line).await;
             continue;
         }
 

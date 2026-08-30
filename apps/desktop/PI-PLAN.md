@@ -195,12 +195,20 @@ Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had
 been promising it did.
 
-**Two rules that are only remembered, and both fail silently.** Never kill a pi
-— every teardown goes through `pi::shutdown`, and a fourth path reaching for
-`child.kill()` regresses with no test firing (see *A pi must be asked to leave*
-in §3). And an unmodelled inbound request hangs the session forever:
-`PiEvent::Unknown` is a unit variant, so a request type pi adds later loses its
-id and cannot be refused, where `extension_ui_request` is answered.
+**Both rules that were only remembered now have something behind them.** Never
+kill a pi is read off the source: a test counts `child.kill()` in `pi.rs` and
+fails on a second one, so a fourth teardown path regresses loudly instead of
+leaking the auth lock onto the next spawn (see *A pi must be asked to leave* in
+§3).
+
+The other is bounded rather than fixed, and the difference is worth stating. An
+unmodelled inbound request still hangs the session — `#[serde(other)]` needs a
+unit variant, so `PiEvent::Unknown` cannot carry the id an answer would have to
+name. What changed is that it no longer hangs *silently*: `describe_line` files
+the type by name and says outright that the turn may be blocked when the line
+carries an `id`. Answering it automatically was considered and refused — the
+reply shape would be a guess, and a wrongly shaped one is dropped in silence,
+which is the same hang with a wrong fix in front of it.
 
 ---
 
