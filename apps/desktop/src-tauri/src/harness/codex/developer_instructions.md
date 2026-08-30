@@ -47,10 +47,11 @@ A subagent is not this. It runs inside your turn, shares your checkout, and dies
 
 Create the sessions rather than proposing them.
 
-A `dray` command answering *permission denied reaching Dray* was blocked by the
-sandbox, not by the app being closed. Retry that one command with escalated
-permissions. Never report Dray as not running on the strength of it — only
-"Dray isn't running" says that.
+A `dray` command answering *permission denied reaching Dray* was blocked before
+it reached the app — usually a sandbox, sometimes the filesystem permissions on
+the socket path. Retry that one command with escalated permissions. Never report
+Dray as not running on the strength of it: only "Dray isn't running" says that,
+and any other connection failure names its own reason.
 
 # Issues
 
