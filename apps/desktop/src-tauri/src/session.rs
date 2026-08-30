@@ -804,22 +804,42 @@ impl SessionManager {
         // carries out the CLI's, after which the session resumes like any other.
         let fork_from = indexed.as_ref().and_then(|i| i.fork_from.clone());
 
-        // A fork into a *new* worktree is the one resume whose tree does not
-        // exist yet, so it needs the creation treatment: `-w` to make the tree,
-        // the project root to spawn in because a missing directory cannot be
-        // `chdir`ed into, and the fork point as a baseline because there is no
-        // tree to snapshot. Every other resume runs in a directory already there.
-        let pending_worktree = fork_from
-            .as_ref()
-            .and(indexed.as_ref())
-            .and_then(|i| i.worktree_name.clone());
+        // A fork into a *new* worktree is the one resume whose directory does
+        // not exist yet, and a missing directory cannot be `chdir`ed into. Read
+        // off the directory rather than off `fork_from`, because only one of
+        // the two forks leaves an instruction behind: pi's is the copied
+        // session file and carries none, so a fork keyed on `fork_from` was
+        // spawned straight into a tree nobody had made.
+        let unmade_worktree = match &indexed {
+            Some(item) if item.worktree_name.is_some() => {
+                (!tokio::fs::try_exists(&item.cwd).await.unwrap_or(true)).then(|| item.clone())
+            }
+            _ => None,
+        };
 
-        let (spawn_cwd, baseline) = match (&pending_worktree, &indexed) {
-            (Some(_), Some(item)) => (
-                item.project_path.clone(),
-                git::base_ref_tree(&item.project_path).await,
-            ),
-            _ => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
+        // Two ways to make it, and which one is the harness's own answer.
+        // Claude Code takes `-w` and creates the tree itself after launch, so
+        // the child spawns at the project root and the baseline can only be the
+        // fork point it is about to resolve. Every other harness needs the tree
+        // to exist first — so Dray makes it, and then the ordinary snapshot
+        // works, which is the more exact of the two baselines.
+        let mut pending_worktree = None;
+        let (spawn_cwd, baseline) = match unmade_worktree {
+            Some(item) if harness.caps().creates_own_worktree => {
+                pending_worktree = item.worktree_name.clone();
+                let baseline = git::base_ref_tree(&item.project_path).await;
+                (item.project_path.clone(), baseline)
+            }
+            Some(item) => {
+                let name = item.worktree_name.clone().expect("checked just above");
+                let base = git::default_base(&item.project_path)
+                    .await
+                    .unwrap_or_else(|| "HEAD".into());
+
+                git::create_worktree(&item.project_path, &name, &base).await?;
+                (session_cwd.clone(), git::snapshot_tree(&session_cwd).await)
+            }
+            None => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
         };
 
         let mut session = Session::init(
@@ -940,6 +960,14 @@ impl SessionManager {
         if events.is_empty() {
             bail!("this session has no conversation to fork yet");
         }
+
+        // For pi this *is* the fork: its resume handle is the file, so the copy
+        // carries the conversation and the first send is an ordinary spawn.
+        // Propagated rather than logged, unlike the delete path's — a fork
+        // whose file failed to copy would open as an empty session claiming to
+        // hold its parent's conversation, and the entry has not been written
+        // yet, so failing here leaves nothing behind.
+        crate::store::copy_pi_session_file(session_id, fork_id).await?;
 
         let item = parent.fork(fork_id, worktree_name.as_deref());
         append_session_index_item(item.clone()).await?;
@@ -1287,8 +1315,14 @@ impl Session {
                 if worktree_name.is_some() {
                     bail!("pi cannot create a worktree — it has to be made first");
                 }
+                // pi forks by copy, so nothing is left for a spawn to carry
+                // out and `SessionIndexItem::fork` writes no instruction. One
+                // arriving here means a caller built the entry by hand and
+                // expects a CLI-side fork pi has no way to perform — and pi's
+                // own `fork` cannot serve it, since `--fork` and `--session`
+                // are refused together.
                 if fork_from.is_some() {
-                    bail!("pi sessions cannot be forked yet");
+                    bail!("a pi fork is the copied session file — there is nothing to resume from");
                 }
 
                 // `None` where pi picked for itself. The spawn omits `--model`

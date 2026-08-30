@@ -375,6 +375,19 @@ pub struct Capabilities {
     pub applies_permission_in_place: bool,
     /// Whether a session can be forked.
     pub forkable: bool,
+    /// Whether a fork has a second half only the CLI can perform.
+    ///
+    /// Claude Code's does. What Dray copies is its *own* log; the conversation
+    /// the CLI holds is forked lazily on the first send, with
+    /// `--resume <parent> --fork-session`, so the fork's index entry carries
+    /// `fork_from` as an instruction until that happens.
+    ///
+    /// pi's does not, and that makes pi's fork the simpler of the two. Its
+    /// resume handle is a *file*, so copying that file is the entire fork — the
+    /// first send is an ordinary spawn on a session that already holds the
+    /// conversation. Setting `fork_from` there would be an instruction with
+    /// nothing to carry it out.
+    pub fork_needs_cli: bool,
 }
 
 impl Harness {
@@ -392,6 +405,7 @@ impl Harness {
                 applies_effort_in_place: false,
                 applies_permission_in_place: true,
                 forkable: true,
+                fork_needs_cli: true,
             },
             // `turn/start` carries model, effort and approval policy on every
             // turn, so this is not for want of a per-turn override. A stance is
@@ -408,20 +422,26 @@ impl Harness {
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
                 forkable: false,
+                fork_needs_cli: false,
             },
-            // Two of these are permanent rather than pending: pi has no
-            // worktree flag, and its own `fork` cannot serve Dray's — `clone`
-            // hijacks the running process, and `--fork` and `--session` are
-            // refused together, so pi names the file rather than taking one.
-            // The rest are settings pi takes at spawn and nowhere else, so a
-            // change to any of them is a respawn.
+            // pi has no worktree flag, and the three settings are ones it takes
+            // at spawn and nowhere else, so changing any of them is a respawn.
+            //
+            // Forkable, and by the cheapest route of the three. pi's own `fork`
+            // is still the wrong tool — `clone` hijacks the running process,
+            // and `--fork` and `--session` are refused together, so pi would
+            // name the file rather than take the one Dray chose. It is not
+            // needed: pi's resume handle *is* a file, so copying it is the whole
+            // fork. Verified live — a pi spawned on a copy reports the new path,
+            // counts the parent's messages, and quotes its first prompt back.
             Harness::Pi => Capabilities {
                 drivable: true,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
-                forkable: false,
+                forkable: true,
+                fork_needs_cli: false,
             },
             // A session some other build wrote and this one cannot run. `false`
             // throughout, and `drivable` is what this variant exists for: the
@@ -435,6 +455,7 @@ impl Harness {
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
                 forkable: false,
+                fork_needs_cli: false,
             },
         }
     }

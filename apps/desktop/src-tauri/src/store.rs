@@ -232,6 +232,33 @@ pub async fn pi_session_file(session_id: &str) -> Result<PathBuf> {
         .join(format!("{session_id}.jsonl")))
 }
 
+/// Copies pi's transcript onto a fork's own path, which for pi *is* the fork.
+///
+/// pi's resume handle is the file, so a fork spawned on this copy opens holding
+/// the whole conversation and needs no CLI-side step at all — verified live: pi
+/// on a copied file reports the new path, counts the parent's messages and
+/// quotes its first prompt back.
+///
+/// The copy keeps pi's own session id inside it, so two files name one pi
+/// session. That collides with nothing: pi's id is not an address anything here
+/// uses — Dray's own id is — and pi reports the *file* as what it resumed.
+///
+/// A missing source is success. Every non-pi fork has none, and so does a pi
+/// session that was indexed and never spawned.
+pub async fn copy_pi_session_file(from: &str, to: &str) -> Result<()> {
+    let source = pi_session_file(from).await?;
+    if !fs::try_exists(&source).await.unwrap_or(false) {
+        return Ok(());
+    }
+
+    let destination = pi_session_file(to).await?;
+    fs::copy(&source, &destination)
+        .await
+        .with_context(|| format!("could not copy {}", source.display()))?;
+
+    Ok(())
+}
+
 /// Removes pi's transcript for a session being deleted.
 ///
 /// A second file per session, so a second thing to delete — without this a
@@ -408,7 +435,17 @@ impl SessionIndexItem {
             // against the same work. Tagging one afterwards leaves the other
             // alone — the copy is a session, not a view of its source.
             issues: self.issues.clone(),
-            fork_from: Some(self.session_id.clone()),
+            // An instruction, and only for a harness whose fork has a second
+            // half. Claude Code's does — the CLI's own conversation is forked
+            // lazily on the first send — where pi's resume handle is the file
+            // this fork already copied, so the first send is an ordinary spawn.
+            // Set there, it would be an instruction with nothing to carry it
+            // out, and `send_msg` refuses one it cannot honour.
+            fork_from: self
+                .harness
+                .caps()
+                .fork_needs_cli
+                .then(|| self.session_id.clone()),
             // Inherited, so the copy sits exactly where the original does: the
             // sidebar draws it beside its source under the same parent, not
             // under its source, and the orchestration depth cap counts it at the

@@ -162,8 +162,20 @@ permission extension loaded. `manual` and `auto` are not offered, and a session
 arriving on one (a spawned session takes its parent's) is recorded as bypass,
 because the index has to say what actually happened.
 
-**Slice 3 — half.** Worktrees and orchestration work. Fork is refused outright,
-`--from` is untested against pi, and steering is not wired.
+**Slice 3 — fork is done; two things left.** Worktrees and orchestration work,
+and pi is forkable — by copy, which is the cheapest of the three routes and is
+verified live: a pi spawned on a copied session file reports the new path,
+counts the parent's messages and quotes its first prompt back. `fork_needs_cli`
+on the capability table is what tells the two mechanisms apart, and it is what
+stopped `SessionIndexItem::fork` writing pi an instruction nothing would carry
+out.
+
+One bug fell out of that and was worth the trip: **a fork into a new worktree
+was keyed on `fork_from`**, so a fork with no instruction to leave — pi's — was
+spawned straight into a directory nobody had made. It now reads the directory
+itself, and makes the tree where the harness cannot.
+
+Left: `--from` is untested against pi, and steering is not wired.
 
 **Slice 4 — not started.**
 
@@ -479,7 +491,11 @@ measured:
   cannot land at a path Dray chose.
 
 So **Dray forks by copying the session file**, which is what it already does
-with its own log. `SessionManager::fork` copies `~/.dray/sessions/<parent>.jsonl`,
+with its own log. Verified: pi spawned on a copy reports the new path as its
+`sessionFile`, counts the parent's messages, and quotes the parent's first
+prompt back. The copy keeps pi's own session id inside it, so two files name one
+pi session — which collides with nothing, since that id is not an address
+anything in Dray uses. `SessionManager::fork` copies `~/.dray/sessions/<parent>.jsonl`,
 the attachments directory, and now `~/.dray/pi-sessions/<parent>.jsonl` to the
 fork's own path; `fork_from` on the index entry is not needed for pi at all,
 because there is no CLI-side fork to perform lazily. First send is an ordinary
