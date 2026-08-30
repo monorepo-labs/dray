@@ -319,8 +319,12 @@ export default function Chat({
   const shownTurns = mountedTurns(turns, mounted);
   const backfilling = mounted > 0;
 
-  // The scroller's height before a step lands, for the compensation below.
-  const heightBeforeStep = useRef<number | null>(null);
+  // Where the oldest mounted turn sat before a step lands, for the
+  // compensation below. A node, not the scroller's height: anything else
+  // growing between capture and commit — a delta, a highlight landing — sits
+  // *below* this node and cannot move it, where it would have counted as
+  // backfill in a height diff.
+  const anchorBeforeStep = useRef<{ key: string; top: number } | null>(null);
   // A rail jump aimed at a turn not mounted yet, honoured once it is.
   const pendingJump = useRef<string | null>(null);
 
@@ -331,7 +335,11 @@ export default function Chat({
     if (!backfilling || !session) return;
     const sessionId = session.sessionId;
     const timer = setTimeout(() => {
-      heightBeforeStep.current = scrollRef.current?.scrollHeight ?? null;
+      const oldest = contentRef.current?.querySelector<HTMLElement>("[data-turn]");
+      anchorBeforeStep.current =
+        oldest?.dataset.turn && !followRef.current
+          ? { key: oldest.dataset.turn, top: oldest.getBoundingClientRect().top }
+          : null;
       setMount({ sessionId, start: grow(mounted) });
     }, 0);
     return () => clearTimeout(timer);
@@ -339,14 +347,21 @@ export default function Chat({
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
-  // bottom is re-taken; unpinned, the view is moved by exactly what grew.
+  // bottom is re-taken; unpinned, the view is moved by exactly what the anchor
+  // moved, so the turn the reader was in stays where it was.
   useLayoutEffect(() => {
-    const before = heightBeforeStep.current;
-    heightBeforeStep.current = null;
+    const anchor = anchorBeforeStep.current;
+    anchorBeforeStep.current = null;
     const el = scrollRef.current;
     if (!el) return;
-    if (followRef.current) el.scrollTop = el.scrollHeight;
-    else if (before !== null) el.scrollTop += el.scrollHeight - before;
+    if (followRef.current) {
+      el.scrollTop = el.scrollHeight;
+    } else if (anchor) {
+      const node = contentRef.current?.querySelector<HTMLElement>(
+        `[data-turn="${anchor.key}"]`,
+      );
+      if (node) el.scrollTop += node.getBoundingClientRect().top - anchor.top;
+    }
 
     const key = pendingJump.current;
     if (key && contentRef.current?.querySelector(`[data-turn="${key}"]`)) {
