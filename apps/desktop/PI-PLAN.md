@@ -240,8 +240,14 @@ string reached the model as punctuation it had to guess the meaning of.
 `expands_at_mentions` on the capability table decides, so Codex was fixed by the
 same line.
 
-Still not started there: the composer-side tray gate on `accepts_images`, and
-fork at a chosen message.
+**The tray says when a model takes no images, and says rather than stops.** Some
+pi models report `input: ["text"]` and mean it. The image is still sent, because
+the harness's own refusal names what was wrong where a guess made here could
+not — and Dray's copy of what a model accepts can be stale, or absent where pi
+picked the model itself. Absence reads as capable, so a warning is never drawn
+on a guess.
+
+Still not started there: fork at a chosen message.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had

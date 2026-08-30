@@ -505,6 +505,11 @@ function App() {
   // expression so the two can't answer for different trees.
   const composerCwd = selectedSession?.cwd ?? projectPath;
   const slashCommands = useSlashCommands(composerCwd, harness);
+  // `true` wherever Dray has no answer: the list may not have landed, and pi
+  // picks its own model when none is named. A warning drawn on a guess is worse
+  // than none, so absence reads as capable.
+  const modelTakesImages =
+    models.find((m) => m.id === modelId)?.acceptsImages ?? true;
 
   const { baseline, head } = useMemo(
     () => changeRange(selectedSession?.events ?? []),
@@ -1045,6 +1050,7 @@ function App() {
           sessionId={selectedSessionId}
           isNewTask={!selectedSession}
           issuesConnected={issuesConnected}
+          modelTakesImages={modelTakesImages}
           error={error}
           onDismissError={() => setError(null)}
           archived={selectedSession?.archived ?? false}

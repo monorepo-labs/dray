@@ -70,6 +70,12 @@ type ChatInputProps = {
   /// failed, this reports that nothing can be attempted yet. Only the second
   /// kind has a cure to offer, which is why it is a node and not a string.
   notice?: ReactNode;
+  /// Whether the picked model can be handed an image at all.
+  ///
+  /// `true` where nothing says otherwise, which covers the model list not
+  /// having landed and pi picking a model for itself — Dray has no answer in
+  /// either case, and a warning drawn on a guess is worse than none.
+  modelTakesImages?: boolean;
   /// The "hand it back" actions, clipped to a sliver above the card and opening
   /// on hover. A node for the toolbar's reason, and placed here rather than by
   /// the shell so it sits inside the same `max-w-3xl` column and against the
@@ -157,6 +163,7 @@ export default function ChatInput({
   queuedCount = 0,
   toolbar,
   notice,
+  modelTakesImages = true,
   handoff,
   busy = false,
   sessionId = null,
@@ -700,6 +707,7 @@ export default function ChatInput({
                 <AttachmentTray
                   attachments={attachments}
                   onRemove={(path) => removeAttachment(sessionId, path)}
+                  modelTakesImages={modelTakesImages}
                 />
               </div>
             )}
