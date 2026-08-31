@@ -257,8 +257,6 @@ export default function RightPanel({
   heading,
   children,
 }: RightPanelProps) {
-  // Read once rather than per render of the row: the count decides whether the
-  // keycaps are affordable as well as what gets drawn.
   const tabs = tabOrder({ pr, docs, issue });
 
   return (
@@ -282,23 +280,41 @@ export default function RightPanel({
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : (
-          // `min-w-0` and its own scroll, so a row that outgrows the pane gives
-          // way here rather than pushing Open and Refresh past the right edge.
-          // The controls are what a reader reaches for by position; a tab they
-          // can still scroll to is the cheaper thing to lose.
-          <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
-            {tabs.map((value) => (
-              <TabButton
-                key={value}
-                active={tab === value}
-                onClick={() => onTabChange(value)}
-              >
-                {LABELS[value]}
-                {!!counts?.[value] && (
-                  <span className="ml-1 text-muted-foreground">{counts[value]}</span>
-                )}
-              </TabButton>
-            ))}
+          // A wrapping row clipped to one line's height, which is what sheds the
+          // keycaps exactly when they stop fitting and never a tab sooner.
+          //
+          // Flex breaks a line *between* items, never through one, so the caps
+          // are dropped whole — where clipping them with `overflow-hidden`
+          // alone leaves half a cap on screen, which reads as broken rather
+          // than as a hint that stood down. `h-full` on this row and on the
+          // caps beside it is what fixes the line's height without naming a
+          // number: the caps define the line, the line is the container, and
+          // anything sent to a second line is outside it.
+          //
+          // `content-start` pins that first line to the top, or a two-line
+          // layout would centre both and clip the tabs' own tops. Measuring in
+          // JS would answer the same question and is not worth a resize
+          // observer on a row this small.
+          <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
+            {/* The tabs are one item on that line, with their own scroll: a row
+                that outgrows the pane even after the caps have gone gives way
+                here rather than pushing Open and Refresh past the right edge.
+                The controls are what a reader reaches for by position; a tab
+                they can still scroll to is the cheaper thing to lose. */}
+            <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+              {tabs.map((value) => (
+                <TabButton
+                  key={value}
+                  active={tab === value}
+                  onClick={() => onTabChange(value)}
+                >
+                  {LABELS[value]}
+                  {!!counts?.[value] && (
+                    <span className="ml-1 text-muted-foreground">{counts[value]}</span>
+                  )}
+                </TabButton>
+              ))}
+            </div>
 
             {/* Beside the tabs rather than at the far end, and with no label:
                 next to the thing it acts on, the caps read as belonging to the
@@ -307,12 +323,12 @@ export default function RightPanel({
                 because a chord for a row of two or three tabs is one nobody
                 goes looking for.
 
-                Which is also why they go once the row is longer than that. The
-                argument for drawing them was a short row nobody would think to
-                explore, and at four tabs it stops holding while the caps go on
-                costing the ~70px that pushed Open and Refresh off the edge. The
-                hint is the only thing in this row that does nothing, so it is
-                the first thing to give up when the row cannot afford it.
+                Last in the row and the only thing in it allowed to wrap, so a
+                pane too full for both loses these ~70px rather than its Open
+                and Refresh controls. The hint is the one element here that does
+                nothing, which makes it the one to give up — but only when the
+                row genuinely cannot afford it, not at a tab count guessed in
+                advance.
 
                 Three caps, not four: `[ ]` is one key with two ends rather than
                 two alternatives, so splitting it reads as a chord wanting
@@ -327,13 +343,11 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            {tabs.length <= 3 && (
-              <KbdGroup className="ml-1.5 shrink-0 dark:opacity-50">
-                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                <Kbd>⇧</Kbd>
-                <Kbd>[ ]</Kbd>
-              </KbdGroup>
-            )}
+            <KbdGroup className="ml-1.5 h-full shrink-0 dark:opacity-50">
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>⇧</Kbd>
+              <Kbd>[ ]</Kbd>
+            </KbdGroup>
           </div>
         )}
 
