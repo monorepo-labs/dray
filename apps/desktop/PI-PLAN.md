@@ -703,6 +703,25 @@ pi has the primitive Dray has wanted: `fork {entryId}` branches at a chosen
 user message, and `get_fork_messages` lists the points. Claude Code cannot do
 this and Codex cannot do this.
 
+**Captured now, not assumed, and it is worse for Dray than the two reasons
+below.** Driving `fork {entryId}` against a real four-turn session:
+
+- It **rebinds the running process** (`rebindSession()` on the RPC side), which
+  is the hijack this section assumed and had not seen.
+- It **writes a new file pi names itself**, in the process's cwd, as
+  `<timestamp>_<uuid>.jsonl`. The file `--session` named is left **byte for byte
+  unchanged** — 11 records before and after — so nothing branches *within* a
+  session file. A session file is a linear chain, not a tree to pick a leaf from.
+- The new file carries **only what follows the fork point**. Resumed, it reports
+  `messageCount: 2` and knows the word taught on the branch and nothing from its
+  parent. So pi's fork does not mean "continue this conversation from an earlier
+  message"; it means "start a session there and keep only what comes after".
+
+That last one settles the design for a fork-at-a-chosen-message picker whenever
+it is wanted: it is **Dray-side, and pi's `fork` is not part of it**. Copy the
+session file and truncate after the chosen entry, which is the same move the
+whole-session fork already makes with the truncation point at the end.
+
 It is still not usable for Dray's fork, for two reasons that were both
 measured:
 
@@ -714,6 +733,13 @@ measured:
 - **pi names the new file.** `--fork` and `--session` are refused together, in
   as many words: `--fork cannot be combined with --session`. So a pi-side fork
   cannot land at a path Dray chose.
+
+**Verified live, end to end at the file level.** A parent taught a codeword; a
+copy of its session file, resumed, answered that codeword without being told — so
+the conversation carries. The fork then learned a second word, and the parent,
+reopened afterwards, still knew its own and answered *no* to the fork's. Two
+independent continuations of one conversation, which is the whole of what fork
+promises.
 
 So **Dray forks by copying the session file**, which is what it already does
 with its own log. Verified: pi spawned on a copy reports the new path as its
@@ -1899,7 +1925,10 @@ it.
 
 ### Later, and not promised
 
-Cost reporting. Reading `get_entries` for a fork-at-message picker. Anything to
+Cost reporting. A fork-at-a-chosen-message picker, which `get_fork_messages`
+already lists the points for — but built by copying the session file and
+truncating after the chosen entry, **not** by calling pi's `fork`, for the
+reasons §5 now records. Anything to
 do with running pi in a container, which is pi's own answer to the sandbox
 question and currently outside what Dray says anything about.
 
@@ -1908,7 +1937,7 @@ question and currently outside what Dray says anything about.
 | question | settled by |
 |---|---|
 | Do other providers through pi fragment tool arguments, or report usage mid-stream? xAI does neither | one capture each against Anthropic and OpenAI. Neither changes a mapping — only how much the streaming preview buys |
-| Does `fork {entryId}` hijack the running process the way `clone` does? | one capture; assumed yes, written against the pattern |
+| ~~Does `fork {entryId}` hijack the running process the way `clone` does?~~ | **Settled.** Yes — `rebindSession()`. It also writes a file pi names itself, leaves the one `--session` named untouched, and keeps only what follows the fork point. See §5 |
 | Does a tool registered by an extension reach `tool_call` under its registered name? §6's `Auto` allowlist assumes so | a capture with an extension registering a mutating tool. Wanted before slice 2 |
 | Can two `extension_ui_request`s ever be outstanding at once? The docs say preflight is sequential | a capture that leaves the first unanswered while a sibling call preflights |
 | What does an unanswered `extension_ui_request` do to the turn — block forever, or is there a floor timeout? | a capture that answers nothing and waits |
