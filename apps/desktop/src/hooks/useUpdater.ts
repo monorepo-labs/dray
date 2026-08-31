@@ -60,6 +60,12 @@ export function useUpdater() {
   // normal case in dev rather than a race worth waving at.
   const inFlight = useRef(false);
 
+  // Read at invoke time rather than closed over: a check's `finally` may fire
+  // under a later effect generation, and it needs the channel picked *now* to
+  // know whether the one it just asked about has gone stale.
+  const channelRef = useRef(channel);
+  channelRef.current = channel;
+
   useEffect(() => {
     const unlisten = listen<UpdateStatus>("update_status", (event) => {
       setStatus(event.payload);
@@ -71,8 +77,9 @@ export function useUpdater() {
     const check = (byHand = false) => {
       if (readyRef.current || inFlight.current) return;
       inFlight.current = true;
+      const used = channelRef.current;
       if (byHand) setManual("checking");
-      void invoke("check_update", { channel })
+      void invoke("check_update", { channel: used })
         .then(() => {
           if (!byHand) return;
           // The command emits nothing and still resolves when there is nothing
@@ -88,6 +95,12 @@ export function useUpdater() {
         })
         .finally(() => {
           inFlight.current = false;
+          // A channel flipped mid-check was swallowed by the guard above —
+          // the re-armed effect's own check() found this one still out and
+          // returned — so the answer that just settled is for the wrong
+          // manifest. Ask again for the one picked now; reading the ref makes
+          // this correct even though `check` belongs to an older effect.
+          if (!readyRef.current && channelRef.current !== used) check();
         });
     };
 
@@ -121,8 +134,9 @@ export function useUpdater() {
   );
 
   // Changing the channel re-arms the effect above, so the new manifest is
-  // checked the moment the switch moves. The `ready` and `inFlight` guards
-  // still hold there: a bundle already downloaded is worth keeping whichever
-  // channel the reader lands on, and the next check is six hours away at worst.
+  // checked the moment the switch moves — or, when a check is mid-flight, the
+  // moment it settles (its `finally` re-asks for the channel picked now). The
+  // `ready` guard still holds: a bundle already downloaded is worth keeping
+  // whichever channel the reader lands on.
   return { status, manual, install, channel, setChannel };
 }

@@ -173,16 +173,26 @@ jobs:
             node -e '
               const parse = (v) => {
                 const [core, pre] = v.replace(/^v/, "").split("+")[0].split(/-(.+)/);
-                return { core: core.split(".").map(Number), pre: pre ? pre.split(".") : null };
+                return { core: core.split("."), pre: pre ? pre.split(".") : null };
+              };
+              // Digit strings compared by length then lexically, never through
+              // Number(): above 2^53 distinct identifiers compare equal there,
+              // and "equal" is a promote that can move a manifest backwards.
+              const cmpNum = (a, b) => {
+                a = a.replace(/^0+(?=\d)/, ""); b = b.replace(/^0+(?=\d)/, "");
+                return a.length !== b.length ? a.length - b.length : a < b ? -1 : a > b ? 1 : 0;
               };
               const cmpId = (a, b) => {
                 const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
-                if (na && nb) return Number(a) - Number(b);
+                if (na && nb) return cmpNum(a, b);
                 if (na !== nb) return na ? -1 : 1;
                 return a < b ? -1 : a > b ? 1 : 0;
               };
               const cmp = (x, y) => {
-                for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] - y.core[i];
+                for (let i = 0; i < 3; i++) {
+                  const c = cmpNum(x.core[i] ?? "0", y.core[i] ?? "0");
+                  if (c) return c;
+                }
                 if (!x.pre || !y.pre) return (x.pre ? -1 : 0) - (y.pre ? -1 : 0);
                 for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
                   if (x.pre[i] === undefined) return -1;
