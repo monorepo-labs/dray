@@ -9,6 +9,7 @@
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-badge-count",
+    "core:window:allow-set-theme",
     "opener:default",
     "dialog:default"
   ]

@@ -453,16 +453,26 @@
      Same two-stop shape, so the two are recognisably one family. */
   --shadow-card: 0 1px 1px oklch(0 0 1 / 4%), 0 1px 1px oklch(0 0 0 / 6%), 0 1px 4px oklch(0 0 0 / 4%);
 
-  /* Much tighter than dark's 80%, and the reason is one this app cannot fix from
-     the CSS side: the window's material is `sidebar`, and an NSVisualEffectView
-     follows the *system* appearance, not `data-mode`. So a light palette on a Mac
-     set to Dark composites over a dark blur, and at 80% the missing fifth dulls
-     the whole page — the page stops reading as paper and starts reading as a grey
-     that no token in this block names. The two appearances agree far more often
-     than they disagree, but the disagreement is the case that has to look right.
-     Still short of 100: some of the desktop has to survive, or the window stops
-     being glass and the veils above have nothing to sit on. */
-  --vibrancy-alpha: 92%;
+  /* Below dark's 80%, and it took fixing a bug to get here. An NSVisualEffectView
+     follows the *system* appearance rather than `data-mode`, so a light palette on
+     a Mac set to Dark used to composite over a dark blur: the missing fifth dulled
+     the whole page, which stopped reading as paper and started reading as a grey
+     no token in this block names. 92% bought that back by letting almost none of
+     the desktop through — a window that had given up being glass to avoid looking
+     wrong.
+
+     [useGlass](src/hooks/useGlass.ts) now gives the material the app's own
+     appearance, so the blur is light whenever the palette is, and the number is
+     free to describe the look rather than defend against the mismatch.
+
+     Lower than dark rather than level with it, because the two ramps are not
+     asking the same thing of the same amount. What survives here is a *light*
+     blur under a near-white page, so the desktop reads as a tint on paper; the
+     same fraction under dark's near-black reads as the wallpaper itself. Light
+     needs more of it through before the window looks like glass at all. Still
+     short of 100 for the reason it always was: some of the desktop has to
+     survive, or the veils above have nothing to sit on. */
+  --vibrancy-alpha: 70%;
 }
 
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
