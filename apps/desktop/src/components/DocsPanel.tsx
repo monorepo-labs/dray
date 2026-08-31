@@ -80,7 +80,10 @@ export default function DocsPanel() {
         {active && isDirty(active) && (
           <Button
             size="sm"
-            className="shrink-0"
+            // Full strength while the write is out: the spinner beside the verb
+            // is the state, and dimming it too makes the one live thing in the
+            // row the hardest part of it to read.
+            className="shrink-0 disabled:opacity-100"
             disabled={active.body.status === "ready" && active.body.saving}
             onClick={() => saveDoc(active.path)}
           >
