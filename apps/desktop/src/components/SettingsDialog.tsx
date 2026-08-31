@@ -35,7 +35,7 @@ import {
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import type { ExternalApp, SettingsView } from "@/types/events";
+import type { ExternalApp, SettingsView, UpdateChannel } from "@/types/events";
 
 /// Where to send someone who wants to say something. Direct message rather than an
 /// issue tracker: most feedback is a sentence, and a form is more than a sentence is
@@ -53,11 +53,17 @@ export default function SettingsDialog({
   open,
   onOpenChange,
   integrations,
+  updateChannel,
+  onUpdateChannelChange,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
+  /// Owned by `useUpdater`, for the reason its own doc comment gives: a second
+  /// `useLocalStorage` here would write a value the checking effect never sees.
+  updateChannel: UpdateChannel;
+  onUpdateChannelChange: (next: UpdateChannel) => void;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
 
@@ -96,6 +102,10 @@ export default function SettingsDialog({
             about: (
               <>
                 <Section>
+                  <BetaUpdatesRow
+                    channel={updateChannel}
+                    onChange={onUpdateChannelChange}
+                  />
                   <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
                 </Section>
                 {/* The one block here with no label of its own, so it is the one
@@ -419,6 +429,81 @@ function useRovingGroup(
   };
 
   return { refs, onKeyDown };
+}
+
+/// Which manifest updates come from.
+///
+/// A button that arms a confirm, the disconnect row's shape exactly — and not a
+/// switch, which was the first draft. The change wants confirming, because it
+/// makes the app start downloading a different build on its own; a switch that
+/// must be confirmed cannot move on click, and a switch that does not move
+/// reads as broken. A button carries the ask honestly: its label names the act
+/// (Turn on / Turn off), which also says which channel is live.
+///
+/// Sits in About because that tab is where the app talks about itself: which
+/// build you are running, and what it reports back.
+///
+/// The description is one line, and deliberately not the mechanism. An earlier
+/// draft spent a second sentence on the fact that switching back is not a
+/// downgrade — true, and nobody asked: the reader wants to know what they get,
+/// not how the updater compares versions. `useUpdater`'s own comments hold
+/// that. It also stays put while the confirm is up.
+function BetaUpdatesRow({
+  channel,
+  onChange,
+}: {
+  channel: UpdateChannel;
+  onChange: (next: UpdateChannel) => void;
+}) {
+  const id = useId();
+  /// The channel the reader is about to move to, or null at rest. Resets with
+  /// the dialog, since the tab bodies are switched rather than hidden.
+  const [confirming, setConfirming] = useState<UpdateChannel | null>(null);
+
+  return (
+    <SettingRow
+      id={id}
+      label="Beta updates"
+      description="Get new versions early, before they're fully tested."
+    >
+      {confirming ? (
+        <div className="flex items-center gap-1.5">
+          {/* Takes the focus the unmounting button just dropped — not stealing,
+              since a keyboard user was on this very spot. Cancel, not the verb,
+              so Enter pressed twice out of habit changes nothing. */}
+          <Button
+            autoFocus
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirming(null)}
+          >
+            Cancel
+          </Button>
+          {/* Not the verb again — the button just pressed said that, and the
+              same word twice reads as the press not having landed. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              onChange(confirming);
+              setConfirming(null);
+            }}
+          >
+            Confirm
+          </Button>
+        </div>
+      ) : (
+        <Button
+          id={id}
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirming(channel === "beta" ? "stable" : "beta")}
+        >
+          {channel === "beta" ? "Turn off" : "Turn on"}
+        </Button>
+      )}
+    </SettingRow>
+  );
 }
 
 /// Two sentences: what it is for, and what it never touches.

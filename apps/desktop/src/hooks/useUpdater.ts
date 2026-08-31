@@ -27,12 +27,21 @@ export type ManualCheck = "idle" | "checking" | "up_to_date" | "failed";
 ///
 /// `null` is the resting state and covers every failure: a check that can't
 /// reach the manifest emits nothing, so no network is silent rather than an
-/// error the reader can do nothing about. The channel has no UI yet — it is
-/// read from storage so opting into beta is a one-line change when it does.
+/// error the reader can do nothing about.
+///
+/// The channel is held here and handed *out*, rather than read a second time by
+/// the settings row that writes it. `useLocalStorage` is per-component, so a
+/// second copy would set its own value while this one kept the old — and since
+/// `channel` is what re-arms the effect below, the change would take on the
+/// next launch and not before. The same trap `useTheme` became a module store
+/// to escape; one owner and a prop is enough for two surfaces.
 export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [manual, setManual] = useState<ManualCheck>("idle");
-  const [channel] = useLocalStorage<UpdateChannel>("ade.updateChannel", "stable");
+  const [channel, setChannel] = useLocalStorage<UpdateChannel>(
+    "ade.updateChannel",
+    "stable",
+  );
 
   // Read inside the check's own promise, which resolves long after the closure
   // that started it was made — on a run that finds something, only once the
@@ -51,6 +60,12 @@ export function useUpdater() {
   // normal case in dev rather than a race worth waving at.
   const inFlight = useRef(false);
 
+  // Read at invoke time rather than closed over: a check's `finally` may fire
+  // under a later effect generation, and it needs the channel picked *now* to
+  // know whether the one it just asked about has gone stale.
+  const channelRef = useRef(channel);
+  channelRef.current = channel;
+
   useEffect(() => {
     const unlisten = listen<UpdateStatus>("update_status", (event) => {
       setStatus(event.payload);
@@ -62,8 +77,9 @@ export function useUpdater() {
     const check = (byHand = false) => {
       if (readyRef.current || inFlight.current) return;
       inFlight.current = true;
+      const used = channelRef.current;
       if (byHand) setManual("checking");
-      void invoke("check_update", { channel })
+      void invoke("check_update", { channel: used })
         .then(() => {
           if (!byHand) return;
           // The command emits nothing and still resolves when there is nothing
@@ -79,6 +95,12 @@ export function useUpdater() {
         })
         .finally(() => {
           inFlight.current = false;
+          // A channel flipped mid-check was swallowed by the guard above —
+          // the re-armed effect's own check() found this one still out and
+          // returned — so the answer that just settled is for the wrong
+          // manifest. Ask again for the one picked now; reading the ref makes
+          // this correct even though `check` belongs to an older effect.
+          if (!readyRef.current && channelRef.current !== used) check();
         });
     };
 
@@ -111,5 +133,10 @@ export function useUpdater() {
     [],
   );
 
-  return { status, manual, install };
+  // Changing the channel re-arms the effect above, so the new manifest is
+  // checked the moment the switch moves — or, when a check is mid-flight, the
+  // moment it settles (its `finally` re-asks for the channel picked now). The
+  // `ready` guard still holds: a bundle already downloaded is worth keeping
+  // whichever channel the reader lands on.
+  return { status, manual, install, channel, setChannel };
 }
