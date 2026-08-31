@@ -7,6 +7,7 @@ import {
   readyTransitions,
   sameMark,
   mergeReadiness,
+  mergeVerdict,
   pickPrMark,
   prBadgeCount,
   readyToMerge,
@@ -182,6 +183,17 @@ describe("readyToMerge", () => {
     expect(readyToMerge(mark({ mergeStateStatus: "BLOCKED" }))).toBe(false);
     expect(readyToMerge(mark({ mergeStateStatus: "BEHIND" }))).toBe(false);
     expect(readyToMerge(mark({ mergeStateStatus: "UNSTABLE" }))).toBe(false);
+  });
+
+  // `isDraft` is a stored fact, not one GitHub recomputes, so an `UNKNOWN`
+  // window cannot unsettle it. Read as null it would hold a draft at whatever
+  // it last said — a ready PR drafted while the base moved kept its `true`, and
+  // going ready again inside the same window then announced nothing.
+  it("reads a draft as a plain no even while mergeability is unknown", () => {
+    expect(readyToMerge(mark({ isDraft: true, mergeable: "UNKNOWN" }))).toBe(false);
+    expect(readyToMerge(mark({ isDraft: true, mergeStateStatus: "UNKNOWN" }))).toBe(false);
+    // A drafted conflict still says conflict — the order above drafts holds.
+    expect(mergeVerdict(mark({ isDraft: true, mergeable: "CONFLICTING" }))).toBe("conflict");
   });
 
   // Not a no, and told apart from one so that `readyTransitions` can hold the

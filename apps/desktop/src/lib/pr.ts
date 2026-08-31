@@ -190,6 +190,15 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
 
   if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") return "conflict";
 
+  // Ahead of the unknown arm, and the difference is what kind of fact each is.
+  // `isDraft` is stored, never recomputed, so an `UNKNOWN` window cannot make
+  // it less true — where letting unknown mask it held a draft at whatever it
+  // last read, and a draft that went ready inside one window then said nothing.
+  // The statuses below stay behind that arm for the mirrored reason: they are
+  // exactly what GitHub is recomputing while it says `UNKNOWN`, and trusting a
+  // leftover `BLOCKED` mid-recompute writes the false this order exists not to.
+  if (pr.isDraft) return "draft";
+
   // `UNKNOWN` is asked lazily by GitHub, so the first read of a fresh PR lands
   // here and the next poll settles it. A *null* is the other way of not
   // knowing — the sidebar's marks carry these for open pull requests only — and
@@ -198,8 +207,6 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
   if (pr.mergeable === "UNKNOWN" || pr.mergeable === null || pr.mergeStateStatus === null) {
     return "unknown";
   }
-
-  if (pr.isDraft) return "draft";
 
   switch (pr.mergeStateStatus) {
     case "BEHIND":
