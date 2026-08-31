@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { pushNotice } from "@/hooks/useNotices";
-import { isReadyToMerge, readyTransitions, sessionBranch } from "@/lib/pr";
+import { readyToMerge, readyTransitions, sessionBranch } from "@/lib/pr";
 import { playNotification } from "@/lib/sound";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
@@ -42,8 +42,9 @@ type Args = {
 export function usePrReady({ sessions, prFor }: Args) {
   /// What each session's pull request last said, and the whole of the
   /// transition test. An entry appearing for the first time is *seeded*, never
-  /// announced. `readyTransitions` owns that rule and the pruning that comes
-  /// with it.
+  /// announced, and a reading GitHub has not worked out is *held* rather than
+  /// written down. `readyTransitions` owns both rules and the pruning that
+  /// comes with them.
   const wasReady = useRef(new Map<string, boolean>());
 
   useEffect(() => {
@@ -51,9 +52,13 @@ export function usePrReady({ sessions, prFor }: Args) {
     // not-ready: no mark is not "no pull request", it is also a repo whose read
     // has not landed, and a `false` written there would turn the first real
     // reading into a transition.
+    //
+    // A mark whose merge state is unknown is the same fact one layer in, so it
+    // travels as `null` rather than as a no — see `readyToMerge`. It is what a
+    // merge leaves every other open PR in the project reading for a window.
     const observed = sessions.flatMap((session) => {
       const mark = prFor(session.projectPath, sessionBranch(session));
-      return mark ? [[session.sessionId, isReadyToMerge(mark)] as const] : [];
+      return mark ? [[session.sessionId, readyToMerge(mark)] as const] : [];
     });
 
     const { next, became } = readyTransitions(wasReady.current, observed);
