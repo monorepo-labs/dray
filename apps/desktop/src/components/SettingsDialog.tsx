@@ -35,7 +35,7 @@ import {
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import type { ExternalApp, SettingsView } from "@/types/events";
+import type { ExternalApp, SettingsView, UpdateChannel } from "@/types/events";
 
 /// Where to send someone who wants to say something. Direct message rather than an
 /// issue tracker: most feedback is a sentence, and a form is more than a sentence is
@@ -53,11 +53,17 @@ export default function SettingsDialog({
   open,
   onOpenChange,
   integrations,
+  updateChannel,
+  onUpdateChannelChange,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
+  /// Owned by `useUpdater`, for the reason its own doc comment gives: a second
+  /// `useLocalStorage` here would write a value the checking effect never sees.
+  updateChannel: UpdateChannel;
+  onUpdateChannelChange: (next: UpdateChannel) => void;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
 
@@ -96,6 +102,10 @@ export default function SettingsDialog({
             about: (
               <>
                 <Section>
+                  <BetaUpdatesRow
+                    channel={updateChannel}
+                    onChange={onUpdateChannelChange}
+                  />
                   <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
                 </Section>
                 {/* The one block here with no label of its own, so it is the one
@@ -419,6 +429,44 @@ function useRovingGroup(
   };
 
   return { refs, onKeyDown };
+}
+
+/// Which manifest updates come from.
+///
+/// A switch, where the mode row above argues for segments — because the two are
+/// not the same shape of choice. Mode has three answers and no default worth
+/// calling off; this has two, and stable is what you get by *not* choosing.
+/// That asymmetry is what a switch says and a segmented control cannot.
+///
+/// Sits in About because that tab is where the app talks about itself: which
+/// build you are running, and what it reports back.
+///
+/// One line, and deliberately not the mechanism. An earlier draft spent a
+/// second sentence on the fact that switching back is not a downgrade — true,
+/// and nobody asked: the reader wants to know what they get, not how the
+/// updater compares versions. `useUpdater`'s own comments hold that.
+function BetaUpdatesRow({
+  channel,
+  onChange,
+}: {
+  channel: UpdateChannel;
+  onChange: (next: UpdateChannel) => void;
+}) {
+  const id = useId();
+
+  return (
+    <SettingRow
+      id={id}
+      label="Beta updates"
+      description="Get new versions early, before they're fully tested."
+    >
+      <Switch
+        id={id}
+        checked={channel === "beta"}
+        onCheckedChange={(next) => onChange(next ? "beta" : "stable")}
+      />
+    </SettingRow>
+  );
 }
 
 /// Two sentences: what it is for, and what it never touches.

@@ -159,6 +159,8 @@ function App() {
     status: updateStatus,
     manual: updateManual,
     install: installUpdate,
+    channel: updateChannel,
+    setChannel: setUpdateChannel,
   } = useUpdater();
 
   // Every session the app has started this run, not the open one: the install
@@ -1186,6 +1188,8 @@ function App() {
       open={settingsOpen}
       onOpenChange={setSettingsOpen}
       integrations={integrations}
+      updateChannel={updateChannel}
+      onUpdateChannelChange={setUpdateChannel}
     />
     <WorktreeDialog
       prompt={worktreePrompt}

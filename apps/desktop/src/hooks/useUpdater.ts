@@ -27,12 +27,21 @@ export type ManualCheck = "idle" | "checking" | "up_to_date" | "failed";
 ///
 /// `null` is the resting state and covers every failure: a check that can't
 /// reach the manifest emits nothing, so no network is silent rather than an
-/// error the reader can do nothing about. The channel has no UI yet — it is
-/// read from storage so opting into beta is a one-line change when it does.
+/// error the reader can do nothing about.
+///
+/// The channel is held here and handed *out*, rather than read a second time by
+/// the settings row that writes it. `useLocalStorage` is per-component, so a
+/// second copy would set its own value while this one kept the old — and since
+/// `channel` is what re-arms the effect below, the change would take on the
+/// next launch and not before. The same trap `useTheme` became a module store
+/// to escape; one owner and a prop is enough for two surfaces.
 export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [manual, setManual] = useState<ManualCheck>("idle");
-  const [channel] = useLocalStorage<UpdateChannel>("ade.updateChannel", "stable");
+  const [channel, setChannel] = useLocalStorage<UpdateChannel>(
+    "ade.updateChannel",
+    "stable",
+  );
 
   // Read inside the check's own promise, which resolves long after the closure
   // that started it was made — on a run that finds something, only once the
@@ -111,5 +120,9 @@ export function useUpdater() {
     [],
   );
 
-  return { status, manual, install };
+  // Changing the channel re-arms the effect above, so the new manifest is
+  // checked the moment the switch moves. The `ready` and `inFlight` guards
+  // still hold there: a bundle already downloaded is worth keeping whichever
+  // channel the reader lands on, and the next check is six hours away at worst.
+  return { status, manual, install, channel, setChannel };
 }
