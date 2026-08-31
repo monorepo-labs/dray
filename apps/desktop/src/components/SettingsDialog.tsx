@@ -460,8 +460,6 @@ function BetaUpdatesRow({
   /// the dialog, since the tab bodies are switched rather than hidden.
   const [confirming, setConfirming] = useState<UpdateChannel | null>(null);
 
-  const verb = (next: UpdateChannel) => (next === "beta" ? "Turn on" : "Turn off");
-
   return (
     <SettingRow
       id={id}
@@ -481,6 +479,8 @@ function BetaUpdatesRow({
           >
             Cancel
           </Button>
+          {/* Not the verb again — the button just pressed said that, and the
+              same word twice reads as the press not having landed. */}
           <Button
             variant="outline"
             size="sm"
@@ -489,7 +489,7 @@ function BetaUpdatesRow({
               setConfirming(null);
             }}
           >
-            {verb(confirming)}
+            Confirm
           </Button>
         </div>
       ) : (
@@ -499,7 +499,7 @@ function BetaUpdatesRow({
           size="sm"
           onClick={() => setConfirming(channel === "beta" ? "stable" : "beta")}
         >
-          {verb(channel === "beta" ? "stable" : "beta")}
+          {channel === "beta" ? "Turn off" : "Turn on"}
         </Button>
       )}
     </SettingRow>
