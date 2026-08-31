@@ -5,6 +5,24 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.9.3
+
+### Fixed
+
+- **Merging a pull request no longer announces every other one as ready.**
+  GitHub recomputes mergeability across the project on a merge, and each PR
+  settling back out of that window raised its own "Ready to merge" card.
+- **An unrecognised agent name no longer empties the sidebar.** One session
+  written by a build that knows an agent this one doesn't failed the whole
+  index, so every other session vanished with it. The name is now carried
+  through untouched.
+- **Unsettling a session follows it out of the settled view.** The row left
+  the list it was drawn from and the view stayed put, so the reader was left
+  looking at where it had been.
+- **The agent names files by absolute path**, so a filename in its prose is a
+  link you can click. Codex also learns what "parent session" means — it read
+  it as a git parent and went looking through commits.
+
 ## 0.9.2
 
 ### Added
