@@ -1,23 +1,23 @@
 {
-  "version": "0.9.2",
-  "notes": "### Added\n\n- **Light mode works for the Default theme.** It was the last theme with no\n  light side, so the mode picker sat disabled for anyone who never changed\n  palette. System, Light and Dark all apply now.\n- **A logged-out agent offers a way back in.** An expired login ended every\n  turn with the harness's own sentence and nothing to do about it — `/login`\n  cannot be reached from inside a session. The composer now names the cure and\n  a button opens the login in a terminal. A wording neither harness recognises\n  still reports the failure as before.\n\n### Changed\n\n- **Model takes Shift+Tab**, the cheapest chord, since it is the pick reached\n  for most often; effort moves to ⌘⇧E and double-tap Shift is gone. ⌘I opens\n  the issues page.\n\n### Fixed\n\n- **A failed turn draws its sentence once.** The harness sends it twice, so\n  every failure appeared in white and again in red.\n- **Opening a long session is fast again.** A 61-turn session took ~700ms\n  before anything appeared; the newest turns now draw first and the rest fill\n  in above them.\n- **`dray` tells a sandboxed refusal from a closed app.** Every connect error\n  read as \"Dray isn't running\", which named no cure when the real cause was\n  the agent's own sandbox. Update the CLI with `dray update`.",
-  "pub_date": "2026-08-30T13:53:37.598Z",
+  "version": "0.9.3",
+  "notes": "### Fixed\n\n- **Merging a pull request no longer announces every other one as ready.**\n  GitHub recomputes mergeability across the project on a merge, and each PR\n  settling back out of that window raised its own \"Ready to merge\" card.\n- **An unrecognised agent name no longer empties the sidebar.** One session\n  written by a build that knows an agent this one doesn't failed the whole\n  index, so every other session vanished with it. The name is now carried\n  through untouched.\n- **Unsettling a session follows it out of the settled view.** The row left\n  the list it was drawn from and the view stayed put, so the reader was left\n  looking at where it had been.\n- **The agent names files by absolute path**, so a filename in its prose is a\n  link you can click. Codex also learns what \"parent session\" means — it read\n  it as a git parent and went looking through commits.",
+  "pub_date": "2026-08-31T08:39:05.702Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWp3bWl6OGlBR21JQy9XWTIrdUREaGpYYUNua29yVGxISmxRdUJtZDk3eTN3cEtIV283OFptVEF6YzZmUHp6LzJlTE5OejJGUkpZbjhEZnl5a1hQZEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDk4MDEwCWZpbGU6RHJheS5hcHAudGFyLmd6ClhTU3FMSEtJRUllcDFMU0JYaGVlN09qcFFFY3RRT3pmOFlDd2tqU25LbkRscVdHZ00xbGtpTFR5aVM1K3NMTExYTGFpRHlWcTZRSG5jeFM5TnE0VUR3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ1QXJrZFZaSFJDbkVRSHA3MmxBeGpRVUxlNHJuQmxLMXFBTWNIc25Ya3dwVDRERDl2L3lET2NiOUwyZmFIOGNMc255c0VrSjNFb2dVYWZ4KzZiUndRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY1NTM5CWZpbGU6RHJheS5hcHAudGFyLmd6ClNYbnlIYzZ0MTY2TC9tNHdNbGRxWlJMTjBHcWx4RmlLb3hIR1RvTFVWT2hXKzFnMm0xb1BmNlhIbExQUk5xa2VKVGU4Umh6WHd0WmVpNEg3ZXJpSURRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWp3bWl6OGlBR21JQy9XWTIrdUREaGpYYUNua29yVGxISmxRdUJtZDk3eTN3cEtIV283OFptVEF6YzZmUHp6LzJlTE5OejJGUkpZbjhEZnl5a1hQZEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDk4MDEwCWZpbGU6RHJheS5hcHAudGFyLmd6ClhTU3FMSEtJRUllcDFMU0JYaGVlN09qcFFFY3RRT3pmOFlDd2tqU25LbkRscVdHZ00xbGtpTFR5aVM1K3NMTExYTGFpRHlWcTZRSG5jeFM5TnE0VUR3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ1QXJrZFZaSFJDbkVRSHA3MmxBeGpRVUxlNHJuQmxLMXFBTWNIc25Ya3dwVDRERDl2L3lET2NiOUwyZmFIOGNMc255c0VrSjNFb2dVYWZ4KzZiUndRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY1NTM5CWZpbGU6RHJheS5hcHAudGFyLmd6ClNYbnlIYzZ0MTY2TC9tNHdNbGRxWlJMTjBHcWx4RmlLb3hIR1RvTFVWT2hXKzFnMm0xb1BmNlhIbExQUk5xa2VKVGU4Umh6WHd0WmVpNEg3ZXJpSURRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.3/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWp3bWl6OGlBR21JQy9XWTIrdUREaGpYYUNua29yVGxISmxRdUJtZDk3eTN3cEtIV283OFptVEF6YzZmUHp6LzJlTE5OejJGUkpZbjhEZnl5a1hQZEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDk4MDEwCWZpbGU6RHJheS5hcHAudGFyLmd6ClhTU3FMSEtJRUllcDFMU0JYaGVlN09qcFFFY3RRT3pmOFlDd2tqU25LbkRscVdHZ00xbGtpTFR5aVM1K3NMTExYTGFpRHlWcTZRSG5jeFM5TnE0VUR3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ1QXJrZFZaSFJDbkVRSHA3MmxBeGpRVUxlNHJuQmxLMXFBTWNIc25Ya3dwVDRERDl2L3lET2NiOUwyZmFIOGNMc255c0VrSjNFb2dVYWZ4KzZiUndRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY1NTM5CWZpbGU6RHJheS5hcHAudGFyLmd6ClNYbnlIYzZ0MTY2TC9tNHdNbGRxWlJMTjBHcWx4RmlLb3hIR1RvTFVWT2hXKzFnMm0xb1BmNlhIbExQUk5xa2VKVGU4Umh6WHd0WmVpNEg3ZXJpSURRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWp3bWl6OGlBR21JQy9XWTIrdUREaGpYYUNua29yVGxISmxRdUJtZDk3eTN3cEtIV283OFptVEF6YzZmUHp6LzJlTE5OejJGUkpZbjhEZnl5a1hQZEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDk4MDEwCWZpbGU6RHJheS5hcHAudGFyLmd6ClhTU3FMSEtJRUllcDFMU0JYaGVlN09qcFFFY3RRT3pmOFlDd2tqU25LbkRscVdHZ00xbGtpTFR5aVM1K3NMTExYTGFpRHlWcTZRSG5jeFM5TnE0VUR3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ1QXJrZFZaSFJDbkVRSHA3MmxBeGpRVUxlNHJuQmxLMXFBTWNIc25Ya3dwVDRERDl2L3lET2NiOUwyZmFIOGNMc255c0VrSjNFb2dVYWZ4KzZiUndRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY1NTM5CWZpbGU6RHJheS5hcHAudGFyLmd6ClNYbnlIYzZ0MTY2TC9tNHdNbGRxWlJMTjBHcWx4RmlLb3hIR1RvTFVWT2hXKzFnMm0xb1BmNlhIbExQUk5xa2VKVGU4Umh6WHd0WmVpNEg3ZXJpSURRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.9.3/Dray_universal.app.tar.gz"
     }
   }
 }
