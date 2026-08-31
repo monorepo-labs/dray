@@ -648,26 +648,49 @@ const detachSession = async (sessionId: string) => {
   }
 };
 
+/// Writes a session's settled or pinned flag, and answers whether it landed.
+///
+/// The answer is what callers navigate on. A failed write leaves the row where
+/// it was, so acting anyway — following it to the other view, celebrating a
+/// settle that did not happen — describes a move the index never made.
 const setSessionFlags = async (
   sessionId: string,
   flags: { archived?: boolean; pinned?: boolean },
-) => {
+): Promise<boolean> => {
   try {
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
       archived: flags.archived ?? null,
       pinned: flags.pinned ?? null,
     });
-    if (!updated) return;
-    setSessionIndexItems((prev) =>
-      prev.flatMap((i) => {
+    // Null is the backend finding no such session, which is a write that did
+    // not happen like any other.
+    if (!updated) return false;
+    setSessionIndexItems((prev) => {
+      // The ref, not the closure: this runs after the write, and the reader can
+      // toggle the split while one is in flight. Judged against the captured
+      // value it would sort the row into whichever view was open when the
+      // button was pressed — dropping it from the list now on screen, or
+      // inserting a settled row into the active one.
+      const belongsHere = updated.archived === showArchivedRef.current;
+      // The row can be written from a view it was never drawn in: the settled
+      // split keeps the selection across a toggle, so the composer's unsettle
+      // bar is reachable while the sidebar is showing the active list. Left to
+      // the map below that write lands nowhere — the row is in neither list,
+      // and the session the reader just took back has no row at all until
+      // something else refetches.
+      if (belongsHere && !prev.some((i) => i.sessionId === sessionId)) {
+        return [...prev, updated];
+      }
+
+      return prev.flatMap((i) => {
         if (i.sessionId !== sessionId) return [i];
         // Archiving from the active list — or unarchiving from the archived one —
         // moves the row to the other view, so it leaves this one rather than
         // sitting there contradicting the filter that produced the list.
-        return updated.archived === showArchived ? [updated] : [];
-      }),
-    );
+        return belongsHere ? [updated] : [];
+      });
+    });
     // The open transcript keeps its own copy of the index fields, and it's what
     // the composer reads `archived` from — left alone, settling the session on
     // screen would swap in the unsettle bar only after a reselect.
@@ -678,8 +701,10 @@ const setSessionFlags = async (
           : s,
       ),
     );
+    return true;
   } catch (e) {
     setError(String(e));
+    return false;
   }
 };
 
