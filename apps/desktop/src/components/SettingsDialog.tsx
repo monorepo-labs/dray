@@ -445,6 +445,13 @@ function useRovingGroup(
 /// second sentence on the fact that switching back is not a downgrade — true,
 /// and nobody asked: the reader wants to know what they get, not how the
 /// updater compares versions. `useUpdater`'s own comments hold that.
+///
+/// Flipping arms a confirm that replaces the switch — the same shape the
+/// disconnect row below uses. Not for irreversibility, which is that row's
+/// reason and not this one's: changing channel makes the app start downloading
+/// a different build on its own, and the consequence sentence drawn while
+/// confirming is the one place that gets said. The switch itself never moves
+/// until confirmed, so it stays honest about which channel is live.
 function BetaUpdatesRow({
   channel,
   onChange,
@@ -453,18 +460,45 @@ function BetaUpdatesRow({
   onChange: (next: UpdateChannel) => void;
 }) {
   const id = useId();
+  /// The channel the reader is about to move to, or null at rest. Resets with
+  /// the dialog, since the tab bodies are switched rather than hidden.
+  const [confirming, setConfirming] = useState<UpdateChannel | null>(null);
 
   return (
     <SettingRow
       id={id}
       label="Beta updates"
-      description="Get new versions early, before they're fully tested."
+      description={
+        confirming === "beta"
+          ? "Dray will update to beta builds as they ship — early, and not fully tested."
+          : confirming === "stable"
+            ? "Dray will go back to stable updates. You keep this build until a stable release passes it."
+            : "Get new versions early, before they're fully tested."
+      }
     >
-      <Switch
-        id={id}
-        checked={channel === "beta"}
-        onCheckedChange={(next) => onChange(next ? "beta" : "stable")}
-      />
+      {confirming ? (
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              onChange(confirming);
+              setConfirming(null);
+            }}
+          >
+            {confirming === "beta" ? "Turn on" : "Turn off"}
+          </Button>
+        </div>
+      ) : (
+        <Switch
+          id={id}
+          checked={channel === "beta"}
+          onCheckedChange={(next) => setConfirming(next ? "beta" : "stable")}
+        />
+      )}
     </SettingRow>
   );
 }

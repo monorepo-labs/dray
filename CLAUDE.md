@@ -1133,6 +1133,8 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Switch not segments, against mode row next door.** Mode have three answer and no default worth calling off; this have two, and stable = what you get by *not* choosing. Asymmetry = what switch say and segmented control cannot. Lives in About because that tab = where app talk about itself: which build you run, and what it report back.
 
+**Flip arm confirm replacing switch**, disconnect row's shape — not for irreversibility (that row's reason, not this one's) but because changing channel make app start downloading different build on own, and consequence sentence drawn while confirming = one place that get said. Switch never move until confirmed, so it stay honest about which channel live.
+
 **Description = one line, and deliberately not mechanism.** Earlier draft spent second sentence explaining that switching back not downgrade — true, and nobody ask: reader want to know what they get, not how updater compare version. Client refuse anything not strictly newer (`release.version > current_version`, no `version_comparator` set), so switching back roll nothing back and there nothing to warn about. That fact live in [useUpdater](apps/desktop/src/hooks/useUpdater.ts), not on screen.
 
 **Nothing emitted until there is update**, so `null` = frontend's resting state and cover every failure. Check that can't reach manifest = common case, not error worth row. Bundle download as soon as found and held in memory until user press install; progress emitted only on change of whole percent, since chunks land every few KB and per-chunk event = thousands of renders per bundle.
