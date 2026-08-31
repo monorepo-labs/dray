@@ -165,11 +165,59 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern latest.json --output manifest.json --clobber
 
-          # A stable release serves both channels: someone on beta should still
-          # be offered the newer stable build. A beta release moves beta alone.
-          cp manifest.json beta.json
+          # Whether $1 is strictly newer than $2 — the same semver comparison
+          # the updater plugin makes, prerelease rules included. Not `sort -V`,
+          # which gets wrong exactly the case that matters here: it puts
+          # 0.9.4-beta.2 *above* 0.9.4.
+          newer() {
+            node -e '
+              const parse = (v) => {
+                const [core, pre] = v.replace(/^v/, "").split("+")[0].split(/-(.+)/);
+                return { core: core.split(".").map(Number), pre: pre ? pre.split(".") : null };
+              };
+              const cmpId = (a, b) => {
+                const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+                if (na && nb) return Number(a) - Number(b);
+                if (na !== nb) return na ? -1 : 1;
+                return a < b ? -1 : a > b ? 1 : 0;
+              };
+              const cmp = (x, y) => {
+                for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] - y.core[i];
+                if (!x.pre || !y.pre) return (x.pre ? -1 : 0) - (y.pre ? -1 : 0);
+                for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+                  if (x.pre[i] === undefined) return -1;
+                  if (y.pre[i] === undefined) return 1;
+                  const c = cmpId(x.pre[i], y.pre[i]);
+                  if (c) return c;
+                }
+                return 0;
+              };
+              process.exit(cmp(parse(process.argv[1]), parse(process.argv[2])) > 0 ? 0 : 1);
+            ' "$1" "$2"
+          }
+
+          # Writes the release over a channel manifest unless that would move
+          # the channel *backwards*. A stable release still serves both
+          # channels — someone on beta should be offered the newer stable — but
+          # a beta line runs ahead of stable for its whole life, so a stable
+          # hotfix shipped while one is open must not clobber it: existing beta
+          # users would see nothing (the client never downgrades), and a fresh
+          # beta opt-in could never reach the beta at all. An equal version
+          # rewrites, so re-running a release republishes its own manifest; a
+          # missing or unreadable manifest is written, never an error.
+          NEW="$(jq -r .version manifest.json)"
+          promote() {
+            cur="$(jq -r '.version // empty' "$1" 2>/dev/null || true)"
+            if [ -n "$cur" ] && newer "$cur" "$NEW"; then
+              echo "keeping $1 at $cur — $NEW is older"
+            else
+              cp manifest.json "$1"
+            fi
+          }
+
+          promote beta.json
           if [ "${{ needs.build.outputs.channel }}" = "stable" ]; then
-            cp manifest.json stable.json
+            promote stable.json
           fi
           rm manifest.json
 
@@ -179,5 +227,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "release ${GITHUB_REF_NAME}"
-          git push
+          # A release that moved no manifest — a re-tag older than every
+          # channel — leaves nothing staged, and an empty commit would fail
+          # the job over a push that had nothing to say.
+          git diff --cached --quiet || {
+            git commit -m "release ${GITHUB_REF_NAME}"
+            git push
+          }

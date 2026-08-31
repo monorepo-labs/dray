@@ -1123,9 +1123,17 @@ Asymmetry = point: appending to private file atomic, rewriting shared one not.
 
 **Tag's shape pick channel**, semver do rest. `v0.3.0` stable, `v0.3.0-beta.1` beta, and because `0.3.0-beta.1` sort _below_ `0.3.0`, beta user offered stable release moment it ship — no logic anywhere reproduce that rule. What release job do encode = other half: stable release write both manifests, beta release write only `beta.json`, so beta superset not fork.
 
+**Manifest only ever move forward** (`promote` in [release.yml](.github/workflows/release.yml)). Beta line run *ahead* of stable for its whole life — that ordinary state, not edge — so unconditional `cp` was bug: stable hotfix shipped while beta open overwrote `beta.json` with older version, and fresh beta opt-in could never reach open beta at all (existing beta user just saw nothing, client never downgrade). Guard = same semver comparison plugin make, prerelease rules included, in inline node — **not `sort -V`**, which put `0.9.4-beta.2` *above* `0.9.4`, wrong on exactly case that matter. Equal version rewrite, so re-run republish own manifest; missing manifest written, never error. Release moving nothing skip commit, or empty commit fail job.
+
 **Manifests live on `updates` branch served by GitHub Pages, not in release.** `/releases/latest/download/` obvious host and cannot work here: it skip prereleases, so beta have no fixed URL. Artifacts still live on release — manifest only point at them.
 
-**Channel chosen per check, in Rust, not in `tauri.conf.json`.** [updater.rs](apps/desktop/src-tauri/src/updater.rs) build updater with channel's endpoint each time, so switching channels need no rebuild; config endpoint only what caller naming no channel get. No channel picker yet — [useUpdater](apps/desktop/src/hooks/useUpdater.ts) read `ade.updateChannel` from storage and default to stable.
+**Channel chosen per check, in Rust, not in `tauri.conf.json`.** [updater.rs](apps/desktop/src-tauri/src/updater.rs) build updater with channel's endpoint each time, so switching channels need no rebuild; config endpoint only what caller naming no channel get. Channel = `ade.updateChannel`, read by [useUpdater](apps/desktop/src/hooks/useUpdater.ts), default stable.
+
+**Beta = switch in Settings → About, and channel own by `useUpdater` not by row.** `useLocalStorage` per-component, so second copy in dialog write value hook never see — and `channel` = what re-arm checking effect, so change land on next launch and not before. Same trap `useTheme` became module store for; here one owner plus prop enough, since `App` already hand `integrations` down that way. Flip therefore re-check for free.
+
+**Switch not segments, against mode row next door.** Mode have three answer and no default worth calling off; this have two, and stable = what you get by *not* choosing. Asymmetry = what switch say and segmented control cannot. Lives in About because that tab = where app talk about itself: which build you run, and what it report back.
+
+**Description = one line, and deliberately not mechanism.** Earlier draft spent second sentence explaining that switching back not downgrade — true, and nobody ask: reader want to know what they get, not how updater compare version. Client refuse anything not strictly newer (`release.version > current_version`, no `version_comparator` set), so switching back roll nothing back and there nothing to warn about. That fact live in [useUpdater](apps/desktop/src/hooks/useUpdater.ts), not on screen.
 
 **Nothing emitted until there is update**, so `null` = frontend's resting state and cover every failure. Check that can't reach manifest = common case, not error worth row. Bundle download as soon as found and held in memory until user press install; progress emitted only on change of whole percent, since chunks land every few KB and per-chunk event = thousands of renders per bundle.
 
@@ -1467,8 +1475,6 @@ Several things deliberately unfinished — don't mistake for bugs:
 
 - **Spawned session inherit permission mode, so most block immediately.** Default stance = `auto`, which prompt per action — so session fanned out from ordinary session stop at its first `Write` waiting for card nobody is next to. Notification path do surface it (yellow rail, notice card, dock badge), so it not silent, but "create 3 sessions" currently mean three sessions to go and approve rather than three running. `dray new` take no `--permission-mode`, and adding one raise real question: agent in `plan` session spawning `bypassPermissions` child = escalation past stance user set. Clamping child to be no more autonomous than parent = likely shape of fix. Unresolved on purpose.
 - **No reading a transcript back.** Create, list and send exist; reading what another session said don't. Agent wanting summary have to ask that session to `dray send` one. Parent also cannot learn child finished except by polling `dray ls` — nothing push.
-- **Beta channel have no picker.** `ade.updateChannel` in local storage = whole switch, and nothing write it. Backend take channel per check, so picker = control and `setChannel`, not protocol change.
-
 - **TS event types generated, not written.** `ts-rs` derive them from Rust model into `src/types/events.ts`, checked in so frontend build need no Rust toolchain. `cargo test` regenerate; never edit output. Two settings live in `src-tauri/.cargo/config.toml`: export path, and `TS_RS_LARGE_INT = "number"` because `u64` otherwise become `bigint`, which `JSON.parse` never produce.
 
 ## Known issues
