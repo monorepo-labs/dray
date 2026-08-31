@@ -28,8 +28,9 @@ export default function FileLink({
   children,
 }: {
   /// Absolute, and already resolved. This draws whatever it is given and asks
-  /// nothing about whether the file is there, since `openFile` reveals as its
-  /// fallback and revealing something gone is a click that does nothing.
+  /// nothing about whether the file is there: a markdown path that names
+  /// nothing opens a doc whose panel says so, and every other one falls through
+  /// to a reveal, where revealing something gone is a click that does nothing.
   path: string;
   title?: string;
   /// This was a markdown link before it was a file link, so draw it as one.
