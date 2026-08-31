@@ -644,9 +644,11 @@ async fn sender(send: &SendMessage) -> Option<MessageSender> {
 /// The caller's pick, else the parent's, else Claude Code.
 fn resolve_harness(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> Result<Harness> {
     match requested {
-        Some("claude_code") => Ok(Harness::ClaudeCode),
-        Some("codex") => Ok(Harness::Codex),
-        Some(other) => bail!("unknown harness {other:?} — try claude_code or codex"),
+        // Named outright, so it has to resolve to something this build offers.
+        // The tolerant `Deserialize` is for values read *off the index*, and
+        // reusing it here would let `--harness` invent one.
+        Some(name) => Harness::from_wire_name(name)
+            .with_context(|| format!("unknown harness {name:?} — try claude_code or codex")),
         None => Ok(parent.map(|p| p.harness).unwrap_or(Harness::ClaudeCode)),
     }
 }

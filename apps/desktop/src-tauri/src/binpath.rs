@@ -152,6 +152,11 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
     match harness {
         Harness::ClaudeCode => claude().await,
         Harness::Codex => codex().await,
+        // A harness only some other build knows. Its own spelling, which is
+        // relative and so reads as "not installed" through `is_absolute` above
+        // — the refusal has to happen here rather than by falling back to
+        // Claude Code, which would run the wrong agent in somebody's session.
+        Harness::Other(name) => PathBuf::from(name),
     }
 }
 

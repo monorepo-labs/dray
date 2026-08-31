@@ -130,10 +130,10 @@ instruction to you:\n\n<prompt>\n{user_prompt}\n</prompt>"
 /// The prompt is always a separate argv element, never concatenated into a
 /// command line — no shell is involved, so a prompt containing quotes or
 /// `$(...)` is inert data rather than something to escape.
-async fn title_command(harness: Harness, prompt: &str) -> Command {
+async fn title_command(harness: Harness, prompt: &str) -> Result<Command> {
     let prompt = build_prompt(prompt);
 
-    match harness {
+    Ok(match harness {
         Harness::ClaudeCode => {
             let mut cmd = Command::new(crate::binpath::claude().await);
             cmd.args([
@@ -205,7 +205,10 @@ async fn title_command(harness: Harness, prompt: &str) -> Command {
             ]);
             cmd
         }
-    }
+        // A harness only some other build knows, so there is no binary to name
+        // — the same refusal `Session::init` makes, one turn earlier.
+        Harness::Other(name) => bail!("no title model for {name}"),
+    })
 }
 
 /// A title for `prompt` written by `harness`'s own cheap model, or `Err` if the
@@ -235,10 +238,14 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
     let cwd = match harness {
         Harness::ClaudeCode => Path::new(cwd).to_path_buf(),
         Harness::Codex => scratch_dir().await?,
+        // No CLI to spawn, so no title to write. The caller keeps its
+        // prompt-derived title on `Err`, which is the right answer here as well
+        // as the cheap one.
+        Harness::Other(name) => bail!("no title model for {name}"),
     };
 
     let child = title_command(harness, prompt)
-        .await
+        .await?
         .current_dir(cwd)
         // Closed, not inherited: with the prompt in argv there's nothing to
         // write. Codex is why this is load-bearing rather than tidy — `codex
@@ -512,6 +519,7 @@ mod command_tests {
     async fn args_for(harness: Harness) -> Vec<String> {
         title_command(harness, "add a dark mode toggle")
             .await
+            .expect("every offered harness names a title model")
             .as_std()
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())

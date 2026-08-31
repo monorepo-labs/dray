@@ -39,6 +39,73 @@ pub fn agent_path() -> String {
 }
 
 #[cfg(test)]
+mod wire_tests {
+    use super::Harness;
+
+    /// The one that matters. `index.json` is rewritten whole by whichever build
+    /// writes last, so a name a newer build wrote reaches an older one — and
+    /// serde's default there is to fail the *value*, which fails the line,
+    /// which is the whole file. One `"pi"` from a dev build made a released app
+    /// read 256 sessions as none at all.
+    #[test]
+    fn a_name_this_build_does_not_know_costs_nothing() {
+        let harness: Harness = serde_json::from_str(r#""some_future_agent""#).expect("parses");
+
+        assert_eq!(harness, Harness::Other("some_future_agent"));
+    }
+
+    /// And it is written back exactly as it arrived. A placeholder would parse
+    /// fine and quietly destroy the harness of every session it did not
+    /// recognise — the worse half of this failure, not a lesser one.
+    #[test]
+    fn an_unknown_name_survives_a_round_trip() {
+        for name in ["some_future_agent", "claude_code", "codex", "pi"] {
+            let json = format!("\"{name}\"");
+            let parsed: Harness = serde_json::from_str(&json).expect("parses");
+
+            assert_eq!(serde_json::to_string(&parsed).expect("serializes"), json);
+        }
+    }
+
+    /// Interning is what lets [`Harness::Other`] stay `Copy`, and it is only
+    /// safe because the same name is the same pointer — otherwise every read of
+    /// a session index would leak another copy of it.
+    #[test]
+    fn one_name_is_interned_once() {
+        let a: Harness = serde_json::from_str(r#""repeated_agent""#).unwrap();
+        let b: Harness = serde_json::from_str(r#""repeated_agent""#).unwrap();
+
+        let (Harness::Other(a), Harness::Other(b)) = (a, b) else {
+            panic!("both should be unknown");
+        };
+
+        assert!(std::ptr::eq(a, b), "the same name leaked twice");
+    }
+
+    /// An unknown harness is a value read off disk, never one to offer — so no
+    /// spelling resolves to one, and a picker or availability read built from
+    /// [`Harness::ALL`] cannot reach it.
+    #[test]
+    fn an_unknown_harness_is_not_offerable() {
+        assert!(Harness::from_wire_name("some_future_agent").is_none());
+        assert!(!Harness::ALL.iter().any(|h| matches!(h, Harness::Other(_))));
+    }
+
+    /// Nothing this build cannot name may be handed a CLI to spawn. Every
+    /// route to one goes through this, so a `false` here is what keeps the
+    /// refusal ahead of the child rather than running somebody else's agent in
+    /// this reader's session.
+    #[test]
+    fn an_unknown_harness_names_no_cli() {
+        assert!(!Harness::Other("some_future_agent").names_a_cli());
+
+        for harness in Harness::ALL {
+            assert!(harness.names_a_cli(), "{harness:?} has no CLI to spawn");
+        }
+    }
+}
+
+#[cfg(test)]
 mod install_tests {
     use super::Harness;
 
@@ -47,7 +114,7 @@ mod install_tests {
     /// rather than shipping a card with an empty command in it.
     #[test]
     fn every_agent_names_its_own_cure() {
-        for harness in [Harness::ClaudeCode, Harness::Codex] {
+        for harness in Harness::ALL {
             assert!(!harness.label().is_empty());
             assert!(
                 harness.install_command().starts_with("curl -fsSL "),
@@ -76,7 +143,7 @@ mod install_tests {
     /// button quietly logs in to something else, or nothing.
     #[test]
     fn both_spellings_of_the_login_command_agree() {
-        for harness in [Harness::ClaudeCode, Harness::Codex] {
+        for harness in Harness::ALL {
             let words: Vec<&str> = harness.login_command().split(' ').collect();
             assert_eq!(
                 words[1..],
@@ -94,20 +161,125 @@ mod install_tests {
 }
 
 use ts_rs::TS;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// Which agent runs a session.
+///
+/// **Unknown spellings are kept, not refused.** `index.json` is a shared store
+/// rewritten whole by whichever build writes last, so a value a newer build
+/// wrote reaches an older one — and serde's default for an unrecognised variant
+/// is to fail the *line*, which here is the whole file. One `"pi"` written by a
+/// dev build made a released app read 256 sessions as none at all, with
+/// `unknown variant \`pi\`` the only thing said about it.
+///
+/// So this is the same bargain [`SessionIndexItem.unknown`] makes one level
+/// out: carry what you cannot understand through untouched. [`Harness::Other`]
+/// holds the original string and serializes it back verbatim, so an old build
+/// reading and rewriting the index leaves a newer build's sessions exactly as it
+/// found them. Storing a placeholder instead would parse fine and quietly
+/// destroy the harness of every session it did not recognise, which is the
+/// worse half of this failure rather than a lesser one.
+///
+/// It is **not** in [`Harness::ALL`]: that is the set this build offers, and an
+/// unknown one is not offerable. Nothing spawns for it either — see
+/// [`Harness::names_a_cli`].
+///
+/// [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", into = "String")]
 pub enum Harness {
     ClaudeCode,
     Codex,
+    /// A harness some other build named and this one has never heard of, with
+    /// its spelling kept so a round trip does not lose it.
+    ///
+    /// `&'static str` rather than `String`, from the intern table below, so
+    /// this type stays `Copy`. It is passed by value through most of
+    /// `session.rs`, and a `String` here put a `.clone()` on 44 call sites —
+    /// permanent reader load on the hot path, to carry a tag.
+    #[serde(skip)]
+    #[ts(skip)]
+    Other(&'static str),
+}
+
+/// Spellings read off the wire that this build does not know.
+///
+/// Leaked on first sight and shared thereafter, which is what lets
+/// [`Harness::Other`] stay `Copy`. Bounded by the number of *distinct* harness
+/// names any build ever writes — one or two in practice — so this is a fixed
+/// cost, not a leak that grows with use.
+static UNKNOWN_NAMES: std::sync::Mutex<Option<std::collections::HashSet<&'static str>>> =
+    std::sync::Mutex::new(None);
+
+fn intern(name: &str) -> &'static str {
+    let mut guard = UNKNOWN_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let names = guard.get_or_insert_with(Default::default);
+
+    if let Some(existing) = names.get(name) {
+        return existing;
+    }
+
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.insert(leaked);
+    leaked
+}
+
+impl<'de> Deserialize<'de> for Harness {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+
+        Ok(Harness::from_wire_name(&name).unwrap_or_else(|| Harness::Other(intern(&name))))
+    }
+}
+
+impl From<Harness> for String {
+    fn from(harness: Harness) -> String {
+        harness.wire_name()
+    }
 }
 
 impl Harness {
+    /// Every harness this build offers.
+    ///
+    /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
+    /// never one to pick, so a picker or an availability read built from this
+    /// cannot offer it.
+    pub const ALL: [Harness; 2] = [Harness::ClaudeCode, Harness::Codex];
+
+    /// How the wire spells it — what `dray new --harness` takes and what an
+    /// index entry holds.
+    pub fn wire_name(self) -> String {
+        match self {
+            Harness::ClaudeCode => "claude_code".to_string(),
+            Harness::Codex => "codex".to_string(),
+            Harness::Other(name) => name.to_string(),
+        }
+    }
+
+    /// The harness that spelling names, if this build has one.
+    pub fn from_wire_name(name: &str) -> Option<Harness> {
+        Harness::ALL.into_iter().find(|h| h.wire_name() == name)
+    }
+
+    /// Whether this build has a CLI to spawn for it.
+    ///
+    /// The one question every path from a [`Harness`] to a running child has to
+    /// ask. False for [`Harness::Other`] and nothing else: a name this build
+    /// cannot resolve must be *refused*, never fall back to Claude Code —
+    /// spawning the wrong agent into somebody's session is the failure the
+    /// tolerant read is protecting against, not a milder version of it.
+    pub fn names_a_cli(self) -> bool {
+        !matches!(self, Harness::Other(_))
+    }
+
     /// What to call it in a sentence somebody reads.
     pub fn label(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "Claude Code",
             Harness::Codex => "Codex",
+            // Its own spelling, the only thing known about it — and the honest
+            // thing to put in a sentence, since the name a newer build wrote is
+            // the one its reader will recognise.
+            Harness::Other(name) => name,
         }
     }
 
@@ -127,6 +299,10 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
             Harness::Codex => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            // Empty, because there is nothing to install: the CLI is not what
+            // is missing, this build is. A command guessed from the name would
+            // be the one thing worse than no command.
+            Harness::Other(_) => "",
         }
     }
 
@@ -138,6 +314,9 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "https://code.claude.com/docs/en/quickstart",
             Harness::Codex => "https://learn.chatgpt.com/docs/codex/cli",
+            // Empty, so the notice draws no link rather than a wrong one: the
+            // cure here is a newer Dray, not a CLI to install.
+            Harness::Other(_) => "",
         }
     }
 
@@ -152,6 +331,9 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude auth login",
             Harness::Codex => "codex login",
+            // Nothing to log in to, for the same reason there is nothing to
+            // install: this build cannot name the CLI, let alone drive it.
+            Harness::Other(_) => "",
         }
     }
 
@@ -166,6 +348,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => &["auth", "login"],
             Harness::Codex => &["login"],
+            Harness::Other(_) => &[],
         }
     }
 }

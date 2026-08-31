@@ -874,6 +874,12 @@ impl SessionManager {
         if parent.harness == Harness::Codex {
             bail!("Codex sessions cannot be forked yet");
         }
+        if !parent.harness.names_a_cli() {
+            bail!(
+                "this session runs on {}, which this version of Dray can't drive — update Dray",
+                parent.harness.label()
+            );
+        }
 
         if let Some(s) = self.sessions.lock().await.get(session_id) {
             if s.status.lock().await.turn_in_flight() {
@@ -1210,6 +1216,14 @@ impl Session {
                     app,
                 )
                 .await
+            }
+            // A session some newer build wrote into the shared index. Its
+            // transcript still reads and its row still draws — that is what the
+            // tolerant read bought — but there is no CLI here to carry it on,
+            // and picking one would run a different agent inside somebody
+            // else's conversation.
+            Harness::Other(name) => {
+                bail!("this session runs on {name}, which this version of Dray can't drive — update Dray")
             }
         }
     }
