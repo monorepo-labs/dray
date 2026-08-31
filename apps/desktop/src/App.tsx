@@ -625,6 +625,50 @@ function App() {
     go();
   };
 
+  /// Writes a session's settled or pinned flag and takes the sidebar wherever
+  /// that write left the row.
+  ///
+  /// One function because there are two ways to unsettle — the sidebar row's
+  /// menu and the composer's own bar — and they have to land in the same place.
+  /// The bar reached `setSessionFlags` directly at first, which wrote the flag
+  /// and nothing else: the row left the settled list it was drawn from, the
+  /// view stayed settled, and the session the reader had just taken back was
+  /// nowhere on screen.
+  const handleSetSessionFlags = async (
+    sessionId: string,
+    flags: { archived?: boolean; pinned?: boolean },
+  ) => {
+    await setSessionFlags(sessionId, flags);
+    if (flags.archived === true) {
+      playCelebration();
+
+      // Settling is the reader saying this work is done, which is the
+      // one moment the worktree behind it is provably spare. Asked
+      // after the flag write lands, so the question is about a task
+      // that is already settled rather than a condition of settling it.
+      const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
+      if (item?.worktreeName) {
+        void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
+      }
+    }
+    // Settling the open session leaves nothing to look at but the
+    // unsettle bar, so it goes back to the empty composer instead.
+    if (flags.archived === true && sessionId === selectedSessionId) {
+      goToSession(handleNewSession);
+    } else if (flags.archived === false) {
+      // The row has just left whichever list it was drawn from, so follow it to
+      // the one it landed in and keep it selected — from the sidebar's menu the
+      // reader pressed that row, and from the composer's bar they are reading
+      // its transcript. Either way, losing it is losing the thing they acted on.
+      //
+      // After the write, never before: `setSessionFlags` reads `showArchived`
+      // from its own closure to decide whether the row still belongs to the
+      // list on screen, and a flip ahead of it is invisible to that closure.
+      if (showArchived) setShowArchived(false);
+      goToSession(() => void handleSelectSessionIndexItem(sessionId));
+    }
+  };
+
   const toggleSidebar = () => setCollapsed((prev) => !prev);
   useHotkey("b", toggleSidebar);
   useHotkey("n", () => goToSession(handleNewSession));
@@ -772,32 +816,7 @@ function App() {
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
           onDetach={detachSession}
-          onSetFlags={async (sessionId, flags) => {
-            await setSessionFlags(sessionId, flags);
-            if (flags.archived === true) {
-              playCelebration();
-
-              // Settling is the reader saying this work is done, which is the
-              // one moment the worktree behind it is provably spare. Asked
-              // after the flag write lands, so the question is about a task
-              // that is already settled rather than a condition of settling it.
-              const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
-              if (item?.worktreeName) {
-                void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
-              }
-            }
-            // Settling the open session leaves nothing to look at but the
-            // unsettle bar, so it goes back to the empty composer instead.
-            if (flags.archived === true && sessionId === selectedSessionId) {
-              goToSession(handleNewSession);
-            } else if (flags.archived === false) {
-              // Unsettling only happens from the settled list, and the row
-              // just left it — follow it back to where it landed, onto the
-              // row itself.
-              if (showArchived) setShowArchived(false);
-              goToSession(() => void handleSelectSessionIndexItem(sessionId));
-            }
-          }}
+          onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
           onDelete={deleteSession}
           showArchived={showArchived}
@@ -968,7 +987,8 @@ function App() {
           onDismissError={() => setError(null)}
           archived={selectedSession?.archived ?? false}
           onUnarchive={() =>
-            selectedSessionId && setSessionFlags(selectedSessionId, { archived: false })
+            selectedSessionId &&
+            void handleSetSessionFlags(selectedSessionId, { archived: false })
           }
           onRemoveWorktree={
             selectedSessionId && selectedSession?.worktreeName

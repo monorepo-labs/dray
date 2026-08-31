@@ -659,15 +659,26 @@ const setSessionFlags = async (
       pinned: flags.pinned ?? null,
     });
     if (!updated) return;
-    setSessionIndexItems((prev) =>
-      prev.flatMap((i) => {
+    setSessionIndexItems((prev) => {
+      const belongsHere = updated.archived === showArchived;
+      // The row can be written from a view it was never drawn in: the settled
+      // split keeps the selection across a toggle, so the composer's unsettle
+      // bar is reachable while the sidebar is showing the active list. Left to
+      // the map below that write lands nowhere — the row is in neither list,
+      // and the session the reader just took back has no row at all until
+      // something else refetches.
+      if (belongsHere && !prev.some((i) => i.sessionId === sessionId)) {
+        return [...prev, updated];
+      }
+
+      return prev.flatMap((i) => {
         if (i.sessionId !== sessionId) return [i];
         // Archiving from the active list — or unarchiving from the archived one —
         // moves the row to the other view, so it leaves this one rather than
         // sitting there contradicting the filter that produced the list.
-        return updated.archived === showArchived ? [updated] : [];
-      }),
-    );
+        return belongsHere ? [updated] : [];
+      });
+    });
     // The open transcript keeps its own copy of the index fields, and it's what
     // the composer reads `archived` from — left alone, settling the session on
     // screen would swap in the unsettle bar only after a reselect.
