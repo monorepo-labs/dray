@@ -43,7 +43,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::rpc::PiClient;
 use crate::events::AgentEvent;
-use crate::harness::claude_code::permissions::PendingPermissions;
+use crate::harness::claude_code::permissions::{PendingPermissions, PendingRequest};
 
 /// One session's answering handles.
 ///
@@ -185,6 +185,75 @@ impl Desk {
         Ok(())
     }
 
+    /// Stops the run, and answers whatever it was asking first.
+    ///
+    /// Takes the desk's route for `answer`'s reason, and one more: the shell row
+    /// the composer draws for a *new* session puts Stop on screen during the
+    /// very window in which the backend `Session` is still a local inside
+    /// `send_msg`, unreachable through `SessionManager`'s map. Reached that way
+    /// Stop answered "no running session" and neither cancelled the dialog nor
+    /// aborted pi — a button drawn over a blocked agent that provably did
+    /// nothing.
+    ///
+    /// Order matters twice. The dialogs are cancelled **before** the abort,
+    /// because `abort` ends the agent and leaves `pendingExtensionRequests`
+    /// untouched — so a dialog left unanswered holds its extension open through
+    /// a Stop that reported success. And `clear_queue` precedes `abort` inside
+    /// [`interrupt`](super::interrupt), because aborting alone lets anything
+    /// steered behind the run start the moment it ends.
+    pub async fn stop(&self, app: &AppHandle) -> Result<()> {
+        self.cancel_cards(app);
+        super::interrupt(&self.client).await
+    }
+
+    /// Answers every card still up with a cancel, which is what unblocks the
+    /// extension waiting on one.
+    ///
+    /// Best-effort throughout: the abort behind this is what the reader pressed
+    /// and has to go out regardless, so a dialog that fails to be answered costs
+    /// a stranded extension where a Stop that fails costs the session.
+    fn cancel_cards(&self, app: &AppHandle) {
+        for (request_id, request) in self.cancel_outstanding() {
+            self.emit_decided(app, request_id, request.tool_use_id, "Stopped");
+        }
+    }
+
+    /// Opens the refusal window and answers everything outstanding, leaving the
+    /// cards for the caller to retire.
+    ///
+    /// Split from the emit for `compose`'s reason: an `AppHandle` is the one
+    /// thing a unit test cannot build, and everything worth pinning here — that
+    /// a Stop *answers* rather than merely dropping, and that it leaves the desk
+    /// open — happens on this side of the line.
+    fn cancel_outstanding(&self) -> Vec<(String, PendingRequest)> {
+        // Opened before the drain, and the drain is a snapshot: pi is several
+        // lines ahead, so a dialog raised as the abort goes out would otherwise
+        // survive the Stop. `register_dialog` reads this under the same lock it
+        // registers into, which is what makes the pair total.
+        self.client.begin_stop();
+
+        let outstanding = self.drain();
+        for (request_id, request) in &outstanding {
+            let Some(method) = &request.pi_dialog_method else {
+                continue;
+            };
+
+            if let Err(error) =
+                self.client
+                    .send(&super::dialog::response(method, request_id, &HashMap::new()))
+            {
+                eprintln!("[pi] could not cancel dialog {request_id}: {error}");
+            }
+        }
+
+        outstanding
+    }
+
+    #[cfg(test)]
+    fn cancel_cards_for_test(&self) {
+        let _ = self.cancel_outstanding();
+    }
+
     /// Retires every card still up, because the pi that asked has gone.
     ///
     /// Called when the reader ends, which is the one signal that covers every
@@ -193,53 +262,65 @@ impl Desk {
     /// whose writer has already broken, and the card retires reporting
     /// "Answered" for a reply that reached nothing.
     ///
-    /// `Deny` and `automatic`, matching a Stop's own cancellation: nobody
-    /// decided anything, and the card is being taken away rather than answered.
-    /// Emitted and not persisted, like every other decision here — the request
-    /// was never written either, since only the child that asked could answer
-    /// it.
     fn retire_all(&self, app: &AppHandle) {
-        let outstanding: Vec<(String, String)> = {
-            let mut guard = self.pending.lock().expect("pending permissions poisoned");
+        // No reply goes out, unlike a Stop's cancellation: the child this would
+        // answer has gone, so a line here could only be queued behind its own
+        // death and dropped.
+        for (request_id, request) in self.drain_closing() {
+            self.emit_decided(app, request_id, request.tool_use_id, "Ended");
+        }
+    }
 
-            // Flagged and drained in one critical section, and read back in
-            // `compose`'s. That is what makes the two total rather than merely
-            // narrow: whichever section runs first decides, so either the click
-            // took its entry while the child was still alive, or teardown had
-            // begun and the click is refused. Flagged *outside* the lock the two
-            // are separate steps, and a click that read the flag a moment before
-            // it was set still claims a delivery into a writer that is already
-            // breaking.
-            self.closed.store(true, Relaxed);
+    /// Takes every outstanding card, leaving the desk open.
+    fn drain(&self) -> Vec<(String, PendingRequest)> {
+        self.pending
+            .lock()
+            .expect("pending permissions poisoned")
+            .drain()
+            .collect()
+    }
 
-            guard
-                .drain()
-                .map(|(id, request)| (id, request.tool_use_id))
-                .collect()
+    /// Takes them and shuts the desk in one critical section.
+    ///
+    /// One section, not two, and that is what makes the click race total rather
+    /// than merely narrow: `compose` reads the same flag under the same lock it
+    /// takes its entry from, so whichever section runs first decides. Flagged
+    /// outside the lock the two are separate steps, and a click reading the flag
+    /// a moment before it was set still claims a delivery into a writer that is
+    /// already breaking.
+    fn drain_closing(&self) -> Vec<(String, PendingRequest)> {
+        let mut guard = self.pending.lock().expect("pending permissions poisoned");
+        self.closed.store(true, Relaxed);
+        guard.drain().collect()
+    }
+
+    /// The event that takes a card away without anyone having answered it.
+    ///
+    /// `Deny` and `automatic`: nobody decided anything, and the card is being
+    /// removed rather than answered. Emitted and not persisted, like every other
+    /// decision here — the request was never written either, since only the
+    /// child that asked could answer it.
+    fn emit_decided(&self, app: &AppHandle, request_id: String, tool_use_id: String, label: &str) {
+        let decided = AgentEvent {
+            id: uuid::Uuid::now_v7().to_string(),
+            session_id: self.session_id.clone(),
+            harness: crate::harness::Harness::Pi,
+            seq: self.seq.fetch_add(1, Relaxed),
+            ts: crate::events::now_rfc3339(),
+            turn_id: None,
+            subagent: None,
+            payload: crate::events::AgentEventPayload::PermissionDecided {
+                request_id,
+                tool_use_id,
+                behavior: crate::events::PermissionBehavior::Deny,
+                label: label.to_string(),
+                automatic: true,
+            },
+            raw: None,
         };
 
-        for (request_id, tool_use_id) in outstanding {
-            let decided = AgentEvent {
-                id: uuid::Uuid::now_v7().to_string(),
-                session_id: self.session_id.clone(),
-                harness: crate::harness::Harness::Pi,
-                seq: self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                ts: crate::events::now_rfc3339(),
-                turn_id: None,
-                subagent: None,
-                payload: crate::events::AgentEventPayload::PermissionDecided {
-                    request_id,
-                    tool_use_id,
-                    behavior: crate::events::PermissionBehavior::Deny,
-                    label: "Ended".to_string(),
-                    automatic: true,
-                },
-                raw: None,
-            };
-
-            if let Err(error) = app.emit("agent_event", &decided) {
-                eprintln!("[pi] could not retire a dialog: {error}");
-            }
+        if let Err(error) = app.emit("agent_event", &decided) {
+            eprintln!("[pi] could not retire a dialog: {error}");
         }
     }
 
@@ -297,7 +378,6 @@ impl Desk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::claude_code::permissions::PendingRequest;
 
     fn request(request_id: &str, method: &str) -> PendingRequest {
         PendingRequest {
@@ -421,6 +501,33 @@ mod tests {
 
         let (reply, _) = desk.compose("d-3", &HashMap::new()).expect("answered");
         assert_eq!(reply["cancelled"], Value::Bool(true));
+
+        let _ = claim(&id, token);
+    }
+
+    /// A Stop answers the cards it takes, where a teardown only removes them.
+    ///
+    /// The difference is which end has gone. `abort` ends the *agent* and leaves
+    /// `pendingExtensionRequests` untouched, so a dialog left unanswered holds
+    /// its extension open through a Stop that reported success — the cancel is
+    /// what unblocks it. A teardown has no child left to tell.
+    #[test]
+    fn a_stop_cancels_its_cards_where_a_teardown_only_takes_them() {
+        let (id, token, desk, pending) = desk_holding("d-6", "confirm");
+
+        desk.cancel_cards_for_test();
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "a Stop clears what was outstanding"
+        );
+        assert!(
+            desk.client.stopping(),
+            "and refuses whatever the dying run raises next"
+        );
+        assert!(
+            !desk.closed.load(Relaxed),
+            "but the desk stays open — the session did not end"
+        );
 
         let _ = claim(&id, token);
     }

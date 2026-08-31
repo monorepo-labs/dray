@@ -82,10 +82,17 @@ pub struct PiClient {
     tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicU64>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
-    /// Set the moment stdin is closed, so nothing is told its line was taken
-    /// after that. The queue alone cannot answer this: it accepts lines behind
-    /// the `Close` marker and the writer drops them.
-    closed: Arc<AtomicBool>,
+    /// Whether stdin has been closed, and the gate every write passes through.
+    ///
+    /// A `Mutex<bool>` rather than an atomic, because the flag and the queue
+    /// have to move together. The queue accepts lines it will never write:
+    /// `close` enqueues a `Close` marker and the writer drops everything behind
+    /// it, while `tx.send` answers `Ok` for each — so an answered dialog took
+    /// that `Ok` as delivery and retired its card claiming a reply had reached a
+    /// pi that never saw it. Checking a flag and then sending is two steps, and
+    /// a close landing between them lands in exactly that hole; under one lock
+    /// there is no between. Nothing awaits inside either critical section.
+    closed: Arc<std::sync::Mutex<bool>>,
     /// Set from the moment a Stop starts until the next run begins, so an
     /// extension dialog raised in that gap is refused rather than drawn.
     ///
@@ -138,7 +145,7 @@ impl PiClient {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -156,7 +163,7 @@ impl PiClient {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -249,18 +256,16 @@ impl PiClient {
     /// `extension_ui_response`, which carries pi's *own* id rather than one
     /// this client minted, and so must not go near the pending map.
     pub fn send(&self, line: &Value) -> Result<()> {
-        // Read before the queue, because the queue accepts lines it will never
-        // write. `close` only *enqueues* a `Close`, so anything sent after it
-        // lands behind that marker and is dropped when the writer breaks — and
-        // `tx.send` answers `Ok` for every one of them. An answered dialog took
-        // that `Ok` as delivery and retired its card claiming a reply had
-        // reached a pi that never saw it.
-        if self.closed.load(Relaxed) {
+        let line = serde_json::to_string(line)?;
+
+        // Held across the queue write, so a `close` cannot land between the two.
+        let closed = self.closed.lock().expect("pi stdin flag poisoned");
+        if *closed {
             bail!("pi's stdin is closed");
         }
 
         self.tx
-            .send(Outbound::Line(serde_json::to_string(line)?))
+            .send(Outbound::Line(line))
             .context("pi's stdin writer has stopped")
     }
 
@@ -277,10 +282,10 @@ impl PiClient {
     /// Best effort by construction — a writer that has already stopped means
     /// the child is gone, which is the state this was asking for.
     pub fn close(&self) {
-        // Set before the marker is queued, and synchronously, so that from here
-        // no caller can be told a line was taken. The writer task drains
-        // asynchronously and drops whatever is behind the `Close`.
-        self.closed.store(true, Relaxed);
+        // Flagged and queued under one lock, so every write is either wholly
+        // before this or refused by it.
+        let mut closed = self.closed.lock().expect("pi stdin flag poisoned");
+        *closed = true;
         let _ = self.tx.send(Outbound::Close);
     }
 
@@ -340,7 +345,7 @@ mod tests {
         PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -518,7 +523,7 @@ mod tests {
         let client = PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -529,6 +534,38 @@ mod tests {
             .expect_err("the pipe is closed");
 
         assert!(client.pending.lock().await.is_empty());
+    }
+
+    /// Nothing is told its line was taken once stdin is closed.
+    ///
+    /// `close` only *enqueues* a `Close`, and the writer drops everything behind
+    /// it while `tx.send` answers `Ok` for each — so an answered dialog took
+    /// that `Ok` as delivery and retired its card claiming a reply had reached a
+    /// pi that never saw it. The flag and the queue move under one lock, so a
+    /// write is either wholly before the close or refused by it.
+    #[tokio::test]
+    async fn a_closed_client_refuses_rather_than_queueing() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let client = PiClient {
+            tx,
+            next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        client.send(&json!({"type": "before"})).expect("stdin is open");
+        client.close();
+        client
+            .send(&json!({"type": "after"}))
+            .expect_err("a line behind the close would be dropped, not written");
+
+        assert!(matches!(rx.recv().await, Some(Outbound::Line(_))));
+        assert!(matches!(rx.recv().await, Some(Outbound::Close)));
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing may be queued behind the close"
+        );
     }
 
     /// The refusal window is shared, which is the whole reason it lives here.
@@ -543,7 +580,7 @@ mod tests {
         let client = PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         };

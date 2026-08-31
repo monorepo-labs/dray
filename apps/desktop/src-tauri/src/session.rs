@@ -1033,12 +1033,22 @@ impl SessionManager {
     /// changed nothing. Naming the tasks here is what makes one Stop mean stop.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
     pub async fn interrupt(&self, session_id: &str, app: &AppHandle) -> Result<()> {
+        // pi stops off its own desk, for `answer_questions`' reason and one
+        // more: the optimistic row the composer draws for a new session puts
+        // Stop on screen while the backend `Session` is still a local inside
+        // `send_msg`, so reaching for the map here answered "no running session"
+        // over a blocked agent. pi has no background tasks either, so the desk
+        // does the whole job and the fan-out below is Claude Code's alone.
+        if let Some(desk) = crate::harness::pi::desk::find(session_id) {
+            return desk.stop(app).await;
+        }
+
         let mut sessions_guard = self.sessions.lock().await;
         let Some(session) = sessions_guard.get_mut(session_id) else {
             bail!("no running session {session_id}");
         };
 
-        session.interrupt(app).await?;
+        session.interrupt().await?;
 
         // Read after the interrupt, so a task the CLI did stop on its own is
         // already gone from the set rather than stopped twice. Harmless either
@@ -1568,90 +1578,13 @@ impl Session {
         Ok(())
     }
 
-    /// Answers every dialog still on screen, so a Stop does not strand one.
-    ///
-    /// pi blocks the tool call that raised a dialog until a response carrying
-    /// its id comes back, and `abort` ends the *agent* — it does not resolve a
-    /// promise an extension is awaiting inside a `tool_call` hook. So a Stop
-    /// pressed with a card up left the extension waiting on a reply and the
-    /// card on screen offering buttons whose id nothing would answer for.
-    ///
-    /// `cancelled: true` for each, which every dialog understands and resolves
-    /// to the default it was constructed with. That is what Stop means: the
-    /// reader did not answer, and they are not going to.
-    ///
-    /// Best-effort throughout. The abort behind this is what the reader pressed
-    /// and must go out regardless — a dialog that fails to be answered here
-    /// costs a stranded extension, where a Stop that fails costs the session.
-    async fn cancel_pending_dialogs(&self, app: &AppHandle) {
-        let Transport::Pi(client) = &self.stdin else {
-            return;
-        };
-
-        // Set before the drain, never after: pi is several lines ahead of this
-        // one, so the window has to be open before the snapshot is taken or a
-        // dialog can land in the gap between the two and be registered by a
-        // reader that has not been told to refuse yet. The reader closes it
-        // again at the next run's first line.
-        client.begin_stop();
-
-        let pending: Vec<(String, crate::harness::claude_code::permissions::PendingRequest)> = {
-            let mut guard = self
-                .pending_permissions
-                .lock()
-                .expect("pending permissions mutex poisoned");
-            guard.drain().collect()
-        };
-
-        for (request_id, request) in pending {
-            let Some(method) = &request.pi_dialog_method else {
-                continue;
-            };
-
-            if let Err(error) = client.send(&crate::harness::pi::dialog::response(
-                method,
-                &request_id,
-                &HashMap::new(),
-            )) {
-                eprintln!("[pi] could not cancel dialog {request_id}: {error}");
-            }
-
-            // Emitted so the card goes with the turn it belonged to. Not
-            // persisted, like every other decision: the request was never
-            // written either, because only the child that asked could answer it.
-            let payload = AgentEventPayload::PermissionDecided {
-                request_id,
-                tool_use_id: request.tool_use_id,
-                behavior: PermissionBehavior::Deny,
-                label: "Stopped".to_string(),
-                automatic: true,
-            };
-
-            let decided = AgentEvent {
-                id: Uuid::now_v7().to_string(),
-                session_id: self.id.clone(),
-                harness: self.harness,
-                seq: self.seq.fetch_add(1, Relaxed),
-                ts: now_rfc3339(),
-                turn_id: None,
-                subagent: None,
-                payload,
-                raw: None,
-            };
-
-            if let Err(error) = app.emit("agent_event", &decided) {
-                eprintln!("[pi emit err] {error}");
-            }
-        }
-    }
-
     /// Interrupts the in-flight turn without killing the child. Verified
     /// against the CLI: it acks with a `control_response`, aborts running tools
     /// (`terminal_reason: "aborted_tools"`) or streaming
     /// (`"aborted_streaming"`), ends the turn as `error_during_execution`, and
     /// usually opens a follow-up turn to narrate the abort — so the status
     /// machine needs nothing special here, the resulting events drive it.
-    pub async fn interrupt(&mut self, app: &AppHandle) -> Result<()> {
+    pub async fn interrupt(&mut self) -> Result<()> {
         // Codex answers the ack immediately and ends the turn with its own
         // `turn/completed` carrying `interrupted`, so the reader is what
         // reports the stop — nothing waits here for the turn to actually end.
@@ -1659,16 +1592,12 @@ impl Session {
             return crate::harness::codex::interrupt_turn(thread).await;
         }
 
-        // Two commands, in this order. `clear_queue` first because `abort`
-        // ends the *running* agent and leaves anything steered or queued
-        // behind it to start the moment it does — so aborting alone reads as
-        // Stop having done nothing. It answers with what it dropped, which is
-        // discarded here: the composer takes prompts back through
-        // `cancel_queued`, and these are pi's own copies of ones the reader
-        // has already seen sent.
-        if let Transport::Pi(client) = &self.stdin {
-            self.cancel_pending_dialogs(app).await;
-            return crate::harness::pi::interrupt(client).await;
+        // pi never reaches here: its Stop goes through
+        // [`pi::desk`](crate::harness::pi::desk), which is registered for the
+        // life of the reader. Arriving means the desk has gone and the child
+        // with it, so there is nothing left to abort.
+        if matches!(self.stdin, Transport::Pi(_)) {
+            bail!("that pi session is no longer running");
         }
 
         write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
