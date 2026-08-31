@@ -1820,6 +1820,16 @@ impl Session {
         answers: HashMap<String, String>,
         app: &AppHandle,
     ) -> Result<()> {
+        // Refused *before* the entry is taken, which is the whole of the
+        // ordering. pi never reaches here — its answers go through
+        // [`pi::desk`](crate::harness::pi::desk) — so arriving means the desk
+        // has gone and the child with it. Taking the entry first and refusing
+        // second consumed the one thing the reader's own retirement needed to
+        // find, so the card it could no longer answer was never retired either.
+        if matches!(self.stdin, Transport::Pi(_)) {
+            bail!("that pi session is no longer running");
+        }
+
         let pending = {
             let mut guard = self
                 .pending_permissions
@@ -1830,17 +1840,6 @@ impl Session {
                 .remove(request_id)
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
-
-        // pi never reaches here: its answers go through
-        // [`pi::desk`](crate::harness::pi::desk), which is registered for the
-        // life of the reader. Arriving anyway means the desk has been closed —
-        // the child has gone — and the honest answer is to say so. Writing to
-        // the client instead is what the desk exists to stop: the line joins a
-        // queue whose writer has already broken and the card retires claiming an
-        // answer landed.
-        if matches!(self.stdin, Transport::Pi(_)) {
-            bail!("that pi session is no longer running");
-        }
 
         write_line(
             self.stdin.lines()?,

@@ -82,6 +82,10 @@ pub struct PiClient {
     tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicU64>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+    /// Set the moment stdin is closed, so nothing is told its line was taken
+    /// after that. The queue alone cannot answer this: it accepts lines behind
+    /// the `Close` marker and the writer drops them.
+    closed: Arc<AtomicBool>,
     /// Set from the moment a Stop starts until the next run begins, so an
     /// extension dialog raised in that gap is refused rather than drawn.
     ///
@@ -134,6 +138,7 @@ impl PiClient {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -151,6 +156,7 @@ impl PiClient {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -243,6 +249,16 @@ impl PiClient {
     /// `extension_ui_response`, which carries pi's *own* id rather than one
     /// this client minted, and so must not go near the pending map.
     pub fn send(&self, line: &Value) -> Result<()> {
+        // Read before the queue, because the queue accepts lines it will never
+        // write. `close` only *enqueues* a `Close`, so anything sent after it
+        // lands behind that marker and is dropped when the writer breaks — and
+        // `tx.send` answers `Ok` for every one of them. An answered dialog took
+        // that `Ok` as delivery and retired its card claiming a reply had
+        // reached a pi that never saw it.
+        if self.closed.load(Relaxed) {
+            bail!("pi's stdin is closed");
+        }
+
         self.tx
             .send(Outbound::Line(serde_json::to_string(line)?))
             .context("pi's stdin writer has stopped")
@@ -261,6 +277,10 @@ impl PiClient {
     /// Best effort by construction — a writer that has already stopped means
     /// the child is gone, which is the state this was asking for.
     pub fn close(&self) {
+        // Set before the marker is queued, and synchronously, so that from here
+        // no caller can be told a line was taken. The writer task drains
+        // asynchronously and drops whatever is behind the `Close`.
+        self.closed.store(true, Relaxed);
         let _ = self.tx.send(Outbound::Close);
     }
 
@@ -320,6 +340,7 @@ mod tests {
         PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -497,6 +518,7 @@ mod tests {
         let client = PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -521,6 +543,7 @@ mod tests {
         let client = PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            closed: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         };

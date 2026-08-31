@@ -351,20 +351,28 @@ const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
   earlyEvents.delete(snapshot.sessionId);
   if (!held?.size) return snapshot;
 
-  const seen = new Set(snapshot.events.map((e) => e.id));
-  const missing = [...held.values()].filter((e) => !seen.has(e.id));
-  if (!missing.length) return snapshot;
+  return mergeEvents(snapshot, [...held.values()]);
+};
 
-  return {
-    ...snapshot,
-    events: [...snapshot.events, ...missing].sort((a, b) => a.seq - b.seq),
-  };
+// Merged by event id against whatever is already on screen, never a plain
+// replace. A snapshot's events come from the log, and the log does not carry a
+// permission request — so replacing a row that has been taking live events would
+// drop exactly the card the reader is being asked to answer. The same id rule as
+// `withEarlyEvents`, and for the same reason it is exact.
+const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
+  const seen = new Set(into.events.map((e) => e.id));
+  const missing = from.filter((e) => !seen.has(e.id));
+  if (!missing.length) return into;
+
+  return { ...into, events: [...into.events, ...missing].sort((a, b) => a.seq - b.seq) };
 };
 
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
     prev.some((s) => s.sessionId === snapshot.sessionId)
-      ? prev.map((s) => (s.sessionId === snapshot.sessionId ? snapshot : s))
+      ? prev.map((s) =>
+          s.sessionId === snapshot.sessionId ? mergeEvents(snapshot, s.events) : s,
+        )
       : [...prev, snapshot],
   );
 
@@ -410,6 +418,49 @@ const handleSendMsg = async (
   // new session has to spawn a process before it can announce anything, so the
   // first `model_request_started` is a cold start away.
   setWorkingBySession((prev) => ({ ...prev, [sessionId]: { tokens: 0 } }));
+
+  // A row for the session before the backend has answered for it, and this one
+  // is not a nicety like the two above. A new session reaches `sessions` only
+  // when `send_msg` resolves, and pi does not resolve that call until its
+  // `input` and `before_agent_start` extension handlers have run — either of
+  // which can raise a *blocking* question. With no row there is no transcript,
+  // so the card that would answer it is never drawn, and the prompt times out
+  // thirty seconds later having asked nobody. Holding the event was not enough:
+  // the merge that would have shown it runs on the reply that is doing the
+  // waiting.
+  //
+  // Every field is one this call is already passing, so nothing here is a guess.
+  // The three the backend alone resolves — the worktree name, the truncated
+  // title, the recorded branch — arrive with the snapshot and replace these.
+  if (isNewSession) {
+    const shell: SessionSnapshot = {
+      events: [],
+      sessionId,
+      harness,
+      cwd,
+      projectPath: projectPath ?? cwd,
+      branch: !useWorktree ? branch : null,
+      worktreeName: null,
+      worktreeRemoved: false,
+      // Provisional. The backend truncates its own way and `session_title`
+      // overwrites it again once generation lands, so this only has to be
+      // better than an empty header for the seconds in between.
+      title: message.trim().replace(/\n/g, " ").slice(0, 60),
+      model: modelId,
+      effort,
+      permissionMode: stanceFor(harness, permissionMode),
+      status: "in_progress",
+      forkFrom: null,
+      threadId: null,
+      issues: [],
+      parentSessionId: null,
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      archived: false,
+      pinned: false,
+    };
+    upsertSession(shell);
+  }
 
   try {
     const outcome = await invoke<SendOutcome>("send_msg", {
@@ -495,6 +546,18 @@ const handleSendMsg = async (
     if (!wasBusy) {
       setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
       setWorkingBySession((prev) => ({ ...prev, [sessionId]: null }));
+    }
+    // The shell described a session the backend never made, so it goes with the
+    // failure — left behind it is a transcript for a session no sidebar row
+    // names and no child is behind. The selection goes too, which puts the
+    // composer back where the reader typed, with `useDraft` still holding the
+    // text under the new-task key.
+    if (isNewSession) {
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      earlyEvents.delete(sessionId);
+      if (selectionRequestRef.current === sessionId) {
+        setSelectedSessionId(null);
+      }
     }
     setError(String(e));
   }

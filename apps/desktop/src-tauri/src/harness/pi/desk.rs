@@ -119,9 +119,28 @@ pub fn open(
 /// explicit kill — a respawn, a delete, a first send that failed — reached this
 /// point with nothing left to retire and left its cards up.
 pub fn end(session_id: &str, token: u64, app: &AppHandle) {
-    if let Some(desk) = claim(session_id, token) {
-        desk.retire_all(app);
-    }
+    let Some(desk) = current(session_id, token) else {
+        return;
+    };
+
+    // Retired while still registered, and unregistered only after. Removing
+    // first opened a gap in which an answer found no desk, fell through to the
+    // session, and took the pending entry from the very map the retirement was
+    // about to drain — so the card could neither be answered nor retired. While
+    // it is still registered a click reaches `compose`, which refuses it under
+    // the same lock this drains under.
+    desk.retire_all(app);
+    claim(session_id, token);
+}
+
+/// The desk registered under this id, if the token still names it.
+fn current(session_id: &str, token: u64) -> Option<Desk> {
+    DESKS
+        .lock()
+        .expect("desk registry poisoned")
+        .get(session_id)
+        .filter(|desk| desk.token == token)
+        .cloned()
 }
 
 /// Takes a desk out of the registry, but only where the token still names the

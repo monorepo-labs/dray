@@ -347,6 +347,23 @@ the agent sat blocked behind the card.
 
 Still not started there: fork at a chosen message.
 
+**A new session gets a row before the backend answers for it**, and that is what
+finally draws the card. Holding the event was not enough, and the reason is worth
+stating because it looked like a fix: the merge that would have shown it runs on
+the very reply that is doing the waiting. `send_msg` does not resolve until pi
+accepts the prompt, and pi does not accept it until its `input` and
+`before_agent_start` handlers have run — either of which can raise the blocking
+question. So the shell is written before the call, beside the optimistic status
+and working writes already there, out of the values that call is already being
+passed. The three the backend alone resolves — worktree name, truncated title,
+recorded branch — arrive with the snapshot and replace them, and the whole row
+goes again if the send fails.
+
+`upsertSession` therefore **merges by event id** rather than replacing. A
+snapshot's events come from the log, and the log carries no permission request,
+so replacing a row that had been taking live events dropped exactly the card the
+reader was being asked to answer.
+
 **An event that arrives before its session does is held, not dropped.**
 `useSessions`' listener wrote into sessions it already had, and a new one reaches
 that array only when its first `send_msg` resolves — by which time its child has
@@ -367,6 +384,13 @@ in development, so a list took each event twice and drew two cards under one
 React key. Both dimensions are capped: per session against a burst, and across
 sessions because a failed send leaves an entry under an id nothing will ever
 claim and every retry mints a fresh one.
+
+**`PiClient::close` is synchronous now, and it had to be.** It only *enqueued* a
+`Close`, so a line sent after it landed behind that marker, answered `Ok`, and
+was dropped when the writer broke — an answered dialog took that `Ok` as
+delivery and retired its card claiming a reply had reached a pi that never saw
+it. A flag set before the marker is queued, and read by `send`, is what makes the
+refusal true rather than merely likely.
 
 One gap left in the dialog channel: `opts.timeout` rides `select`, `confirm` and
 `input`, and Dray ignores it — so a card can outlive the dialog it draws and
