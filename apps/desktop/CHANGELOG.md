@@ -5,6 +5,44 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.10.0
+
+### Added
+
+- **Markdown opens in the side panel, and you can edit it there.** Clicking a
+  `.md` file in the chat used to hand it to an external editor to read
+  something Dray already renders. It now opens in a Docs tab beside Changes
+  and PR, with a view/edit toggle. Anything that isn't markdown still goes to
+  your editor.
+
+  Saving is explicit, and a save is refused rather than landing if the file
+  changed underneath — the agent shares the checkout — with Reload or
+  Overwrite offered at that point.
+
+- **A Branch tab in the Changes view, for this session's own commits.**
+  History logs the whole branch, so a session's commits sat buried under
+  however long the branch it forked from is. The base comes from the branch's
+  own reflog, so a session started from another session's branch doesn't claim
+  that branch's work.
+
+- **Beta updates, in Settings under About.** The channel existed and nothing
+  could reach it. Turning it on offers prereleases; turning it off leaves you
+  on the next stable build, since a stable release always sorts above the
+  betas that preceded it.
+
+### Fixed
+
+- **A light palette on a Mac set to Dark no longer goes grey.** The window's
+  blur followed the system rather than the mode you picked, and light hid it
+  by nearly giving up on glass. It's properly translucent again.
+- **The composer has an edge again in dark mode.** It was left with neither
+  border nor shadow, so the card floated over the transcript with nothing
+  drawing the box.
+- **A stable release no longer moves the beta channel backwards.** A hotfix
+  shipped while a beta was open replaced the beta manifest with an older
+  version, so beta readers saw nothing and a fresh opt-in could never reach
+  the open beta.
+
 ## 0.9.3
 
 ### Fixed
