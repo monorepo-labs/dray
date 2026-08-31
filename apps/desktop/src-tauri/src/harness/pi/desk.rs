@@ -5,22 +5,27 @@
 //! breaks it because pi can ask a *blocking* question at two moments when the
 //! session is not in that map, or when the lock guarding it is held:
 //!
-//! - **Before the first prompt is accepted.** `resolveProjectTrusted` calls
-//!   `ctx.ui.select` during startup for any directory holding `.pi` resources
-//!   with no stored decision, so the first pi session in a project asks before
-//!   the handshake has even answered — and a new session is inserted into the
-//!   map only after its first `send_msg` returns.
-//! - **During any prompt's preflight.** pi answers a `prompt` command only
+//! - **On a *new* session's first prompt.** pi answers a `prompt` command only
 //!   after `_tryExecuteExtensionCommand`, `emitInput` and `emitBeforeAgentStart`
-//!   have run, and each of those can call `ctx.ui.confirm`. `send_msg` for a
-//!   live session runs under the session map's own lock, so the answer that
-//!   would release pi waits on the lock the send holds while it waits on the
-//!   answer.
+//!   have run, and each can call `ctx.ui.confirm`. A new session is inserted
+//!   into the map only after that first `send_msg` returns, so the question
+//!   arrives while nothing there holds it.
+//! - **On a live session's, under the map's own lock.** `send_msg` runs holding
+//!   it, so the answer that would release pi waits on the lock the send holds
+//!   while it waits on the answer — and that lock is one lock for the whole app,
+//!   so every other session's controls wait with it.
 //!
 //! Both ended the same way: the card was drawn, its buttons did nothing, and
-//! the prompt failed 30 seconds later when the request timed out — taking every
-//! other session's controls with it in the second case, since that lock is one
-//! lock for the whole app.
+//! the prompt failed 30 seconds later when the request timed out.
+//!
+//! Project trust looked like a third and is not, which is worth writing down
+//! because the source reads that way until the last step. `resolveProjectTrusted`
+//! does call `ctx.ui.select` — but only past `if (!hasUI) return false`, and
+//! `main.js` sets `hasUI` to `isInitialRuntime && trustPromptMode ===
+//! "interactive"`, where `trustPromptMode` is the app mode. Under `--mode rpc`
+//! it is `"rpc"`, so pi never asks and answers *untrusted* instead: a project
+//! holding `.pi` resources with no stored decision silently does not load
+//! them.
 //!
 //! So the answer does not go through the session at all. Everything it needs is
 //! a handle the read loop already holds — the pending map, the client, the id
@@ -113,6 +118,53 @@ impl Desk {
         self.client.send(&reply)?;
         app.emit("agent_event", &decided)?;
         Ok(())
+    }
+
+    /// Retires every card still up, because the pi that asked has gone.
+    ///
+    /// Called when the reader ends, which is the one signal that covers every
+    /// way a child can leave — asked to, killed, or crashed. Without it a stale
+    /// desk answers: the click removes the entry, the line goes into a queue
+    /// whose writer has already broken, and the card retires reporting
+    /// "Answered" for a reply that reached nothing.
+    ///
+    /// `Deny` and `automatic`, matching a Stop's own cancellation: nobody
+    /// decided anything, and the card is being taken away rather than answered.
+    /// Emitted and not persisted, like every other decision here — the request
+    /// was never written either, since only the child that asked could answer
+    /// it.
+    pub fn retire_all(&self, app: &AppHandle) {
+        let outstanding: Vec<(String, String)> = {
+            let mut guard = self.pending.lock().expect("pending permissions poisoned");
+            guard
+                .drain()
+                .map(|(id, request)| (id, request.tool_use_id))
+                .collect()
+        };
+
+        for (request_id, tool_use_id) in outstanding {
+            let decided = AgentEvent {
+                id: uuid::Uuid::now_v7().to_string(),
+                session_id: self.session_id.clone(),
+                harness: crate::harness::Harness::Pi,
+                seq: self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                ts: crate::events::now_rfc3339(),
+                turn_id: None,
+                subagent: None,
+                payload: crate::events::AgentEventPayload::PermissionDecided {
+                    request_id,
+                    tool_use_id,
+                    behavior: crate::events::PermissionBehavior::Deny,
+                    label: "Ended".to_string(),
+                    automatic: true,
+                },
+                raw: None,
+            };
+
+            if let Err(error) = app.emit("agent_event", &decided) {
+                eprintln!("[pi] could not retire a dialog: {error}");
+            }
+        }
     }
 
     /// The reply and the event that retires the card, built together.

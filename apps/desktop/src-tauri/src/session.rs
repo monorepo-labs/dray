@@ -1831,22 +1831,22 @@ impl Session {
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
 
-        // Answered on the channel that asked, and in the shape that channel
-        // reads. pi's extension dialogs are not a permission verdict at all —
-        // each resolves the promise its own `ctx.ui` call returned — so they
-        // carry their method here rather than share one envelope.
-        match (&self.stdin, &pending.pi_dialog_method) {
-            (Transport::Pi(client), Some(method)) => {
-                client.send(&crate::harness::pi::dialog::response(method, request_id, &answers))?;
-            }
-            _ => {
-                write_line(
-                    self.stdin.lines()?,
-                    &answer_response(request_id, &pending, &answers),
-                )
-                .await?;
-            }
+        // pi never reaches here: its answers go through
+        // [`pi::desk`](crate::harness::pi::desk), which is registered for the
+        // life of the reader. Arriving anyway means the desk has been closed —
+        // the child has gone — and the honest answer is to say so. Writing to
+        // the client instead is what the desk exists to stop: the line joins a
+        // queue whose writer has already broken and the card retires claiming an
+        // answer landed.
+        if matches!(self.stdin, Transport::Pi(_)) {
+            bail!("that pi session is no longer running");
         }
+
+        write_line(
+            self.stdin.lines()?,
+            &answer_response(request_id, &pending, &answers),
+        )
+        .await?;
 
         let decision = dialog_decided(
             &self.id,

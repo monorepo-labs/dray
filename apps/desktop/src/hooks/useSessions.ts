@@ -301,6 +301,50 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 // Dedupes against the queued array, not the render snapshot: two fast clicks
 // both miss an `existing` check made before their `await`, and would otherwise
 // each append the same session.
+// Events that arrived before the session they belong to was here.
+//
+// A new session reaches `sessions` only when its first `send_msg` resolves, and
+// its child is already streaming by then: pi answers a `prompt` only after its
+// extension `input` and `before_agent_start` handlers have run, and either can
+// raise a *blocking* question. That question is the one event nothing can
+// replace, because permission requests are never written to the log — so it does
+// not come back in the snapshot, and dropping it left a card that was never
+// drawn over an agent waiting for its answer until the prompt timed out.
+//
+// Module-level for `useDraft`'s reason: the write site is an event listener
+// registered once, and the read site is a fetch that resolves after it.
+const earlyEvents = new Map<string, AgentEvent[]>();
+
+// A session whose snapshot never arrives keeps whatever it held, so this is
+// capped rather than trusted. Well past any real burst before one lands, and
+// small enough that a run of failed sends costs nothing worth measuring.
+const MAX_EARLY_EVENTS = 200;
+
+const holdEarlyEvent = (event: AgentEvent) => {
+  const held = earlyEvents.get(event.sessionId) ?? [];
+  held.push(event);
+  earlyEvents.set(event.sessionId, held.slice(-MAX_EARLY_EVENTS));
+};
+
+// Merged by event id, which is exact: an event that *was* persisted carries the
+// same id in the snapshot as it did on the wire, so this can hold everything and
+// still duplicate nothing. Choosing by payload type instead would be a second
+// copy of which events the log carries, free to disagree with the one in Rust.
+const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
+  const held = earlyEvents.get(snapshot.sessionId);
+  earlyEvents.delete(snapshot.sessionId);
+  if (!held?.length) return snapshot;
+
+  const seen = new Set(snapshot.events.map((e) => e.id));
+  const missing = held.filter((e) => !seen.has(e.id));
+  if (!missing.length) return snapshot;
+
+  return {
+    ...snapshot,
+    events: [...snapshot.events, ...missing].sort((a, b) => a.seq - b.seq),
+  };
+};
+
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
     prev.some((s) => s.sessionId === snapshot.sessionId)
@@ -408,7 +452,7 @@ const handleSendMsg = async (
     // Only a new session yields a snapshot. Built by the backend, so the resolved
     // worktree name and truncated title come from disk rather than a guess here.
     if (snapshot) {
-      upsertSession(snapshot);
+      upsertSession(withEarlyEvents(snapshot));
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       if (!showArchived) {
@@ -635,7 +679,7 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   try {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
-      upsertSession(snapshot);
+      upsertSession(withEarlyEvents(snapshot));
       return;
     }
 
@@ -949,7 +993,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   }
 
   setError(null);
-  upsertSession(snapshot);
+  upsertSession(withEarlyEvents(snapshot));
   // A fork is never archived, so it belongs to the active list alone — pushed
   // unconditionally it would show up under the archived filter too.
   if (!showArchived) {
@@ -1086,13 +1130,20 @@ useEffect(() => {
       const agentEvent = event.payload;
 
         if (agentEvent.payload.type != "delta") {
-            setSessions((prev) =>
-            prev.map((s) =>
+            setSessions((prev) => {
+            // Held rather than dropped where the session is not here yet. See
+            // `earlyEvents`: its child streams before its row exists.
+            if (!prev.some((s) => s.sessionId === agentEvent.sessionId)) {
+                holdEarlyEvent(agentEvent);
+                return prev;
+            }
+
+            return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
                 ? { ...s, events: [...s.events, agentEvent] }
                 : s,
-            ),
             );
+            });
 
             // A held prompt reached the CLI, so the pending row it was drawn as
             // gives way to the real one now in the transcript. Matched by

@@ -273,19 +273,35 @@ picked the model itself. Absence reads as capable, so a warning is never drawn
 on a guess.
 
 **A pi dialog is answered off its own desk, never through the session map**, and
-that came out of an adversarial review. pi asks blocking questions at two
-moments when the session is not reachable that way. `resolveProjectTrusted`
-calls `ctx.ui.select` during *startup* for any directory holding `.pi` resources
-with no stored decision, which is before a new session is ever inserted into the
-map. And pi answers a `prompt` only after `_tryExecuteExtensionCommand`,
-`emitInput` and `emitBeforeAgentStart` have all run — each able to ask — while
-`send_msg` for a live session holds the map's own lock, so the answer that would
-release pi waited on the lock the send held while it waited on the answer. Both
+that came out of an adversarial review. pi answers a `prompt` only after
+`_tryExecuteExtensionCommand`, `emitInput` and `emitBeforeAgentStart` have run,
+and each of those can call `ctx.ui.confirm`. On a *new* session that is before
+the first `send_msg` returns, which is the only thing that puts it in the map;
+on a live one it is under the map's own lock, so the answer that would release pi
+waited on the lock the send held while it waited on the answer — and that is one
+lock for the whole app, so every other session's controls waited with it. Both
 drew a card whose buttons did nothing until the prompt timed out thirty seconds
-later, and the second took every other session's controls down with it, since
-that lock is one lock for the whole app. `harness/pi/desk.rs` registers the four
-handles an answer needs — pending map, client, id, sequence — the moment the
-reader starts, and `answer_questions` looks there first.
+later. `harness/pi/desk.rs` registers the four handles an answer needs — pending
+map, client, id, sequence — the moment the reader starts, and `answer_questions`
+looks there first.
+
+Project trust looked like a third route and is not, which is worth recording
+because the source reads that way until the last step. `resolveProjectTrusted`
+does call `ctx.ui.select`, but only past `if (!hasUI) return false`, and
+`main.js` sets `hasUI` to `isInitialRuntime && trustPromptMode ===
+"interactive"` where `trustPromptMode` is the app mode. Under `--mode rpc` it is
+`"rpc"`, so pi never asks — it answers *untrusted*, and a project holding `.pi`
+resources with no stored decision silently does not load them. Worth knowing as
+pi behaviour; not a Dray defect, and nothing here can change it.
+
+**A desk closes when its reader ends, not only when Dray does the leaving.** The
+reader ending is the one signal covering every way a child can go — asked to,
+killed, crashed, or never past the handshake. A stale desk still answered: the
+click took the pending entry, the reply joined a queue whose writer had already
+broken, and the card retired reporting "Answered" for a line that reached
+nothing. Outstanding cards are retired on the way out, and `Session`'s own pi arm
+is gone rather than left as a fallback that would recreate exactly that false
+answer through a dead client.
 
 **Stop's refusal window closes on the outgoing prompt, not on the inbound
 `agent_start`.** Keyed on the inbound line it was open across exactly the
@@ -317,15 +333,22 @@ the agent sat blocked behind the card.
 
 Still not started there: fork at a chosen message.
 
-**Two gaps left in the dialog channel, both known.** A pi session's *first*
-prompt can raise a card the frontend drops: `useSessions`' listener writes into
-sessions it already holds, and a new session reaches that array only when
-`send_msg` returns — so a project-trust question asked during startup lights the
-sidebar rail and draws no card. The backend can answer it now; nothing draws the
-card to answer with. The cure is a session row created optimistically at send
-rather than on the reply. Separately, `opts.timeout` still rides `select`,
-`confirm` and `input` and Dray ignores it, so a card can outlive the dialog it
-draws and answer into a promise pi has already resolved.
+**An event that arrives before its session does is held, not dropped.**
+`useSessions`' listener wrote into sessions it already had, and a new one reaches
+that array only when its first `send_msg` resolves — by which time its child has
+been streaming for a while. For most events that cost nothing, since the snapshot
+carries the log; for a blocking question it cost everything, because a permission
+request is never *written* to the log, so the one event that could draw the card
+was the one event the snapshot could not replace. Held in a capped module-level
+map now and merged **by event id**, which is exact: a persisted event carries the
+same id in the snapshot as it did on the wire, so the buffer can hold everything
+and still duplicate nothing. Deciding by payload type instead would have been a
+second copy of which events the log carries, free to disagree with the one in
+Rust.
+
+One gap left in the dialog channel: `opts.timeout` rides `select`, `confirm` and
+`input`, and Dray ignores it — so a card can outlive the dialog it draws and
+answer into a promise pi has already resolved to its default.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had

@@ -197,6 +197,8 @@ pub async fn init(
         let queued = queued.clone();
         let seq = seq.clone();
         let pending = pending.clone();
+        let desk_id = session_id.clone();
+        let teardown_app = app.clone();
         async move {
             if let Err(error) = read_stdout(
                 stdout, client, session_id, session_cwd, events, status, queued, pending, seq, app,
@@ -205,6 +207,19 @@ pub async fn init(
             {
                 eprintln!("Failed to read pi stdout: {error}");
             }
+
+            // The reader ending is the one signal that covers every way a pi can
+            // leave — asked to, killed, crashed, or never past the handshake —
+            // so the desk closes here rather than only where Dray does the
+            // leaving. A stale one answers: the click takes the entry, the line
+            // joins a queue whose writer has already broken, and the card
+            // retires saying "Answered" for a reply that reached nothing.
+            //
+            // Retired before closed, since retiring is what needs the desk.
+            if let Some(desk) = desk::find(&desk_id) {
+                desk.retire_all(&teardown_app);
+            }
+            desk::close(&desk_id);
         }
     });
 
