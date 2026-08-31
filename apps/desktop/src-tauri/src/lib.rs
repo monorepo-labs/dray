@@ -340,6 +340,16 @@ async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<git::Commit
         .map_err(|e| e.to_string())
 }
 
+/// A page of the commits this branch made on its own, newest first — the same
+/// paging as [`log_commits`], against a range that stops at the fork point.
+/// Empty where no base can be named, which the list draws as its own sentence.
+#[tauri::command]
+async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<git::Commit>, String> {
+    git::log_branch_commits(cwd, limit, skip)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn sync_status(cwd: String) -> git::SyncStatus {
     git::sync_status(&cwd).await
@@ -643,6 +653,7 @@ pub fn run() {
             file_change,
             head_tree,
             log_commits,
+            log_branch_commits,
             sync_status,
             work_status,
             commit_files,

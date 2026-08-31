@@ -97,17 +97,35 @@ export type CommitLog = {
   commits: readonly Commit[];
   error: string | null;
   loading: boolean;
+  /// Whether a read has ever come back for this directory. Carried for
+  /// [useHeadTree]'s reason: until one has, an empty list says "not asked yet"
+  /// rather than "no commits", and a caller that folds the two decides on an
+  /// answer nobody gave it.
+  settled: boolean;
   /// The last page came back full, so there is probably another behind it.
   hasMore: boolean;
   loadMore: () => void;
   refresh: () => void;
 };
 
-/// The branch's history, a page at a time.
-export function useCommitLog(cwd: string, revision: string, active: boolean): CommitLog {
+/// A commit list, a page at a time.
+///
+/// Which list is the caller's, because two tabs read two different ones — the
+/// whole of HEAD's history, and just the commits this branch made since it
+/// forked — and both want the same paging, the same race token and the same
+/// `reconcileLog` behind them. Every call site names its command rather than
+/// one of them inheriting a default: a default is how the second reader
+/// quietly gets the first reader's list.
+export function useCommitLog(
+  cwd: string,
+  revision: string,
+  active: boolean,
+  command: string,
+): CommitLog {
   const [commits, setCommits] = useState<readonly Commit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [settled, setSettled] = useState(false);
   const [hasMore, setHasMore] = useState(false);
 
   // Read by `loadMore`, which must not close over a stale length: it is called
@@ -121,7 +139,7 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
   const read = useCallback(() => {
     const token = ++issued.current;
     setLoading(true);
-    void invoke<Commit[]>("log_commits", { cwd, limit: LOG_PAGE, skip: 0 })
+    void invoke<Commit[]>(command, { cwd, limit: LOG_PAGE, skip: 0 })
       .then((page) => {
         if (issued.current !== token) return;
         setCommits((prev) => reconcileLog(prev, page));
@@ -129,15 +147,19 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
         setError(null);
       })
       .catch((e) => issued.current === token && setError(String(e)))
-      .finally(() => issued.current === token && setLoading(false));
-  }, [cwd]);
+      .finally(() => {
+        if (issued.current !== token) return;
+        setLoading(false);
+        setSettled(true);
+      });
+  }, [cwd, command]);
 
   const loadMore = useCallback(() => {
     if (paging.current) return;
     paging.current = true;
 
     const token = issued.current;
-    void invoke<Commit[]>("log_commits", {
+    void invoke<Commit[]>(command, {
       cwd,
       limit: LOG_PAGE,
       skip: commitsRef.current.length,
@@ -158,19 +180,20 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
       .finally(() => {
         paging.current = false;
       });
-  }, [cwd]);
+  }, [cwd, command]);
 
   const [seeded, setSeeded] = useState(cwd);
   if (seeded !== cwd) {
     setSeeded(cwd);
     setCommits([]);
     setError(null);
+    setSettled(false);
     setHasMore(false);
   }
 
   usePolledRead(cwd, revision, active, read);
 
-  return { commits, error, loading, hasMore, loadMore, refresh: read };
+  return { commits, error, loading, settled, hasMore, loadMore, refresh: read };
 }
 
 /// Where the branch stands against its upstream, for the push button.

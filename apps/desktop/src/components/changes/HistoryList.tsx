@@ -11,13 +11,17 @@ import type { ChangedFile, Commit } from "@/types/events";
 /// In place rather than as a second column or a drill-in. A column would leave
 /// the diff the narrowest of three panes, and replacing the list would hide the
 /// history behind whichever commit was open. Opening in place keeps both on
-/// screen — and it is why **nothing is selected on arrival**: a first commit
-/// touching thirty files would push the rest of the history off screen before
-/// the reader had picked anything.
+/// screen — which is what lets the history tab arrive with nothing selected: a
+/// first commit touching thirty files would push the rest of the history off
+/// screen before the reader had picked anything.
 ///
-/// No chevron. The row is the control, its highlight says which is open, and a
-/// second click closes it — an arrow would only label what the row already
-/// demonstrates.
+/// Whether anything is open on arrival is the caller's, though, not this
+/// component's. The branch tab opens its newest commit, because there the
+/// alternative is a pane with nothing in it rather than a history worth
+/// scrolling.
+///
+/// No chevron. The row is the control and its highlight says which is open —
+/// an arrow would only label what the row already demonstrates.
 export default function HistoryList({
   commits,
   selected,
@@ -29,6 +33,7 @@ export default function HistoryList({
   onLoadMore,
   loading,
   error,
+  empty = "No commits yet.",
 }: {
   commits: readonly Commit[];
   /// The open commit, or null when the list is closed up.
@@ -42,12 +47,16 @@ export default function HistoryList({
   onLoadMore: () => void;
   loading: boolean;
   error: string | null;
+  /// What an empty list says. The caller's, because "no commits" and "none on
+  /// this branch" are two different facts and only the caller knows which list
+  /// it asked for.
+  empty?: string;
 }) {
   if (error) return <p className="px-3 py-6 text-ui text-destructive">{error}</p>;
   if (!commits.length) {
     return (
       <p className="px-3 py-6 text-ui text-muted-foreground">
-        {loading ? "Reading the history…" : "No commits yet."}
+        {loading ? "Reading the history…" : empty}
       </p>
     );
   }

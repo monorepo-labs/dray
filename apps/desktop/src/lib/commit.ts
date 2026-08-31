@@ -83,3 +83,35 @@ export function reconcileLog(
   if (firstPage.length > 0 && firstPage[0].sha === prev[0].sha) return prev;
   return firstPage;
 }
+
+/// Which list the repo view's sub-tab row is showing.
+///
+/// Named here rather than beside the row it labels, so the rule below can
+/// answer in it without this file reaching up into a component.
+export type SubTab = "uncommitted" | "branch" | "history";
+
+/// Where that row lands before the reader has picked a tab.
+///
+/// Uncommitted leads, because it is the one list still being written and every
+/// other tab is a record. A clean tree makes it the emptiest thing on screen
+/// though, so with nothing to commit the branch's own commits are what the
+/// session has to show for itself and the view opens on those instead.
+///
+/// `settled` is what stops that from flipping under the reader. The view
+/// paints before the first read lands, and until it does an empty list says
+/// "not asked yet" rather than "nothing changed" — the same two meanings
+/// `useHeadTree` carries its own `settled` to tell apart. Read as clean, an
+/// unanswered read opens the branch tab for a frame and steps off it the moment
+/// the working tree replies.
+export function defaultSubTab({
+  hasUncommitted,
+  settled,
+  hasBranchCommits,
+}: {
+  hasUncommitted: boolean;
+  /// Whether the working-tree read has ever come back for this directory.
+  settled: boolean;
+  hasBranchCommits: boolean;
+}): SubTab {
+  return !hasUncommitted && settled && hasBranchCommits ? "branch" : "uncommitted";
+}
