@@ -207,10 +207,20 @@ nor the hold, and pi needs neither half of it. The trade is
 `queue_and_flush`'s: no window to cancel in, in exchange for a boundary pi
 guarantees rather than one this side races for.
 
-Left: `--from` is untested against pi. Reading the code it should work — pi
-does not create its own worktree, so a base ref makes `send_msg` build the tree
-and spawn into it with no worktree name, which is the same path an ordinary pi
-worktree session already takes. Untested is untested.
+**`--from` reduces to the path an ordinary pi worktree session already takes**,
+and there is nothing pi-specific left in it. pi creates no tree of its own, so
+*every* pi worktree session resolves a base ref and has Dray build the tree —
+`--from` only changes which ref that is. The routing is pinned by
+`only_claude_code_makes_its_own_worktree`, the tree-at-an-arbitrary-ref by
+`create_worktree`'s own tests, and the spawn goes in with `worktree_name: None`
+either way.
+
+Checked live to close the last of it: a linked worktree created at an arbitrary
+commit runs pi, which spawned, opened a run and settled inside it. The turn
+itself errored, on a shared `openai-codex` refresh token being used by another
+process — not a path this touches, and the failure surfaced exactly as the
+harness's own sentence, which `a_failed_turn_carries_its_own_sentence` already
+pins.
 
 **Slice 4 — retries, compaction and the rest of pi's vocabulary.** `auto_retry_start`
 drives the retry indicator and `compaction_start`/`compaction_end` drive the
