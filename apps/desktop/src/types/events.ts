@@ -517,6 +517,30 @@ newText: string | null,
  */
 unreadable: Unreadable | null, };
 
+/**
+ * Which agent runs a session.
+ *
+ * **Unknown spellings are kept, not refused.** `index.json` is a shared store
+ * rewritten whole by whichever build writes last, so a value a newer build
+ * wrote reaches an older one — and serde's default for an unrecognised variant
+ * is to fail the *line*, which here is the whole file. One `"pi"` written by a
+ * dev build made a released app read 256 sessions as none at all, with
+ * `unknown variant \`pi\`` the only thing said about it.
+ *
+ * So this is the same bargain [`SessionIndexItem.unknown`] makes one level
+ * out: carry what you cannot understand through untouched. [`Harness::Other`]
+ * holds the original string and serializes it back verbatim, so an old build
+ * reading and rewriting the index leaves a newer build's sessions exactly as it
+ * found them. Storing a placeholder instead would parse fine and quietly
+ * destroy the harness of every session it did not recognise, which is the
+ * worse half of this failure rather than a lesser one.
+ *
+ * It is **not** in [`Harness::ALL`]: that is the set this build offers, and an
+ * unknown one is not offerable. Nothing spawns for it either — see
+ * [`Harness::names_a_cli`].
+ *
+ * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
+ */
 export type Harness = "claude_code" | "codex";
 
 export type HookPhase = "started" | "finished";

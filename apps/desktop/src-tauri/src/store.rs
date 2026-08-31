@@ -1278,6 +1278,43 @@ mod tests {
         assert_eq!(item.fork_from, None);
     }
 
+    /// The whole file, not the one entry. `index.json` is parsed as a single
+    /// `Vec`, so a value serde refuses fails the line and the line is the file
+    /// — which is how one `"harness":"pi"` from a dev build made a released app
+    /// read 256 real sessions as none at all.
+    ///
+    /// The unknown entry survives too, spelling intact. Dropping it would be
+    /// worse than the crash rather than milder: the index is rewritten whole,
+    /// so an entry left out of a read is deleted by the next write.
+    #[test]
+    fn one_unknown_harness_does_not_cost_the_other_entries() {
+        let entry = |id: &str, harness: &str| {
+            format!(
+                r#"{{"sessionId":"{id}","harness":"{harness}","cwd":"/p","projectPath":"/p",
+                "branch":null,"worktreeName":null,"title":"t","created":"c","modified":"m",
+                "archived":false,"pinned":false}}"#
+            )
+        };
+        let file = format!(
+            "[{},{},{}]",
+            entry("a", "claude_code"),
+            entry("b", "some_future_agent"),
+            entry("c", "codex")
+        );
+
+        let items: Vec<SessionIndexItem> = serde_json::from_str(&file).expect("reads");
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].harness, Harness::ClaudeCode);
+        assert_eq!(items[1].harness, Harness::Other("some_future_agent"));
+        assert_eq!(items[2].harness, Harness::Codex);
+
+        // And written back as it arrived, so an old build rewriting the index
+        // leaves a newer build's sessions exactly as it found them.
+        let rewritten = serde_json::to_string(&items).expect("writes");
+        assert!(rewritten.contains(r#""harness":"some_future_agent""#));
+    }
+
     /// Forking in place must not claim the parent's tree: `worktree_name` is what
     /// settling and deleting act on, so a fork carrying it would take the
     /// directory out from under the session still working in it.

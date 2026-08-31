@@ -142,6 +142,10 @@ pub fn default_model_for(harness: Harness) -> ModelId {
     match harness {
         Harness::ClaudeCode => ModelId::Opus,
         Harness::Codex => ModelId::Gpt56Sol,
+        // No list to default out of, and nothing will spawn for it anyway.
+        // `Unknown` is the honest answer and the one that fails loudly if it
+        // ever reaches a flag.
+        Harness::Other(_) => ModelId::Unknown,
     }
 }
 
@@ -270,6 +274,10 @@ pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => codex_models(),
+        // Empty rather than a guess: this build cannot say what that harness
+        // runs, and offering Claude's list would let a picker set a model the
+        // session's own agent has never heard of.
+        Harness::Other(_) => Vec::new(),
     }
 }
 
@@ -284,6 +292,7 @@ pub fn runs_on(id: ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => every_codex_model(),
+        Harness::Other(_) => Vec::new(),
     }
     .into_iter()
     .any(|m| m.id == id)

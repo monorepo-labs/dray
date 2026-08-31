@@ -54,11 +54,10 @@ async fn send_msg(
     app: AppHandle,
     manager: State<'_, SessionManager>,
 ) -> Result<SendOutcome, String> {
-    let harness = match harness {
-        "claude_code" => Harness::ClaudeCode,
-        "codex" => Harness::Codex,
-        _ => return Err("invalid harness".into()),
-    };
+    // `from_wire_name`, not the tolerant `Deserialize`: this is the composer
+    // naming a harness to *start*, so an unknown one is a caller error, where
+    // off the index it is a session some other build wrote.
+    let harness = Harness::from_wire_name(harness).ok_or("invalid harness")?;
 
     manager
         .send_msg(
@@ -116,7 +115,7 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 #[tauri::command]
 async fn agent_availability() -> Vec<AgentAvailability> {
     let mut out = Vec::new();
-    for harness in [harness::Harness::ClaudeCode, harness::Harness::Codex] {
+    for harness in harness::Harness::ALL {
         out.push(AgentAvailability {
             harness,
             available: binpath::agent_available(harness).await,
