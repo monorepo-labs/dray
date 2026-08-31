@@ -638,7 +638,13 @@ function App() {
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
   ) => {
-    await setSessionFlags(sessionId, flags);
+    // Everything below describes a move the index has made. A failed write —
+    // or one naming a session that is no longer there — has moved nothing, so
+    // it gets no celebration, no worktree offer, and no navigation: the row is
+    // still where it was, and `setSessionFlags` has already put the reason on
+    // screen.
+    if (!(await setSessionFlags(sessionId, flags))) return;
+
     if (flags.archived === true) {
       playCelebration();
 
@@ -661,10 +667,14 @@ function App() {
       // reader pressed that row, and from the composer's bar they are reading
       // its transcript. Either way, losing it is losing the thing they acted on.
       //
-      // After the write, never before: `setSessionFlags` reads `showArchived`
-      // from its own closure to decide whether the row still belongs to the
-      // list on screen, and a flip ahead of it is invisible to that closure.
-      if (showArchived) setShowArchived(false);
+      // Unconditional, and after the write. Unconditional because the guard it
+      // replaces read `showArchived` from a closure captured before the await,
+      // so a reader who opened the settled view while the write was in flight
+      // was left in it with the row gone; setting a boolean to the value it
+      // already holds costs nothing. After, because the flip is what triggers
+      // the list refetch, and a refetch racing a write still in flight answers
+      // from an index that has not moved yet.
+      setShowArchived(false);
       goToSession(() => void handleSelectSessionIndexItem(sessionId));
     }
   };
