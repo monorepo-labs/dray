@@ -788,6 +788,34 @@ mod tests {
         assert!(prose.contains(r#"only "Dray isn't running" says that"#));
     }
 
+    /// Told to report back to its parent, an agent with no definition of the
+    /// word reads it as a git parent and goes looking at commits. The prompt
+    /// has to say which parent it means; the skill carries the mechanism.
+    #[test]
+    fn the_developer_instructions_define_a_parent_session() {
+        let prose = DEVELOPER_INSTRUCTIONS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(prose.contains("parent session is the Dray session that spawned this one"));
+        assert!(prose.contains("never a git parent"));
+        assert!(prose.contains("`parentSessionId`"));
+    }
+
+    /// "Review this with codex" names a harness, and an agent reading it as the
+    /// vendor's CLI shells out to a second agent nothing in the app can see.
+    #[test]
+    fn the_developer_instructions_read_an_agent_name_as_a_harness() {
+        let prose = DEVELOPER_INSTRUCTIONS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(prose.contains("`dray new --harness <name>`"));
+        assert!(prose.contains("never the vendor's own CLI or app"));
+    }
+
     /// Replays a real capture through the parser and the mapper.
     ///
     /// The point is not the assertions below so much as the parse itself: these
