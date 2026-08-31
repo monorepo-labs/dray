@@ -103,8 +103,20 @@ export type CommitLog = {
   refresh: () => void;
 };
 
-/// The branch's history, a page at a time.
-export function useCommitLog(cwd: string, revision: string, active: boolean): CommitLog {
+/// A commit list, a page at a time.
+///
+/// Which list is the caller's, because two tabs read two different ones — the
+/// whole of HEAD's history, and just the commits this branch made since it
+/// forked — and both want the same paging, the same race token and the same
+/// `reconcileLog` behind them. Every call site names its command rather than
+/// one of them inheriting a default: a default is how the second reader
+/// quietly gets the first reader's list.
+export function useCommitLog(
+  cwd: string,
+  revision: string,
+  active: boolean,
+  command: string,
+): CommitLog {
   const [commits, setCommits] = useState<readonly Commit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -121,7 +133,7 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
   const read = useCallback(() => {
     const token = ++issued.current;
     setLoading(true);
-    void invoke<Commit[]>("log_commits", { cwd, limit: LOG_PAGE, skip: 0 })
+    void invoke<Commit[]>(command, { cwd, limit: LOG_PAGE, skip: 0 })
       .then((page) => {
         if (issued.current !== token) return;
         setCommits((prev) => reconcileLog(prev, page));
@@ -130,14 +142,14 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
       })
       .catch((e) => issued.current === token && setError(String(e)))
       .finally(() => issued.current === token && setLoading(false));
-  }, [cwd]);
+  }, [cwd, command]);
 
   const loadMore = useCallback(() => {
     if (paging.current) return;
     paging.current = true;
 
     const token = issued.current;
-    void invoke<Commit[]>("log_commits", {
+    void invoke<Commit[]>(command, {
       cwd,
       limit: LOG_PAGE,
       skip: commitsRef.current.length,
@@ -158,7 +170,7 @@ export function useCommitLog(cwd: string, revision: string, active: boolean): Co
       .finally(() => {
         paging.current = false;
       });
-  }, [cwd]);
+  }, [cwd, command]);
 
   const [seeded, setSeeded] = useState(cwd);
   if (seeded !== cwd) {

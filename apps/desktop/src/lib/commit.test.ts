@@ -4,6 +4,7 @@ import {
   checkedCount,
   commitBase,
   commitPaths,
+  defaultSubTab,
   EMPTY_TREE,
   reconcileLog,
   reconcileUnchecked,
@@ -116,5 +117,34 @@ describe("reconcileLog", () => {
     const page = [commit({ sha: "c1" })];
 
     expect(reconcileLog([], page)).toBe(page);
+  });
+});
+
+describe("defaultSubTab", () => {
+  it("opens on work still being written", () => {
+    expect(
+      defaultSubTab({ hasUncommitted: true, settled: true, hasBranchCommits: true }),
+    ).toBe("uncommitted");
+  });
+
+  it("opens on the branch when the tree is clean and the branch has commits", () => {
+    expect(
+      defaultSubTab({ hasUncommitted: false, settled: true, hasBranchCommits: true }),
+    ).toBe("branch");
+  });
+
+  // The view paints before the first read lands, and there an empty list is
+  // "not asked yet" rather than "nothing changed" — read as clean, it opens
+  // the branch tab for a frame and steps off it when the read replies.
+  it("waits for the working tree to answer before leaving Uncommitted", () => {
+    expect(
+      defaultSubTab({ hasUncommitted: false, settled: false, hasBranchCommits: true }),
+    ).toBe("uncommitted");
+  });
+
+  it("stays put when the branch has nothing of its own either", () => {
+    expect(
+      defaultSubTab({ hasUncommitted: false, settled: true, hasBranchCommits: false }),
+    ).toBe("uncommitted");
   });
 });

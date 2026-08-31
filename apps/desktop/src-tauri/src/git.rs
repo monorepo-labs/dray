@@ -916,6 +916,90 @@ pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>
     Ok(parse_log(&raw))
 }
 
+/// The commit this branch forked from, read out of the branch's own reflog.
+///
+/// `claude -w` and `dray new --from` both create the branch with
+/// `git worktree add --no-track -B`, which writes `branch: Created from <base>`
+/// on first creation and `branch: Reset to <base>` when the branch already
+/// existed. The entry's own `%H` **is** the base commit, because the branch
+/// starts life pointing at it. An ordinary `git checkout -b feature
+/// origin/main` writes the same entry, so this covers plain sessions too.
+///
+/// `None` on a detached HEAD, and where nothing on record names a base — an
+/// expired reflog, or `core.logAllRefUpdates` turned off.
+async fn fork_point(cwd: &str) -> Option<String> {
+    let branch = current_branch(cwd).await?;
+    let refname = format!("refs/heads/{branch}");
+    let reflog = git(cwd, &["reflog", "show", "--format=%H%x09%gs", &refname]).await?;
+
+    // The newest matching entry, which is the one git prints first: `-B` on a
+    // pre-existing branch resets it, so an older entry names a base this
+    // session never had.
+    reflog.lines().find_map(|line| {
+        let (sha, message) = line.split_once('\t')?;
+        let names_base = message.starts_with("branch: Created from ")
+            || message.starts_with("branch: Reset to ");
+        names_base.then(|| sha.trim().to_string())
+    })
+}
+
+/// A page of the commits this branch made on its own, newest first.
+///
+/// [`log_commits`] logs HEAD whole, which buries a session's work under
+/// however long the branch it forked from is. This excludes the fork point and
+/// the default base, so what is left is what this session did.
+///
+/// The default base goes as well as the fork point because a session that
+/// merges `origin/main` into its branch pulls upstream commits into HEAD that
+/// the fork point does not exclude, and those are not this session's work.
+///
+/// Empty when **no** exclusion resolves, rather than logging HEAD whole: a
+/// branch with no nameable base has no honest answer here, and the history
+/// beside it already shows everything.
+///
+/// Over-reports after a rebase that replays another branch's commits onto a new
+/// base, since git no longer knows whose were whose — the safe direction, and
+/// the same reading the unpushed-commit count takes.
+pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>> {
+    let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
+    let skip = format!("--skip={skip}");
+
+    let mut wanted = Vec::new();
+    // Hex-checked for [`is_tree_id`]'s reason: this one comes off a reflog
+    // line, and a value opening with `-` would parse as a flag.
+    if let Some(base) = fork_point(cwd).await.filter(|sha| is_tree_id(sha)) {
+        wanted.push(base);
+    }
+    if let Some(base) = default_base(cwd).await {
+        wanted.push(base);
+    }
+
+    // One exclusion that doesn't resolve makes the whole command fatal, and
+    // `git` swallows that into `None` — so the list would read empty with
+    // nothing saying why. `default_base` is the live case: it resolves
+    // `refs/remotes/origin/HEAD` without checking the target was ever fetched.
+    let mut excludes = Vec::new();
+    for base in wanted {
+        if resolve_commit(cwd, &base).await.is_some() {
+            excludes.push(base);
+        }
+    }
+
+    if excludes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut args = vec!["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--not"];
+    args.extend(excludes.iter().map(String::as_str));
+    args.push("--");
+
+    let Some(raw) = git(cwd, &args).await else {
+        return Ok(Vec::new());
+    };
+
+    Ok(parse_log(&raw))
+}
+
 fn parse_log(raw: &str) -> Vec<Commit> {
     raw.split('\0')
         .filter(|record| !record.trim().is_empty())
@@ -2512,6 +2596,168 @@ mod tests {
         fs::create_dir_all(&dir).await.unwrap();
 
         assert!(log_commits(dir.to_str().unwrap(), 50, 0).await.unwrap().is_empty());
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The whole point of the branch list: a session forked from somebody
+    /// else's branch reports what it did, not what that branch had already
+    /// done. `origin/<default>..HEAD` gets this one wrong — the base's own
+    /// commits are not on the default branch either.
+    #[tokio::test]
+    async fn a_forked_branch_logs_only_its_own_commits() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        run(at, &["checkout", "-q", "-b", "authors-work"]).await.unwrap();
+        fs::write(dir.join("feature.txt"), "the work\n").await.unwrap();
+        run(at, &["add", "-A"]).await.unwrap();
+        run(at, &["commit", "-qm", "author's commit"]).await.unwrap();
+        run(at, &["checkout", "-q", "-"]).await.unwrap();
+
+        let path = create_worktree(at, "reviewer", "authors-work")
+            .await
+            .expect("a branch that exists is a base");
+        fs::write(Path::new(&path).join("review.txt"), "mine\n")
+            .await
+            .unwrap();
+        run(&path, &["add", "-A"]).await.unwrap();
+        run(&path, &["commit", "-qm", "reviewer's commit"]).await.unwrap();
+
+        let page = log_branch_commits(&path, 50, 0).await.unwrap();
+        assert_eq!(
+            page.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+            ["reviewer's commit"],
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The newest entry wins. Reusing a worktree name resets the branch it
+    /// left behind, so the reflog holds both bases and only the later one is
+    /// where this session actually started.
+    #[tokio::test]
+    async fn a_reset_branch_forks_from_the_base_it_was_reset_to() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        run(at, &["checkout", "-q", "-b", "base-work"]).await.unwrap();
+        fs::write(dir.join("base.txt"), "one\n").await.unwrap();
+        run(at, &["add", "-A"]).await.unwrap();
+        run(at, &["commit", "-qm", "base one"]).await.unwrap();
+
+        let path = create_worktree(at, "reviewer", "base-work").await.unwrap();
+        // The tree goes and the branch stays, which is what makes the second
+        // create a `Reset to` rather than another `Created from`.
+        run(at, &["worktree", "remove", "--force", &path]).await.unwrap();
+
+        fs::write(dir.join("base.txt"), "two\n").await.unwrap();
+        run(at, &["commit", "-aqm", "base two"]).await.unwrap();
+
+        let path = create_worktree(at, "reviewer", "base-work").await.unwrap();
+        fs::write(Path::new(&path).join("mine.txt"), "mine\n")
+            .await
+            .unwrap();
+        run(&path, &["add", "-A"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+
+        let page = log_branch_commits(&path, 50, 0).await.unwrap();
+        assert_eq!(
+            page.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+            ["session work"],
+            "read the base this branch was reset to, not the older one it was created from",
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The `-w` shape, forked from `origin/<default>`, and the reason the
+    /// default base is excluded as well as the fork point: a session that
+    /// merges upstream in mid-flight pulls commits into HEAD that the fork
+    /// point predates. Drop the `default_base` exclusion and this one fails.
+    #[tokio::test]
+    async fn upstream_merged_in_after_the_fork_is_not_this_branch_s_work() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()])
+            .await
+            .unwrap();
+        // Named rather than pushed by whatever `git init` called the branch, so
+        // the remote side reads the same on a machine configured either way.
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
+            .await
+            .unwrap();
+        run(at, &["remote", "set-head", "origin", "main"]).await.unwrap();
+        assert_eq!(default_base(at).await.as_deref(), Some("origin/main"));
+
+        let path = create_worktree(at, "worker", "origin/main")
+            .await
+            .expect("the default base is a base");
+        fs::write(Path::new(&path).join("one.txt"), "1\n").await.unwrap();
+        run(&path, &["add", "-A"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+
+        // Upstream moves after the fork, and the session merges it in. The push
+        // is what carries it onto `origin/main`, which the worktree shares.
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n").await.unwrap();
+        run(at, &["commit", "-aqm", "upstream work"]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
+            .await
+            .unwrap();
+        run(&path, &["merge", "-q", "--no-edit", "origin/main"])
+            .await
+            .unwrap();
+
+        let subjects = log_branch_commits(&path, 50, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.subject)
+            .collect::<Vec<_>>();
+
+        assert!(subjects.iter().any(|s| s == "session work"), "{subjects:?}");
+        assert!(
+            !subjects.iter().any(|s| s == "upstream work"),
+            "an upstream commit the fork point predates: {subjects:?}"
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// No remote, and an initial commit whose reflog says `commit (initial)` —
+    /// so nothing on record names a base. Empty rather than the whole of HEAD,
+    /// which the history beside it already draws.
+    #[tokio::test]
+    async fn a_branch_with_no_nameable_base_logs_nothing() {
+        let dir = scratch_repo().await;
+
+        let page = log_branch_commits(dir.to_str().unwrap(), 50, 0)
+            .await
+            .unwrap();
+        assert!(page.is_empty(), "logged HEAD whole: {page:?}");
+
+        fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// A folder the user attached that git knows nothing about. Empty like
+    /// every other read here, never an error.
+    #[tokio::test]
+    async fn a_directory_that_is_not_a_repo_has_no_branch_history() {
+        let dir = std::env::temp_dir().join(format!("dray-nonrepo-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.unwrap();
+
+        assert!(log_branch_commits(dir.to_str().unwrap(), 50, 0)
+            .await
+            .unwrap()
+            .is_empty());
 
         fs::remove_dir_all(&dir).await.ok();
     }
