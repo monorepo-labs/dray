@@ -16,6 +16,7 @@ pub mod analytics;
 pub mod apps;
 pub mod attachments;
 pub mod binpath;
+pub mod docs;
 #[path = "events/events.rs"]
 pub mod events;
 pub mod files;
@@ -689,6 +690,8 @@ pub fn run() {
             github::mark_pr_ready,
             quit::confirm_quit,
             quit::dismiss_quit,
+            docs::read_doc,
+            docs::save_doc,
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,

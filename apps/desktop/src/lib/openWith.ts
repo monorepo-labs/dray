@@ -19,6 +19,10 @@ export const OPEN_DIR_KEY = "ade.openWith";
 /// choice and holds terminals and Finder too — so a reader who last opened
 /// their checkout in Ghostty would find that clicking a filename opened a
 /// terminal, which is no answer to "show me this file".
+///
+/// Markdown never reaches this: it opens in the Docs panel, which is Dray's own
+/// answer to "show me this file". See `openPath` in
+/// [useDocs](../hooks/useDocs.ts).
 export const OPEN_FILE_KEY = "ade.openFileWith";
 
 /// The last answer, so a control drawn after the first read paints at once

@@ -1,6 +1,6 @@
 import type { ReactNode, SyntheticEvent } from "react";
 
-import { openFile } from "@/lib/openWith";
+import { openPath } from "@/hooks/useDocs";
 import { cn } from "@/lib/utils";
 
 /// A path anywhere in the chat, drawn as something that opens.
@@ -28,8 +28,9 @@ export default function FileLink({
   children,
 }: {
   /// Absolute, and already resolved. This draws whatever it is given and asks
-  /// nothing about whether the file is there, since `openFile` reveals as its
-  /// fallback and revealing something gone is a click that does nothing.
+  /// nothing about whether the file is there: a markdown path that names
+  /// nothing opens a doc whose panel says so, and every other one falls through
+  /// to a reveal, where revealing something gone is a click that does nothing.
   path: string;
   title?: string;
   /// This was a markdown link before it was a file link, so draw it as one.
@@ -39,7 +40,9 @@ export default function FileLink({
 }) {
   const open = (e: SyntheticEvent) => {
     e.stopPropagation();
-    void openFile(path);
+    // Markdown opens in the Docs panel and everything else in the reader's
+    // editor. A file this app can already render is not one to leave Dray for.
+    openPath(path);
   };
 
   return (

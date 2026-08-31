@@ -117,7 +117,7 @@ export function PanelToggle({
 
 /// Which body the right panel is showing. This is the set, not the order —
 /// see `tabOrder`.
-export const PANEL_TABS = ["changes", "subagents", "pr", "issue"] as const;
+export const PANEL_TABS = ["changes", "subagents", "pr", "issue", "docs"] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
@@ -127,6 +127,9 @@ const LABELS: Record<PanelTab, string> = {
   // Singular, and not "Linear": the panel is about the work's issue whoever
   // tracks it, and a session usually carries one.
   issue: "Issue",
+  // Plural where Issue is singular: a session takes up one piece of tracked
+  // work and opens as many files as it takes to read it.
+  docs: "Docs",
   // Not "Pull Request": the short form is what anyone working on one calls it,
   // and the long one is the widest label in a row of three.
   pr: "PR",
@@ -148,8 +151,20 @@ const LABELS: Record<PanelTab, string> = {
 /// The PR tab is absent entirely for a session that has no PR to show — see
 /// `prTabVisible`. A tab whose only content is "there is nothing here" is one
 /// the eye has to skip past on every session that will never have one.
-export function tabOrder({ pr, issue }: { pr: boolean; issue: boolean }): readonly PanelTab[] {
+export function tabOrder({
+  pr,
+  docs,
+  issue,
+}: {
+  pr: boolean;
+  /// At least one markdown file is open in the pane — see
+  /// [useDocs](../hooks/useDocs.ts). Absent otherwise, for the PR tab's reason.
+  docs: boolean;
+  issue: boolean;
+}): readonly PanelTab[] {
   const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  // After Changes, which is what keeps Issue immediately before Subagents.
+  if (docs) tabs.push("docs");
   // Immediately before Subagents wherever it is drawn, so the row's order is
   // the same one ⌘⇧[ steps whether or not a session has an issue on it.
   if (issue) tabs.push("issue");
@@ -170,6 +185,8 @@ type RightPanelProps = {
   counts?: Partial<Record<PanelTab, number>>;
   /// There is a pull request tab to draw at all — see `prTabVisible`.
   pr?: boolean;
+  /// At least one markdown file is open in the pane.
+  docs?: boolean;
   /// This session is tagged with at least one issue. Absent otherwise, for the
   /// PR tab's reason: a tab whose only content is "there is nothing here" is one
   /// the eye skips past on every session that will never have one.
@@ -233,12 +250,15 @@ export default function RightPanel({
   onTabChange,
   counts,
   pr = false,
+  docs = false,
   issue = false,
   refresh,
   cwd,
   heading,
   children,
 }: RightPanelProps) {
+  const tabs = tabOrder({ pr, docs, issue });
+
   return (
     <aside
       className={cn(
@@ -260,19 +280,36 @@ export default function RightPanel({
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : (
-          <>
-            {tabOrder({ pr, issue }).map((value) => (
-              <TabButton
-                key={value}
-                active={tab === value}
-                onClick={() => onTabChange(value)}
-              >
-                {LABELS[value]}
-                {!!counts?.[value] && (
-                  <span className="ml-1 text-muted-foreground">{counts[value]}</span>
-                )}
-              </TabButton>
-            ))}
+          // A wrapping row clipped to one line, which sheds the keycaps when
+          // they stop fitting and never a tab sooner — the CSS answer to a
+          // question a resize observer would otherwise have to measure.
+          //
+          // Flex breaks a line between items, never through one, so the caps go
+          // whole where `overflow-hidden` alone would leave half of one on
+          // screen. `h-full` on **both** items is what holds the line open: a
+          // line is only as tall as what is left on it, so caps carrying the
+          // height alone took it with them when they wrapped and the second
+          // line surfaced in the slack. `content-start` pins the first line to
+          // the top, or two lines would centre and clip the tabs.
+          <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
+            {/* Their own scroll, so a row still too long after the caps have
+                gone gives way here rather than pushing Open and Refresh past
+                the edge: those are reached for by position, where a tab can
+                still be scrolled to. */}
+            <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
+              {tabs.map((value) => (
+                <TabButton
+                  key={value}
+                  active={tab === value}
+                  onClick={() => onTabChange(value)}
+                >
+                  {LABELS[value]}
+                  {!!counts?.[value] && (
+                    <span className="ml-1 text-muted-foreground">{counts[value]}</span>
+                  )}
+                </TabButton>
+              ))}
+            </div>
 
             {/* Beside the tabs rather than at the far end, and with no label:
                 next to the thing it acts on, the caps read as belonging to the
@@ -280,6 +317,11 @@ export default function RightPanel({
                 in a tooltip the way the rest of the app's shortcuts are —
                 because a chord for a row of two or three tabs is one nobody
                 goes looking for.
+
+                Last in the row and the only thing allowed to wrap: the hint is
+                the one element here that does nothing, so it is the one to give
+                up — but only when the row cannot afford it, never at a tab
+                count guessed in advance.
 
                 Three caps, not four: `[ ]` is one key with two ends rather than
                 two alternatives, so splitting it reads as a chord wanting
@@ -294,12 +336,12 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <KbdGroup className="ml-1.5 shrink-0 dark:opacity-50">
+            <KbdGroup className="ml-1.5 h-full shrink-0 dark:opacity-50">
               <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
               <Kbd>⇧</Kbd>
               <Kbd>[ ]</Kbd>
             </KbdGroup>
-          </>
+          </div>
         )}
 
         {/* The far end of the row, and one group rather than two `ml-auto`s:

@@ -1075,6 +1075,12 @@ export type RateLimit = { usedPercent: number | null, windowMinutes: number | nu
 resetsAt: string | null, planType: string | null, };
 
 /**
+ * What a save did. `Stale` is not an error: the file moved under the reader,
+ * so their text is still in the editor and theirs to force through.
+ */
+export type SaveOutcome = "saved" | "stale";
+
+/**
  * What a send did. The two fields are mutually exclusive in practice — a
  * session being created cannot already be running a turn — but they answer
  * different questions and the frontend acts on each separately.

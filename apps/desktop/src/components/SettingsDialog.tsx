@@ -236,7 +236,7 @@ function OpenFilesRow() {
       label="Open files with"
       description={
         unavailable ??
-        "Where a filename in the chat opens. Finder selects the file instead of opening it."
+        "Where a filename in the chat opens. Markdown opens in the panel instead, and Finder selects a file rather than opening it."
       }
     >
       {/* Opening the menu re-reads the list — see `refresh`. */}

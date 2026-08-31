@@ -8,6 +8,7 @@ import ChangesPanel from "@/components/ChangesPanel";
 import ChangesView from "@/components/changes/ChangesView";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
+import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog from "@/components/SettingsDialog";
@@ -42,6 +43,7 @@ import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
+import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -448,7 +450,13 @@ function App() {
 
   const issueData = useSessionIssues(sessionIssues, panelShown && activeTabIsIssue);
 
-  const tabs = tabOrder({ pr: hasPrTab, issue: hasIssueTab });
+  // Read here rather than in the panel, for the PR tab's reason: the row has to
+  // know whether the tab exists before that tab has ever been drawn.
+  const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs();
+  const hasDocsTab = docs.length > 0;
+  const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
+
+  const tabs = tabOrder({ pr: hasPrTab, docs: hasDocsTab, issue: hasIssueTab });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
   // still names a tab this session draws, and otherwise the derived default
@@ -572,7 +580,12 @@ function App() {
         ? { onRefresh: pullRequests.refresh, loading: pullRequests.loading }
         : activeTab === "issue"
           ? { onRefresh: issueData.refresh, loading: issueData.loading }
-          : null;
+          : activeTab === "docs"
+            ? {
+                onRefresh: refreshActiveDoc,
+                loading: activeDoc?.body.status === "loading",
+              }
+            : null;
 
   // Same order the sidebar draws, so the walk matches the list even when the
   // sidebar is collapsed and there is nothing on screen to follow — project
@@ -601,6 +614,23 @@ function App() {
       void handleSelectSessionIndexItem(item.sessionId);
     }
   };
+
+  // A click on a markdown path in the transcript, which is the one route in.
+  // Off the counter rather than off `docs.length`, since reopening a file that
+  // is already open leaves the list unchanged and still has to bring the pane
+  // forward.
+  //
+  // The pick moves as well as the pane, and has to, for the same reason
+  // `usePullRequest`'s `onOpened` writes one: `activeTab` honours a standing
+  // pick over the derived default, and `handleTogglePanel` stores "changes"
+  // every time the pane opens onto a turn that touched files.
+  const lastOpened = useRef(docsOpened);
+  useEffect(() => {
+    if (docsOpened === lastOpened.current) return;
+    lastOpened.current = docsOpened;
+    setPanelTab("docs");
+    setPanelOpen(true);
+  }, [docsOpened, setPanelTab, setPanelOpen]);
 
   // The pane is one piece of app-wide state, so a new task would otherwise
   // inherit whichever pane the last session left open — invisibly, since the
@@ -723,6 +753,10 @@ function App() {
     }
     if (panelShown) panelRefresh?.onRefresh();
   });
+  // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
+  // `useHotkey` claims every chord it matches, and ⌘S is the browser's own save
+  // — left bound everywhere it would eat the key from nothing at all.
+  useHotkey("s", saveActiveDoc, { enabled: panelShown && activeTab === "docs" });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks
@@ -942,8 +976,12 @@ function App() {
               // already says, and the count is news exactly when there is more
               // than one thing behind it.
               issue: sessionIssues.length > 1 ? sessionIssues.length : 0,
+              // Same rule, and beside it so the rule reads once: the count is
+              // news exactly when there is more than one file behind the tab.
+              docs: docs.length > 1 ? docs.length : 0,
             }}
             pr={hasPrTab}
+            docs={hasDocsTab}
             issue={hasIssueTab}
             refresh={panelRefresh}
             cwd={selectedSession.cwd}
@@ -963,6 +1001,9 @@ function App() {
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>
               <PrPanel branch={prBranch} {...pullRequests} />
+            </TabBody>
+            <TabBody active={hasDocsTab && activeTab === "docs"}>
+              <DocsPanel />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
               <IssuePanel
