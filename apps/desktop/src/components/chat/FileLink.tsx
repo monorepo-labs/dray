@@ -1,6 +1,6 @@
 import type { ReactNode, SyntheticEvent } from "react";
 
-import { openFile } from "@/lib/openWith";
+import { openPath } from "@/hooks/useDocs";
 import { cn } from "@/lib/utils";
 
 /// A path anywhere in the chat, drawn as something that opens.
@@ -39,7 +39,9 @@ export default function FileLink({
 }) {
   const open = (e: SyntheticEvent) => {
     e.stopPropagation();
-    void openFile(path);
+    // Markdown opens in the Docs panel and everything else in the reader's
+    // editor. A file this app can already render is not one to leave Dray for.
+    openPath(path);
   };
 
   return (

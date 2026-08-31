@@ -117,7 +117,7 @@ export function PanelToggle({
 
 /// Which body the right panel is showing. This is the set, not the order —
 /// see `tabOrder`.
-export const PANEL_TABS = ["changes", "subagents", "pr", "issue"] as const;
+export const PANEL_TABS = ["changes", "subagents", "pr", "issue", "docs"] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
@@ -127,6 +127,9 @@ const LABELS: Record<PanelTab, string> = {
   // Singular, and not "Linear": the panel is about the work's issue whoever
   // tracks it, and a session usually carries one.
   issue: "Issue",
+  // Plural where Issue is singular: a session takes up one piece of tracked
+  // work and opens as many files as it takes to read it.
+  docs: "Docs",
   // Not "Pull Request": the short form is what anyone working on one calls it,
   // and the long one is the widest label in a row of three.
   pr: "PR",
@@ -148,8 +151,20 @@ const LABELS: Record<PanelTab, string> = {
 /// The PR tab is absent entirely for a session that has no PR to show — see
 /// `prTabVisible`. A tab whose only content is "there is nothing here" is one
 /// the eye has to skip past on every session that will never have one.
-export function tabOrder({ pr, issue }: { pr: boolean; issue: boolean }): readonly PanelTab[] {
+export function tabOrder({
+  pr,
+  docs,
+  issue,
+}: {
+  pr: boolean;
+  /// At least one markdown file is open in the pane — see
+  /// [useDocs](../hooks/useDocs.ts). Absent otherwise, for the PR tab's reason.
+  docs: boolean;
+  issue: boolean;
+}): readonly PanelTab[] {
   const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  // After Changes, which is what keeps Issue immediately before Subagents.
+  if (docs) tabs.push("docs");
   // Immediately before Subagents wherever it is drawn, so the row's order is
   // the same one ⌘⇧[ steps whether or not a session has an issue on it.
   if (issue) tabs.push("issue");
@@ -170,6 +185,8 @@ type RightPanelProps = {
   counts?: Partial<Record<PanelTab, number>>;
   /// There is a pull request tab to draw at all — see `prTabVisible`.
   pr?: boolean;
+  /// At least one markdown file is open in the pane.
+  docs?: boolean;
   /// This session is tagged with at least one issue. Absent otherwise, for the
   /// PR tab's reason: a tab whose only content is "there is nothing here" is one
   /// the eye skips past on every session that will never have one.
@@ -233,6 +250,7 @@ export default function RightPanel({
   onTabChange,
   counts,
   pr = false,
+  docs = false,
   issue = false,
   refresh,
   cwd,
@@ -261,7 +279,7 @@ export default function RightPanel({
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : (
           <>
-            {tabOrder({ pr, issue }).map((value) => (
+            {tabOrder({ pr, docs, issue }).map((value) => (
               <TabButton
                 key={value}
                 active={tab === value}
