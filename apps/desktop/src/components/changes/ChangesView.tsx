@@ -63,7 +63,13 @@ export default function ChangesView({
   const [commit, setCommit] = useState<Commit | null>(null);
   const [branchSha, setBranchSha] = useState<string | null>(null);
   const [workingPath, setWorkingPath] = useState<string | null>(null);
+  // A path each, not one shared between the two commit tabs. Switching tabs by
+  // the row moves the open commit without either list's `onToggle` running, so
+  // a single path followed the reader across and opened a file of the same name
+  // in the other tab's commit — which is the auto-selection rule quietly not
+  // happening.
   const [commitPath, setCommitPath] = useState<string | null>(null);
+  const [branchPath, setBranchPath] = useState<string | null>(null);
 
   const head = useHeadTree(cwd, revision, active);
 
@@ -83,13 +89,29 @@ export default function ChangesView({
 
   const workingFiles = working.changes?.files ?? NO_FILES;
 
-  const subTab =
-    subTabPick ??
-    defaultSubTab({
-      hasUncommitted: workingFiles.length > 0,
-      settled: !!working.changes,
-      hasBranchCommits: branchLog.commits.length > 0,
-    });
+  const derived = defaultSubTab({
+    hasUncommitted: workingFiles.length > 0,
+    settled: !!working.changes,
+    hasBranchCommits: branchLog.commits.length > 0,
+  });
+
+  // Taken **once**, when both reads have first answered, and held from there.
+  // The rule picks where the row opens, not where it lives: left deriving on
+  // every render it moves under the reader whenever the answer changes — the
+  // agent writing a file mid-turn would step them off the diff they were
+  // reading and onto Uncommitted. Both reads have to have landed before it can
+  // be taken at all, or whichever answers first decides on the other's behalf.
+  if (subTabPick === null && working.changes && branchLog.settled) setSubTabPick(derived);
+
+  const subTab = subTabPick ?? derived;
+
+  // A different directory is a different repository, so the tab taken for the
+  // old one says nothing about this one.
+  const [seeded, setSeeded] = useState(cwd);
+  if (seeded !== cwd) {
+    setSeeded(cwd);
+    setSubTabPick(null);
+  }
 
   // History keeps its gate. It is the expensive read — the whole of HEAD's
   // history behind it, however long that is — and nothing in the rule above
@@ -127,7 +149,7 @@ export default function ChangesView({
     files.find((f) => f.path === path) ?? files[0] ?? null;
 
   const selectedWorking = pick(workingFiles, workingPath);
-  const selectedCommitFile = pick(commitFiles, commitPath);
+  const selectedCommitFile = pick(commitFiles, subTab === "branch" ? branchPath : commitPath);
 
   const showing = subTab === "uncommitted" ? working : commitChanges;
   const selectedFile = subTab === "uncommitted" ? selectedWorking : selectedCommitFile;
@@ -232,11 +254,11 @@ export default function ChangesView({
             // to replace.
             onToggle={(next) => {
               setBranchSha(next.sha);
-              setCommitPath(null);
+              setBranchPath(null);
             }}
             files={commitFiles}
             selectedFile={selectedCommitFile?.path ?? null}
-            onSelectFile={setCommitPath}
+            onSelectFile={setBranchPath}
             hasMore={branchLog.hasMore}
             onLoadMore={branchLog.loadMore}
             loading={branchLog.loading}

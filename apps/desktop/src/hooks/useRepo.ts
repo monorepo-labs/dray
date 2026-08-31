@@ -97,6 +97,11 @@ export type CommitLog = {
   commits: readonly Commit[];
   error: string | null;
   loading: boolean;
+  /// Whether a read has ever come back for this directory. Carried for
+  /// [useHeadTree]'s reason: until one has, an empty list says "not asked yet"
+  /// rather than "no commits", and a caller that folds the two decides on an
+  /// answer nobody gave it.
+  settled: boolean;
   /// The last page came back full, so there is probably another behind it.
   hasMore: boolean;
   loadMore: () => void;
@@ -120,6 +125,7 @@ export function useCommitLog(
   const [commits, setCommits] = useState<readonly Commit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [settled, setSettled] = useState(false);
   const [hasMore, setHasMore] = useState(false);
 
   // Read by `loadMore`, which must not close over a stale length: it is called
@@ -141,7 +147,11 @@ export function useCommitLog(
         setError(null);
       })
       .catch((e) => issued.current === token && setError(String(e)))
-      .finally(() => issued.current === token && setLoading(false));
+      .finally(() => {
+        if (issued.current !== token) return;
+        setLoading(false);
+        setSettled(true);
+      });
   }, [cwd, command]);
 
   const loadMore = useCallback(() => {
@@ -177,12 +187,13 @@ export function useCommitLog(
     setSeeded(cwd);
     setCommits([]);
     setError(null);
+    setSettled(false);
     setHasMore(false);
   }
 
   usePolledRead(cwd, revision, active, read);
 
-  return { commits, error, loading, hasMore, loadMore, refresh: read };
+  return { commits, error, loading, settled, hasMore, loadMore, refresh: read };
 }
 
 /// Where the branch stands against its upstream, for the push button.

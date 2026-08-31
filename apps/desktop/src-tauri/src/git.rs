@@ -946,54 +946,75 @@ async fn fork_point(cwd: &str) -> Option<String> {
 /// A page of the commits this branch made on its own, newest first.
 ///
 /// [`log_commits`] logs HEAD whole, which buries a session's work under
-/// however long the branch it forked from is. This excludes the fork point and
-/// the default base, so what is left is what this session did.
+/// however long the branch it forked from is. This excludes the fork point, so
+/// what is left is what this session did.
 ///
-/// The default base goes as well as the fork point because a session that
-/// merges `origin/main` into its branch pulls upstream commits into HEAD that
-/// the fork point does not exclude, and those are not this session's work.
+/// **One exclusion, and it has to be an immutable one.** Excluding
+/// `origin/<default>` as well looks like it would cover a session that merges
+/// upstream in, and it does — right up until that session's own work lands on
+/// that branch and someone fetches, at which point the ref *contains* the
+/// commits and the list empties itself exactly when the work shipped. A moving
+/// ref cannot be an exclusion here. `--first-parent` covers the merge case
+/// instead: a merge of `origin/main` reaches this branch's own spine through
+/// the first parent and the upstream commits through the second, so walking the
+/// spine alone drops them without any ref being named.
 ///
-/// Empty when **no** exclusion resolves, rather than logging HEAD whole: a
-/// branch with no nameable base has no honest answer here, and the history
-/// beside it already shows everything.
+/// Empty when no fork point resolves and no default base stands in, rather than
+/// logging HEAD whole: a branch with no nameable base has no honest answer here,
+/// and the history beside it already shows everything.
 ///
-/// Over-reports after a rebase that replays another branch's commits onto a new
-/// base, since git no longer knows whose were whose — the safe direction, and
-/// the same reading the unpushed-commit count takes.
+/// Two ways it can still be wrong, both toward over-reporting. A branch whose
+/// reflog no longer holds its creation entry — expired, or
+/// `core.logAllRefUpdates` off — falls back to the default base, which is a
+/// moving ref again and which reports a `--from` session's inherited commits as
+/// its own. And after a rebase that replays another branch's commits onto a new
+/// base, git no longer knows whose were whose. Over-reporting is the safe
+/// direction, the same reading the unpushed-commit count takes.
 pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>> {
     let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
     let skip = format!("--skip={skip}");
 
-    let mut wanted = Vec::new();
     // Hex-checked for [`is_tree_id`]'s reason: this one comes off a reflog
     // line, and a value opening with `-` would parse as a flag.
-    if let Some(base) = fork_point(cwd).await.filter(|sha| is_tree_id(sha)) {
-        wanted.push(base);
-    }
-    if let Some(base) = default_base(cwd).await {
-        wanted.push(base);
-    }
+    let fork = fork_point(cwd).await.filter(|sha| is_tree_id(sha));
 
-    // One exclusion that doesn't resolve makes the whole command fatal, and
+    // The default base only stands in where the reflog named nothing. It is a
+    // moving ref, so it carries the failure described above and is the worse
+    // answer wherever the fork point exists.
+    let wanted = match fork {
+        Some(base) => Some(base),
+        None => default_base(cwd).await,
+    };
+
+    // An exclusion that doesn't resolve makes the whole command fatal, and
     // `git` swallows that into `None` — so the list would read empty with
     // nothing saying why. `default_base` is the live case: it resolves
     // `refs/remotes/origin/HEAD` without checking the target was ever fetched.
-    let mut excludes = Vec::new();
-    for base in wanted {
-        if resolve_commit(cwd, &base).await.is_some() {
-            excludes.push(base);
-        }
-    }
-
-    if excludes.is_empty() {
+    let Some(base) = wanted else {
+        return Ok(Vec::new());
+    };
+    if resolve_commit(cwd, &base).await.is_none() {
         return Ok(Vec::new());
     }
 
-    let mut args = vec!["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--not"];
-    args.extend(excludes.iter().map(String::as_str));
-    args.push("--");
-
-    let Some(raw) = git(cwd, &args).await else {
+    let Some(raw) = git(
+        cwd,
+        &[
+            "log",
+            "-z",
+            LOG_FORMAT,
+            "--first-parent",
+            "-n",
+            &limit,
+            &skip,
+            "HEAD",
+            "--not",
+            &base,
+            "--",
+        ],
+    )
+    .await
+    else {
         return Ok(Vec::new());
     };
 
@@ -2726,6 +2747,54 @@ mod tests {
         assert!(
             !subjects.iter().any(|s| s == "upstream work"),
             "an upstream commit the fork point predates: {subjects:?}"
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// Work that has landed is still this branch's work. Excluding
+    /// `origin/<default>` as well as the fork point emptied this list the
+    /// moment the session's own commits reached that branch and somebody
+    /// fetched — the list going blank exactly when the work shipped. Only an
+    /// immutable exclusion can be used here, which is why the merge case is
+    /// covered by `--first-parent` instead.
+    #[tokio::test]
+    async fn work_that_has_landed_upstream_is_still_this_branch_s_work() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."])
+            .await
+            .unwrap();
+
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()])
+            .await
+            .unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
+            .await
+            .unwrap();
+        run(at, &["remote", "set-head", "origin", "main"]).await.unwrap();
+
+        let path = create_worktree(at, "worker", "origin/main").await.unwrap();
+        fs::write(Path::new(&path).join("one.txt"), "1\n").await.unwrap();
+        run(&path, &["add", "-A"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+
+        // The branch lands on the default branch and the worktree learns about
+        // it, which is what makes `origin/main` contain this session's commit.
+        run(&path, &["push", "-q", "origin", "HEAD:refs/heads/main"])
+            .await
+            .unwrap();
+        run(&path, &["fetch", "-q", "origin"]).await.unwrap();
+
+        let page = log_branch_commits(&path, 50, 0).await.unwrap();
+        assert_eq!(
+            page.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+            ["session work"],
+            "the list emptied itself once the work landed",
         );
 
         fs::remove_dir_all(&dir).await.ok();
