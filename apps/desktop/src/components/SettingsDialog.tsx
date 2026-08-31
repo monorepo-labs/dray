@@ -433,26 +433,21 @@ function useRovingGroup(
 
 /// Which manifest updates come from.
 ///
-/// A switch, where the mode row above argues for segments — because the two are
-/// not the same shape of choice. Mode has three answers and no default worth
-/// calling off; this has two, and stable is what you get by *not* choosing.
-/// That asymmetry is what a switch says and a segmented control cannot.
+/// A button that arms a confirm, the disconnect row's shape exactly — and not a
+/// switch, which was the first draft. The change wants confirming, because it
+/// makes the app start downloading a different build on its own; a switch that
+/// must be confirmed cannot move on click, and a switch that does not move
+/// reads as broken. A button carries the ask honestly: its label names the act
+/// (Turn on / Turn off), which also says which channel is live.
 ///
 /// Sits in About because that tab is where the app talks about itself: which
 /// build you are running, and what it reports back.
 ///
-/// One line, and deliberately not the mechanism. An earlier draft spent a
-/// second sentence on the fact that switching back is not a downgrade — true,
-/// and nobody asked: the reader wants to know what they get, not how the
-/// updater compares versions. `useUpdater`'s own comments hold that.
-///
-/// Flipping arms a confirm that replaces the switch — the same shape the
-/// disconnect row below uses. Not for irreversibility, which is that row's
-/// reason and not this one's: changing channel makes the app start downloading
-/// a different build on its own, so an accidental flip should cost a Cancel
-/// rather than a download. The description stays put through it — one line,
-/// always — and the switch never moves until confirmed, so it stays honest
-/// about which channel is live.
+/// The description is one line, and deliberately not the mechanism. An earlier
+/// draft spent a second sentence on the fact that switching back is not a
+/// downgrade — true, and nobody asked: the reader wants to know what they get,
+/// not how the updater compares versions. `useUpdater`'s own comments hold
+/// that. It also stays put while the confirm is up.
 function BetaUpdatesRow({
   channel,
   onChange,
@@ -465,6 +460,8 @@ function BetaUpdatesRow({
   /// the dialog, since the tab bodies are switched rather than hidden.
   const [confirming, setConfirming] = useState<UpdateChannel | null>(null);
 
+  const verb = (next: UpdateChannel) => (next === "beta" ? "Turn on" : "Turn off");
+
   return (
     <SettingRow
       id={id}
@@ -473,7 +470,15 @@ function BetaUpdatesRow({
     >
       {confirming ? (
         <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>
+          {/* Takes the focus the unmounting button just dropped — not stealing,
+              since a keyboard user was on this very spot. Cancel, not the verb,
+              so Enter pressed twice out of habit changes nothing. */}
+          <Button
+            autoFocus
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirming(null)}
+          >
             Cancel
           </Button>
           <Button
@@ -484,15 +489,18 @@ function BetaUpdatesRow({
               setConfirming(null);
             }}
           >
-            {confirming === "beta" ? "Turn on" : "Turn off"}
+            {verb(confirming)}
           </Button>
         </div>
       ) : (
-        <Switch
+        <Button
           id={id}
-          checked={channel === "beta"}
-          onCheckedChange={(next) => setConfirming(next ? "beta" : "stable")}
-        />
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirming(channel === "beta" ? "stable" : "beta")}
+        >
+          {verb(channel === "beta" ? "stable" : "beta")}
+        </Button>
       )}
     </SettingRow>
   );
