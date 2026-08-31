@@ -365,3 +365,36 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::APPEND_SYSTEM_PROMPT;
+
+    /// Same undefined word Codex read as a git parent. Claude has not been seen
+    /// to get it wrong, which is not the same as the prompt saying what it means.
+    #[test]
+    fn the_prompt_defines_a_parent_session() {
+        // Prose, so match on the words rather than on where a line wraps.
+        let prose = APPEND_SYSTEM_PROMPT
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(prose.contains("parent session is the Dray session that spawned this one"));
+        assert!(prose.contains("never a git parent"));
+        assert!(prose.contains("`parentSessionId`"));
+    }
+
+    /// "Review this with codex" names a harness, and an agent reading it as the
+    /// vendor's CLI shells out to a second agent nothing in the app can see.
+    #[test]
+    fn the_prompt_reads_an_agent_name_as_a_harness() {
+        let prose = APPEND_SYSTEM_PROMPT
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(prose.contains("`dray new --harness <name>`"));
+        assert!(prose.contains("never the vendor's own CLI or app"));
+    }
+}

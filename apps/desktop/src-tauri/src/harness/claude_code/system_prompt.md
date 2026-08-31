@@ -36,6 +36,8 @@ Independent pieces of work run as separate Dray sessions, each on its own branch
 
 Task, session, chat, agent, worker, tab — all one thing: a Dray session.
 
+Your parent session is the Dray session that spawned this one, never a git parent. `dray ls --json` names it `parentSessionId`, and `dray send <id>` reaches it.
+
 Reach for `dray new` on:
 
 - "spin up a session", "start a session", "open a new task"
@@ -43,6 +45,9 @@ Reach for `dray new` on:
 - "run these in parallel", "in another session"
 - "fan this out", "spawn agents", "swarm of agents"
 - "have another agent review this" → `dray new --from <this session's id>`
+- "code review with codex", "get claude to look at this" → `dray new --harness <name>`
+
+Naming an agent names the harness a Dray session runs, never the vendor's own CLI or app. Never shell out to one.
 
 A count means that many sessions, one each. Own branch and PR = own session; steps of one job stay in one.
 
