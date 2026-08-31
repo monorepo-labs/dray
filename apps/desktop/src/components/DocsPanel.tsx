@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Eye, Loader2, Pencil, X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
@@ -14,7 +14,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   closeDoc,
   isDirty,
@@ -28,6 +27,7 @@ import {
   type DocMode,
 } from "@/hooks/useDocs";
 import { splitPath } from "@/lib/changes";
+import { FIRST_SECTIONS, SECTION_STEP, splitMarkdownSections } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
 /// A markdown file from the transcript, rendered and editable.
@@ -194,26 +194,26 @@ function ModeToggle({
 }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted/50 p-0.5">
+      {/* No tooltip. Both options are drawn side by side, so the pair says what
+          each one does by contrast — a tooltip naming the glyph under the
+          cursor tells the reader what they can already see. `aria-label` still
+          carries the word for anyone not reading the shape. */}
       {MODES.map(({ value: mode, label, Icon }) => (
-        <Tooltip key={mode}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => onChange(mode)}
-              aria-label={label}
-              aria-pressed={value === mode}
-              className={cn(
-                "rounded-[min(var(--radius-md),6px)] p-1 transition-colors",
-                value === mode
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-3.5" strokeWidth={1.5} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left">{label}</TooltipContent>
-        </Tooltip>
+        <button
+          key={mode}
+          type="button"
+          onClick={() => onChange(mode)}
+          aria-label={label}
+          aria-pressed={value === mode}
+          className={cn(
+            "rounded-[min(var(--radius-md),6px)] p-1 transition-colors",
+            value === mode
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="size-3.5" strokeWidth={1.5} />
+        </button>
       ))}
     </div>
   );
@@ -264,14 +264,9 @@ function Body({ doc }: { doc: Doc }) {
   }
 
   if (doc.mode === "view") {
-    return (
-      <div className="px-3 py-2">
-        {/* `linkFilePaths` stays off. It is on for the assistant's own messages
-            alone, and a doc's relative links are markdown the author wrote —
-            Streamdown's business, not this app's. */}
-        <Markdown>{doc.body.draft}</Markdown>
-      </div>
-    );
+    // Keyed on the path so switching chips starts the next document at its own
+    // top rather than inheriting how far the last one had mounted.
+    return <Rendered key={doc.path} text={doc.body.draft} />;
   }
 
   return (
@@ -287,6 +282,48 @@ function Body({ doc }: { doc: Doc }) {
       // out of this box, and markdown lists need no indent to be written.
       className="h-full w-full resize-none bg-transparent px-3 py-2 font-mono text-code outline-none"
     />
+  );
+}
+
+/// The document, mounted a few sections at a time.
+///
+/// One commit was what made a long file take seconds to open: 282KB of markdown
+/// measured at 930ms of parsing before any of the 608KB of HTML it produces
+/// reached the DOM, and the commit and layout of that tree after it. A reader
+/// opens a document at its top, so the top is what has to be on screen — the
+/// rest arrives behind it, which is the bargain the transcript's own backfill
+/// makes for a long session.
+///
+/// The total work is unchanged. What changes is that the main thread comes back
+/// between steps, so the panel is readable and scrollable throughout instead of
+/// frozen until the last section lands.
+function Rendered({ text }: { text: string }) {
+  const sections = useMemo(() => splitMarkdownSections(text), [text]);
+  const [mounted, setMounted] = useState(FIRST_SECTIONS);
+
+  useEffect(() => {
+    if (mounted >= sections.length) return;
+    // A macrotask rather than a frame: this is parse work, and yielding to the
+    // event loop is what keeps a click or a keystroke from queueing behind it.
+    const id = setTimeout(() => setMounted((n) => n + SECTION_STEP), 0);
+    return () => clearTimeout(id);
+  }, [mounted, sections.length]);
+
+  return (
+    <div className="px-3 py-2">
+      {sections.slice(0, mounted).map((section, i) => (
+        // `Markdown` strips its own first child's top margin, which is right for
+        // one message in a transcript and wrong for a section stacked under
+        // another — without this every heading after the first would sit flush
+        // against the paragraph above it.
+        <div key={i} className={i > 0 ? "mt-4" : undefined}>
+          {/* `linkFilePaths` stays off. It is on for the assistant's own
+              messages alone, and a doc's relative links are markdown the author
+              wrote — Streamdown's business, not this app's. */}
+          <Markdown>{section}</Markdown>
+        </div>
+      ))}
+    </div>
   );
 }
 
