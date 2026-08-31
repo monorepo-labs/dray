@@ -1873,10 +1873,12 @@ impl Session {
     /// change, an update install, a delete and retry.
     pub async fn kill(mut self) -> Result<()> {
         if let Transport::Pi(client) = &self.stdin {
-            // Closed with the child rather than left for the next spawn to
-            // replace, so a card answered after this reports "no running
-            // session" instead of "no pending request".
-            crate::harness::pi::desk::close(&self.id);
+            // The desk is deliberately *not* closed here. Its reader owns that,
+            // and closing ahead of the shutdown meant every explicit kill — a
+            // respawn, a delete, a first send that failed — left the reader
+            // nothing to retire and its cards up for good. Until EOF reaches the
+            // reader an answer still fails honestly: `close` breaks the writer,
+            // so the reply errors rather than being claimed as delivered.
             crate::harness::pi::shutdown(&mut self.child, client).await;
             return Ok(());
         }

@@ -313,17 +313,33 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 //
 // Module-level for `useDraft`'s reason: the write site is an event listener
 // registered once, and the read site is a fetch that resolves after it.
-const earlyEvents = new Map<string, AgentEvent[]>();
+// Keyed by event id within each session, and that is not tidiness. The hold
+// happens inside a `setSessions` updater — the only place with a true reading of
+// which sessions are here — and StrictMode invokes every updater twice in
+// development, so an array would take each event twice and draw two cards with
+// one React key. A map makes the second call a no-op.
+const earlyEvents = new Map<string, Map<string, AgentEvent>>();
 
-// A session whose snapshot never arrives keeps whatever it held, so this is
-// capped rather than trusted. Well past any real burst before one lands, and
-// small enough that a run of failed sends costs nothing worth measuring.
+// A session whose snapshot never arrives keeps whatever it held, so both
+// dimensions are capped rather than trusted. Per session, well past any real
+// burst before one lands; and across sessions, because a failed send leaves an
+// entry under an id nothing will ever claim and every retry mints a fresh one.
 const MAX_EARLY_EVENTS = 200;
+const MAX_EARLY_SESSIONS = 32;
 
 const holdEarlyEvent = (event: AgentEvent) => {
-  const held = earlyEvents.get(event.sessionId) ?? [];
-  held.push(event);
-  earlyEvents.set(event.sessionId, held.slice(-MAX_EARLY_EVENTS));
+  const held = earlyEvents.get(event.sessionId) ?? new Map<string, AgentEvent>();
+  held.set(event.id, event);
+
+  // Insertion-ordered, so the oldest is the first key either way.
+  while (held.size > MAX_EARLY_EVENTS) {
+    held.delete(held.keys().next().value!);
+  }
+
+  earlyEvents.set(event.sessionId, held);
+  while (earlyEvents.size > MAX_EARLY_SESSIONS) {
+    earlyEvents.delete(earlyEvents.keys().next().value!);
+  }
 };
 
 // Merged by event id, which is exact: an event that *was* persisted carries the
@@ -333,10 +349,10 @@ const holdEarlyEvent = (event: AgentEvent) => {
 const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
   const held = earlyEvents.get(snapshot.sessionId);
   earlyEvents.delete(snapshot.sessionId);
-  if (!held?.length) return snapshot;
+  if (!held?.size) return snapshot;
 
   const seen = new Set(snapshot.events.map((e) => e.id));
-  const missing = held.filter((e) => !seen.has(e.id));
+  const missing = [...held.values()].filter((e) => !seen.has(e.id));
   if (!missing.length) return snapshot;
 
   return {

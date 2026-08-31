@@ -34,10 +34,10 @@
 //!
 //! [`SessionManager`]: crate::session::SessionManager
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter};
 
@@ -52,9 +52,17 @@ use crate::harness::claude_code::permissions::PendingPermissions;
 #[derive(Clone)]
 pub struct Desk {
     session_id: String,
+    /// Which desk this is, not merely whose. A session id is reused across a
+    /// respawn, and the reader it replaces is a task nobody joins — so an old
+    /// one reaching its teardown after the new desk is open would otherwise
+    /// retire the *new* pi's dialog and unregister it.
+    token: u64,
     client: PiClient,
     pending: PendingPermissions,
     seq: Arc<AtomicU64>,
+    /// Set the moment teardown begins, and read under [`Desk::pending`]'s lock
+    /// so a click and a dying child cannot both believe they won.
+    closed: Arc<AtomicBool>,
 }
 
 /// Module-level for [`crate::hooks`]-shaped reasons: the two halves sit far
@@ -64,34 +72,72 @@ pub struct Desk {
 static DESKS: LazyLock<Mutex<HashMap<String, Desk>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Opens one, before the reader starts.
+/// Hands out [`Desk::token`]. Only ever increments, so no two desks in one run
+/// of the app can share one.
+static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// Opens one, before the reader starts, and answers which one it is.
 ///
 /// Before, not after: the reader is what draws the card, so a desk registered
 /// second leaves a window in which a question is asked and cannot be answered.
-/// Re-registering the same id replaces it, which is what a respawn wants.
-pub fn open(session_id: &str, client: PiClient, pending: PendingPermissions, seq: Arc<AtomicU64>) {
+/// Re-registering the same id replaces it, which is what a respawn wants — and
+/// the token is what lets the reader it replaced know that is what happened.
+pub fn open(
+    session_id: &str,
+    client: PiClient,
+    pending: PendingPermissions,
+    seq: Arc<AtomicU64>,
+) -> u64 {
+    let token = NEXT_TOKEN.fetch_add(1, Relaxed);
+
     DESKS.lock().expect("desk registry poisoned").insert(
         session_id.to_string(),
         Desk {
             session_id: session_id.to_string(),
+            token,
             client,
             pending,
             seq,
+            closed: Arc::new(AtomicBool::new(false)),
         },
     );
+
+    token
 }
 
-/// Closes one, when its child goes.
+/// Ends one, when the reader that served it does.
 ///
-/// A desk left behind is not dangerous — its client writes to a closed pipe and
-/// the answer fails — but it would report "no pending request" where "no running
-/// session" is the true sentence, so it is closed rather than left for the next
-/// spawn to overwrite.
-pub fn close(session_id: &str) {
-    DESKS
-        .lock()
-        .expect("desk registry poisoned")
-        .remove(session_id);
+/// Takes the token and does nothing where it names a desk that has already been
+/// replaced. That guard is the whole of it: `shutdown` waits for the child but
+/// nobody joins the stdout task, so a respawn can open the next desk under the
+/// same session id before the old reader reaches this line. Without the token
+/// the old teardown retires the *new* pi's dialog as `Ended` and unregisters
+/// its desk, and the new pi then waits on an answer nothing can send.
+///
+/// Retiring and closing happen together and only here, so there is one owner of
+/// both. `Session::kill` used to close ahead of `shutdown`, which meant every
+/// explicit kill — a respawn, a delete, a first send that failed — reached this
+/// point with nothing left to retire and left its cards up.
+pub fn end(session_id: &str, token: u64, app: &AppHandle) {
+    if let Some(desk) = claim(session_id, token) {
+        desk.retire_all(app);
+    }
+}
+
+/// Takes a desk out of the registry, but only where the token still names the
+/// one registered. `None` means it has been replaced or already ended, and in
+/// both cases this reader owns nothing here any more.
+///
+/// Split from [`end`] because `end` needs an `AppHandle` to retire cards with
+/// and a unit test has none, while this — the guard that stops an old reader
+/// dismantling its replacement — is the half worth pinning.
+fn claim(session_id: &str, token: u64) -> Option<Desk> {
+    let mut registry = DESKS.lock().expect("desk registry poisoned");
+
+    match registry.get(session_id) {
+        Some(desk) if desk.token == token => registry.remove(session_id),
+        _ => None,
+    }
 }
 
 /// The desk for a session, if it has one.
@@ -133,9 +179,20 @@ impl Desk {
     /// Emitted and not persisted, like every other decision here — the request
     /// was never written either, since only the child that asked could answer
     /// it.
-    pub fn retire_all(&self, app: &AppHandle) {
+    fn retire_all(&self, app: &AppHandle) {
         let outstanding: Vec<(String, String)> = {
             let mut guard = self.pending.lock().expect("pending permissions poisoned");
+
+            // Flagged and drained in one critical section, and read back in
+            // `compose`'s. That is what makes the two total rather than merely
+            // narrow: whichever section runs first decides, so either the click
+            // took its entry while the child was still alive, or teardown had
+            // begun and the click is refused. Flagged *outside* the lock the two
+            // are separate steps, and a click that read the flag a moment before
+            // it was set still claims a delivery into a writer that is already
+            // breaking.
+            self.closed.store(true, Relaxed);
+
             guard
                 .drain()
                 .map(|(id, request)| (id, request.tool_use_id))
@@ -185,6 +242,15 @@ impl Desk {
     ) -> Result<(Value, AgentEvent)> {
         let pending = {
             let mut guard = self.pending.lock().expect("pending permissions poisoned");
+
+            // Read under the same lock the entry is taken from. Without it a
+            // click landing as the child dies takes its entry, misses the drain,
+            // queues a line to a writer that has already broken, and retires the
+            // card saying "Answered" for a reply that reached nothing.
+            if self.closed.load(Relaxed) {
+                bail!("that pi session is no longer running");
+            }
+
             guard
                 .remove(request_id)
                 .with_context(|| format!("no pending permission request {request_id}"))?
@@ -214,40 +280,44 @@ mod tests {
     use super::*;
     use crate::harness::claude_code::permissions::PendingRequest;
 
-    fn desk_holding(request_id: &str, method: &str) -> (String, Desk, PendingPermissions) {
+    fn request(request_id: &str, method: &str) -> PendingRequest {
+        PendingRequest {
+            tool_use_id: request_id.to_string(),
+            tool_name: method.to_string(),
+            input: Value::Null,
+            options: HashMap::new(),
+            rpc_id: None,
+            pi_dialog_method: Some(method.to_string()),
+        }
+    }
+
+    fn desk_holding(request_id: &str, method: &str) -> (String, u64, Desk, PendingPermissions) {
         let id = format!("desk-test-{}", uuid::Uuid::now_v7());
         let pending: PendingPermissions = Default::default();
 
-        pending.lock().unwrap().insert(
-            request_id.to_string(),
-            PendingRequest {
-                tool_use_id: request_id.to_string(),
-                tool_name: method.to_string(),
-                input: Value::Null,
-                options: HashMap::new(),
-                rpc_id: None,
-                pi_dialog_method: Some(method.to_string()),
-            },
-        );
+        pending
+            .lock()
+            .unwrap()
+            .insert(request_id.to_string(), request(request_id, method));
 
-        open(
+        let token = open(
             &id,
             PiClient::detached(),
             pending.clone(),
             Arc::new(AtomicU64::new(0)),
         );
         let desk = find(&id).expect("just opened");
-        (id, desk, pending)
+        (id, token, desk, pending)
     }
 
-    /// A desk is findable from the moment the reader starts until the child has
-    /// gone, which is the whole of what it promises.
+    /// A desk is findable from the moment the reader starts until its own reader
+    /// ends, which is the whole of what it promises.
     #[test]
-    fn a_desk_lives_from_open_to_close() {
+    fn a_desk_lives_from_open_to_end() {
         let id = format!("desk-test-{}", uuid::Uuid::now_v7());
         assert!(find(&id).is_none(), "nothing is registered yet");
 
-        open(
+        let token = open(
             &id,
             PiClient::detached(),
             Default::default(),
@@ -255,15 +325,46 @@ mod tests {
         );
         assert!(find(&id).is_some(), "the reader has started");
 
-        close(&id);
-        assert!(find(&id).is_none(), "the child has gone");
+        assert!(claim(&id, token).is_some(), "its own reader ends it");
+        assert!(find(&id).is_none(), "and it is gone");
+    }
+
+    /// An old reader cannot dismantle the desk that replaced it.
+    ///
+    /// `shutdown` waits for the child but nobody joins the stdout task, so a
+    /// respawn opens the next desk under the same session id while the previous
+    /// reader is still on its way to teardown. Keyed on the id alone that
+    /// teardown retired the *new* pi's dialog as `Ended` and unregistered its
+    /// desk, and the new pi then waited on an answer nothing could send.
+    #[test]
+    fn an_old_reader_cannot_end_the_desk_that_replaced_it() {
+        let id = format!("desk-test-{}", uuid::Uuid::now_v7());
+
+        let first = open(
+            &id,
+            PiClient::detached(),
+            Default::default(),
+            Arc::new(AtomicU64::new(0)),
+        );
+        let second = open(
+            &id,
+            PiClient::detached(),
+            Default::default(),
+            Arc::new(AtomicU64::new(0)),
+        );
+        assert_ne!(first, second, "two desks are never one");
+
+        assert!(claim(&id, first).is_none(), "the old reader owns nothing");
+        assert!(find(&id).is_some(), "the replacement is untouched");
+
+        assert!(claim(&id, second).is_some(), "its own reader still ends it");
     }
 
     /// One dialog, one answer. The second click finds nothing rather than
     /// writing a reply pi has already stopped waiting for.
     #[test]
     fn a_dialog_is_answered_exactly_once() {
-        let (id, desk, _pending) = desk_holding("d-1", "confirm");
+        let (id, token, desk, _pending) = desk_holding("d-1", "confirm");
         let answers = HashMap::from([("Confirm?".to_string(), "Yes".to_string())]);
 
         let (reply, _) = desk.compose("d-1", &answers).expect("the first answer");
@@ -274,7 +375,7 @@ mod tests {
             "the second click has nothing left to answer"
         );
 
-        close(&id);
+        let _ = claim(&id, token);
     }
 
     /// The reply is shaped by the method that asked, not by what came back.
@@ -283,7 +384,7 @@ mod tests {
     /// blocked, so this is the half that has to travel with the request.
     #[test]
     fn the_reply_is_shaped_by_the_method_that_asked() {
-        let (id, desk, _pending) = desk_holding("d-2", "input");
+        let (id, token, desk, _pending) = desk_holding("d-2", "input");
         let answers = HashMap::from([("Name it".to_string(), "typed".to_string())]);
 
         let (reply, decided) = desk.compose("d-2", &answers).expect("answered");
@@ -291,17 +392,88 @@ mod tests {
         assert_eq!(reply["id"], Value::String("d-2".into()));
         assert_eq!(decided.harness, crate::harness::Harness::Pi);
 
-        close(&id);
+        let _ = claim(&id, token);
     }
 
     /// A skip still answers, and says so.
     #[test]
     fn a_skip_cancels_and_is_labelled_as_one() {
-        let (id, desk, _pending) = desk_holding("d-3", "select");
+        let (id, token, desk, _pending) = desk_holding("d-3", "select");
 
         let (reply, _) = desk.compose("d-3", &HashMap::new()).expect("answered");
         assert_eq!(reply["cancelled"], Value::Bool(true));
 
-        close(&id);
+        let _ = claim(&id, token);
+    }
+
+    /// A click that lands after teardown began is refused, not claimed.
+    ///
+    /// Both halves read the same flag under the same lock the entry is taken
+    /// from, so exactly one of them wins. Refused, the card stays up until the
+    /// retirement retires it; claimed, it would queue a line to a writer that
+    /// has already broken and report "Answered" for a reply that reached
+    /// nothing.
+    #[test]
+    fn a_click_after_teardown_is_refused_rather_than_claimed() {
+        let (id, token, desk, pending) = desk_holding("d-4", "confirm");
+
+        // What `retire_all` does inside the lock, immediately before draining.
+        desk.closed.store(true, Relaxed);
+
+        assert!(
+            desk.compose("d-4", &HashMap::new()).is_err(),
+            "a dying desk must not claim a delivery"
+        );
+        assert!(
+            pending.lock().unwrap().contains_key("d-4"),
+            "and it must leave the entry for the retirement to take"
+        );
+
+        let _ = claim(&id, token);
+    }
+
+    /// A click and a teardown never both take the entry, and never both miss it.
+    ///
+    /// Narrower than it looks, and worth saying so: this pins that the two
+    /// critical sections are mutually exclusive, not *which* of them the flag
+    /// sends away. That half is deterministic and sits in the test above. Kept
+    /// because the pair is what the card's correctness rests on, and because
+    /// there is no await between reading the flag and taking the entry — so this
+    /// is real parallelism, with no scheduling point anything could be argued
+    /// from.
+    #[test]
+    fn a_click_and_a_teardown_never_both_win() {
+        for round in 0..2_000 {
+            let (id, token, desk, pending) = desk_holding("d-5", "confirm");
+
+            let clicker = {
+                let desk = desk.clone();
+                std::thread::spawn(move || desk.compose("d-5", &HashMap::new()).is_ok())
+            };
+
+            let closer = {
+                let desk = desk.clone();
+                std::thread::spawn(move || {
+                    desk.closed.store(true, Relaxed);
+                    let mut guard = desk.pending.lock().expect("pending permissions poisoned");
+                    guard.drain().count()
+                })
+            };
+
+            let answered = clicker.join().expect("clicker thread");
+            let retired = closer.join().expect("closer thread");
+
+            assert_eq!(
+                answered,
+                retired == 0,
+                "round {round}: the entry went to both or to neither"
+            );
+            assert!(
+                pending.lock().unwrap().is_empty(),
+                "round {round}: nothing may be left registered"
+            );
+
+            let _ = claim(&id, token);
+        }
     }
 }

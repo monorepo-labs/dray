@@ -294,12 +294,26 @@ does call `ctx.ui.select`, but only past `if (!hasUI) return false`, and
 resources with no stored decision silently does not load them. Worth knowing as
 pi behaviour; not a Dray defect, and nothing here can change it.
 
-**A desk closes when its reader ends, not only when Dray does the leaving.** The
-reader ending is the one signal covering every way a child can go — asked to,
-killed, crashed, or never past the handshake. A stale desk still answered: the
-click took the pending entry, the reply joined a queue whose writer had already
-broken, and the card retired reporting "Answered" for a line that reached
-nothing. Outstanding cards are retired on the way out, and `Session`'s own pi arm
+**A desk is ended by its own reader, and only ever its own.** The reader ending
+is the one signal covering every way a child can go — asked to, killed, crashed,
+or never past the handshake — so retirement and closure happen there and nowhere
+else. `Session::kill` used to close ahead of `shutdown`, which meant every
+explicit kill reached the reader with nothing left to retire and left its cards
+up for good.
+
+Ending is keyed on a **token**, not on the session id. `shutdown` waits for the
+child but nobody joins the stdout task, so a respawn opens the next desk under
+the same id while the previous reader is still on its way out — and keyed on the
+id alone that teardown retired the *new* pi's dialog and unregistered its desk,
+leaving the new pi waiting on an answer nothing could send.
+
+The click race is closed by a flag set **inside** the pending lock, immediately
+before the drain, and read inside the lock the answer takes its entry from. That
+is what makes the two total rather than merely narrow: whichever critical section
+runs first decides, so either the click took its entry while the child was alive,
+or teardown had begun and the click is refused. Flagged outside the lock they are
+separate steps, and a click reading the flag a moment before it was set still
+claims a delivery into a writer that is already breaking. `Session`'s own pi arm
 is gone rather than left as a fallback that would recreate exactly that false
 answer through a dead client.
 
@@ -345,6 +359,14 @@ same id in the snapshot as it did on the wire, so the buffer can hold everything
 and still duplicate nothing. Deciding by payload type instead would have been a
 second copy of which events the log carries, free to disagree with the one in
 Rust.
+
+Held **in a map keyed by event id**, not a list, and that is not tidiness. The
+hold happens inside a `setSessions` updater, which is the only place with a true
+reading of which sessions are here — and StrictMode invokes every updater twice
+in development, so a list took each event twice and drew two cards under one
+React key. Both dimensions are capped: per session against a burst, and across
+sessions because a failed send leaves an entry under an id nothing will ever
+claim and every retry mints a fresh one.
 
 One gap left in the dialog channel: `opts.timeout` rides `select`, `confirm` and
 `input`, and Dray ignores it — so a card can outlive the dialog it draws and

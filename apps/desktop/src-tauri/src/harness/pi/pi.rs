@@ -183,7 +183,7 @@ pub async fn init(
     // decision — which is long before this session reaches `SessionManager`'s
     // map. See [`desk`] for the two windows and why the answer cannot go
     // through the session.
-    desk::open(session_id, client.clone(), pending.clone(), seq.clone());
+    let desk_token = desk::open(session_id, client.clone(), pending.clone(), seq.clone());
 
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
@@ -210,16 +210,15 @@ pub async fn init(
 
             // The reader ending is the one signal that covers every way a pi can
             // leave — asked to, killed, crashed, or never past the handshake —
-            // so the desk closes here rather than only where Dray does the
-            // leaving. A stale one answers: the click takes the entry, the line
-            // joins a queue whose writer has already broken, and the card
-            // retires saying "Answered" for a reply that reached nothing.
+            // so the desk ends here and nowhere else. A stale one answers: the
+            // click takes the entry, the line joins a queue whose writer has
+            // already broken, and the card retires saying "Answered" for a reply
+            // that reached nothing.
             //
-            // Retired before closed, since retiring is what needs the desk.
-            if let Some(desk) = desk::find(&desk_id) {
-                desk.retire_all(&teardown_app);
-            }
-            desk::close(&desk_id);
+            // By token, because a respawn reuses the session id and nothing
+            // joins this task: without it a slow teardown retires the *next*
+            // pi's dialog and takes its desk with it.
+            desk::end(&desk_id, desk_token, &teardown_app);
         }
     });
 
