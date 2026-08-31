@@ -155,7 +155,11 @@ function StyleToggle({
   onChange: (next: DiffStyle) => void;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted/50 p-0.5">
+    // `--surface-well`, the track token, rather than a muted fill: the well is
+    // a black scrim in both modes, so on a light page it cuts *into* the row
+    // instead of sitting a shade off it — which is what lets the thumb read as
+    // raised rather than as the one segment that happens to be greyer.
+    <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-surface-well p-0.5">
       {STYLES.map(({ value: style, label, Icon }) => (
         <Tooltip key={style}>
           <TooltipTrigger asChild>
@@ -166,8 +170,14 @@ function StyleToggle({
               aria-pressed={value === style}
               className={cn(
                 "rounded-[min(var(--radius-md),6px)] p-1 transition-colors",
+                // The thumb has to come up past the surface the row is drawn
+                // at, out of the well the track cuts — so it takes
+                // `--surface-thumb` and the button shadow, the pair the
+                // composer's own segmented control uses. An accent fill is a
+                // veil, and a veil over a scrim is a few percent of light that
+                // reads as nothing.
                 value === style
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  ? "bg-surface-thumb text-foreground shadow-(--shadow-button)"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >

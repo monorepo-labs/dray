@@ -257,6 +257,10 @@ export default function RightPanel({
   heading,
   children,
 }: RightPanelProps) {
+  // Read once rather than per render of the row: the count decides whether the
+  // keycaps are affordable as well as what gets drawn.
+  const tabs = tabOrder({ pr, docs, issue });
+
   return (
     <aside
       className={cn(
@@ -278,8 +282,12 @@ export default function RightPanel({
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : (
-          <>
-            {tabOrder({ pr, docs, issue }).map((value) => (
+          // `min-w-0` and its own scroll, so a row that outgrows the pane gives
+          // way here rather than pushing Open and Refresh past the right edge.
+          // The controls are what a reader reaches for by position; a tab they
+          // can still scroll to is the cheaper thing to lose.
+          <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+            {tabs.map((value) => (
               <TabButton
                 key={value}
                 active={tab === value}
@@ -299,6 +307,13 @@ export default function RightPanel({
                 because a chord for a row of two or three tabs is one nobody
                 goes looking for.
 
+                Which is also why they go once the row is longer than that. The
+                argument for drawing them was a short row nobody would think to
+                explore, and at four tabs it stops holding while the caps go on
+                costing the ~70px that pushed Open and Refresh off the edge. The
+                hint is the only thing in this row that does nothing, so it is
+                the first thing to give up when the row cannot afford it.
+
                 Three caps, not four: `[ ]` is one key with two ends rather than
                 two alternatives, so splitting it reads as a chord wanting
                 both. */}
@@ -312,12 +327,14 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <KbdGroup className="ml-1.5 shrink-0 dark:opacity-50">
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>⇧</Kbd>
-              <Kbd>[ ]</Kbd>
-            </KbdGroup>
-          </>
+            {tabs.length <= 3 && (
+              <KbdGroup className="ml-1.5 shrink-0 dark:opacity-50">
+                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                <Kbd>⇧</Kbd>
+                <Kbd>[ ]</Kbd>
+              </KbdGroup>
+            )}
+          </div>
         )}
 
         {/* The far end of the row, and one group rather than two `ml-auto`s:
