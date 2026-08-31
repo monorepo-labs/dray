@@ -17,6 +17,7 @@
 //! it can ask to leave — see [`shutdown`] and [`PiClient::close`].
 
 pub mod commands;
+pub mod desk;
 pub mod dialog;
 pub mod mapper;
 pub mod models;
@@ -176,6 +177,14 @@ pub async fn init(
     // the handshake even returns.
     let pending: PendingPermissions = Default::default();
 
+    // Open before the reader, and before the handshake it starts for. pi can ask
+    // a blocking question during startup — `resolveProjectTrusted` calls
+    // `ctx.ui.select` for any directory holding `.pi` resources with no stored
+    // decision — which is long before this session reaches `SessionManager`'s
+    // map. See [`desk`] for the two windows and why the answer cannot go
+    // through the session.
+    desk::open(session_id, client.clone(), pending.clone(), seq.clone());
+
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
     tokio::spawn({
@@ -268,6 +277,40 @@ pub enum Delivery {
     Steer,
 }
 
+/// Registers one dialog, unless the reader has stopped the run that raised it.
+/// Answers whether it was taken.
+///
+/// Refused after a Stop because the drain Stop performs is a snapshot and pi is
+/// lines ahead of it — a dialog raised as the abort goes out would otherwise
+/// survive it.
+///
+/// **The check sits under the pending lock, with the registration, and that is
+/// the whole of what makes it sound.** `begin_stop` stores the flag before Stop
+/// takes this lock to drain, so both orders end correctly: register first and
+/// the drain that follows finds this entry and cancels it; drain first and the
+/// flag is visible here — the mutex is what publishes a `Relaxed` store — so
+/// this refuses. Checked *before* taking the lock, the two become separate
+/// steps on two threads and a dialog landing between them survives a Stop that
+/// has already reported itself done.
+///
+/// Split out to be called rather than inlined, so the test can exercise the
+/// same code the read loop runs instead of a second copy of its ordering.
+fn register_dialog(
+    client: &PiClient,
+    pending: &PendingPermissions,
+    request_id: &str,
+    request: crate::harness::claude_code::permissions::PendingRequest,
+) -> bool {
+    let mut guard = pending.lock().expect("pending permissions mutex poisoned");
+
+    if client.stopping() {
+        return false;
+    }
+
+    guard.insert(request_id.to_string(), request);
+    true
+}
+
 /// Writes one prompt.
 ///
 /// pi answers `success: true` the moment it *accepts* one, and its docs say
@@ -281,6 +324,21 @@ pub async fn send_prompt(
     delivery: Delivery,
     images: &[crate::attachments::PreparedImage],
 ) -> Result<()> {
+    // The refusal window closes here, on the way out, and not on the inbound
+    // `agent_start` it used to. Two reasons, and the first is the damaging one:
+    // a new run's own preflight can ask before `agent_start` is ever published —
+    // an extension command, an `input` handler, `before_agent_start` — so a
+    // window keyed on that line was still open for a question the reader very
+    // much wanted, and Dray refused it. And pi awaits its `agent_start` handlers
+    // before publishing the line at all, so it was never proof the stopped run
+    // had finished asking either.
+    //
+    // Only a prompt that starts a run. A steer joins the run that is already
+    // going, which is the one the reader stopped.
+    if matches!(delivery, Delivery::WhenIdle) {
+        client.end_stop();
+    }
+
     client
         .request("prompt", prompt_request(text, delivery, images))
         .await?;
@@ -444,31 +502,12 @@ async fn read_stdout(
             continue;
         }
 
-        // The next run begins, so a dialog is answerable again. Placed ahead of
-        // the dialog branch rather than after it, since pi opens a run before
-        // anything inside one can ask.
-        if matches!(event, parser::PiEvent::AgentStart) {
-            client.end_stop();
-        }
-
         // An extension asking the reader something. Answered from here and
         // never merely ignored: pi blocks the tool call until an
         // `extension_ui_response` carrying this id comes back, and
         // `ctx.ui.confirm` has no timeout, so silence stalls the session with a
         // complete transcript on screen and nothing saying why.
         if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
-            // A dialog raised by a run the reader stopped. Refused where it
-            // would otherwise be drawn, because the drain that Stop performs is
-            // a snapshot and pi is lines ahead of it.
-            if client.stopping() && dialog::BLOCKING.contains(&method.as_str()) {
-                let _ = client.send(&json!({
-                    "type": "extension_ui_response",
-                    "id": id,
-                    "cancelled": true,
-                }));
-                continue;
-            }
-
             // Four of the nine block. The five in `ANNOUNCEMENTS` are output:
             // pi mints an id for them and registers no waiter, so a reply is
             // dropped. Drawing them is wanted and not built, and dropping them
@@ -493,10 +532,16 @@ async fn read_stdout(
             };
 
             let tool_use_id = request.tool_use_id.clone();
-            pending
-                .lock()
-                .expect("pending permissions mutex poisoned")
-                .insert(request_id.clone(), request);
+            if !register_dialog(&client, &pending, &request_id, request) {
+                // `cancelled` is what every dialog understands, resolving each
+                // to the default it was built with.
+                let _ = client.send(&json!({
+                    "type": "extension_ui_response",
+                    "id": id,
+                    "cancelled": true,
+                }));
+                continue;
+            }
 
             // Registered before it is emitted, so a reader answering the frame
             // it appears cannot beat the entry that resolves the answer.
@@ -703,6 +748,81 @@ mod tests {
             assert!(
                 !code.contains(&format!("\"{method}\"")),
                 "the read loop names {method} itself instead of asking `dialog`"
+            );
+        }
+    }
+
+    /// A Stop cannot leave a dialog registered behind it, however the two
+    /// threads interleave.
+    ///
+    /// The reader registers dialogs and `Session::interrupt` drains them, on
+    /// different threads and with no await between the check and the insert —
+    /// so there is no scheduling point to reason from, only real parallelism.
+    /// Checking the flag before taking the lock made those two separate steps,
+    /// and a dialog landing between them outlived the Stop that had already
+    /// reported itself done: a card raised by a run the reader had just ended,
+    /// holding its extension open.
+    ///
+    /// Run rather than reasoned about, and against `register_dialog` itself
+    /// rather than a copy of its ordering. The invariant is one sentence: once
+    /// both halves have finished, nothing is left registered — either the insert
+    /// landed before the drain and was drained, or the flag was visible and the
+    /// insert was refused.
+    #[test]
+    fn a_stop_never_leaves_a_dialog_registered() {
+        use crate::harness::claude_code::permissions::{PendingPermissions, PendingRequest};
+
+        for round in 0..2_000 {
+            let client = PiClient::detached();
+            let pending: PendingPermissions = Default::default();
+
+            let reader = {
+                let client = client.clone();
+                let pending = pending.clone();
+                std::thread::spawn(move || {
+                    register_dialog(
+                        &client,
+                        &pending,
+                        "d-1",
+                        PendingRequest {
+                            tool_use_id: "d-1".to_string(),
+                            tool_name: "confirm".to_string(),
+                            input: serde_json::Value::Null,
+                            options: Default::default(),
+                            rpc_id: None,
+                            pi_dialog_method: Some("confirm".to_string()),
+                        },
+                    )
+                })
+            };
+
+            let stopper = {
+                let client = client.clone();
+                let pending = pending.clone();
+                std::thread::spawn(move || {
+                    // The order `Session::cancel_pending_dialogs` uses, and the
+                    // order the argument rests on: the flag is stored before the
+                    // lock is taken.
+                    client.begin_stop();
+                    let drained: Vec<_> = pending
+                        .lock()
+                        .expect("pending permissions mutex poisoned")
+                        .drain()
+                        .collect();
+                    drained.len()
+                })
+            };
+
+            let registered = reader.join().expect("reader thread");
+            let drained = stopper.join().expect("stopper thread");
+
+            assert!(
+                pending.lock().unwrap().is_empty(),
+                "round {round}: a dialog survived the Stop (registered {registered}, drained {drained})"
+            );
+            assert_eq!(
+                registered, drained == 1,
+                "round {round}: a registered dialog has to be the one drained"
             );
         }
     }

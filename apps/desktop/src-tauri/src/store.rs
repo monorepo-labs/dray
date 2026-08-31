@@ -519,18 +519,38 @@ pub async fn resolve_unclaimed_worktree_name(
         .collect();
     claimed.extend(crate::git::worktree_branch_names(project_path).await);
 
+    // One spawn, read once. A directory that is not a repository answers
+    // nothing, which reads as no branches — right, since there is no branch
+    // there to reset.
+    let branches = crate::git::list_branches(project_path)
+        .await
+        .map(|list| list.branches)
+        .unwrap_or_default();
+
+    let taken = |name: &str| {
+        claimed.iter().any(|c| c == name)
+            || branches.contains(&crate::git::worktree_branch(name))
+    };
+
     // A name the user asked for is answered, never silently swapped — so a
     // collision here is an error rather than a redraw.
     if let Some(name) = requested {
         if claimed.iter().any(|c| c == name) {
             bail!("a session is already using the worktree name '{name}'");
         }
+        if branches.contains(&crate::git::worktree_branch(name)) {
+            bail!(
+                "the branch '{}' already exists, so a worktree named '{name}' \
+                 would reset it",
+                crate::git::worktree_branch(name)
+            );
+        }
         return resolve_worktree_name(project_path, Some(name));
     }
 
     for _ in 0..16 {
         let name = resolve_worktree_name(project_path, None)?;
-        if !claimed.contains(&name) {
+        if !taken(&name) {
             return Ok(name);
         }
     }

@@ -64,10 +64,19 @@ export default function QuestionRequest({
   // blocked until this is answered, so it is the one thing on screen the reader
   // has to deal with. Once per mount — a re-render must not yank the caret back
   // out of the free-text box.
+  //
+  // The free-text box is the fallback, and it is not a nicety: pi's `input` and
+  // `editor` dialogs carry no choices at all, so a choice-only query found
+  // nothing and left focus in the composer. Typing then edited a prompt while
+  // the agent sat blocked behind the card, and Enter sent it.
   useEffect(() => {
-    formRef.current
-      ?.querySelector<HTMLInputElement>("[data-slot=questionnaire-choice] input")
-      ?.focus();
+    const form = formRef.current;
+    const target =
+      form?.querySelector<HTMLInputElement>(
+        "[data-slot=questionnaire-choice] input"
+      ) ?? form?.querySelector<HTMLInputElement>("[data-slot=questionnaire-input]");
+
+    target?.focus();
   }, []);
 
   return (
@@ -106,8 +115,15 @@ export default function QuestionRequest({
             {/* `header` is deliberately unrendered. It is a chip-sized label the
                 model writes alongside the question — "Indentation" over "Tabs or
                 spaces?" — which reads as a heading for a section that isn't
-                there, and says nothing the question doesn't. */}
-            <QuestionnaireTitle className="text-chat font-medium">
+                there, and says nothing the question doesn't. Anything a reader
+                must see belongs in the question text; `pi/dialog.rs` puts a
+                dialog's title there for exactly that reason.
+
+                `whitespace-pre-line` because that text can be two sentences: a
+                pi `confirm` carries a short question and the detail under it,
+                and run together on one line the detail reads as part of the
+                question. */}
+            <QuestionnaireTitle className="text-chat font-medium whitespace-pre-line">
               {question.question}
             </QuestionnaireTitle>
 

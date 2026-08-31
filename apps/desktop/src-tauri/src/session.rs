@@ -1104,6 +1104,15 @@ impl SessionManager {
         answers: HashMap<String, String>,
         app: &AppHandle,
     ) -> Result<()> {
+        // pi answers off its own desk and never touches the map below, because
+        // it can ask while the map does not hold the session or while this very
+        // lock is held by the send it is blocking. Both left the card drawn with
+        // buttons that did nothing until the prompt timed out 30 seconds later.
+        // See `harness::pi::desk`.
+        if let Some(desk) = crate::harness::pi::desk::find(session_id) {
+            return desk.answer(request_id, &answers, app);
+        }
+
         let mut sessions_guard = self.sessions.lock().await;
         let Some(session) = sessions_guard.get_mut(session_id) else {
             bail!("no running session {session_id}");
@@ -1839,29 +1848,14 @@ impl Session {
             }
         }
 
-        let payload = AgentEventPayload::PermissionDecided {
-            request_id: request_id.to_string(),
-            tool_use_id: pending.tool_use_id,
-            behavior: PermissionBehavior::Allow,
-            label: if answers.is_empty() {
-                "Skipped".to_string()
-            } else {
-                "Answered".to_string()
-            },
-            automatic: false,
-        };
-
-        let decision = AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: self.id.clone(),
-            harness: self.harness,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: now_rfc3339(),
-            turn_id: None,
-            subagent: None,
-            payload,
-            raw: None,
-        };
+        let decision = dialog_decided(
+            &self.id,
+            self.harness,
+            &self.seq,
+            request_id,
+            pending.tool_use_id,
+            answers.is_empty(),
+        );
 
         app.emit("agent_event", &decision)?;
 
@@ -1879,12 +1873,54 @@ impl Session {
     /// change, an update install, a delete and retry.
     pub async fn kill(mut self) -> Result<()> {
         if let Transport::Pi(client) = &self.stdin {
+            // Closed with the child rather than left for the next spawn to
+            // replace, so a card answered after this reports "no running
+            // session" instead of "no pending request".
+            crate::harness::pi::desk::close(&self.id);
             crate::harness::pi::shutdown(&mut self.child, client).await;
             return Ok(());
         }
 
         let _ = self.child.kill().await?;
         Ok(())
+    }
+}
+
+/// The event that retires an answered question's card.
+///
+/// Shared with [`pi::desk`](crate::harness::pi::desk), which answers pi's
+/// dialogs without going through the session map at all — so this is the one
+/// place the shape is stated. Two copies would differ on exactly the field
+/// nobody is watching, and the card is retired by this event alone.
+///
+/// Always `Allow`: a question is not a consent, the call runs either way, and
+/// the answer *is* the reply. `Skipped` is a real answer too — pi resolves the
+/// dialog to the default it was built with — so the label reports which of the
+/// two happened rather than whether anything did.
+pub fn dialog_decided(
+    session_id: &str,
+    harness: Harness,
+    seq: &Arc<AtomicU64>,
+    request_id: &str,
+    tool_use_id: String,
+    skipped: bool,
+) -> AgentEvent {
+    AgentEvent {
+        id: Uuid::now_v7().to_string(),
+        session_id: session_id.to_string(),
+        harness,
+        seq: seq.fetch_add(1, Relaxed),
+        ts: now_rfc3339(),
+        turn_id: None,
+        subagent: None,
+        payload: AgentEventPayload::PermissionDecided {
+            request_id: request_id.to_string(),
+            tool_use_id,
+            behavior: PermissionBehavior::Allow,
+            label: if skipped { "Skipped" } else { "Answered" }.to_string(),
+            automatic: false,
+        },
+        raw: None,
     }
 }
 

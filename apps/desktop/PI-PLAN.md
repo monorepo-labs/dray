@@ -272,7 +272,60 @@ not — and Dray's copy of what a model accepts can be stale, or absent where pi
 picked the model itself. Absence reads as capable, so a warning is never drawn
 on a guess.
 
+**A pi dialog is answered off its own desk, never through the session map**, and
+that came out of an adversarial review. pi asks blocking questions at two
+moments when the session is not reachable that way. `resolveProjectTrusted`
+calls `ctx.ui.select` during *startup* for any directory holding `.pi` resources
+with no stored decision, which is before a new session is ever inserted into the
+map. And pi answers a `prompt` only after `_tryExecuteExtensionCommand`,
+`emitInput` and `emitBeforeAgentStart` have all run — each able to ask — while
+`send_msg` for a live session holds the map's own lock, so the answer that would
+release pi waited on the lock the send held while it waited on the answer. Both
+drew a card whose buttons did nothing until the prompt timed out thirty seconds
+later, and the second took every other session's controls down with it, since
+that lock is one lock for the whole app. `harness/pi/desk.rs` registers the four
+handles an answer needs — pending map, client, id, sequence — the moment the
+reader starts, and `answer_questions` looks there first.
+
+**Stop's refusal window closes on the outgoing prompt, not on the inbound
+`agent_start`.** Keyed on the inbound line it was open across exactly the
+preflight above, so the next run's own legitimate question was auto-cancelled —
+the bug it exists to prevent, pointed the other way. And the check that reads it
+sits *under* the pending lock with the registration: `begin_stop` stores the flag
+before Stop takes that lock to drain, so either the insert lands first and is
+drained, or the flag is visible and the insert is refused. Checked before taking
+the lock they are two steps on two threads, and a dialog landing between them
+outlives a Stop that has already reported itself done — pinned by a threaded test
+that fails within a dozen rounds on the old ordering.
+
+**A worktree name is refused where its branch exists**, which is a hazard older
+than pi. `create_worktree` runs `worktree add -B`, which *resets* an existing
+branch, and the name resolver checked only the directory — so a tree removed by
+hand, leaving `worktree-<name>` with commits and no session row naming it, could
+have that name handed out again and the first send would move the branch off its
+own commits. `-B` stays, because it is what stops a leftover branch making a name
+fail forever; the resolver simply never hands out a name that would meet one.
+
+**A dialog's title reaches the reader.** The card draws no `header` — that slot
+is a chip-sized label `AskUserQuestion`'s model writes — so a `confirm`'s title
+put there was a title nobody saw: `confirm("Overwrite?", "file exists")` drew
+"file exists" over Yes and No. Which field carries the substance is not knowable
+from the wire, so both are shown, on two lines. The card also takes focus into
+its free-text box where it has no choices, which pi's `input` and `editor` never
+do — without it focus stayed in the composer, and typing edited a prompt while
+the agent sat blocked behind the card.
+
 Still not started there: fork at a chosen message.
+
+**Two gaps left in the dialog channel, both known.** A pi session's *first*
+prompt can raise a card the frontend drops: `useSessions`' listener writes into
+sessions it already holds, and a new session reaches that array only when
+`send_msg` returns — so a project-trust question asked during startup lights the
+sidebar rail and draws no card. The backend can answer it now; nothing draws the
+card to answer with. The cure is a session row created optimistically at send
+rather than on the reply. Separately, `opts.timeout` still rides `select`,
+`confirm` and `input` and Dray ignores it, so a card can outlive the dialog it
+draws and answer into a promise pi has already resolved.
 
 Both smaller things are done: a deleted session takes pi's own transcript with
 it, and the root README credits pi's mark, which its icon's doc comment had

@@ -87,14 +87,21 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
         return None;
     }
 
-    // The substance goes in the question and the short line becomes the chip,
-    // which is the split the two fields were built for: `confirm` sends
-    // "Confirm?" as its title and the sentence that matters as its message.
-    let (header, question) = match (title, message) {
-        (Some(title), Some(message)) => (Some(title.clone()), message.clone()),
-        (Some(title), None) => (None, title.clone()),
-        (None, Some(message)) => (None, message.clone()),
-        (None, None) => (None, format!("The extension is asking for a {method}")),
+    // Both go in the question, and neither in `header`. The card does not draw
+    // headers — that slot is a chip-sized label `AskUserQuestion`'s model writes,
+    // and it says nothing the question doesn't — so a title put there is a title
+    // nobody sees. `ctx.ui.confirm("Overwrite?", "file exists")` drew "file
+    // exists" over Yes and No, hiding what Yes authorised.
+    //
+    // Which of the two carries the substance is not knowable: `confirm` often
+    // asks in its title and explains in its message, while `project_trust`'s
+    // `select` puts the whole prompt in the title. So both are shown, as two
+    // lines rather than one sentence, since running them together reads as one
+    // long question with a fragment on the end.
+    let question = match (title, message) {
+        (Some(title), Some(message)) => format!("{title}\n\n{message}"),
+        (Some(text), None) | (None, Some(text)) => text.clone(),
+        (None, None) => format!("The extension is asking for a {method}"),
     };
 
     let choices: Vec<QuestionOption> = match method.as_str() {
@@ -144,7 +151,7 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
 
     let questions = vec![Question {
         question,
-        header,
+        header: None,
         multi_select: false,
         // A box beside a `select` would let the reader send the extension a
         // sentence where it expects one of its own options.
@@ -259,6 +266,32 @@ mod tests {
         assert_eq!(
             response("confirm", "d-1", &answers(NO, "Confirm?")),
             json!({"type": "extension_ui_response", "id": "d-1", "confirmed": false})
+        );
+    }
+
+    /// A confirm's title reaches the reader, because nothing else will show it.
+    ///
+    /// It used to ride `header`, which the card deliberately never draws — so
+    /// `confirm("Overwrite?", "file exists")` put "file exists" over Yes and No
+    /// and hid what Yes authorised. Which field carries the substance is not
+    /// knowable from the wire, so both are shown.
+    #[test]
+    fn both_halves_of_a_confirm_reach_the_reader() {
+        let event = PiEvent::ExtensionUiRequest {
+            id: "d-1".to_string(),
+            method: "confirm".to_string(),
+            title: Some("Overwrite?".to_string()),
+            message: Some("file exists".to_string()),
+            options: None,
+        };
+
+        let (_, _, questions) = for_request(&event).expect("a confirm blocks");
+
+        assert!(questions[0].question.contains("Overwrite?"));
+        assert!(questions[0].question.contains("file exists"));
+        assert_eq!(
+            questions[0].header, None,
+            "the card draws no header, so nothing may be left in one"
         );
     }
 

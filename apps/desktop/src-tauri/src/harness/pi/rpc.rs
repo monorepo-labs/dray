@@ -139,6 +139,23 @@ impl PiClient {
         }
     }
 
+    /// A client with nothing on the other end, for tests.
+    ///
+    /// The writer task is spawned as usual and its receiver dropped, so a
+    /// `send` fails the way one to a closed pipe does. That is what a test of
+    /// the *shape* of a line wants: it builds the line and never needs it to
+    /// arrive.
+    #[cfg(test)]
+    pub fn detached() -> Self {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            next_id: Arc::new(AtomicU64::new(1)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     /// Opens the window in which extension dialogs are refused on sight.
     ///
     /// Stop drains the dialogs already registered, and that drain is a snapshot:

@@ -1506,6 +1506,16 @@ pub async fn resolve_commit(cwd: &str, base: &str) -> Option<String> {
 }
 
 /// Creates a worktree at `<project>/.claude/worktrees/<name>` on a new branch
+/// The branch a worktree of this name lands on.
+///
+/// Stated here because two callers need it and they need it for opposite
+/// reasons: [`create_worktree`] mints it, and the name resolver has to refuse a
+/// name whose branch already exists. Two spellings of one rule would let the
+/// resolver bless a name that the creation then resets.
+pub fn worktree_branch(name: &str) -> String {
+    format!("worktree-{name}")
+}
+
 /// `worktree-<name>`, starting from `base`. Returns the path.
 ///
 /// The symmetric half of [`remove_worktree`], and it exists because the harness
@@ -1546,7 +1556,7 @@ pub async fn create_worktree(project_path: &str, name: &str, base: &str) -> Resu
     }
 
     let path = path.to_string_lossy().into_owned();
-    let branch = format!("worktree-{name}");
+    let branch = worktree_branch(name);
 
     // `--no-track` so the branch takes no upstream from the base. Without it a
     // base that is a remote-tracking ref makes every later `git push` on this
@@ -1945,6 +1955,29 @@ mod tests {
             .expect("a commit is a base");
 
         fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The branch a worktree gets is the one `worktree_branch` names.
+    ///
+    /// `resolve_unclaimed_worktree_name` refuses a name whose branch already
+    /// exists, because `-B` would reset it and take any commits on it with it —
+    /// and that check is only worth anything while the two agree. Drift here is
+    /// silent in the worst direction: the resolver would look for a branch
+    /// nothing ever creates, find none, and hand out the name it was meant to
+    /// withhold.
+    #[tokio::test]
+    async fn the_branch_a_worktree_gets_is_the_one_named_for_it() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        create_worktree(at, "derived", "HEAD").await.unwrap();
+
+        let branches = list_branches(at).await.unwrap().branches;
+        assert!(
+            branches.contains(&worktree_branch("derived")),
+            "the resolver looks for {}, and found {branches:?}",
+            worktree_branch("derived")
+        );
     }
 
     /// The name is what the branch is derived from, so a branch left behind by
