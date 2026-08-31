@@ -449,9 +449,10 @@ function useRovingGroup(
 /// Flipping arms a confirm that replaces the switch — the same shape the
 /// disconnect row below uses. Not for irreversibility, which is that row's
 /// reason and not this one's: changing channel makes the app start downloading
-/// a different build on its own, and the consequence sentence drawn while
-/// confirming is the one place that gets said. The switch itself never moves
-/// until confirmed, so it stays honest about which channel is live.
+/// a different build on its own, so an accidental flip should cost a Cancel
+/// rather than a download. The description stays put through it — one line,
+/// always — and the switch never moves until confirmed, so it stays honest
+/// about which channel is live.
 function BetaUpdatesRow({
   channel,
   onChange,
@@ -468,13 +469,7 @@ function BetaUpdatesRow({
     <SettingRow
       id={id}
       label="Beta updates"
-      description={
-        confirming === "beta"
-          ? "Dray will update to beta builds as they ship — early, and not fully tested."
-          : confirming === "stable"
-            ? "Dray will go back to stable updates. You keep this build until a stable release passes it."
-            : "Get new versions early, before they're fully tested."
-      }
+      description="Get new versions early, before they're fully tested."
     >
       {confirming ? (
         <div className="flex items-center gap-1.5">
