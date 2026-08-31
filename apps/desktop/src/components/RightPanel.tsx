@@ -286,10 +286,16 @@ export default function RightPanel({
           // Flex breaks a line *between* items, never through one, so the caps
           // are dropped whole — where clipping them with `overflow-hidden`
           // alone leaves half a cap on screen, which reads as broken rather
-          // than as a hint that stood down. `h-full` on this row and on the
-          // caps beside it is what fixes the line's height without naming a
-          // number: the caps define the line, the line is the container, and
-          // anything sent to a second line is outside it.
+          // than as a hint that stood down. `h-full` on this row and on both
+          // items in it is what fixes the line's height without naming a
+          // number: the first line is the container, so a second one is
+          // entirely outside it.
+          //
+          // Both items, not just the caps. A line is only as tall as what is
+          // left on it, so caps that carried the height alone took it with them
+          // when they wrapped — the row collapsed to the tabs' own height and
+          // the second line surfaced in the ~10px left over, drawing the top of
+          // every cap it was meant to have dropped.
           //
           // `content-start` pins that first line to the top, or a two-line
           // layout would centre both and clip the tabs' own tops. Measuring in
@@ -301,7 +307,7 @@ export default function RightPanel({
                 here rather than pushing Open and Refresh past the right edge.
                 The controls are what a reader reaches for by position; a tab
                 they can still scroll to is the cheaper thing to lose. */}
-            <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+            <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
               {tabs.map((value) => (
                 <TabButton
                   key={value}
