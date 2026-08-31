@@ -18,6 +18,8 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label.** Copy tweak, doc, prompt wording, config — label keep review bot off diff with nothing to find. Add at open (`gh pr create --label no-review`), since review fire on open. Anything touching behaviour = no label.
 
+**Open PR as draft, then spawn Codex reviewer.** `dray new --harness codex --effort medium --from <this session's id>`, briefed with issue, change and PR url — push first, since `--from` carry committed work only. It report through `dray send`; you fix and push until nothing left, then mark ready. `no-review` PR skip both.
+
 **One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
 
 Linear MCP not connected → say so, then carry on with the work. Tell reader at the end which issue still want creating, so it can be filed by hand.
