@@ -170,7 +170,7 @@ export type MergeState = {
 ///
 /// Split from the words it is said in because two surfaces need the verdict and
 /// only one of them needs a sentence: [mergeReadiness] writes the panel's line,
-/// and [isReadyToMerge] asks the one question a notice turns on. A predicate
+/// and [readyToMerge] asks the one question a notice turns on. A predicate
 /// written beside this rather than out of it would be a second copy of an order
 /// that took a while to get right.
 export type MergeVerdict =
@@ -190,6 +190,15 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
 
   if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") return "conflict";
 
+  // Ahead of the unknown arm, and the difference is what kind of fact each is.
+  // `isDraft` is stored, never recomputed, so an `UNKNOWN` window cannot make
+  // it less true — where letting unknown mask it held a draft at whatever it
+  // last read, and a draft that went ready inside one window then said nothing.
+  // The statuses below stay behind that arm for the mirrored reason: they are
+  // exactly what GitHub is recomputing while it says `UNKNOWN`, and trusting a
+  // leftover `BLOCKED` mid-recompute writes the false this order exists not to.
+  if (pr.isDraft) return "draft";
+
   // `UNKNOWN` is asked lazily by GitHub, so the first read of a fresh PR lands
   // here and the next poll settles it. A *null* is the other way of not
   // knowing — the sidebar's marks carry these for open pull requests only — and
@@ -198,8 +207,6 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
   if (pr.mergeable === "UNKNOWN" || pr.mergeable === null || pr.mergeStateStatus === null) {
     return "unknown";
   }
-
-  if (pr.isDraft) return "draft";
 
   switch (pr.mergeStateStatus) {
     case "BEHIND":
@@ -223,9 +230,22 @@ export function mergeVerdict(pr: MergeState): MergeVerdict {
 }
 
 /// Whether it can land right now — nothing in the way, nothing left to wait
-/// for. What the "Ready to merge" notice fires on.
-export function isReadyToMerge(pr: MergeState): boolean {
-  return mergeVerdict(pr) === "ready";
+/// for — or `null` where GitHub has not worked the answer out yet. What the
+/// "Ready to merge" notice fires on.
+///
+/// The missing `is` is the point: three answers, because the third one is a
+/// real state and folding it into `false` is what [readyTransitions] cannot
+/// afford. GitHub computes mergeability lazily *and recomputes it for every
+/// open pull request whose base moves*, so `UNKNOWN` is not only what a fresh
+/// PR reads on its first poll — it is what the rest of a project reads for a
+/// window after any merge. Read as a no, each of those is a pull request that
+/// has just stopped being ready, and settling back a poll later is then news.
+///
+/// A surface wanting a straight yes — a merge button, the panel's own line —
+/// reads `null` as a no. Only the transition test needs the two apart.
+export function readyToMerge(pr: MergeState): boolean | null {
+  const verdict = mergeVerdict(pr);
+  return verdict === "unknown" ? null : verdict === "ready";
 }
 
 /// One step of "which pull requests have just become ready", against what they
@@ -244,14 +264,36 @@ export function isReadyToMerge(pr: MergeState): boolean {
 /// sighting. That is the safe direction: re-seeding costs one announcement that
 /// was never made, where remembering a `false` across an absence would raise
 /// one for a pull request that was ready the whole time the row was gone.
+///
+/// **A `null` reading is held, not recorded.** GitHub recomputes mergeability
+/// for every open pull request the moment their base moves, so one merge drops
+/// the whole rest of a project to `UNKNOWN` for a window — and the marks read
+/// that `usePrMarks.refreshAfterWrite` forces on that same merge lands inside
+/// it. Written down as not-ready, every one of those settles back a poll later
+/// and announces itself, which is a card per open PR on every merge. So the
+/// last real reading stands and nothing is compared against.
+///
+/// Held rather than forgotten, and that is the difference from a session with
+/// no mark at all: not knowing yet is a brief bounded window in a session still
+/// being watched, where an absent row may be gone for a day. Forgetting here
+/// would drop a genuine `false`, so a pull request that was blocked before the
+/// merge would come back ready and say nothing.
 export function readyTransitions(
   prev: Map<string, boolean>,
-  observed: Iterable<readonly [string, boolean]>,
+  observed: Iterable<readonly [string, boolean | null]>,
 ): { next: Map<string, boolean>; became: string[] } {
   const next = new Map<string, boolean>();
   const became: string[] = [];
 
   for (const [sessionId, ready] of observed) {
+    if (ready === null) {
+      // Nothing to carry on a first sighting that is already unknown, so it is
+      // left absent and the next real reading seeds it in silence.
+      const held = prev.get(sessionId);
+      if (held !== undefined) next.set(sessionId, held);
+      continue;
+    }
+
     next.set(sessionId, ready);
     if (ready && prev.get(sessionId) === false) became.push(sessionId);
   }

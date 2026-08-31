@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   firstLine,
-  isReadyToMerge,
   isSettling,
   markDisagrees,
   readyTransitions,
   sameMark,
   mergeReadiness,
+  mergeVerdict,
   pickPrMark,
   prBadgeCount,
+  readyToMerge,
   sessionBranch,
   stripBotMarkers,
   summarizeChecks,
@@ -155,7 +156,7 @@ describe("mergeReadiness", () => {
   });
 });
 
-describe("isReadyToMerge", () => {
+describe("readyToMerge", () => {
   const mark = (over: Partial<PrMark> = {}): PrMark => ({
     number: 1,
     headRefName: "feat/x",
@@ -171,34 +172,55 @@ describe("isReadyToMerge", () => {
   // fields and is judged by the same ordered rule, so the notice and the
   // panel's own line can never disagree about whether something can land.
   it("answers for a sidebar mark and for a full pull request alike", () => {
-    expect(isReadyToMerge(mark())).toBe(true);
-    expect(isReadyToMerge(pr())).toBe(true);
+    expect(readyToMerge(mark())).toBe(true);
+    expect(readyToMerge(pr())).toBe(true);
     expect(mergeReadiness(pr()).tone).toBe("ready");
   });
 
   it("is false for everything standing in the way", () => {
-    expect(isReadyToMerge(mark({ isDraft: true }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeable: "CONFLICTING" }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeStateStatus: "BLOCKED" }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeStateStatus: "BEHIND" }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeStateStatus: "UNSTABLE" }))).toBe(false);
+    expect(readyToMerge(mark({ isDraft: true }))).toBe(false);
+    expect(readyToMerge(mark({ mergeable: "CONFLICTING" }))).toBe(false);
+    expect(readyToMerge(mark({ mergeStateStatus: "BLOCKED" }))).toBe(false);
+    expect(readyToMerge(mark({ mergeStateStatus: "BEHIND" }))).toBe(false);
+    expect(readyToMerge(mark({ mergeStateStatus: "UNSTABLE" }))).toBe(false);
   });
 
-  // The marks query asks for these on its open half alone, so a merged mark
-  // carries nulls. Reading a null as "nothing in the way" would announce work
-  // that has already landed as ready to land.
-  it("reads unasked fields as not knowing, never as ready", () => {
-    expect(isReadyToMerge(mark({ state: "MERGED", mergeable: null, mergeStateStatus: null }))).toBe(
+  // `isDraft` is a stored fact, not one GitHub recomputes, so an `UNKNOWN`
+  // window cannot unsettle it. Read as null it would hold a draft at whatever
+  // it last said — a ready PR drafted while the base moved kept its `true`, and
+  // going ready again inside the same window then announced nothing.
+  it("reads a draft as a plain no even while mergeability is unknown", () => {
+    expect(readyToMerge(mark({ isDraft: true, mergeable: "UNKNOWN" }))).toBe(false);
+    expect(readyToMerge(mark({ isDraft: true, mergeStateStatus: "UNKNOWN" }))).toBe(false);
+    // A drafted conflict still says conflict — the order above drafts holds.
+    expect(mergeVerdict(mark({ isDraft: true, mergeable: "CONFLICTING" }))).toBe("conflict");
+  });
+
+  // Not a no, and told apart from one so that `readyTransitions` can hold the
+  // previous reading instead of recording a PR as having stopped being ready.
+  // Every caller that wants a yes-or-no still reads this as a no.
+  it("answers null where GitHub has not worked it out", () => {
+    // The marks query asks these on its open half alone, so an open mark
+    // carrying a null is one whose answer has not arrived.
+    expect(readyToMerge(mark({ mergeable: null }))).toBe(null);
+    expect(readyToMerge(mark({ mergeStateStatus: null }))).toBe(null);
+    // GitHub's own two ways of not knowing. `mergeable` lands there on the
+    // first read of a fresh PR and on every open PR in a project whose base has
+    // just moved; `mergeStateStatus` can be there while `mergeable` has already
+    // settled, which is the case that fired a notification sound for a PR that
+    // could not be merged.
+    expect(readyToMerge(mark({ mergeable: "UNKNOWN" }))).toBe(null);
+    expect(readyToMerge(mark({ mergeStateStatus: "UNKNOWN" }))).toBe(null);
+  });
+
+  // A merged mark carries nulls in both fields, and answering `null` for it
+  // would be the fix eating itself: the previous reading would then stand, so a
+  // pull request that was ready right up to the merge would be held at ready
+  // forever. `state` is read before either field for exactly this.
+  it("reads a merged pull request as a plain no, never as not knowing", () => {
+    expect(readyToMerge(mark({ state: "MERGED", mergeable: null, mergeStateStatus: null }))).toBe(
       false,
     );
-    expect(isReadyToMerge(mark({ mergeable: null }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeStateStatus: null }))).toBe(false);
-    // Same answer for GitHub's own two ways of not knowing. `mergeable` lands
-    // there on the first read of a fresh PR; `mergeStateStatus` can be there
-    // while `mergeable` has already settled, which is the case that fired a
-    // notification sound for a PR that could not be merged.
-    expect(isReadyToMerge(mark({ mergeable: "UNKNOWN" }))).toBe(false);
-    expect(isReadyToMerge(mark({ mergeStateStatus: "UNKNOWN" }))).toBe(false);
   });
 });
 
@@ -242,6 +264,38 @@ describe("readyTransitions", () => {
     const away = readyTransitions(seeded.next, []);
     expect(away.next.size).toBe(0);
     expect(readyTransitions(away.next, [["a", true]]).became).toEqual([]);
+  });
+
+  // The whole of DRA-112. Merging moves the base, so GitHub recomputes
+  // mergeability for every other open pull request in the project and they read
+  // `UNKNOWN` for a window — which `refreshAfterWrite` forces a read inside.
+  // Recorded as not-ready, each settles back a poll later and announces itself,
+  // so the reader got the same cards again on every merge.
+  it("says nothing when a ready PR goes unknown and comes back", () => {
+    const ready = readyTransitions(new Map(), [["a", true]]);
+    const unknown = readyTransitions(ready.next, [["a", null]]);
+    expect(unknown.became).toEqual([]);
+    // The previous reading stands, which is what leaves nothing to announce.
+    expect(unknown.next.get("a")).toBe(true);
+    expect(readyTransitions(unknown.next, [["a", true]]).became).toEqual([]);
+  });
+
+  // Holding rather than forgetting, so news that was real before the base moved
+  // is still news after it.
+  it("still announces a PR that was blocked before it went unknown", () => {
+    const blocked = readyTransitions(new Map(), [["a", false]]);
+    const unknown = readyTransitions(blocked.next, [["a", null]]);
+    expect(unknown.next.get("a")).toBe(false);
+    expect(readyTransitions(unknown.next, [["a", true]]).became).toEqual(["a"]);
+  });
+
+  // Nothing to hold, so nothing is written — and the first real reading is then
+  // an ordinary first sighting, which is silent.
+  it("records nothing for a session whose first reading is unknown", () => {
+    const first = readyTransitions(new Map(), [["a", null]]);
+    expect(first.became).toEqual([]);
+    expect(first.next.size).toBe(0);
+    expect(readyTransitions(first.next, [["a", true]]).became).toEqual([]);
   });
 });
 
