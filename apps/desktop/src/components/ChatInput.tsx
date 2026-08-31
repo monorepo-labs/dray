@@ -669,13 +669,20 @@ export default function ChatInput({
             ref={cardRef}
             className={cn(
               "relative rounded-2xl transition-colors",
-              // `--shadow-surface` is `none` in dark, where the card already reads
-              // as raised by being lighter than the transcript behind it. In light
-              // every surface sits within a few percent of white, so the shadow is
-              // the only thing left that says the composer floats over the page it
-              // scrolls under.
+              // `--edge-surface` and `--shadow-surface` are one pair, and exactly
+              // one of them is drawn per mode. Light gets the shadow and a
+              // transparent edge — under a shadow tuned this crisp, a border is a
+              // second line saying the same thing. Dark gets the edge and no
+              // shadow: a shadow under a dark card falls on something already
+              // darker than itself, and the card is glass there, so being lighter
+              // than the page does not draw the box on its own.
+              //
+              // The focus hairline is not part of that trade and stays in both:
+              // a shadow can say "above" and cannot say "focused". The resting
+              // border keeps its width in light and spends only its colour, so
+              // focus swaps a value and reflows nothing.
               !isNewTask &&
-                "bg-composer shadow-(--shadow-surface) backdrop-blur-xl focus-within:border-hairline-strong",
+                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl focus-within:border-hairline-strong",
             )}
           >
             {/* Covers the card rather than replacing anything, so the text and

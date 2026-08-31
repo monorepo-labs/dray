@@ -265,6 +265,13 @@
      that needs this, where every surface is within a few percent of white and a
      shadow is the only thing left that can say "above". */
   --shadow-surface: none;
+  /* The edge of that same floating surface, and the exact twin of the shadow
+     above: the two say "above" in the two modes, and never both at once. A
+     hairline here because dark's floating surface is glass — `--veil-float` is
+     62% of a colour a few percent off the page — so being lighter than the
+     transcript is not on its own enough to draw the box. Light takes the shadow
+     and no edge; see the note there. */
+  --edge-surface: var(--hairline);
   /* The same idea one step down, for a surface that sits *in* the page rather
      than floating over it — the user's own message bubble, and whatever else
      wants separating from the transcript without claiming to hover above it. The
@@ -444,6 +451,12 @@
      that says how far above the transcript the card sits. */
   --shadow-surface:
     0 1px 1px oklch(0 0 1 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 4px oklch(0 0 0 / 8%);
+  /* Transparent, where dark carries a hairline. The shadow above already draws
+     the lip, and a border under it is a second line saying the same thing — read
+     together they double the edge and the crispness the shadow was tuned for is
+     what makes that show. Transparent rather than absent so the border-width
+     stays 1px in both modes: focus swaps the colour in and nothing reflows. */
+  --edge-surface: transparent;
   /* Lighter and a shade softer than the one above, and both halves are needed:
      the composer's shadow read as an edge cut under the bubble, because a bubble
      is not lifted off the page the way a bar at the window's edge is. So the
@@ -632,6 +645,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-hairline: var(--hairline);
+  --color-edge-surface: var(--edge-surface);
   --color-hairline-strong: var(--hairline-strong);
   --color-veil-strong: var(--veil-strong);
   --color-destructive: var(--destructive);
