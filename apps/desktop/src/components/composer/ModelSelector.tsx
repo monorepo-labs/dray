@@ -15,7 +15,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -322,20 +321,17 @@ export default function ModelSelector({
             ))
           : listed.map(modelRow)}
 
+        {/* No rule above it. The row is already a different shape to the models
+            over it — muted, and the one thing in the menu carrying a glyph — so
+            a line there drew a box round the difference rather than making it. */}
         {shortlisted && (
-          <>
-            {/* Only where something is above it. An empty shortlist makes this
-                the whole menu, and a rule above the only row draws a line
-                under nothing. */}
-            {listed.length > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuItem
-              className="cursor-pointer gap-2 text-ui text-muted-foreground"
-              onSelect={() => setLibraryOpen(true)}
-            >
-              <Sliders className="size-3.5" />
-              {listed.length > 0 ? "Choose models…" : "Select models…"}
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem
+            className="cursor-pointer gap-2 text-ui text-muted-foreground"
+            onSelect={() => setLibraryOpen(true)}
+          >
+            <Sliders className="size-3.5" />
+            {listed.length > 0 ? "Choose models…" : "Select models…"}
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
 

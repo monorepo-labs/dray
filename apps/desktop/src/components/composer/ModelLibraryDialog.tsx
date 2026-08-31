@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { RefreshCw, Search, Star } from "lucide-react";
+import { RefreshCw, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -58,14 +58,17 @@ export default function ModelLibraryDialog({
         <DialogHeader className="px-5 pt-5">
           <DialogTitle>Models</DialogTitle>
           <DialogDescription>
-            Star the ones you work with. Only those show in the picker.
+            Turn on the ones you work with. Only those show in the picker.
           </DialogDescription>
         </DialogHeader>
 
         {/* No fill and no border, the search bar the issues page already uses:
             it is the one control always in the same place, so the glyph says
-            "type here" without drawing a box round the list underneath. */}
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-5">
+            "type here" without drawing a box round the list underneath. No rule
+            under it either, for the same reason — the list below already starts
+            with a provider heading, so the line separated two things that were
+            not being confused for one another. */}
+        <div className="flex h-9 shrink-0 items-center gap-2 px-5">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <Input
             autoFocus
@@ -113,30 +116,37 @@ export default function ModelLibraryDialog({
               {group.models.map((model) => {
                 const isStarred = stars.has(model.id);
                 return (
+                  // The whole row is the target, and it carries the switch role
+                  // itself — a real `Switch` here would be a button inside a
+                  // button, which is invalid and gives the row two hit areas
+                  // where the reader sees one. Same bargain `WorktreeToggle`
+                  // makes with its own hand-drawn track.
                   <button
                     key={model.id}
                     type="button"
-                    aria-pressed={isStarred}
+                    role="switch"
+                    aria-checked={isStarred}
                     onClick={() => onStarredChange(toggleStar(starred, model.id))}
                     className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-ui hover:bg-accent"
                   >
-                    {/* Filled where starred, outline where not. The whole row is
-                        the target, so this is a state mark rather than a second
-                        thing to hit. */}
-                    <Star
+                    <span className="truncate">{model.label}</span>
+                    {/* The id used to sit here, and for most models it is the
+                        label again with a slash in it — the same name twice on
+                        one row. The state is what the row is for, so it takes
+                        the slot. */}
+                    <span
                       aria-hidden
                       className={cn(
-                        "size-3.5 shrink-0",
-                        isStarred
-                          ? "fill-accent-command text-accent-command"
-                          : "text-muted-foreground/50",
+                        "ml-auto flex h-4 w-7 shrink-0 items-center rounded-full p-px transition-colors",
+                        isStarred ? "bg-primary" : "bg-muted-foreground/30",
                       )}
-                    />
-                    <span className="truncate">{model.label}</span>
-                    {/* The id is what `dray new --model` takes and what pi names
-                        in an error, so it is worth having somewhere findable. */}
-                    <span className="ml-auto shrink-0 truncate text-muted-foreground/60">
-                      {model.arg}
+                    >
+                      <span
+                        className={cn(
+                          "size-3.5 rounded-full bg-background transition-transform",
+                          isStarred && "translate-x-3",
+                        )}
+                      />
                     </span>
                   </button>
                 );
