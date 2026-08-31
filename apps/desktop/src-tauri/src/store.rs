@@ -243,14 +243,17 @@ pub async fn pi_session_file(session_id: &str) -> Result<PathBuf> {
 /// session. That collides with nothing: pi's id is not an address anything here
 /// uses — Dray's own id is — and pi reports the *file* as what it resumed.
 ///
-/// A missing source is success. Every non-pi fork has none, and so does a pi
-/// session that was indexed and never spawned.
+/// A source that cannot be read is a failure, and the caller decides whether
+/// that matters: only a pi session has a transcript, so the fork path calls
+/// this for pi alone.
+///
+/// Probing first and answering "nothing to do" was the first shape, and it was
+/// wrong in the one case worth catching. A pi parent whose file is missing or
+/// unreadable would fork into a session showing the parent's whole conversation
+/// on screen over an empty pi context: it reads as a working fork and answers
+/// as a blank one.
 pub async fn copy_pi_session_file(from: &str, to: &str) -> Result<()> {
     let source = pi_session_file(from).await?;
-    if !fs::try_exists(&source).await.unwrap_or(false) {
-        return Ok(());
-    }
-
     let destination = pi_session_file(to).await?;
     fs::copy(&source, &destination)
         .await

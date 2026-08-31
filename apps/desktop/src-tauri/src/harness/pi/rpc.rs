@@ -22,7 +22,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
@@ -82,6 +82,15 @@ pub struct PiClient {
     tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicU64>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+    /// Set from the moment a Stop starts until the next run begins, so an
+    /// extension dialog raised in that gap is refused rather than drawn.
+    ///
+    /// It lives here because the client is already the one thing both halves
+    /// hold: [`Session::interrupt`](crate::session::Session::interrupt) sets it
+    /// and the read loop reads it, and neither has another handle on the other.
+    /// A field on `Session` would put a pi-only flag on the struct every
+    /// harness shares.
+    stopping: Arc<AtomicBool>,
 }
 
 /// What the writer task accepts.
@@ -125,8 +134,35 @@ impl PiClient {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Opens the window in which extension dialogs are refused on sight.
+    ///
+    /// Stop drains the dialogs already registered, and that drain is a snapshot:
+    /// pi is several lines ahead by the time the abort is written, so cancelling
+    /// a `select` can let the extension's very next `confirm` through. Registered
+    /// after the drain, it is a card raised by a run the reader has just stopped,
+    /// holding the session open behind a question they did not want asked.
+    pub fn begin_stop(&self) {
+        self.stopping.store(true, Relaxed);
+    }
+
+    /// Closes it again, at the next run's first line.
+    ///
+    /// The next run is the earliest moment a dialog can honestly be drawn again,
+    /// and it is the only boundary safe to key on: an aborted run is not promised
+    /// to settle, so clearing on a turn ending could leave the window open for
+    /// the life of the session.
+    pub fn end_stop(&self) {
+        self.stopping.store(false, Relaxed);
+    }
+
+    /// Whether a dialog arriving now belongs to a run the reader stopped.
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Relaxed)
     }
 
     /// Sends a command and waits for its answer, up to [`REQUEST_TIMEOUT`].
@@ -267,6 +303,7 @@ mod tests {
         PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -443,6 +480,7 @@ mod tests {
         let client = PiClient {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
+            stopping: Arc::new(AtomicBool::new(false)),
             pending: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -452,5 +490,31 @@ mod tests {
             .expect_err("the pipe is closed");
 
         assert!(client.pending.lock().await.is_empty());
+    }
+
+    /// The refusal window is shared, which is the whole reason it lives here.
+    ///
+    /// `Session::interrupt` opens it and the read loop closes it, and they hold
+    /// nothing in common but a clone of this client — so a flag that did not
+    /// travel across the clone would leave Stop refusing dialogs in one half and
+    /// drawing them in the other.
+    #[tokio::test]
+    async fn the_stop_window_is_shared_by_every_clone() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let client = PiClient {
+            tx,
+            next_id: Arc::new(AtomicU64::new(1)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let reader = client.clone();
+
+        assert!(!reader.stopping(), "a fresh session refuses nothing");
+
+        client.begin_stop();
+        assert!(reader.stopping(), "the reader has to see the Stop");
+
+        reader.end_stop();
+        assert!(!client.stopping(), "the next run reopens it for both");
     }
 }

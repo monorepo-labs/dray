@@ -444,19 +444,38 @@ async fn read_stdout(
             continue;
         }
 
+        // The next run begins, so a dialog is answerable again. Placed ahead of
+        // the dialog branch rather than after it, since pi opens a run before
+        // anything inside one can ask.
+        if matches!(event, parser::PiEvent::AgentStart) {
+            client.end_stop();
+        }
+
         // An extension asking the reader something. Answered from here and
         // never merely ignored: pi blocks the tool call until an
         // `extension_ui_response` carrying this id comes back, and
         // `ctx.ui.confirm` has no timeout, so silence stalls the session with a
         // complete transcript on screen and nothing saying why.
         if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
-            // Three of the six block. `notify` and `setStatus` are output — pi
-            // mints an id for them and registers no waiter, so a reply is
-            // dropped — and `custom` carries a payload only its own author can
-            // render. Drawing the first two is wanted and not built; dropping
-            // them quietly is the honest interim.
+            // A dialog raised by a run the reader stopped. Refused where it
+            // would otherwise be drawn, because the drain that Stop performs is
+            // a snapshot and pi is lines ahead of it.
+            if client.stopping() && dialog::BLOCKING.contains(&method.as_str()) {
+                let _ = client.send(&json!({
+                    "type": "extension_ui_response",
+                    "id": id,
+                    "cancelled": true,
+                }));
+                continue;
+            }
+
+            // Four of the nine block. The five in `ANNOUNCEMENTS` are output:
+            // pi mints an id for them and registers no waiter, so a reply is
+            // dropped. Drawing them is wanted and not built, and dropping them
+            // quietly is the honest interim. Anything else is a method this
+            // build has never seen, which is worth filing.
             let Some((request_id, request, questions)) = dialog::for_request(&event) else {
-                if !matches!(method.as_str(), "notify" | "setStatus") {
+                if !dialog::ANNOUNCEMENTS.contains(&method.as_str()) {
                     let asked = title.clone().unwrap_or_else(|| method.clone());
                     record_failure(&session_id, "unsupported_request", &asked, &line).await;
 
@@ -661,6 +680,31 @@ mod tests {
             json!({"message": "go"}),
             "an empty array states what pi already assumes"
         );
+    }
+
+    /// The read loop names no dialog method of its own.
+    ///
+    /// Which methods block and which are announcements is stated once, in
+    /// [`dialog`], and this is the half that drifted: the loop carried its own
+    /// `"notify" | "setStatus"` while the list beside it grew, so `setTitle` and
+    /// `setWidget` were filed as coverage gaps and answered with a refusal
+    /// nobody was waiting for. Neither direction of that mistake produces an
+    /// error — pi drops an unwanted reply in silence — so the guard has to be
+    /// that the loop holds no opinion at all.
+    #[test]
+    fn the_read_loop_classifies_dialogs_only_through_the_lists() {
+        let source = include_str!("pi.rs");
+        let code = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("there is always a first half");
+
+        for method in dialog::BLOCKING.into_iter().chain(dialog::ANNOUNCEMENTS) {
+            assert!(
+                !code.contains(&format!("\"{method}\"")),
+                "the read loop names {method} itself instead of asking `dialog`"
+            );
+        }
     }
 
     /// Nothing here kills a pi except the one function allowed to.

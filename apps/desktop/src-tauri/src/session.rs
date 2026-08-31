@@ -846,12 +846,24 @@ impl SessionManager {
                 (item.project_path.clone(), baseline)
             }
             Some(item) => {
-                let name = item.worktree_name.clone().expect("checked just above");
-                let base = git::default_base(&item.project_path)
-                    .await
-                    .unwrap_or_else(|| "HEAD".into());
+                // Made only once, however many times this runs. The tree is
+                // created before the child is spawned and `fork_from` is only
+                // cleared after it, so a spawn that fails leaves the
+                // instruction standing and the next send arrives here again —
+                // where `worktree add` on a path that exists refuses outright,
+                // and a fork that failed to start once could never start at
+                // all. Nothing is lost by adopting the tree: it belongs to this
+                // fork, whose first send is what this is, so there is no work
+                // in it yet to be surprised by.
+                if !tokio::fs::try_exists(&session_cwd).await.unwrap_or(false) {
+                    let name = item.worktree_name.clone().expect("checked just above");
+                    let base = git::default_base(&item.project_path)
+                        .await
+                        .unwrap_or_else(|| "HEAD".into());
 
-                git::create_worktree(&item.project_path, &name, &base).await?;
+                    git::create_worktree(&item.project_path, &name, &base).await?;
+                }
+
                 (session_cwd.clone(), git::snapshot_tree(&session_cwd).await)
             }
             None => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
@@ -988,11 +1000,18 @@ impl SessionManager {
 
         // For pi this *is* the fork: its resume handle is the file, so the copy
         // carries the conversation and the first send is an ordinary spawn.
-        // Propagated rather than logged, unlike the delete path's — a fork
-        // whose file failed to copy would open as an empty session claiming to
-        // hold its parent's conversation, and the entry has not been written
-        // yet, so failing here leaves nothing behind.
-        crate::store::copy_pi_session_file(session_id, fork_id).await?;
+        // Propagated rather than logged, unlike the delete path's — a fork whose
+        // file failed to copy would open as an empty session claiming to hold
+        // its parent's conversation, and the entry has not been written yet, so
+        // failing here leaves nothing behind.
+        //
+        // Asked for by harness rather than by probing the path, so that a
+        // missing file is an error where it means something and never reached
+        // where it is the ordinary state. Every other harness forks through the
+        // CLI and has no transcript of its own here.
+        if parent.harness == Harness::Pi {
+            crate::store::copy_pi_session_file(session_id, fork_id).await?;
+        }
 
         let item = parent.fork(fork_id, worktree_name.as_deref());
         append_session_index_item(item.clone()).await?;
@@ -1559,6 +1578,13 @@ impl Session {
         let Transport::Pi(client) = &self.stdin else {
             return;
         };
+
+        // Set before the drain, never after: pi is several lines ahead of this
+        // one, so the window has to be open before the snapshot is taken or a
+        // dialog can land in the gap between the two and be registered by a
+        // reader that has not been told to refuse yet. The reader closes it
+        // again at the next run's first line.
+        client.begin_stop();
 
         let pending: Vec<(String, crate::harness::claude_code::permissions::PendingRequest)> = {
             let mut guard = self

@@ -141,7 +141,7 @@ ungated — is closed on the half that could be closed. See slice 2.
 **Slice 2 — the part that matters is done, and it is not what §14 planned.**
 No gate ships, deliberately: pi is extensible, permission extensions already
 exist, and Dray renders *the channel* every extension asks over rather than
-competing with them. So `select`, `confirm` and `input` each draw the
+competing with them. So `select`, `confirm`, `input` and `editor` each draw the
 questionnaire card Dray already had, answered in the shape their own method
 reads, and an extension-registered tool needs no code at all — it arrives as an
 ordinary tool call. §6 is rewritten around this; the embedded gate extension it
@@ -150,7 +150,7 @@ agent and does not resolve a promise an extension is awaiting inside its
 `tool_call` hook — so a Stop pressed with a card on screen used to leave the
 extension waiting and the card offering buttons nothing would answer for. Not
 built there: `opts.timeout`, so a card can still outlive the dialog it draws;
-`notify` and `setStatus`, which are dropped rather than shown.
+and the five fire-and-forget methods, which are dropped rather than shown.
 
 Follows from that: **`Plan` is the only stance pi can honour, and it now
 does.** `--tools read,grep,find,ls` at spawn, which pi's own help gives as its
@@ -178,9 +178,25 @@ the first shape of this — was spawned straight into a directory nobody had
 made. Settled by having *every* fork record its parent and filtering the
 instruction on `fork_needs_cli` at the spawn, so the field's second fact ("this
 fork has not spawned yet") is available to both harnesses. Probing the
-directory instead was tried and is the wrong fix: a tree deleted by hand reads
-the same way, and remaking it runs `worktree add -B`, which resets the branch
-and takes its commits with it.
+directory instead was tried and is the wrong fix as a *gate*: a tree deleted by
+hand reads the same way, and remaking it runs `worktree add -B`, which resets
+the branch and takes its commits with it.
+
+The same probe is right one step in, though, and it closed a second hole. The
+tree is made before the child spawns and `fork_from` is only cleared after it,
+so a spawn that fails leaves the instruction standing and the next send arrives
+at the same branch — where `worktree add` on a path that exists refuses
+outright, and a fork that failed to start once could never start at all. So the
+creation is skipped when the directory is already there. Adopting it costs
+nothing: it belongs to this fork, whose first send is what this is, so there is
+no work in it to be surprised by.
+
+**A pi fork requires its parent's transcript, and says so.** The copy used to
+answer "nothing to do" for a missing source, which is the ordinary state for
+every other harness and a broken fork for pi: the copied Dray log puts the whole
+parent conversation on screen while pi opens on an empty context. It is asked
+for by harness now rather than by probing the path, so a missing file is an
+error exactly where it means one.
 
 **Steering is wired, and it removed code rather than adding it.** A prompt
 typed into a running pi turn goes straight out with
@@ -638,39 +654,57 @@ below.
 ### The whole extension UI surface, read out of the RPC bridge
 
 Everything below is `createExtensionUIContext` in `dist/modes/rpc/rpc-mode.js`,
-so it is what pi *does* rather than what its docs say. Six methods reach the
+so it is what pi *does* rather than what its docs say. Nine methods reach the
 wire, all as `extension_ui_request`, and they split in a way Dray has to respect
-because half of them must not be answered:
+because five of them must not be answered:
 
 | method | fields | answered with | on cancel/timeout |
 |---|---|---|---|
 | `select` | `title`, `options`, `timeout?` | `{value}` | `undefined` |
 | `confirm` | `title`, `message`, `timeout?` | `{confirmed}` | `false` |
 | `input` | `title`, `placeholder`, `timeout?` | `{value}` | `undefined` |
+| `editor` | `title`, `prefill` | `{value}` | `undefined`, **no timeout** |
 | `notify` | `message`, `notifyType` | **nothing** | — |
 | `setStatus` | `statusKey`, `statusText` | **nothing** | — |
+| `setWidget` | `widgetKey`, `widgetLines`, `widgetPlacement` | **nothing** | — |
+| `setTitle` | `title` | **nothing** | — |
+| `set_editor_text` | `text` | **nothing** | — |
 
-`onTerminalInput`, `setWorkingMessage`, `setWorkingVisible`,
-`setWorkingIndicator` and `setHiddenThinkingLabel` are TUI-only and no-op in RPC
-mode, so nothing reaches the wire for them and Dray never has to care.
+`custom` is not among them: it is declared and returns `undefined` in RPC mode
+without emitting anything. `onTerminalInput`, `setWorkingMessage`,
+`setWorkingVisible`, `setWorkingIndicator`, `setHiddenThinkingLabel`,
+`setFooter`, `setHeader` and the theme and editor-component accessors are
+TUI-only and no-op the same way, so Dray never has to care about any of them.
 
-Three things follow that are easy to get wrong:
+Four things follow that are easy to get wrong:
 
-- **`notify` and `setStatus` are fire-and-forget.** pi mints an id for them and
+- **The five announcements are fire-and-forget.** pi mints an id for them and
   registers no waiter, so a response is dropped — but treating them as blocking
-  requests to be refused files two ordinary UI messages as coverage gaps, and
+  requests to be refused files five ordinary UI messages as coverage gaps, and
   loses a line the reader was meant to see. They are output, not questions.
-- **The dialog carries its own deadline.** `opts.timeout` rides the request and
-  pi resolves the promise to the default above when it fires, so a card left up
-  past it is answering a question pi has already closed — the same shape as
-  Claude Code's `control_cancel_request`, arriving as a field rather than a
-  line.
+  Getting the split wrong is silent in both directions, which is why it is
+  stated once as two lists in `dialog.rs` and the read loop is pinned by test to
+  hold no opinion of its own.
+- **`editor` blocks and carries no deadline.** The other three are built by
+  `createDialogPromise`, which honours `opts.timeout` and `opts.signal`;
+  `editor` registers its waiter by hand and passes neither, so an unanswered one
+  holds its tool call for the life of the process. It looks like an
+  announcement and is not one.
+- **The other dialogs carry their own deadline.** `opts.timeout` rides the
+  request and pi resolves the promise to the default above when it fires, so a
+  card left up past it is answering a question pi has already closed — the same
+  shape as Claude Code's `control_cancel_request`, arriving as a field rather
+  than a line.
 - **`opts.signal` aborts the same way**, which is how a cancelled tool call
-  takes its dialog back.
+  takes its dialog back. It clears `pendingExtensionRequests`; an `abort`
+  command does not, so a dialog raised as a run is being stopped stays
+  outstanding on pi's side until Dray answers it. Stop therefore cancels the
+  dialogs it drains *and* refuses any that arrive before the next run begins,
+  since the drain is a snapshot and pi is several lines ahead of it.
 
 ### It is a question, not a consent card
 
-`dialog.rs` turns the three blocking methods into one
+`dialog.rs` turns the four blocking methods into one
 `AgentEventPayload::QuestionsAsked` each, which is the payload Dray already
 draws a form for. Not `PermissionRequested`, and that is the honest reading
 rather than reuse of convenience: nothing is being consented to, the call runs
@@ -687,10 +721,10 @@ Three consequences, each pinned by a test:
   and tells the model not to offer an "Other" option because of it, so the box
   is not optional there. pi's `select` is a closed list and its `confirm` is a
   boolean, so a typed sentence is an answer neither can be given — the
-  extension is handed a string it has no branch for. `input` is the one pi
-  dialog that takes one.
+  extension is handed a string it has no branch for. `input` and `editor` are
+  the two pi dialogs that take one.
 - **Each method is answered in its own shape.** `confirm` reads `confirmed`,
-  the other two read `value`. `PendingRequest` carries the method for this
+  the other three read `value`. `PendingRequest` carries the method for this
   alone; the id the answer names is the request id the entry is already filed
   under. A reply in the wrong shape is dropped in silence and the turn stays
   blocked, which is why the method is remembered rather than guessed at from
@@ -783,11 +817,13 @@ Two things worth saying plainly whenever a stance does come back:
   `control_cancel_request` already has: retire the card automatically and mint
   `PermissionDecided { automatic: true }`. The field is on the wire; nothing
   reads it.
-- **`notify` and `setStatus` draw nothing.** They are dropped quietly, which is
-  the honest interim — refusing them would file two ordinary UI messages as
+- **The five announcements draw nothing.** They are dropped quietly, which is
+  the honest interim — refusing them would file five ordinary UI messages as
   coverage gaps — but a reader is meant to see them.
-- **`custom` is refused.** It carries a payload only its own author can render,
-  so `cancelled: true` and a `unsupported_request` line is the truthful answer.
+- **A method on neither list is refused**, with `cancelled: true` and an
+  `unsupported_request` line. That is the truthful answer to one nobody has
+  looked at, and the wrong one to a method that only drifted out of the lists —
+  which is why the split is stated once and pinned by test.
 - **Load order is unexamined.** `event.input` is mutable and later handlers see
   earlier mutations, so two permission extensions installed together can
   disagree about what runs. That is between them and the reader now that Dray

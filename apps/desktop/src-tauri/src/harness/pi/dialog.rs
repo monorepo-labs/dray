@@ -8,10 +8,14 @@
 //! package anyone installs, including ones nobody has written yet, and Dray
 //! ships no gate of its own to compete with them.
 //!
-//! Three of the six methods block until they are answered and are what this
-//! module builds a card for. `notify` and `setStatus` are announcements pi
-//! registers no waiter for, and `custom` carries a payload only its own author
-//! can render.
+//! Nine methods reach the wire. Four block until they are answered and are
+//! what this module builds a card for; the other five are announcements pi
+//! registers no waiter for.
+//!
+//! Which is which is read off `createExtensionUIContext` and stated here in two
+//! lists rather than inferred, because both ways of being wrong are silent: pi
+//! drops a reply nobody is waiting for without complaining, and a blocking
+//! method mistaken for an announcement hangs the tool call that raised it.
 //!
 //! The card is [`QuestionsAsked`](crate::events::AgentEventPayload::QuestionsAsked),
 //! not a permission request, and that is the honest reading rather than a reuse
@@ -32,7 +36,29 @@ use crate::harness::claude_code::permissions::PendingRequest;
 /// The methods that block. Kept as one list because the read loop and this
 /// module have to agree on which lines get a card and which get dropped, and
 /// disagreeing either hangs a turn or files an announcement as a coverage gap.
-pub const BLOCKING: [&str; 3] = ["select", "confirm", "input"];
+///
+/// `editor` is the one with no deadline of its own. The other three are built
+/// by `createDialogPromise`, which honours `opts.timeout`; `editor` registers
+/// its waiter by hand and passes none, so an unanswered one blocks its tool
+/// call for the life of the process.
+pub const BLOCKING: [&str; 4] = ["select", "confirm", "input", "editor"];
+
+/// The methods pi sends and registers no waiter for. A reply to one of these is
+/// dropped, so refusing them would file five ordinary UI messages as coverage
+/// gaps and tell the reader they were refused something they were only being
+/// told.
+///
+/// Read off `createExtensionUIContext`, which is the only place the split is
+/// stated. Getting it wrong is quiet in both directions: a blocking method
+/// treated as an announcement hangs the turn, and an announcement treated as
+/// blocking answers a question nobody asked.
+pub const ANNOUNCEMENTS: [&str; 5] = [
+    "notify",
+    "setStatus",
+    "setWidget",
+    "setTitle",
+    "set_editor_text",
+];
 
 /// pi's own wording for a yes/no. `confirm` carries no labels on the wire — it
 /// resolves to a boolean — so these are Dray's, and they are what maps back.
@@ -95,6 +121,11 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
                 preview: None,
             })
             .collect(),
+        // `input` and `editor` both take an answer that is not on a list. The
+        // difference is only how much of one: `editor` opens a text area with
+        // `prefill` in it, and neither the area nor the prefill has anywhere to
+        // go on this card yet — so it draws as a plain box, which takes the
+        // answer even where it flatters the question.
         _ => Vec::new(),
     };
 
@@ -115,9 +146,8 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
         question,
         header,
         multi_select: false,
-        // Only `input` takes an answer that is not on the list. A box beside a
-        // `select` would let the reader send the extension a sentence where it
-        // expects one of its own options.
+        // A box beside a `select` would let the reader send the extension a
+        // sentence where it expects one of its own options.
         free_text: choices.is_empty(),
         options: choices,
     }];
@@ -128,10 +158,10 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
 /// The line that answers one, in the shape its own method reads.
 ///
 /// A dialog is answered in its own shape rather than through one envelope, so
-/// this is where the three diverge: `confirm` reads `confirmed`, the other two
-/// read `value`. A reply in the wrong shape is dropped in silence and the turn
-/// stays blocked, which is why the method is remembered rather than guessed at
-/// from what came back.
+/// this is where the four diverge: `confirm` reads `confirmed`, the other
+/// three read `value`. A reply in the wrong shape is dropped in silence and
+/// the turn stays blocked, which is why the method is remembered rather than
+/// guessed at from what came back.
 ///
 /// No answer is `cancelled`, which every dialog understands and resolves to the
 /// default it was constructed with. That is the truthful answer to a skip: the
@@ -232,6 +262,66 @@ mod tests {
         );
     }
 
+    /// `editor` blocks, so it gets a card rather than a refusal.
+    ///
+    /// It was read as unsupported once and auto-cancelled, which is the quietest
+    /// way to get this wrong: the extension sees its own dialog dismissed, so it
+    /// carries on with the default and the reader is never asked. `editor` is
+    /// also the one method built without a timeout, so nothing else would have
+    /// come along to end the wait.
+    #[test]
+    fn an_editor_takes_free_text_the_way_an_input_does() {
+        let event = request("editor", Some("Edit the message"), None);
+        let (_, pending, questions) = for_request(&event).expect("an editor blocks");
+
+        assert!(questions[0].options.is_empty());
+        assert!(questions[0].free_text);
+        assert_eq!(pending.pi_dialog_method.as_deref(), Some("editor"));
+
+        assert_eq!(
+            response("editor", "d-1", &answers("rewritten", "Edit the message")),
+            json!({"type": "extension_ui_response", "id": "d-1", "value": "rewritten"})
+        );
+    }
+
+    /// The two lists cannot overlap, and between them they have to name every
+    /// method that reaches the wire.
+    ///
+    /// Read off `createExtensionUIContext` in pi 0.84.4. A method in neither
+    /// list is refused and filed as a coverage gap, which is the right answer to
+    /// one nobody has looked at and the wrong one to `setTitle`.
+    #[test]
+    fn every_method_pi_sends_is_on_exactly_one_list() {
+        for method in BLOCKING {
+            assert!(
+                !ANNOUNCEMENTS.contains(&method),
+                "{method} cannot both block and be an announcement"
+            );
+        }
+
+        let known: Vec<&str> = BLOCKING
+            .iter()
+            .chain(ANNOUNCEMENTS.iter())
+            .copied()
+            .collect();
+        for method in [
+            "select",
+            "confirm",
+            "input",
+            "editor",
+            "notify",
+            "setStatus",
+            "setWidget",
+            "setTitle",
+            "set_editor_text",
+        ] {
+            assert!(
+                known.contains(&method),
+                "{method} reaches the wire unclassified"
+            );
+        }
+    }
+
     /// `input` is the one dialog whose answer is not on a list.
     #[test]
     fn an_input_is_the_only_one_that_takes_free_text() {
@@ -265,7 +355,7 @@ mod tests {
     /// An announcement gets no card, because nothing is waiting on one.
     #[test]
     fn an_announcement_is_not_a_question() {
-        for method in ["notify", "setStatus", "custom"] {
+        for method in ANNOUNCEMENTS {
             assert!(
                 for_request(&request(method, Some("hi"), None)).is_none(),
                 "{method} registers no waiter, so a card would ask about nothing"
