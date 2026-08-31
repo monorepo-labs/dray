@@ -36,8 +36,13 @@ export const SECTION_STEP = 2;
 ///
 /// Joining the result with a newline gives the input back exactly, which is the
 /// property worth holding on to — it is what makes "the pieces draw the whole"
-/// checkable rather than asserted.
+/// checkable rather than asserted. It is not sufficient on its own, though:
+/// concatenating to the input says the *text* survived, not that parsing the
+/// pieces separately means what parsing the whole meant. `isSplittable` is
+/// where that second half lives.
 export function splitMarkdownSections(text: string): string[] {
+  if (!isSplittable(text)) return [text];
+
   const sections: string[] = [];
   let current: string[] = [];
   let fence: string | null = null;
@@ -46,8 +51,14 @@ export function splitMarkdownSections(text: string): string[] {
     const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
 
     if (fence) {
-      // Closed only by its own character, and only by at least as many of them.
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      // Closed only by its own character, by at least as many of them, and by
+      // nothing else on the line: a closing fence takes no info string, so
+      // ```` ```not-a-close ```` opens a nested-looking block rather than
+      // ending this one. Reading it as a close put the rest of the fence back
+      // in play and cut the file at the next `#` inside it.
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) {
+        if (!line.slice(line.indexOf(marker) + marker.length).trim()) fence = null;
+      }
     } else if (marker) {
       fence = marker;
     } else if (/^#{1,6}(\s|$)/.test(line) && current.length) {
@@ -60,4 +71,53 @@ export function splitMarkdownSections(text: string): string[] {
 
   sections.push(current.join("\n"));
   return sections;
+}
+
+/// Whether cutting this document at its headings draws what one render would.
+///
+/// A heading ends every open *block*, which is what makes it a safe cut — but
+/// two things in markdown reach across one, and a section parsed alone cannot
+/// see them:
+///
+/// - **A link reference definition.** `[text][ref]` resolves against a
+///   `[ref]: url` line that may sit under a later heading, and in its own
+///   section the link falls back to literal text.
+/// - **An HTML block.** It runs until a blank line rather than until a heading,
+///   so a `#` inside one is part of it, and cutting there leaves an unclosed
+///   tag in one piece and an orphaned one in the next.
+///
+/// Front matter goes with them: a `---` at the top of the file is a block this
+/// splitter has no concept of at all.
+///
+/// So the answer is the whole document's, not the section's — one construct
+/// anywhere means the file renders in one commit. Slow is the safe side to be
+/// wrong on here, and both tests are deliberately loose: an autolink alone on a
+/// line reads as an HTML block by this rule and costs nothing but speed, where
+/// missing a real one costs a wrong render.
+function isSplittable(text: string): boolean {
+  if (/^---\s*$/.test(text.split("\n", 1)[0] ?? "")) return false;
+
+  let fence: string | null = null;
+  for (const line of text.split("\n")) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (
+        marker &&
+        marker[0] === fence[0] &&
+        marker.length >= fence.length &&
+        !line.slice(line.indexOf(marker) + marker.length).trim()
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (/^ {0,3}\[[^\]]*\]:/.test(line)) return false;
+    if (/^ {0,3}</.test(line)) return false;
+  }
+
+  return true;
 }

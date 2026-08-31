@@ -53,6 +53,10 @@ export default function DocsPanel() {
   const active = docs.find((doc) => doc.path === activePath) ?? null;
 
   const close = (doc: Doc) => {
+    // Stated here as well as on the button, which is disabled for it: the
+    // dialog this opens promises the file is untouched, and a save already
+    // with the OS makes that untrue.
+    if (doc.body.status === "ready" && doc.body.saving) return;
     if (isDirty(doc)) return setConfirming(doc.path);
     closeDoc(doc.path);
   };
@@ -133,6 +137,7 @@ function Chip({
   onClose: () => void;
 }) {
   const { name } = splitPath(doc.path);
+  const saving = doc.body.status === "ready" && doc.body.saving;
 
   return (
     // The two buttons sit side by side inside the chip rather than nested, so
@@ -162,11 +167,17 @@ function Chip({
         <span aria-label="Unsaved" className="size-1.5 shrink-0 rounded-full bg-current" />
       )}
 
+      {/* Held back while a save is out, because closing cannot call it off.
+          The write is already with the OS, so "Discard edits" would name
+          something this app can no longer do — and the file would land with
+          the very text the reader was told had been thrown away. A save is a
+          keystroke's worth of wait; the button comes back on its own. */}
       <button
         type="button"
         onClick={onClose}
+        disabled={saving}
         aria-label={`Close ${name}`}
-        className="shrink-0 rounded-sm p-0.5 opacity-60 transition-opacity hover:opacity-100"
+        className="shrink-0 rounded-sm p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
       >
         <X className="size-3" strokeWidth={1.5} />
       </button>

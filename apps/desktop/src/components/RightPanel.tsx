@@ -280,33 +280,22 @@ export default function RightPanel({
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : (
-          // A wrapping row clipped to one line's height, which is what sheds the
-          // keycaps exactly when they stop fitting and never a tab sooner.
+          // A wrapping row clipped to one line, which sheds the keycaps when
+          // they stop fitting and never a tab sooner — the CSS answer to a
+          // question a resize observer would otherwise have to measure.
           //
-          // Flex breaks a line *between* items, never through one, so the caps
-          // are dropped whole — where clipping them with `overflow-hidden`
-          // alone leaves half a cap on screen, which reads as broken rather
-          // than as a hint that stood down. `h-full` on this row and on both
-          // items in it is what fixes the line's height without naming a
-          // number: the first line is the container, so a second one is
-          // entirely outside it.
-          //
-          // Both items, not just the caps. A line is only as tall as what is
-          // left on it, so caps that carried the height alone took it with them
-          // when they wrapped — the row collapsed to the tabs' own height and
-          // the second line surfaced in the ~10px left over, drawing the top of
-          // every cap it was meant to have dropped.
-          //
-          // `content-start` pins that first line to the top, or a two-line
-          // layout would centre both and clip the tabs' own tops. Measuring in
-          // JS would answer the same question and is not worth a resize
-          // observer on a row this small.
+          // Flex breaks a line between items, never through one, so the caps go
+          // whole where `overflow-hidden` alone would leave half of one on
+          // screen. `h-full` on **both** items is what holds the line open: a
+          // line is only as tall as what is left on it, so caps carrying the
+          // height alone took it with them when they wrapped and the second
+          // line surfaced in the slack. `content-start` pins the first line to
+          // the top, or two lines would centre and clip the tabs.
           <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
-            {/* The tabs are one item on that line, with their own scroll: a row
-                that outgrows the pane even after the caps have gone gives way
-                here rather than pushing Open and Refresh past the right edge.
-                The controls are what a reader reaches for by position; a tab
-                they can still scroll to is the cheaper thing to lose. */}
+            {/* Their own scroll, so a row still too long after the caps have
+                gone gives way here rather than pushing Open and Refresh past
+                the edge: those are reached for by position, where a tab can
+                still be scrolled to. */}
             <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
               {tabs.map((value) => (
                 <TabButton
@@ -329,12 +318,10 @@ export default function RightPanel({
                 because a chord for a row of two or three tabs is one nobody
                 goes looking for.
 
-                Last in the row and the only thing in it allowed to wrap, so a
-                pane too full for both loses these ~70px rather than its Open
-                and Refresh controls. The hint is the one element here that does
-                nothing, which makes it the one to give up — but only when the
-                row genuinely cannot afford it, not at a tab count guessed in
-                advance.
+                Last in the row and the only thing allowed to wrap: the hint is
+                the one element here that does nothing, so it is the one to give
+                up — but only when the row cannot afford it, never at a tab
+                count guessed in advance.
 
                 Three caps, not four: `[ ]` is one key with two ends rather than
                 two alternatives, so splitting it reads as a chord wanting
