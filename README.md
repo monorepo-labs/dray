@@ -54,14 +54,32 @@ loudly on either.
 
 ## Themes
 
-Two of the palettes Dray ships are ports of other people's work, used under the
-MIT licence and unchanged in intent — the colours are theirs, the token names
-are ours.
+Four of the palettes Dray ships are ports of other people's work, used under
+the MIT licence and unchanged in intent — the colours are theirs, the token
+names are ours. Dray, the default, is our own.
 
-| Theme        | By                                                                     |
-| ------------ | ---------------------------------------------------------------------- |
-| [Catppuccin](https://github.com/catppuccin/catppuccin) | the Catppuccin org       |
-| [gruvbox](https://github.com/morhetz/gruvbox)          | Pavel Pertsev (@morhetz) |
+| Theme                                                   | By                       |
+| ------------------------------------------------------- | ------------------------ |
+| [Catppuccin](https://github.com/catppuccin/catppuccin)   | the Catppuccin org       |
+| [Cobalt2](https://github.com/wesbos/cobalt2-vscode)      | Wes Bos, Roberto Achar   |
+| [One Dark Pro](https://github.com/Binaryify/OneDark-Pro) | Binaryify                |
+| [gruvbox](https://github.com/morhetz/gruvbox)            | Pavel Pertsev (@morhetz) |
+
+Full licence texts are in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) —
+MIT asks the notice travel with the work, so a credit line on its own is not
+enough.
+
+**Which repo a port comes from is part of the port.** Cobalt2 is taken from the
+**VS Code** theme, not `wesbos/cobalt2`, which is the original Sublime one and
+carries no licence file at all — the colours are the same in both and only one
+of them grants permission to ship them. gruvbox is the reverse trap: it has no
+licence file either, so GitHub reports it as unlicensed, but it declares MIT in
+its `package.json`. One Dark Pro takes its surfaces from that repo's own
+`darker` variant and its text from the main one.
+
+Cobalt2 and One Dark Pro are dark-only, because neither has a light palette
+upstream and a light one is a second full ramp rather than an inversion.
+Picking either disables the mode control and says why.
 
 Ports live in `apps/desktop/src/App.css`, each value commented with the name it
 carries upstream (`surface0`, `bg0_h`) so a port can be checked against its

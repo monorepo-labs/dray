@@ -9,7 +9,7 @@
 /// `--composer`, which has to stay an opaque fill, and a grey composer on a tinted
 /// page is what a second axis buys.
 
-export type ThemeName = "default" | "catppuccin" | "gruvbox";
+export type ThemeName = "default" | "catppuccin" | "gruvbox" | "one-dark-pro" | "cobalt2";
 export type ThemeMode = "light" | "dark" | "system";
 
 /// Resolved mode — what actually lands on `data-mode`. `system` never does.
@@ -19,18 +19,25 @@ export type ResolvedMode = "light" | "dark";
 /// behaviour by saying nothing.
 ///
 /// `flatInFullscreen`: a theme keeps its layering when there is nothing behind the
-/// window unless it says otherwise. Default is the exception because its backdrop is
-/// a flat near-black, so in fullscreen its veils have nothing to sit on and only cost
-/// contrast. This was a switch in Settings for about an hour; it asked the reader a
-/// question that belongs to the theme, in a dialog, about a state they were not in.
+/// window unless it says otherwise. **Every theme shipped today says otherwise**, so
+/// the default this opts out of is currently used by nothing — the reasoning that
+/// began as Default's alone turned out to hold for all of them. Nothing is behind a
+/// fullscreen window, so the veils sit on the theme's own backdrop rather than on
+/// anything real, and what they cost in contrast they no longer buy in depth.
 ///
-/// `darkOnly`: a theme has both palettes unless it says otherwise. **No theme sets it
-/// today** — Default was the last, and its light side is built. It stays because the
-/// case it covers is real and silent: a palette with no light block matches nothing,
-/// so the app falls through to the light ramp's own neutrals, which is legible and is
-/// not the theme anyone chose. The flag is what turns that into a Settings row that is
-/// disabled and says why. A light palette is a second full ramp, not an inversion,
-/// which is why the next ported theme may well arrive without one.
+/// Kept as a flag rather than folded into `keepsGlassInFullscreen` because it stays
+/// answerable per palette: a backdrop worth layering over is a fact about the
+/// palette, and a future one may well have it. It was a switch in Settings for about
+/// an hour, which asked the reader a question that belongs to the theme, in a dialog,
+/// about a state they were not in.
+///
+/// `darkOnly`: a theme has both palettes unless it says otherwise. Cobalt2 and One
+/// Dark Pro set it, and it is the case this flag was kept for: a palette with no light
+/// block matches nothing, so the app falls through to the light ramp's own neutrals,
+/// which is legible and is not the theme anyone chose. The flag turns that into a
+/// Settings row that is disabled and says why. Neither has a light variant upstream,
+/// and a light palette is a second full ramp rather than an inversion, so neither can
+/// be given one without inventing it.
 export type Theme = {
   id: ThemeName;
   label: string;
@@ -41,15 +48,41 @@ export type Theme = {
 };
 
 export const THEMES: Theme[] = [
-  { id: "default", label: "Default", flatInFullscreen: true },
+  // Labelled for the app, still `default` on the wire. The id is what `coerceTheme`
+  // falls back to, what the pre-paint script in index.html stamps, and what every
+  // retired name (`neutral`, `shadcn`) lands on — renaming it would strand every
+  // stored pick on a palette that no longer answers to what is written down.
+  { id: "default", label: "Dray", flatInFullscreen: true },
   {
     id: "catppuccin",
     label: "Catppuccin",
+    flatInFullscreen: true,
     credit: { name: "Catppuccin", url: "https://github.com/catppuccin/catppuccin" },
+  },
+  // Ported from `cobalt2-vscode` rather than `wesbos/cobalt2`, and the distinction
+  // is the licence rather than the colours: the original Sublime repo carries no
+  // licence file at all, so it grants nothing. The VS Code port is MIT.
+  {
+    id: "cobalt2",
+    label: "Cobalt2",
+    flatInFullscreen: true,
+    darkOnly: true,
+    credit: { name: "Cobalt2", url: "https://github.com/wesbos/cobalt2-vscode" },
+  },
+  // Dark only because the upstream theme is. Atom's One Light is the obvious light
+  // side and is deliberately not reached for here: it is a different project under a
+  // different copyright, so pairing them would credit one palette and ship two.
+  {
+    id: "one-dark-pro",
+    label: "One Dark Pro",
+    flatInFullscreen: true,
+    darkOnly: true,
+    credit: { name: "One Dark Pro", url: "https://github.com/Binaryify/OneDark-Pro" },
   },
   {
     id: "gruvbox",
     label: "Gruvbox",
+    flatInFullscreen: true,
     credit: { name: "gruvbox", url: "https://github.com/morhetz/gruvbox" },
   },
 ];

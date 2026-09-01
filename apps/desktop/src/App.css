@@ -367,8 +367,8 @@
   --accent-mention: oklch(0.55 0.16 245);
   /* Missing here until light mode had a page to be looked at on: the dark ramp
      declared it, no palette block did, and a token no block sets resolves to
-     nothing at all — so an issue tag drew as plain prose in Latte and Gruvbox
-     light alike, and nothing said why. Violet at the trio's own lightness. */
+     nothing at all — so an issue tag drew as plain prose in every ported light
+     palette alike, and nothing said why. Violet at the trio's own lightness. */
   --accent-issue: oklch(0.55 0.16 310);
 
   /* Far shallower than dark's 22%: the same scrim over a near-white surface
@@ -542,7 +542,14 @@
    picker, and measurably so: its background is chroma **0.000**, a true neutral,
    with all the warmth in the cream foreground. That is why it could never have
    been a hue-and-chroma theme — the derived ramp would tint the background to
-   match the text, which is the one thing Gruvbox does not do. */
+   match the text, which is the one thing Gruvbox does not do.
+
+   Everforest was ported into this slot and taken back out: same author, softer
+   and greener, and on screen it lost exactly the quality above — its greys are
+   green, so the room is tinted and the text sits in it rather than against it.
+   The overlap that made the swap look reasonable is real; the thing worth
+   keeping turned out to be the neutral, not the warmth.
+   */
 [data-theme="gruvbox"][data-mode="dark"] {
   --background: #1d2021; /* bg0_h */
   --surface-raised: #282828; /* bg0 */
@@ -577,6 +584,91 @@
   --accent-command: #b57614; /* faded yellow */
   --accent-mention: #076678; /* faded blue */
   --accent-thinking: #928374; /* gray */
+}
+
+/* One Dark Pro — https://github.com/Binaryify/OneDark-Pro, MIT. Atom's One Dark by
+   way of the VS Code theme of that name.
+
+   **Surfaces from the `darker` variant, text from the main one**, both upstream and
+   both in that repo. The four rungs land at L 0.250 / 0.272 / 0.339 / 0.387, which is
+   Catppuccin's shape (+0.027 / +0.081 / +0.080) rather than Nord's flat one — Nord
+   was tried in this slot and cut for exactly that, its steps sitting ~0.04 apart with
+   nothing able to separate.
+
+   **The foreground pair is deliberately not One Dark Pro's own, and this is the part
+   worth reading.** Upstream's `editor.foreground` is `#abb2bf` at L 0.762, and its
+   description text sits at 0.566. Dray's dark ramp asks for 0.985 and 0.708 — so
+   taking the editor's values wholesale put *body prose* below the lightness this app
+   uses for secondary labels, and every muted string in the chrome (`Pinned`, `All
+   Projects`, a breadcrumb, a panel tab) below that again. It read as the theme being
+   washed out; it was a calibration meant for code being asked to carry prose.
+
+   So both move up, staying inside the palette: `#d7dae0` (0.888) takes foreground
+   and `#9da5b4` (0.720) takes muted, landing on the ramp's own figure almost exactly.
+   That leaves `#abb2bf`, One Dark's signature silver, doing neither — its lightness
+   is what made it wrong for both jobs here, and the character it carries survives in
+   the two greys either side of it.
+
+   `--accent-thinking` moves for the same reason: `#5c6370` is the comment colour and
+   the honest analogue, and at L 0.498 it is dimmer than any other theme's, so the
+   next grey up carries it. */
+[data-theme="one-dark-pro"][data-mode="dark"] {
+  --background: #1e2227; /* darker: sideBar.background */
+  --surface-raised: #23272e; /* darker: editor.background */
+  --surface-card: #323842;
+  --muted: #3e4452; /* focusBorder */
+  --muted-foreground: #9da5b4;
+  --foreground: #d7dae0;
+  --primary: #d7dae0;
+  --primary-foreground: #1e2227; /* darker: sideBar.background */
+  --ring: #4d78cc;
+  --destructive: #e06c75; /* red */
+  --accent-command: #e5c07b; /* yellow */
+  --accent-mention: #61afef; /* blue */
+  --accent-thinking: #7f848e;
+}
+
+/* Cobalt2 — https://github.com/wesbos/cobalt2-vscode, MIT. The one theme here with
+   no light side, and the only one that sets `darkOnly`: there is no light variant
+   upstream, and #193549 is not a colour that inverts into one.
+
+   Ported from the VS Code repo and not from `wesbos/cobalt2`, which is the original
+   Sublime theme and carries **no licence file** — no licence is not a permissive
+   one, so that repo grants nothing however freely it is shared. The colours are the
+   same either way; only one of the two may be shipped.
+
+   The page is `editor.background`, not the darker chrome Cobalt2 paints its sidebar
+   with. That inverts how the theme dresses a VS Code window, deliberately: there the
+   navy is the surface you read, and in Dray the surface you read is the transcript,
+   which sits on `--background`. Taking the chrome colour instead would put the colour
+   the theme is known for on cards and menus only.
+
+   **Darkening it was tried twice and taken back both times**, which is worth writing
+   down because the numbers argue for it and the screen does not. At L 0.317 this is
+   the lightest page of any theme shipping — lighter than One Dark Pro's was when it
+   read as washed out, and within 0.007 of Nord, which was cut for exactly that. What
+   the numbers miss is chroma: Nord had almost none, so the vibrancy bleed had no
+   colour to join and read as haze, while this navy is emphatic enough to stay navy.
+   `sideBar.background` (0.248) read as murk and `panel.background` (0.264) was no
+   better, and those two are adjacent to 0.317 in the whole palette — there is no
+   value in between to compromise on. So the outlier stands, on purpose.
+
+   Comments here are blue and italic rather than grey — `--accent-thinking` is that
+   blue, since dimmed prose in a transcript is the nearest thing Dray has to one. */
+[data-theme="cobalt2"][data-mode="dark"] {
+  --background: #193549; /* editor.background */
+  --surface-raised: #243e51;
+  --surface-card: #1f4662;
+  --muted: #355166;
+  --muted-foreground: #aaa; /* sideBar.foreground */
+  --foreground: #fff; /* editor.foreground */
+  --primary: #fff; /* editor.foreground */
+  --primary-foreground: #193549; /* editor.background */
+  --ring: #437da3;
+  --destructive: #ff628c; /* red */
+  --accent-command: #ffc600; /* yellow, and the colour the theme is known by */
+  --accent-mention: #9effff; /* light blue */
+  --accent-thinking: #0088ff; /* comment */
 }
 
 @theme inline {
