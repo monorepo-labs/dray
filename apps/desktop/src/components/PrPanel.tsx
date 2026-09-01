@@ -8,7 +8,6 @@ import {
   CircleDashed,
   CircleSlash,
   ExternalLink,
-  Loader2,
   MinusCircle,
   X,
 } from "lucide-react";
@@ -17,6 +16,7 @@ import Avatar from "@/components/Avatar";
 import PrStateIcon from "@/components/PrStateIcon";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
+import Spinner from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -362,7 +362,7 @@ function BranchCleanup({
                 void act(pr.number, { kind: "delete_branch" });
               }}
             >
-              {acting && <Loader2 className="animate-spin" />}
+              {acting && <Spinner />}
               {acting ? busyLabel("delete_branch") : "Delete branch"}
             </Button>
           </>
@@ -446,7 +446,7 @@ function Readiness({
               disabled={acting}
               onClick={() => void act(pr.number, { kind: "reopen" })}
             >
-              {acting && <Loader2 className="animate-spin" />}
+              {acting && <Spinner />}
               {acting ? busyLabel("reopen") : "Reopen"}
             </Button>
           )}
@@ -460,7 +460,7 @@ function Readiness({
                 disabled={acting}
                 onClick={() => void act(pr.number, { kind: "ready" })}
               >
-                {acting && <Loader2 className="animate-spin" />}
+                {acting && <Spinner />}
                 {acting ? busyLabel("ready") : "Ready for review"}
               </Button>
             ) : confirming ? (
@@ -510,7 +510,7 @@ function Readiness({
                   title={ready ? undefined : "This pull request is not ready to merge"}
                   onClick={() => setConfirming(true)}
                 >
-                  {acting && <Loader2 className="animate-spin" />}
+                  {acting && <Spinner />}
                   {acting ? busyLabel("merge") : METHOD_LABEL[method]}
                 </Button>
 
