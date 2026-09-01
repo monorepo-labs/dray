@@ -1302,7 +1302,7 @@ pub async fn record_parse_failure(
     Ok(())
 }
 
-/// Tail-reads the log's last line to continue its `seq` counter on resume.
+/// Reads the log's highest main-thread `seq` to continue its counter on resume.
 pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
     let path = get_session_path(session_id).await?;
 
@@ -1312,15 +1312,28 @@ pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
         Err(e) => return Err(e).context("could not read session file"),
     };
 
-    let seq = match buf.lines().next_back() {
-        Some(v) => {
-            let json: Value = serde_json::from_str(v)?;
-            json.get("seq").and_then(|s| s.as_u64()).unwrap_or(0)
-        }
-        None => 0,
-    };
+    Ok(max_main_thread_seq(&buf).map_or(0, |seq| seq + 1))
+}
 
-    Ok(seq + 1)
+/// A subagent's events carry their *own* sequence, restarting at 0, and are
+/// persisted to the same log — so the last line is not the counter. Reading it
+/// reset the session to 0 whenever a subagent settled last, and every event
+/// after that sorted above the entire history. Scanning for the max also heals
+/// a log already written that way. A line that will not parse is skipped, since
+/// refusing to resume over one is worse than the gap.
+fn max_main_thread_seq(buf: &str) -> Option<u64> {
+    buf.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|json| {
+            // `subagent_started` names a subagent but is the main thread's, and
+            // the mapper numbers it through the main counter — so it has to be
+            // read back the same way or a log ending on one hands out a `seq`
+            // twice.
+            json.get("subagent").is_none_or(Value::is_null)
+                || json.pointer("/payload/type") == Some(&Value::from("subagent_started"))
+        })
+        .filter_map(|json| json.get("seq").and_then(Value::as_u64))
+        .max()
 }
 
 /// Path to a session's `.jsonl` log under the sessions dir.
@@ -2067,6 +2080,36 @@ mod tests {
         assert!(
             json.get("indexItem").is_none(),
             "must stay flat for the generated TS type"
+        );
+    }
+
+    /// A subagent's events number themselves from 0 in the same log, so the
+    /// last line is not the counter. Reading it reset a resumed session to 0
+    /// and every event after sorted above the whole history — the transcript
+    /// looked like the reply had never arrived.
+    #[test]
+    fn resumes_past_a_subagent_that_settled_last() {
+        let log = concat!(
+            r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
+            "\n",
+            r#"{"seq":0,"subagent":{"id":"toolu_1","label":null},"payload":{"type":"subagent_completed"}}"#,
+            "\n",
+        );
+
+        assert_eq!(max_main_thread_seq(log), Some(41));
+        assert_eq!(max_main_thread_seq(""), None);
+
+        let spawned = concat!(
+            r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
+            "\n",
+            r#"{"seq":42,"subagent":{"id":"toolu_1","label":null},"payload":{"type":"subagent_started"}}"#,
+            "\n",
+        );
+
+        assert_eq!(
+            max_main_thread_seq(spawned),
+            Some(42),
+            "a spawn announcement is numbered through the main counter"
         );
     }
 }
