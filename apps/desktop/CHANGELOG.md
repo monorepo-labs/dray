@@ -5,6 +5,16 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.4
+
+### Fixed
+
+- **Quitting no longer crashes.** Once a transcription model had been
+  loaded, quitting raised a crash report every time: the Metal backend
+  frees its residency sets on the way out, after the Metal runtime is
+  already down. 0.12.3 made this everyone's problem by loading a model
+  at launch rather than on the first press.
+
 ## 0.12.3
 
 ### Added
