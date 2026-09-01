@@ -112,6 +112,12 @@ async fn ready_model() -> Option<&'static TranscriptionModel> {
 /// Spawned and silent: nothing here is worth delaying a command for, and the
 /// transcribe behind it loads again and reports for itself.
 pub fn warm_selected(engine: Engine) {
+    // Taken here rather than inside `warm`: the task below awaits twice before
+    // it loads anything, and a switch landing in either gap would otherwise be
+    // adopted as this warm's own generation — leaving two live loads holding
+    // the same token, where whichever finishes last is the one that stays.
+    let token = engine.token();
+
     tauri::async_runtime::spawn(async move {
         let Some(model) = ready_model().await else {
             return;
@@ -120,7 +126,7 @@ pub fn warm_selected(engine: Engine) {
             return;
         };
 
-        engine.warm(model.id.to_string(), path).await;
+        engine.warm(token, model.id.to_string(), path).await;
     });
 }
 

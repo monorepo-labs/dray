@@ -96,6 +96,15 @@ impl Engine {
         Ok(result?.trim().to_string())
     }
 
+    /// What [`Engine::warm`] must be handed to be allowed to install.
+    ///
+    /// Read *before* the caller does any awaiting, since anything it awaits
+    /// first is a gap an `unload` can land in — after which this reads as the
+    /// new generation and the stale warm is indistinguishable from a fresh one.
+    pub fn token(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     /// Loads the model now, so a dictation started this second doesn't pay for
     /// it when it ends.
     ///
@@ -104,9 +113,7 @@ impl Engine {
     /// recording starts: the reader is talking for that whole window, so the
     /// load lands before they press stop. Failures are silent — the real
     /// transcribe loads again and reports for itself.
-    pub async fn warm(&self, model_id: String, path: PathBuf) {
-        let generation = self.generation.load(Ordering::SeqCst);
-
+    pub async fn warm(&self, token: u64, model_id: String, path: PathBuf) {
         if self
             .loaded
             .lock()
@@ -130,9 +137,10 @@ impl Engine {
 
         let mut guard = self.loaded.lock().await;
 
-        // Re-read under the lock: an unload landing while this loaded means
-        // the model is one the reader has switched away from or deleted.
-        if self.generation.load(Ordering::SeqCst) == generation {
+        // Checked under the lock: an unload landing any time since the caller
+        // took its token means the model is one the reader has switched away
+        // from or deleted.
+        if self.token() == token {
             *guard = Some(Loaded { model_id, session });
         }
     }
@@ -191,7 +199,7 @@ mod tests {
         let engine = Engine::default();
 
         engine
-            .warm("whisper-small".into(), PathBuf::from("/nonexistent"))
+            .warm(engine.token(), "whisper-small".into(), PathBuf::from("/nonexistent"))
             .await;
 
         assert!(engine.loaded.lock().await.is_none());
@@ -202,15 +210,16 @@ mod tests {
         Engine::default().unload().await;
     }
 
-    /// The rule a stale warm is rejected by. Reachable with no weights on disk
-    /// because it is the counter, not the load, that decides.
+    /// The rule a stale warm is rejected by. Only the counter is reachable
+    /// with no weights on disk — a warm that cannot load never gets as far as
+    /// the install this token guards.
     #[tokio::test]
-    async fn unload_moves_the_generation_a_warm_is_judged_against() {
+    async fn unload_moves_the_token_a_warm_is_judged_against() {
         let engine = Engine::default();
-        let before = engine.generation.load(Ordering::SeqCst);
+        let before = engine.token();
 
         engine.unload().await;
 
-        assert_ne!(engine.generation.load(Ordering::SeqCst), before);
+        assert_ne!(engine.token(), before);
     }
 }
