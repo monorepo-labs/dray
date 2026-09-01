@@ -49,7 +49,7 @@ function Swatch({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
-/// The composer, its three dictation states, and nothing else.
+/// The composer, every dictation state, and nothing else.
 ///
 /// Reachable at `/demo.html` under `pnpm dev`. It exists because dictation is
 /// gated behind a microphone permission that cannot be granted to a dev binary,
