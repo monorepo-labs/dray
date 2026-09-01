@@ -1479,10 +1479,24 @@ The denominator is `get_state`'s `model.contextWindow`, taken at the handshake
 that already runs, held in an `AtomicU64` the mapper reads at `agent_settled`.
 The window is re-read on `model_changed`, since Dray respawns for a model
 change but a pi extension calling `setModel` does not — and dropped to `0` the
-moment that event lands, rather than left standing until the answer does. A
-turn settling in the gap draws no ring, where one drawn against the model that
-left is wrong in the direction that reassures: a switch onto a smaller window
-understates occupancy and the gauge says there is room where there is none.
+moment that event lands, rather than left standing until the answer does. That
+stops the *mixed* pair, which is the one nothing else could catch: a fresh
+occupancy measured against the window of the model that left, which after a
+switch onto a smaller one says there is room where there is none.
+
+**It does not make the gauge wait, and cannot.** The reader folds backwards to
+the newest event carrying a figure, so a turn with no window falls through to
+the previous turn's pair — the same reading, a turn older, and internally
+consistent because both halves came from one model. The window Dray no longer
+knows is therefore a stale gauge for as long as it takes `get_state` to answer,
+which is a local round trip against a turn that runs for seconds, and for the
+life of the child where that request fails.
+
+Making it go dark instead needs the fold to know that readings before a point
+are void — a persisted model-change event, which is a variant on the shared
+vocabulary and a fold rule to go with it. Not built: nothing Dray does reaches
+this, since it respawns for a model change, and the path exists only for a pi
+extension calling `setModel` mid-session.
 
 Three states carry no reading rather than a wrong one, and the last two are
 what pi's own `getContextUsage` does: a window Dray never learned, a turn that

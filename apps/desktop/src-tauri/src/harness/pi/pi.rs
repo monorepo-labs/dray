@@ -568,10 +568,16 @@ async fn read_stdout(
         // this loop is what reads them, so awaiting one here waits on itself.
         //
         // So the old window is dropped *here*, synchronously, rather than left
-        // standing until the answer lands. A turn settling in that gap draws no
-        // ring, where one drawn against the model that left is wrong in the
-        // direction that reassures — a switch onto a smaller window understates
-        // occupancy, and the gauge says there is room where there is none.
+        // standing until the answer lands. That is about the *mixed* pair: a
+        // fresh occupancy measured against the window of the model that left
+        // reads as room where there is none, once the switch is onto a smaller
+        // one.
+        //
+        // It does not make the gauge wait. A turn carrying no window falls
+        // through to the previous turn's pair, which is a reading one turn old
+        // with both halves from one model. Going dark instead would need the
+        // fold to know that readings before this point are void — see
+        // PI-PLAN.md.
         if matches!(event, parser::PiEvent::ModelChanged { .. }) {
             let client = client.clone();
             let context_window = mapper.context_window();
