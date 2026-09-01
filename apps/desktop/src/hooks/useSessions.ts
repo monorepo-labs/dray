@@ -99,6 +99,11 @@ export function useSessions() {
     // archived is the exception view, so every launch starts on the active list.
     const [showArchived, setShowArchived] = useState(false);
     const [models, setModels] = useState<Model[]>([]);
+    // Which harness `models` was read for. The list lands a beat after the
+    // harness moves, so it can still be the *other* harness's — and a pick
+    // repaired against that list is replaced by whatever led it, which is how a
+    // remembered pi model came back as one the reader never starred.
+    const [modelsHarness, setModelsHarness] = useState<Harness | null>(null);
     // pi's list is a read, not a table, so it can be in flight. `0` is the
     // resting value and every refresh bumps it, which is what re-arms the
     // effect below without a second copy of the read beside it.
@@ -682,8 +687,16 @@ const handleNewSession = () => {
   // other harness would come back here untouched every time — and the harness
   // is stored too, so the two can disagree from the moment one is picked
   // without the other.
+  //
+  // But only where that list is the preferred harness's own. Coming back from a
+  // session on another agent, `models` is still that agent's list, and
+  // repairing a pi pick against Claude's models threw it away for Claude's
+  // first model — which the pi fetch then threw away again for pi's first.
+  // An empty list is the "not landed yet" answer, and the fetch the harness
+  // change fires repairs the pick against the right list a beat later.
+  const ownList = modelsHarness === prefs.harness ? models : [];
   setModelId(
-    usableModel(models, rememberedModel(prefs.modelByHarness, prefs.harness), prefs.harness),
+    usableModel(ownList, rememberedModel(prefs.modelByHarness, prefs.harness), prefs.harness),
   );
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
@@ -1130,6 +1143,7 @@ useEffect(() => {
       // land on the second harness's picker.
       if (cancelled) return;
       setModels(list);
+      setModelsHarness(harness);
       // A model belongs to exactly one harness, so switching harness leaves the
       // pick naming something the new one cannot run. Repaired here, where the
       // real list has just landed, rather than guessed at when the toggle moved.

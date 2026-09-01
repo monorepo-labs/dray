@@ -67,11 +67,25 @@ export function usableModel(models: Model[], picked: ModelId, harness: Harness):
 
   const fallback = DEFAULT_MODEL_FOR[harness];
 
-  // Unset is a real answer where the harness names no default: pi picks for
-  // itself, and the spawn omits the flag. Without this the repair below reads
-  // it as a pick to replace and lands on whichever model leads the list —
-  // overriding a choice the reader made in pi's own settings.
-  if (isUnsetModel(picked) && isUnsetModel(fallback)) return picked;
+  // A harness naming no default answers the sentinel, never the head of the
+  // list: pi picks for itself, and the spawn omits the flag. A pick this list
+  // cannot run — the other harness's model, or one whose provider was logged
+  // out — falls to "let pi decide", where landing on the list's first model
+  // put a session on a model the reader never chose, with nothing on screen
+  // saying so. Same answer for the unset pick.
+  if (isUnsetModel(fallback)) return UNSET_MODEL;
 
   return models.some((m) => m.id === fallback) ? fallback : models[0].id;
+}
+
+/// The agents in the order the picker draws them, which is also the order ⌘⇧A
+/// steps through. One list: a chord visiting a harness the row cannot show, or
+/// skipping one it can, reads as the chord being broken.
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi"];
+
+/// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
+/// first, the same place the picker parks its thumb.
+export function nextHarness(current: Harness): Harness {
+  const i = HARNESS_ORDER.indexOf(current);
+  return HARNESS_ORDER[(i + 1) % HARNESS_ORDER.length];
 }
