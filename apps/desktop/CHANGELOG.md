@@ -5,6 +5,28 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.2
+
+### Added
+
+- **Start work on an issue from the issues page.** The button hands you the
+  empty composer with the issue already tagged, rather than starting a session
+  behind your back — the page spans the whole workspace, so the project, agent
+  and model are still yours to pick.
+
+### Fixed
+
+- **Dictation can reach the microphone.** 0.12.1 shipped it unable to: the
+  bundle is signed with the hardened runtime, under which macOS refuses the
+  mic before ever prompting unless the audio-input entitlement is granted. No
+  dialog appeared and no row showed up in Privacy & Security.
+- **The context ring fills for pi sessions**, and stays empty rather than
+  showing a figure that would mislead — after a compaction, or on a turn that
+  failed or was stopped.
+- **The issues page waits for its first read.** Only the settled headings can
+  draw without an answer, so for a beat they were the whole page and it read
+  as a workspace with nothing left to do.
+
 ## 0.12.1
 
 ### Added
