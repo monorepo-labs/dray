@@ -78,7 +78,7 @@ const BAR: Record<NoticeKind, string> = {
 
 /// How long the card lingers after its work is done, to say so. Long enough to
 /// read one word, short enough that nobody waits on it.
-const CONFIRM_MS = 1400;
+const CONFIRM_MS = 800;
 
 /// Wraps a button in the tooltip that carries its accelerator, and only where
 /// there is one to carry.
