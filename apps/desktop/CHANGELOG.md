@@ -5,6 +5,37 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.0
+
+### Added
+
+- **Dictate a prompt, transcribed on this machine.** ⌘D, or the mic beside
+  send. No audio leaves your computer.
+
+  **No model ships with the app** — Settings gains a Transcription tab that
+  downloads one, and pressing the mic with none opens it. Each model lists its
+  languages, size, and speed and accuracy scores.
+
+  The words land in the draft of the session you spoke into, so switching away
+  mid-recording doesn't lose them or file them somewhere else. Stop and cancel
+  are separate controls; Escape cancels.
+
+### Fixed
+
+- **A resumed session no longer sorts its whole history above the reply.** A
+  subagent numbers its own events from zero in the same log, so reading the
+  last line restarted the count — and every event after it drew above
+  everything that came before, which read as the answer never arriving.
+  Already-affected logs heal on the next read.
+- **⌘⇧A reaches pi.** The chord toggled between two agents, written when there
+  were two, so the third was unreachable from the keyboard. It now steps the
+  picker's own order.
+- **A new session keeps the model you picked for that agent.** Starting one
+  after visiting another agent's session repaired your pick against the wrong
+  agent's list and landed on whatever led it.
+- **The send button turns into Stop rather than swapping**, and spinners no
+  longer wobble on the pull request buttons.
+
 ## 0.11.0
 
 ### Added
