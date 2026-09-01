@@ -3,6 +3,7 @@ import { Streamdown, type Components, type LinkSafetyConfig, type ThemeInput } f
 
 import FileLink from "@/components/chat/FileLink";
 import LinkDialog from "@/components/chat/LinkDialog";
+import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
@@ -50,8 +51,11 @@ function codePlugin(pair: CodeThemePair) {
   return plugin;
 }
 
-// Copy is the only control worth keeping. Table actions and code download are
-// off entirely rather than hidden with CSS, so they can't be tabbed to either.
+// Copy is the only control worth keeping, and code's is the only one of
+// Streamdown's used: the table's copy control is ours ([MarkdownTable]), whose
+// format menu opens on hover where Streamdown's needs a click. Download and
+// fullscreen are off entirely rather than hidden with CSS, so they can't be
+// tabbed to either.
 const CONTROLS = { table: false, code: { copy: true, download: false } };
 
 // Streamdown's own confirm is kept on — a link in agent output is worth a
@@ -80,10 +84,14 @@ function MarkdownImpl({
   );
   const plugins = useMemo(() => ({ code: codePlugin(pair) }), [pair]);
 
-  // The caller's own overrides win, so a surface needing its own `span` is not
-  // quietly handed this one instead.
+  // The caller's own overrides win, so a surface needing its own `span` or
+  // `table` is not quietly handed this one instead.
   const overrides = useMemo(
-    () => (linkFilePaths ? { span: FilePathSpan, ...components } : components),
+    () => ({
+      table: MarkdownTable,
+      ...(linkFilePaths ? { span: FilePathSpan } : null),
+      ...components,
+    }),
     [linkFilePaths, components],
   );
 
@@ -147,30 +155,26 @@ function MarkdownImpl({
         // The copy control's reveal-on-hover lives in App.css too — it keys off
         // the code block itself, not this whole message.
 
-        // Table: no enclosing box. The outline lives on an unnamed div between
-        // the wrapper and the table, so all three layers have to be cleared —
-        // including that div's own `bg-background`, which cost nothing to leave
-        // while the page was that exact colour and became a slab behind every
-        // table the moment the page was glass.
-        "[&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
-        "[&_[data-streamdown=table-wrapper]]:rounded-none",
-        "[&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0",
-        "[&_[data-streamdown=table-wrapper]>div]:bg-transparent",
+        // Table: no enclosing box. The wrapper and scroll box are ours
+        // ([MarkdownTable]) and carry no chrome of their own; only what
+        // Streamdown still renders inside them needs clearing — the header's
+        // fill, and cells with no structure of their own, so rows get the
+        // rules instead.
         "[&_[data-streamdown=table-header]]:bg-transparent",
-        "[&_table]:rounded-none [&_table]:border-0",
-        // Cells carry no rules of their own, so removing the outline would leave
-        // the table with no structure at all — put it back on the rows.
         "[&_th]:border-b [&_th]:border-border/60",
         "[&_tbody_tr]:border-b [&_tbody_tr]:border-border/30",
-        // A cell that cannot break sets the table's width: one file path in a
-        // bot's summary table pushed every other column out of the PR panel and
-        // left the reader scrolling sideways to read a sentence. Anywhere rather
-        // than break-word, because only `anywhere` shrinks the cell's min-content
-        // width, which is what the auto layout measures. The wrapper keeps its
-        // own scroll for a table that is genuinely wide.
-        // The header cell needs its `whitespace-nowrap` lifted first, or the
-        // wrap rule is dead on it — nowrap outranks overflow-wrap.
-        "[&_th]:whitespace-normal [&_th]:wrap-anywhere [&_td]:wrap-anywhere",
+        // Each column is still capped, or one long-prose cell runs its whole
+        // paragraph out on a single line and the reader scrolls a paragraph's
+        // width to finish a sentence. The cap rides the block
+        // `rehypeTableCells` puts inside every cell (see markdownPlugins for
+        // why the `td` itself cannot carry it), spelled here so all table
+        // styling reads in one place. Break-word rather than anywhere: only a
+        // word wider than the whole cap breaks — a file path in a cell — so a
+        // column can never collapse below its longest ordinary word.
+        "[&_.dray-table-cell]:max-w-md [&_.dray-table-cell]:wrap-break-word",
+        // The header cell's `whitespace-nowrap` has to lift, or a capped
+        // header column overflows instead of wrapping.
+        "[&_th]:whitespace-normal",
         // With cells now several lines tall, a middle-aligned short cell floats
         // opposite the middle of a paragraph beside it.
         "[&_td]:align-top",

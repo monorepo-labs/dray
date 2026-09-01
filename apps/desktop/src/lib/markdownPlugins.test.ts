@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { FILE_LINK_CLASS, FILE_PATH_CLASS, REHYPE_PLUGINS, walk } from "./markdownPlugins";
+import {
+  FILE_LINK_CLASS,
+  FILE_PATH_CLASS,
+  REHYPE_PLUGINS,
+  TABLE_CELL_CLASS,
+  walk,
+  wrapCells,
+} from "./markdownPlugins";
 
 type Hast = {
   type: string;
@@ -243,5 +250,47 @@ describe("rehypeFilePaths", () => {
     walk(tree);
 
     expect(tree.children![0].children).toBe(before);
+  });
+});
+
+describe("rehypeTableCells", () => {
+  function cell(tagName: "th" | "td", value: string): Hast {
+    return { type: "element", tagName, properties: {}, children: [{ type: "text", value }] };
+  }
+
+  it("wraps each cell's content in one block carrying the width hook", () => {
+    const row: Hast = {
+      type: "element",
+      tagName: "tr",
+      properties: {},
+      children: [cell("th", "Theme"), cell("td", "Rosé Pine")],
+    };
+    const tree: Hast = {
+      type: "root",
+      children: [{ type: "element", tagName: "table", properties: {}, children: [row] }],
+    };
+    wrapCells(tree);
+
+    for (const c of row.children!) {
+      expect(c.children).toHaveLength(1);
+      expect(c.children![0]).toMatchObject({
+        tagName: "div",
+        properties: { className: [TABLE_CELL_CLASS] },
+      });
+    }
+    expect(text(row.children![1])).toBe("Rosé Pine");
+  });
+
+  it("touches nothing outside a cell", () => {
+    const prose: Hast = {
+      type: "element",
+      tagName: "p",
+      properties: {},
+      children: [{ type: "text", value: "no table here" }],
+    };
+    const tree: Hast = { type: "root", children: [prose] };
+    wrapCells(tree);
+
+    expect(prose.children).toEqual([{ type: "text", value: "no table here" }]);
   });
 });
