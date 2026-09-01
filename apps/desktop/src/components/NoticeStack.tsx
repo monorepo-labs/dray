@@ -46,9 +46,10 @@ const ACTION: Record<NoticeKind, string> = {
   // the one irreversible thing in the app reachable by a stray click on a
   // notice nobody asked for.
   pr: "Review",
-  // Where the retry is. The refused removal left the index entry alone, so the
-  // session's settled bar is still carrying its "Delete worktree" button — the
-  // card names the reason and this puts the reader back in front of the cure.
+  // Where the retry is. The step that clears the index entry is the last one,
+  // so a cleanup that stopped anywhere left the settled bar carrying its
+  // "Delete worktree" button — the card names the reason and this puts the
+  // reader back in front of the control that runs the rest.
   "worktree-failed": "View",
 };
 
@@ -69,9 +70,9 @@ const BAR: Record<NoticeKind, string> = {
   // colour to separate them would spend the palette on a distinction the label
   // already makes.
   pr: "bg-accent-add/70",
-  // The colour the offer wore, kept for the card that reports it did not
-  // happen: the two are the same deletion, and this one is the only place the
-  // reader learns the tree is still there.
+  // The colour the offer wore, kept for the card that reports it did not go
+  // through: the two are the same deletion, and this one is the only place the
+  // reader learns it stopped part way.
   "worktree-failed": "bg-destructive/70",
 };
 
@@ -183,10 +184,13 @@ function NoticeCard({
     else timer.current?.play();
   }, [frozen, duration]);
 
-  // Said, not awaited. "Deleted" is the truthful thing to draw here — the
-  // removal is under way and nothing the reader does now changes it — and it
-  // is the one confirmation this deletion gets on either route. A git refusal
-  // lands afterwards on a `worktree-failed` card, which is what takes it back.
+  // Said, not awaited — and "Deleted" is *optimistic*, deliberately. It reports
+  // a removal that is under way rather than one that has happened, which is the
+  // trade this whole surface now makes: the alternative is a spinner saying
+  // "still going" over three git commands, which is the click that reads as
+  // missed. Nothing the reader does from here changes the outcome, and a
+  // cleanup that fails comes back on a `worktree-failed` card, which exists to
+  // take this word back.
   const confirm = () => {
     onDeleteWorktree();
     setPhase("done");

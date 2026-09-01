@@ -223,9 +223,15 @@ Dialog get **no** such confirmation: it close, and enough else on screen already
 
 **Neither route wait on git.** Unlock, remove, `branch -D` = three command over directory that can be large, and both surface used to sit through them — dialog unchanged, card spinning "Deleting…". Press now start work and answer straight away: dialog close, card go to its **Deleted** state. Reversal deliberate. Spinner said "still going" and nothing else, and dialog holding still through it read as click that missed.
 
-**Cost = failure land after reader been told it worked, so second card take it back.** `worktree-failed`, raised whatever window doing (like `pr`, opposite reason — reader already seen wrong answer). Label = news not verb (`Worktree not deleted`), subject = task title like offer's, detail = **git's own sentence**, only thing naming why — tree another session hold lock on, removal git refuse. Button = `View`, and it lead somewhere real: refusal leave index entry alone, so settled bar still carry its Delete worktree button. Reason on card, cure at end of button. Bar take destructive colour offer wore — same deletion, and only place reader learn tree still there.
+**"Deleted" therefore optimistic, and card exist to take it back.** `worktree-failed`, raised whatever window doing (like `pr`, opposite reason — reader already seen wrong answer). Detail = backend's own sentence, only thing saying which step stopped.
 
-Error banner cannot carry this and that not preference: banner draw above **composer**, settled session draw settled bar instead, so one state this reachable from = one state banner not on screen in.
+**Label name operation, never outcome** — `Worktree cleanup failed`, not "not deleted". Removal = run of step and any can answer: git refusing leave directory, but index write come **last**, so failure there = tree already gone and session simply never moved off it. Which step reached not reported, so copy claiming state of disk wrong roughly half the time.
+
+Button = `View`, and it lead somewhere real for same reason: last step = one clearing index entry, so cleanup that stop anywhere leave settled bar still carrying its Delete worktree button. Reason on card, rest of run at end of button. Bar take destructive colour offer wore — same deletion, only place reader learn it stopped part way.
+
+**Card only where reader been told something.** Tidy-up pass over worktree already gone raise none: nothing drawn, nothing promised, and session pointed at missing directory before it ran, so card there = state reader never seen and cannot act on.
+
+Error banner cannot carry any of this and that not preference: banner draw above **composer**, settled session draw settled bar instead, so one state this reachable from = one state banner not on screen in.
 
 Failure inside session **delete** stay quiet, deliberately: card keyed to session about to stop existing, whose button lead nowhere. Naming orphaned path with no session behind it = channel of its own.
 

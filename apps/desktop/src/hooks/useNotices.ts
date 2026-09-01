@@ -14,10 +14,9 @@ import { useSyncExternalStore } from "react";
 ///
 /// `worktree-failed` is the correction, and it exists because the deletion no
 /// longer waits: the dialog closes and the card says "Deleted" the moment the
-/// click lands, so a git failure arrives after the reader has been told it
-/// worked. Nothing else can tell them otherwise — the error banner sits above a
-/// composer a settled session does not draw, and the row they would read it
-/// from is the one still carrying the tree.
+/// click lands, so a failure arrives after the reader has been told it worked.
+/// Nothing else can tell them otherwise — the error banner sits above a
+/// composer a settled session does not draw.
 ///
 /// `pr` is the only kind raised by something no session did. A turn ending, a
 /// question asked and a tree settled are all this app's own doing; a pull
@@ -25,7 +24,7 @@ import { useSyncExternalStore } from "react";
 /// one kind that fires whether or not the window has focus — the reader cannot
 /// have seen it happen. `worktree-failed` fires regardless of focus too, for
 /// the opposite reason: they have already seen the wrong answer. See `announce`
-/// in [useSessions](./useSessions.ts) for the split the other three make.
+/// in [useSessions](./useSessions.ts) for the split the first three make.
 export type NoticeKind = "completed" | "asking" | "worktree" | "pr" | "worktree-failed";
 
 /// How long each kind stays on screen. Read by the card to time its own progress
@@ -139,15 +138,16 @@ export function dismissNotice(sessionId: string, kind?: NoticeKind | NoticeKind[
 /// What opening a session answers: the completion is read, and a pending
 /// request is now on screen next to the transcript that explains it.
 ///
-/// `pr` is deliberately absent, because nothing *answers* it. The other three
-/// report something about the session itself, which opening it settles; a pull
+/// `pr` is deliberately absent, because nothing *answers* it. Every other kind
+/// reports something about the session itself, which opening it settles; a pull
 /// request being ready is true whether or not the reader is looking at the
 /// session, and stays true after they look away. That card runs its own
 /// countdown out and goes. See [usePrReady](./usePrReady.ts).
 ///
-/// `worktree-failed` is answered because the cure is in the session: the
-/// removal left the index entry alone, so the settled bar is still carrying the
-/// button that tries again, and opening the session is what puts it on screen.
+/// `worktree-failed` is answered because the nearest thing to a cure is in the
+/// session: the step that clears the index entry is the last one, so a cleanup
+/// that stopped anywhere left the settled bar carrying the button that runs the
+/// rest, and opening the session is what puts it on screen.
 ///
 /// Spelled out rather than written as "everything but `pr`", so a kind added
 /// later has to be placed here on purpose instead of inheriting a default that

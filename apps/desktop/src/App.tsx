@@ -279,7 +279,7 @@ function App() {
     }
 
     if (!disposition.exists) {
-      removeWorktree(sessionId);
+      removeWorktree(sessionId, "tidy");
       return;
     }
 
