@@ -33,7 +33,7 @@ use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Stdio;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use std::time::Duration;
@@ -195,6 +195,13 @@ pub async fn init(
     // through the session.
     let desk_token = desk::open(session_id, client.clone(), pending.clone(), seq.clone());
 
+    // The ring's denominator, filled by the handshake below and read by the
+    // mapper at every turn's end. Minted here because the reader has to start
+    // *before* that handshake — nothing settles a request except a line off
+    // stdout — so the mapper exists a moment before its window does. `0` until
+    // then, which draws no ring rather than a wrong one.
+    let context_window = Arc::new(AtomicU64::new(0));
+
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
     tokio::spawn({
@@ -207,11 +214,22 @@ pub async fn init(
         let queued = queued.clone();
         let seq = seq.clone();
         let pending = pending.clone();
+        let context_window = context_window.clone();
         let desk_id = session_id.clone();
         let teardown_app = app.clone();
         async move {
             if let Err(error) = read_stdout(
-                stdout, client, session_id, session_cwd, events, status, queued, pending, seq, app,
+                stdout,
+                client,
+                session_id,
+                session_cwd,
+                events,
+                status,
+                queued,
+                pending,
+                seq,
+                context_window,
+                app,
             )
             .await
             {
@@ -243,26 +261,40 @@ pub async fn init(
     // bound, tighter than an ordinary command's: silence here is
     // indistinguishable from a slow start, and thirty seconds of a blank
     // composer reads as broken.
-    if let Err(error) = client
+    let state = client
         .request_within("get_state", Value::Null, HANDSHAKE_TIMEOUT)
-        .await
-    {
-        // Everything above is post-spawn, so the child is running with nobody
-        // left to talk to it. Killed rather than dropped: a `Child` is not
-        // reaped on drop, so every failed start would leave a pi alive for the
-        // life of the app.
-        //
-        // Asked whether it is still there first, because the two failures want
-        // different cures and read identically without this: a child that
-        // *exited* took its reason with it to stderr, where one still running
-        // and silent is pi not answering a command this build sends.
-        let died = child.try_wait().ok().flatten();
-        shutdown(&mut child, &client).await;
+        .await;
 
-        return Err(error).with_context(|| match died {
-            Some(status) => format!("pi exited during the handshake ({status})"),
-            None => "pi did not answer the handshake".to_string(),
-        });
+    let state = match state {
+        Ok(state) => state,
+        Err(error) => {
+            // Everything above is post-spawn, so the child is running with
+            // nobody left to talk to it. Killed rather than dropped: a `Child`
+            // is not reaped on drop, so every failed start would leave a pi
+            // alive for the life of the app.
+            //
+            // Asked whether it is still there first, because the two failures
+            // want different cures and read identically without this: a child
+            // that *exited* took its reason with it to stderr, where one still
+            // running and silent is pi not answering a command this build
+            // sends.
+            let died = child.try_wait().ok().flatten();
+            shutdown(&mut child, &client).await;
+
+            return Err(error).with_context(|| match died {
+                Some(status) => format!("pi exited during the handshake ({status})"),
+                None => "pi did not answer the handshake".to_string(),
+            });
+        }
+    };
+
+    // The one number the ring cannot derive. Read off the handshake rather than
+    // asked for per turn, which the reader could not do anyway: a request is
+    // settled by a line off stdout, so awaiting one inside the read loop waits
+    // on itself. Sound for the child's life — pi respawns for a model change,
+    // so nothing moves the window under a running session.
+    if let Some(window) = state["model"]["contextWindow"].as_u64() {
+        context_window.store(window, Relaxed);
     }
 
     Ok(Session {
@@ -473,6 +505,7 @@ async fn read_stdout(
     queued: QueuedMessages,
     pending: PendingPermissions,
     seq: Arc<AtomicU64>,
+    context_window: Arc<AtomicU64>,
     app: AppHandle,
 ) -> Result<()> {
     let reader = BufReader::new(stdout);
@@ -480,7 +513,7 @@ async fn read_stdout(
     // `U+2029` are legal inside JSON strings, so a reader treating them as line
     // breaks would corrupt any record containing one.
     let mut lines = reader.lines();
-    let mut mapper = mapper::Mapper::new(session_id.clone(), seq.clone());
+    let mut mapper = mapper::Mapper::new(session_id.clone(), seq.clone(), context_window);
     let transport = Transport::Pi(client.clone());
 
     while let Some(line) = lines.next_line().await? {

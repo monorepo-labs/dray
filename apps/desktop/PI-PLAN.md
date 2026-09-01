@@ -1109,8 +1109,9 @@ compiler names every one, and ts-rs emits `string` either way.
 **Two things come off `Model` that the first draft added.** `provider`
 duplicates the id — pi's `set_model` takes the halves separately, so the split
 belongs at the call site, on the **first** `/` (OpenRouter ids carry more than
-one). `context_window` has no reader: the ring takes occupancy from
-`get_session_stats`, not from the model table.
+one). `context_window` has no reader on `Model`: the ring takes its
+denominator from the handshake's own `get_state` answer, not from the model
+table — one number, read where it is already being asked for.
 
 **Two.** `Model` grows what a discovered entry knows and a static one can leave
 empty:
@@ -1461,6 +1462,26 @@ before the event is emitted. One round trip per turn, no model call, and the
 number is exact rather than derived — no summing of four disjoint counts, no
 per-model window table.
 
+**That is not what shipped, and the reason is the reader.** A request is
+settled by a line off stdout, and the read loop is what reads them — so
+awaiting `get_session_stats` from inside it waits on itself and gives up
+thirty seconds later, every turn. Asking from a spawned task escapes the
+deadlock and loses the ordering: `TurnCompleted` is emitted and logged before
+the answer lands, and there is no second event carrying occupancy for the
+ring to read.
+
+So the fallback below is the implementation. `message_end.message.usage`
+carries `totalTokens`, which **is** the occupancy — one model call's prompt
+plus its answer, so the turn's last call describes what the turn left behind —
+and it agrees with pi's own figure exactly: 2139 in `live_turn.jsonl`, 2840 in
+`no_approvals.jsonl`, against the `get_session_stats` answer captured in each.
+The denominator is `get_state`'s `model.contextWindow`, taken at the handshake
+that already runs, held in an `AtomicU64` the mapper reads at `agent_settled`.
+One reading stands for the child's life, since pi respawns for a model change.
+Cost: nothing per turn, and a window Dray never learns draws no ring rather
+than a wrong one. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
+reads both numbers out of the captures rather than restating them.
+
 Two edges the docs name and a capture should confirm: `contextUsage` is
 **omitted** when no model or window is available, and its `tokens`/`percent`
 are **null** immediately after a compaction until a fresh assistant response
@@ -1478,10 +1499,10 @@ would read zero on a real session and show an empty gauge with nothing saying
 why.
 
 So the per-message `usage` feeds `UsageUpdate` (emitted, never persisted) and
-nothing else, and `message_end.message.usage` — which *is* populated — is the
-fallback if `get_session_stats` ever proves too slow to ask on every turn. Its
-`cost` field has no home in Dray at all and is dropped: pi is the first harness
-to report money, and a surface for it is a product decision, not a mapping one.
+`TurnCompleted`, where `message_end.message.usage` — which *is* populated — is
+what the ring reads, for the reason above. Its `cost` field has no home in Dray
+at all and is dropped: pi is the first harness to report money, and a surface
+for it is a product decision, not a mapping one.
 
 ### Gaps, both directions
 

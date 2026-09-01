@@ -20,8 +20,8 @@
 //! `0`.
 
 use crate::events::{
-    AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, ErrorSource, SessionInfo,
-    ToolResult, ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent,
+    ErrorSource, SessionInfo, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::Harness;
 use serde_json::Value;
@@ -77,6 +77,17 @@ pub struct Mapper {
     /// `message_update` and is **all zeros on a real provider** for the whole
     /// run. Reading those would draw a ring that never fills.
     usage: Option<Usage>,
+    /// The running model's context window, the ring's denominator. `0` until
+    /// the handshake fills it, and forever on a pi that answered `get_state`
+    /// with no window on its model.
+    ///
+    /// Shared rather than passed because the reader is running *before* the
+    /// handshake it settles the answer for — nothing but a line off stdout
+    /// resolves a request, so the mapper exists a moment before its window
+    /// does. One reading stands for the child's life: pi respawns for a model
+    /// change (`applies_model_in_place: false`), so nothing can move the window
+    /// under a session that is running.
+    context_window: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +97,7 @@ struct Outcome {
 }
 
 impl Mapper {
-    pub fn new(session_id: String, seq: Arc<AtomicU64>) -> Self {
+    pub fn new(session_id: String, seq: Arc<AtomicU64>, context_window: Arc<AtomicU64>) -> Self {
         Self {
             session_id,
             seq,
@@ -94,7 +105,34 @@ impl Mapper {
             open_calls: std::collections::HashMap::new(),
             outcome: None,
             usage: None,
+            context_window,
         }
+    }
+
+    /// Puts the ring's pair on a turn's usage: the committed message's
+    /// `totalTokens` against the model's window.
+    ///
+    /// `totalTokens` **is** the occupancy, not a per-turn sum — it is one model
+    /// call's prompt plus its answer, so the last call of a turn describes the
+    /// context that turn left behind. Pinned against pi's own arithmetic in
+    /// `the_turn_carries_pis_own_occupancy_figure`, which reads the
+    /// `get_session_stats` answer captured beside it.
+    ///
+    /// Both halves must be real. A window of `0` is a pi that never said, and a
+    /// count of `0` is a turn that reached no model at all — an auth failure
+    /// reports zeros where pi's own reading is the system prompt alone, and a
+    /// ring drawn empty there claims a fresh context rather than an unknown one.
+    fn with_occupancy(&self, mut usage: Usage) -> Usage {
+        let max = self.context_window.load(Relaxed);
+
+        if let Some(used) = usage.total_tokens.filter(|used| *used > 0 && max > 0) {
+            usage.context_window = Some(ContextWindow {
+                used_tokens: used,
+                max_tokens: max,
+            });
+        }
+
+        usage
     }
 
     pub fn map(&mut self, event: PiEvent) -> Vec<AgentEvent> {
@@ -114,7 +152,7 @@ impl Mapper {
 
             PiEvent::AgentSettled => {
                 let outcome = self.outcome.take();
-                let usage = self.usage.take();
+                let usage = self.usage.take().map(|u| self.with_occupancy(u));
 
                 let (status, stop_reason, final_text) = match outcome {
                     Some(o) if o.stop_reason.as_deref() == Some("error") => {
@@ -487,7 +525,17 @@ mod tests {
     }
 
     fn mapped(fixture: &str) -> Vec<AgentEvent> {
-        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        mapped_within(fixture, 0)
+    }
+
+    /// The same, on a session that learned its model's context window at the
+    /// handshake — which is where the ring's denominator comes from.
+    fn mapped_within(fixture: &str, context_window: u64) -> Vec<AgentEvent> {
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(context_window)),
+        );
 
         fixture
             .lines()
@@ -499,10 +547,25 @@ mod tests {
             .collect()
     }
 
+    /// What a captured command answered, so a test can check this build's
+    /// arithmetic against pi's own rather than against a number typed here.
+    fn answered(fixture: &str, command: &str) -> Value {
+        fixture
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<Record>(l).expect("fixture record"))
+            .filter(|r| r.dir == "out")
+            .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
+            .find(|v| v["type"] == "response" && v["command"] == command)
+            .map(|v| v["data"].clone())
+            .unwrap_or_else(|| panic!("the capture has no {command} answer in it"))
+    }
+
     const LIVE_TURN: &str = include_str!("fixtures/live_turn.jsonl");
     const EXTENSION_TOOL: &str = include_str!("fixtures/extension_tool_and_dialogs.jsonl");
     const ABORT: &str = include_str!("fixtures/abort_and_queue.jsonl");
     const FAILED: &str = include_str!("fixtures/failed_turn_live.jsonl");
+    const NO_APPROVALS: &str = include_str!("fixtures/no_approvals.jsonl");
 
     /// One prompt is one turn, however many model calls pi makes inside it.
     ///
@@ -739,6 +802,95 @@ mod tests {
         );
     }
 
+    /// The committed message's `totalTokens` **is** pi's own occupancy reading,
+    /// which is the whole reason the ring needs no round trip of its own.
+    ///
+    /// Checked against the `get_session_stats` answer captured in the same
+    /// session rather than a number written here: `contextUsage.tokens` is what
+    /// pi's own UI draws, so agreeing with it is the claim being made. Two
+    /// captures, one live and one stubbed, since a single-message turn would
+    /// hide a sum where these each close after three model calls.
+    #[test]
+    fn the_turn_carries_pis_own_occupancy_figure() {
+        for fixture in [LIVE_TURN, NO_APPROVALS] {
+            let stats = answered(fixture, "get_session_stats");
+            let occupancy = stats["contextUsage"]["tokens"]
+                .as_u64()
+                .expect("the capture answered with an occupancy");
+            let max = stats["contextUsage"]["contextWindow"]
+                .as_u64()
+                .expect("the capture answered with a window");
+
+            let window = mapped_within(fixture, max)
+                .iter()
+                .find_map(|e| match &e.payload {
+                    AgentEventPayload::TurnCompleted { usage, .. } => {
+                        usage.as_ref().and_then(|u| u.context_window)
+                    }
+                    _ => None,
+                })
+                .expect("the turn closed with a window on it");
+
+            assert_eq!(
+                window.used_tokens, occupancy,
+                "the ring disagrees with pi's own arithmetic"
+            );
+            assert_eq!(window.max_tokens, max);
+        }
+    }
+
+    /// `get_state` is what fills the denominator, and it is already the
+    /// handshake — so the ring costs no round trip. Pinned because the field
+    /// sits on the model rather than beside it, and reading the wrong level
+    /// leaves a window of `0`, which draws as no ring at all.
+    #[test]
+    fn the_handshake_answer_carries_the_window() {
+        let state = answered(NO_APPROVALS, "get_state");
+
+        assert!(state["model"]["contextWindow"]
+            .as_u64()
+            .is_some_and(|w| w > 0));
+    }
+
+    /// Neither half may be guessed at. A window of `0` is a pi that never said;
+    /// a count of `0` is a turn that reached no model — an auth failure reports
+    /// zeros where the real occupancy is the system prompt — and a ring drawn
+    /// there claims a fresh context rather than an unknown one.
+    #[test]
+    fn a_missing_half_draws_no_ring() {
+        let counted = Usage {
+            total_tokens: Some(2139),
+            ..Usage::default()
+        };
+        let mapper = |window: u64| {
+            Mapper::new(
+                "s".into(),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(window)),
+            )
+        };
+
+        assert!(mapper(0)
+            .with_occupancy(counted.clone())
+            .context_window
+            .is_none());
+        assert!(mapper(500_000)
+            .with_occupancy(Usage {
+                total_tokens: Some(0),
+                ..Usage::default()
+            })
+            .context_window
+            .is_none());
+        assert!(mapper(500_000)
+            .with_occupancy(Usage::default())
+            .context_window
+            .is_none());
+        assert!(mapper(500_000)
+            .with_occupancy(counted)
+            .context_window
+            .is_some());
+    }
+
     /// An abort is a user's own Stop, and pi reports it as `stopReason: "error"`
     /// — the docs say `"aborted"` and it does not. Mapping it as a failure is
     /// honest here: the sentence pi gives is the one to draw.
@@ -773,7 +925,11 @@ mod tests {
     }
 
     fn map_one(line: &str) -> Vec<AgentEvent> {
-        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        );
         mapper.map(super::super::parser::parse_line(line).expect("parses"))
     }
 
