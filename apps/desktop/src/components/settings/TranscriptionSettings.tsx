@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, ChevronDown, Download, ExternalLink, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +28,7 @@ function formatSize(bytes: number): string {
 /// The system default is a real choice, not the absence of one, so it is an
 /// entry in the menu rather than the state of having picked nothing.
 const SYSTEM_DEFAULT = "__default__";
+
 
 /// One of the two model scores, as a labelled bar.
 ///
@@ -289,6 +291,7 @@ export default function TranscriptionSettings({
   onDelete,
   onSelectModel,
   onSelectDevice,
+  onSetMute,
 }: {
   status: TranscriptionStatus | null;
   downloads: Downloads;
@@ -297,6 +300,7 @@ export default function TranscriptionSettings({
   onDelete: (id: string) => void;
   onSelectModel: (id: string) => void;
   onSelectDevice: (device: string | null) => void;
+  onSetMute: (mute: boolean) => void;
 }) {
   // One id, not a flag per row: two rows asking the question at once would be
   // two red buttons where only one press was ever made.
@@ -404,6 +408,28 @@ export default function TranscriptionSettings({
           {status.devices.length === 0 && (
             <p className="text-ui text-muted-foreground">No microphone was found.</p>
           )}
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-4">
+            <label className="text-ui font-medium" htmlFor="transcription-mute">
+              Mute while recording
+            </label>
+
+            <Switch
+              id="transcription-mute"
+              checked={status.muteWhileRecording}
+              onCheckedChange={onSetMute}
+            />
+          </div>
+
+          {/* Two sentences doing two jobs: why it is on by default, and that
+              the machine is not left silent. Without the second the switch
+              reads as something the reader has to undo themselves. */}
+          <p className="text-ui text-muted-foreground">
+            Keeps whatever is playing out of the transcript. Unmuted automatically when
+            recording stops.
+          </p>
         </div>
       </section>
     </div>

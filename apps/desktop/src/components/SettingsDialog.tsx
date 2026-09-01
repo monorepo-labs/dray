@@ -106,6 +106,7 @@ export default function SettingsDialog({
                 onDelete={transcription.remove}
                 onSelectModel={transcription.selectModel}
                 onSelectDevice={transcription.selectDevice}
+                onSetMute={transcription.setMute}
               />
             ),
             integrations: (
@@ -781,7 +782,11 @@ function SettingsTabs({
         aria-labelledby={`${id}-${tab}`}
         // `shrink-0` on the sections, since a column flex item's default is to
         // shrink toward its content before the container agrees to scroll.
-        className="-mx-1 flex h-96 flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+        // Capped against the viewport as well as fixed: the height is still
+        // one number for every tab, so nothing jumps on a switch, but a short
+        // window gets a dialog that fits inside it rather than one running off
+        // both ends.
+        className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
       >
         {children[tab]}
       </div>

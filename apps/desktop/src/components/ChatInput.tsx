@@ -21,6 +21,7 @@ import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { applyIssue, issueSpan } from "@/lib/issue";
+import { registerComposer } from "@/lib/composerFocus";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import {
   applyCommand,
@@ -808,7 +809,12 @@ export default function ChatInput({
             <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
               <div className="relative min-w-0 flex-1">
                 <textarea
-                  ref={textareaRef}
+                  // Registered as well as held, so dictation can hand focus
+                  // back from `App`, which has no route to this element.
+                  ref={(el) => {
+                    textareaRef.current = el;
+                    registerComposer(el);
+                  }}
                   rows={1}
                   autoFocus
                   value={message}

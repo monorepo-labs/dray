@@ -69,6 +69,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft } from "@/hooks/useDraft";
 import { issueTag } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
+import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { playCelebration } from "@/lib/sound";
@@ -276,7 +277,15 @@ function App() {
     // and still lands where it was spoken. Drafts are per session, so it is
     // waiting there on the way back.
     target: selectedSessionId,
-    onText: (text, session) => appendToDraft(session, text),
+    onText: (text, session) => {
+      appendToDraft(session, text);
+      // Straight back to typing: the words landed in a draft the reader is
+      // most likely about to add to or send. Only where they are still looking
+      // at the session they spoke into — a dictation outlives the screen it
+      // began on, and focusing a composer holding somebody else's draft is
+      // worse than not focusing at all.
+      if (session === selectedSessionId) focusComposer();
+    },
     onNeedsModel: () => {
       setSettingsTab("transcription");
       setSettingsOpen(true);

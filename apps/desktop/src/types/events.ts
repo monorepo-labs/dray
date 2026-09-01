@@ -1594,7 +1594,7 @@ languages: string,
 speed: number, accuracy: number, };
 
 /**
- * The transcription picks, both meaning "not chosen" when absent.
+ * The transcription picks. Model and device mean "not chosen" when absent.
  */
 export type TranscriptionSettings = { 
 /**
@@ -1609,7 +1609,13 @@ model: string | null,
  * mic is unplugged, so a stored one silently starts naming a different
  * device. See [`crate::transcription::audio::InputDevice`].
  */
-device: string | null, };
+device: string | null, 
+/**
+ * Whether the speakers are silenced while the microphone is open. On by
+ * default: the mic hears them, so whatever is playing otherwise lands in
+ * the transcript as words nobody said.
+ */
+muteWhileRecording: boolean, };
 
 /**
  * Everything the transcription tab draws in one read.
@@ -1635,6 +1641,10 @@ recommended: string, devices: Array<InputDevice>,
  * Stored device name, or `None` for the system default.
  */
 selectedDevice: string | null, 
+/**
+ * Whether the speakers are silenced while the microphone is open.
+ */
+muteWhileRecording: boolean, 
 /**
  * False where no model is installed, or the picked one has been deleted.
  */
