@@ -53,6 +53,8 @@ pub struct TranscriptionStatus {
     pub devices: Vec<InputDevice>,
     /// Stored device name, or `None` for the system default.
     pub selected_device: Option<String>,
+    /// Whether the speakers are silenced while the microphone is open.
+    pub mute_while_recording: bool,
     /// False where no model is installed, or the picked one has been deleted.
     pub ready: bool,
 }
@@ -115,6 +117,7 @@ pub async fn transcription_status() -> Result<TranscriptionStatus, String> {
         recommended: catalog::recommended().id.to_string(),
         devices,
         selected_device: stored.device,
+        mute_while_recording: stored.mute_while_recording,
     })
 }
 
@@ -218,6 +221,15 @@ pub async fn select_transcription_device(device: Option<String>) -> Result<(), S
     settings::write(&next).await.map_err(|e| e.to_string())
 }
 
+/// Turns muting-while-recording on or off.
+#[tauri::command]
+pub async fn set_transcription_mute(mute: bool) -> Result<(), String> {
+    let mut next = settings::read().await;
+    next.transcription.mute_while_recording = mute;
+
+    settings::write(&next).await.map_err(|e| e.to_string())
+}
+
 /// Whether macOS will actually feed this process audio.
 ///
 /// Asked *before* opening the stream, because a denied microphone yields
@@ -273,12 +285,21 @@ pub async fn start_transcription(
         return Ok(Some(StartRefusal::NeedsPermission));
     }
 
-    let device = settings::read().await.transcription.device;
-    let recording = Recording::start(device.as_deref()).map_err(|e| e.to_string())?;
+    let stored = settings::read().await.transcription;
+    let recording = Recording::start(stored.device.as_deref()).map_err(|e| e.to_string())?;
 
     // Replaces whatever was there, which stops it: two live streams would both
     // be filling buffers and only one could ever be read.
     *state.recording.lock().await = Some(recording);
+
+    // After the microphone is open, never before: a refusal must leave the
+    // machine's sound exactly as it found it. The start tone the frontend
+    // plays next therefore lands on a muted system and is not heard, which is
+    // the honest reading of a reader who asked for silence while they talk —
+    // the visualizer appearing is what says the mic is live.
+    if stored.mute_while_recording {
+        mute_other_audio().await;
+    }
 
     Ok(None)
 }
@@ -295,10 +316,19 @@ pub async fn stop_transcription(
     // exists to prevent. Unreachable through the UI, since stop is only drawn
     // while recording — but the command is public and this is the honest answer.
     let Some(recording) = recording else {
+        // Nothing was recording, but something may still be muted — a stop
+        // arriving twice must not leave the speakers off.
+        restore_other_audio().await;
         return Ok(TranscribeOutcome::Empty);
     };
 
-    let Some(audio) = recording.finish().map_err(|e| e.to_string())? else {
+    let captured = recording.finish().map_err(|e| e.to_string());
+
+    // The moment the microphone closes, not once the model has finished:
+    // transcribing takes seconds and there is nothing left to keep out of.
+    restore_other_audio().await;
+
+    let Some(audio) = captured? else {
         return Ok(TranscribeOutcome::NoAudio);
     };
 
@@ -342,6 +372,17 @@ pub async fn transcription_level(state: State<'_, TranscriptionState>) -> Result
 #[tauri::command]
 pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Result<(), String> {
     state.recording.lock().await.take();
+    restore_other_audio().await;
 
     Ok(())
+}
+
+/// Both halves of the muting run `osascript`, which is a spawn and a wait —
+/// off the async worker, or a press parks a runtime thread for ~50ms.
+async fn mute_other_audio() {
+    let _ = tokio::task::spawn_blocking(audio::mute_other_audio).await;
+}
+
+async fn restore_other_audio() {
+    let _ = tokio::task::spawn_blocking(audio::restore_other_audio).await;
 }

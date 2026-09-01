@@ -77,6 +77,116 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
         .ok_or_else(|| anyhow!("no microphone is available"))
 }
 
+/// Whether the speakers are muted right now on a recording's behalf, and what
+/// they were before.
+///
+/// Module-level rather than on the `Recording`, because a recording that is
+/// dropped rather than stopped must still put the sound back.
+static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Silences the speakers for the duration of a recording. Blocking.
+///
+/// The microphone hears them, so anything playing lands in the transcript as
+/// words nobody said — nothing here can capture the mic and the system's own
+/// output separately.
+///
+/// Best effort throughout: a machine with no output device, or an `osascript`
+/// that refuses, records anyway. Failing the press over this would be worse
+/// than the audio it is trying to keep out.
+pub fn mute_other_audio() {
+    let Ok(mut prior) = PRIOR_MUTED.lock() else {
+        return;
+    };
+
+    // A reading already held is the one from before we touched anything, and
+    // the only thing that can put the sound back. Overwriting it with our own
+    // `true` is what would leave a machine muted for good.
+    if prior.is_some() {
+        return;
+    }
+
+    let Some(was_muted) = read_muted() else {
+        return;
+    };
+
+    if set_muted(true) {
+        *prior = Some(was_muted);
+    }
+}
+
+/// Puts the sound back. Harmless where nothing was muted. Blocking.
+pub fn restore_other_audio() {
+    let Ok(mut prior) = PRIOR_MUTED.lock() else {
+        return;
+    };
+
+    // Restored to what it was, never unconditionally unmuted: a reader who was
+    // already muted before they started talking stays that way.
+    if let Some(was_muted) = prior.take() {
+        set_muted(was_muted);
+    }
+}
+
+/// Whether the system output is muted, or `None` where it cannot be read.
+#[cfg(target_os = "macos")]
+fn read_muted() -> Option<bool> {
+    parse_muted(&osascript(&["output muted of (get volume settings) as text"]).ok()?)
+}
+
+#[cfg(target_os = "macos")]
+fn set_muted(muted: bool) -> bool {
+    osascript(&[&format!("set volume output muted {muted}")]).is_ok()
+}
+
+/// Reads `"true"` or `"false"` back out of the AppleScript above.
+///
+/// Split from the spawn so it is testable, since the failure it guards is
+/// silent: a machine with no output device answers `missing value`, and taking
+/// that as "not muted" would leave the sound off on the way back out.
+fn parse_muted(answer: &str) -> Option<bool> {
+    match answer.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Runs one AppleScript, each line its own `-e`.
+///
+/// AppleScript rather than CoreAudio: `set volume` is the documented way to
+/// move the *system* output, where the CoreAudio route is a device lookup plus
+/// a property write per channel for the same answer.
+#[cfg(target_os = "macos")]
+fn osascript(lines: &[&str]) -> Result<String> {
+    let mut command = std::process::Command::new("/usr/bin/osascript");
+    for line in lines {
+        command.arg("-e").arg(line);
+    }
+
+    let output = command.output().context("could not run osascript")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "osascript failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Every other target answers as though there were nothing to mute. The
+/// setting still draws, since a row that vanishes reads as one the app forgot.
+#[cfg(not(target_os = "macos"))]
+fn read_muted() -> Option<bool> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_muted(_muted: bool) -> bool {
+    false
+}
+
 /// Anything below this peak, over a whole recording, is silence.
 ///
 /// Not zero, because a live-but-muted input still carries dither a hair above
@@ -303,6 +413,20 @@ fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mute_state_parses() {
+        assert_eq!(parse_muted("true"), Some(true));
+        assert_eq!(parse_muted("false\n"), Some(false));
+    }
+
+    /// What a machine with no output device answers. Reading it as `false` is
+    /// what would leave the sound off after the recording ended.
+    #[test]
+    fn an_unreadable_output_reads_as_nothing() {
+        assert_eq!(parse_muted("missing value"), None);
+        assert_eq!(parse_muted(""), None);
+    }
 
     #[test]
     fn mono_passes_through() {

@@ -792,6 +792,7 @@ pub fn run() {
             transcription::delete_transcription_model,
             transcription::select_transcription_model,
             transcription::select_transcription_device,
+            transcription::set_transcription_mute,
             transcription::start_transcription,
             transcription::transcription_level,
             transcription::stop_transcription,

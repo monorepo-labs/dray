@@ -128,6 +128,14 @@ export function useTranscriptionSettings(active: boolean) {
     [refresh],
   );
 
+  const setMute = useCallback(
+    async (mute: boolean) => {
+      await invoke("set_transcription_mute", { mute });
+      await refresh();
+    },
+    [refresh],
+  );
+
   return {
     status,
     downloads,
@@ -137,6 +145,7 @@ export function useTranscriptionSettings(active: boolean) {
     remove,
     selectModel,
     selectDevice,
+    setMute,
   };
 }
 
