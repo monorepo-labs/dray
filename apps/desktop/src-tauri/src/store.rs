@@ -1302,7 +1302,7 @@ pub async fn record_parse_failure(
     Ok(())
 }
 
-/// Reads the log's highest main-thread `seq` to continue its counter on resume.
+/// Reads the log's highest `seq` to continue its counter on resume.
 pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
     let path = get_session_path(session_id).await?;
 
@@ -1312,27 +1312,29 @@ pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
         Err(e) => return Err(e).context("could not read session file"),
     };
 
-    Ok(max_main_thread_seq(&buf).map_or(0, |seq| seq + 1))
+    Ok(max_seq(&buf).map_or(0, |seq| seq + 1))
 }
 
-/// A subagent's events carry their *own* sequence, restarting at 0, and are
-/// persisted to the same log — so the last line is not the counter. Reading it
-/// reset the session to 0 whenever a subagent settled last, and every event
-/// after that sorted above the entire history. Scanning for the max also heals
-/// a log already written that way. A line that will not parse is skipped, since
-/// refusing to resume over one is worse than the gap.
-fn max_main_thread_seq(buf: &str) -> Option<u64> {
+/// The highest `seq`, never the last line's: a Claude Code subagent's events
+/// carry their *own* sequence restarting at 0 and are persisted into this same
+/// log, so a log settling on one restarted the whole session at 0 and every
+/// later event sorted above the entire history.
+///
+/// Every line counts, subagent or not. Codex numbers all of its through the
+/// main counter, so filtering those out would hand a live `seq` out twice —
+/// where over-counting only ever leaves a gap, and nothing reads `seq` but
+/// comparison. The max also heals a log already written the broken way. A line
+/// that will not parse is skipped, since refusing to resume over one is worse
+/// than the gap.
+fn max_seq(buf: &str) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct SeqLine {
+        seq: u64,
+    }
+
     buf.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|json| {
-            // `subagent_started` names a subagent but is the main thread's, and
-            // the mapper numbers it through the main counter — so it has to be
-            // read back the same way or a log ending on one hands out a `seq`
-            // twice.
-            json.get("subagent").is_none_or(Value::is_null)
-                || json.pointer("/payload/type") == Some(&Value::from("subagent_started"))
-        })
-        .filter_map(|json| json.get("seq").and_then(Value::as_u64))
+        .filter_map(|line| serde_json::from_str::<SeqLine>(line).ok())
+        .map(|line| line.seq)
         .max()
 }
 
@@ -2083,33 +2085,36 @@ mod tests {
         );
     }
 
-    /// A subagent's events number themselves from 0 in the same log, so the
-    /// last line is not the counter. Reading it reset a resumed session to 0
-    /// and every event after sorted above the whole history — the transcript
-    /// looked like the reply had never arrived.
+    /// The two harnesses number subagents differently and one rule has to serve
+    /// both. Claude Code restarts a subagent at 0 in this same log, so reading
+    /// the last line reset a resumed session to 0 and every event after sorted
+    /// above the whole history — the transcript looked like the reply had never
+    /// arrived. Codex numbers its subagent lines through the main counter, so
+    /// skipping them would hand the same `seq` out twice.
     #[test]
     fn resumes_past_a_subagent_that_settled_last() {
-        let log = concat!(
+        let claude = concat!(
             r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
             "\n",
             r#"{"seq":0,"subagent":{"id":"toolu_1","label":null},"payload":{"type":"subagent_completed"}}"#,
             "\n",
         );
 
-        assert_eq!(max_main_thread_seq(log), Some(41));
-        assert_eq!(max_main_thread_seq(""), None);
+        assert_eq!(max_seq(claude), Some(41));
 
-        let spawned = concat!(
+        let codex = concat!(
             r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
             "\n",
-            r#"{"seq":42,"subagent":{"id":"toolu_1","label":null},"payload":{"type":"subagent_started"}}"#,
+            r#"{"seq":42,"subagent":{"id":"t_1","label":null},"payload":{"type":"subagent_completed"}}"#,
             "\n",
         );
 
         assert_eq!(
-            max_main_thread_seq(spawned),
+            max_seq(codex),
             Some(42),
-            "a spawn announcement is numbered through the main counter"
+            "Codex numbers a subagent line through the main counter"
         );
+
+        assert_eq!(max_seq(""), None);
     }
 }
