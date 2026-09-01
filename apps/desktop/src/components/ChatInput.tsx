@@ -676,13 +676,8 @@ export default function ChatInput({
               // shadow: a shadow under a dark card falls on something already
               // darker than itself, and the card is glass there, so being lighter
               // than the page does not draw the box on its own.
-              //
-              // The focus hairline is not part of that trade and stays in both:
-              // a shadow can say "above" and cannot say "focused". The resting
-              // border keeps its width in light and spends only its colour, so
-              // focus swaps a value and reflows nothing.
               !isNewTask &&
-                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl focus-within:border-hairline-strong",
+                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl",
             )}
           >
             {/* Covers the card rather than replacing anything, so the text and
