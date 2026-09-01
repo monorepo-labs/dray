@@ -5,6 +5,36 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.10.1
+
+### Added
+
+- **Two more themes: One Dark Pro and Cobalt2.** Both dark-only. The default
+  palette is called Dray now — the same colours under a name of its own, and
+  the theme you had set stays set.
+- **Copy a table from the chat.** Wide markdown tables scroll in place instead
+  of being squeezed to a letter a line, and hovering one reveals a copy
+  control.
+
+### Fixed
+
+- **A queued prompt draws its attachments.** An image attached to a prompt sent
+  mid-turn looked dropped until the turn ended. Cancelling a queued prompt now
+  hands the files back to the tray with the text.
+- **A new worktree can't take a name a landed branch still holds.** The
+  `worktree-<name>` branch stays on the remote after a session settles, and the
+  PR tab looks sessions up by branch — so a redrawn name opened onto an
+  unrelated merged pull request. The pool of names is much larger now, since
+  every landed PR retires one for good.
+- **Deleting a worktree no longer holds the dialog open** behind a spinner. The
+  press starts the work and the surface answers at once; a refusal that lands
+  afterwards takes it back and carries git's own reason.
+- **A project heading no longer drifts a tooltip over the sidebar** while
+  you're scanning it.
+- **Fullscreen drops the glass for every theme**, not just the default. There
+  is nothing behind a fullscreen window, so the layering cost contrast and
+  bought no depth.
+
 ## 0.10.0
 
 ### Added
