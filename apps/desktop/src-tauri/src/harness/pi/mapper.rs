@@ -84,10 +84,23 @@ pub struct Mapper {
     /// Shared rather than passed because the reader is running *before* the
     /// handshake it settles the answer for — nothing but a line off stdout
     /// resolves a request, so the mapper exists a moment before its window
-    /// does. One reading stands for the child's life: pi respawns for a model
-    /// change (`applies_model_in_place: false`), so nothing can move the window
-    /// under a session that is running.
+    /// does. Shared for a second reason too: Dray respawns for a model change
+    /// (`applies_model_in_place: false`) but a pi extension calling `setModel`
+    /// does not, so [`super::pi`] re-reads this on `model_changed`.
     context_window: Arc<AtomicU64>,
+    /// Whether a compaction has landed since the reading in `usage` was taken.
+    ///
+    /// A compaction *lowers* occupancy and publishes what it kept on
+    /// `context_compacted`, so a turn closing after one must not re-attach the
+    /// message total from before it — the ring is settled by the newest event
+    /// carrying a figure, and a stale one there jumps it back to its
+    /// pre-compaction level and keeps it there for the rest of the session.
+    /// Claude Code's mapper clears its own tracked reading at a boundary for
+    /// exactly this.
+    ///
+    /// Cleared by the next committed message, whose total is post-compaction
+    /// and honest again.
+    compacted_since_usage: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +119,15 @@ impl Mapper {
             outcome: None,
             usage: None,
             context_window,
+            compacted_since_usage: false,
         }
+    }
+
+    /// The slot holding the ring's denominator, for the one caller that has to
+    /// write it: a model changing under a running child leaves the window
+    /// describing the model that left.
+    pub fn context_window(&self) -> Arc<AtomicU64> {
+        self.context_window.clone()
     }
 
     /// Puts the ring's pair on a turn's usage: the committed message's
@@ -122,8 +143,20 @@ impl Mapper {
     /// count of `0` is a turn that reached no model at all — an auth failure
     /// reports zeros where pi's own reading is the system prompt alone, and a
     /// ring drawn empty there claims a fresh context rather than an unknown one.
-    fn with_occupancy(&self, mut usage: Usage) -> Usage {
+    ///
+    /// Two turns carry no reading at all rather than a wrong one, both matching
+    /// what pi's own `getContextUsage` does: one that **failed or was aborted**,
+    /// whose message describes a call that did not land, and one closing
+    /// **after a compaction** the message predates. In both the previous
+    /// reading stands, which is the safe direction — under-reporting occupancy
+    /// costs nothing where over-reporting claims a context that was thrown
+    /// away.
+    fn with_occupancy(&self, mut usage: Usage, status: TurnStatus) -> Usage {
         let max = self.context_window.load(Relaxed);
+
+        if self.compacted_since_usage || !matches!(status, TurnStatus::Success) {
+            return usage;
+        }
 
         if let Some(used) = usage.total_tokens.filter(|used| *used > 0 && max > 0) {
             usage.context_window = Some(ContextWindow {
@@ -152,7 +185,6 @@ impl Mapper {
 
             PiEvent::AgentSettled => {
                 let outcome = self.outcome.take();
-                let usage = self.usage.take().map(|u| self.with_occupancy(u));
 
                 let (status, stop_reason, final_text) = match outcome {
                     Some(o) if o.stop_reason.as_deref() == Some("error") => {
@@ -160,6 +192,10 @@ impl Mapper {
                     }
                     other => (TurnStatus::Success, other.and_then(|o| o.stop_reason), None),
                 };
+
+                // Read after the verdict, since a failed turn's counts describe
+                // a model call that did not land.
+                let usage = self.usage.take().map(|u| self.with_occupancy(u, status));
 
                 vec![self.event(AgentEventPayload::TurnCompleted {
                     status,
@@ -273,6 +309,13 @@ impl Mapper {
                 result,
                 aborted,
             } => {
+                // Whatever the mapper is holding describes the context this
+                // compaction has just replaced, so it must not close the turn
+                // as an occupancy reading. Armed even where the compaction
+                // aborted: it reports no saving either, and the ring is better
+                // left on its last known figure than moved by a guess.
+                self.compacted_since_usage = true;
+
                 // Dropped where the compaction did not finish: the numbers
                 // describe a context that was kept, and reporting a saving for
                 // one that was thrown away is worse than reporting none.
@@ -345,6 +388,9 @@ impl Mapper {
             error_message,
         });
         if let Some(u) = usage {
+            // This reading is newer than any compaction before it, so the
+            // suppression that one armed is spent.
+            self.compacted_since_usage = false;
             self.usage = Some(Usage {
                 input_tokens: Some(u.input),
                 output_tokens: Some(u.output),
@@ -839,6 +885,83 @@ mod tests {
         }
     }
 
+    /// A compaction lowers occupancy, so the message total from before it must
+    /// not close the turn as a reading.
+    ///
+    /// The ring settles on the newest event carrying a figure. Left attached,
+    /// the stale total lands *after* `context_compacted`'s own count and jumps
+    /// the ring back to its pre-compaction level — where it then stays, since
+    /// nothing later contradicts it. The next committed message clears the
+    /// suppression, which is the ordinary case: a compaction exists to make
+    /// room for a call that follows it.
+    #[test]
+    fn a_turn_closing_after_a_compaction_carries_no_stale_reading() {
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(500_000)),
+        );
+
+        feed(&mut mapper, r#"{"type":"agent_start"}"#);
+        feed(
+            &mut mapper,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],
+                "usage":{"input":180000,"output":16,"cacheRead":0,"cacheWrite":0,
+                         "reasoning":0,"totalTokens":180016}}}"#,
+        );
+        feed(
+            &mut mapper,
+            r#"{"type":"compaction_end","reason":"threshold","aborted":false,
+                "result":{"tokensBefore":180016,"estimatedTokensAfter":20000}}"#,
+        );
+        let settled = feed(&mut mapper, r#"{"type":"agent_settled"}"#);
+
+        assert!(
+            settled_usage(&settled).context_window.is_none(),
+            "the ring would jump back to the context the compaction threw away"
+        );
+    }
+
+    /// A failed or aborted turn describes a call that did not land, so it
+    /// carries no reading either — pi's own `getContextUsage` skips those
+    /// messages for the same reason, and the previous reading standing is the
+    /// safe direction.
+    #[test]
+    fn a_failed_turn_carries_no_reading() {
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(500_000)),
+        );
+
+        feed(&mut mapper, r#"{"type":"agent_start"}"#);
+        feed(
+            &mut mapper,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],
+                "stopReason":"error","errorMessage":"the provider gave up",
+                "usage":{"input":2000,"output":8,"cacheRead":0,"cacheWrite":0,
+                         "reasoning":0,"totalTokens":2008}}}"#,
+        );
+        let settled = feed(&mut mapper, r#"{"type":"agent_settled"}"#);
+
+        assert!(settled_usage(&settled).context_window.is_none());
+    }
+
+    fn feed(mapper: &mut Mapper, line: &str) -> Vec<AgentEvent> {
+        mapper.map(super::super::parser::parse_line(line).expect("parses"))
+    }
+
+    /// The usage riding a turn that just closed, so a test asserting about the
+    /// ring cannot pass on a turn that never closed at all.
+    fn settled_usage(events: &[AgentEvent]) -> Usage {
+        match &events[0].payload {
+            AgentEventPayload::TurnCompleted { usage, .. } => {
+                usage.clone().expect("the counts still ride the turn")
+            }
+            other => panic!("the turn did not close: {other:?}"),
+        }
+    }
+
     /// `get_state` is what fills the denominator, and it is already the
     /// handshake — so the ring costs no round trip. Pinned because the field
     /// sits on the model rather than beside it, and reading the wrong level
@@ -871,22 +994,25 @@ mod tests {
         };
 
         assert!(mapper(0)
-            .with_occupancy(counted.clone())
+            .with_occupancy(counted.clone(), TurnStatus::Success)
             .context_window
             .is_none());
         assert!(mapper(500_000)
-            .with_occupancy(Usage {
-                total_tokens: Some(0),
-                ..Usage::default()
-            })
+            .with_occupancy(
+                Usage {
+                    total_tokens: Some(0),
+                    ..Usage::default()
+                },
+                TurnStatus::Success,
+            )
             .context_window
             .is_none());
         assert!(mapper(500_000)
-            .with_occupancy(Usage::default())
+            .with_occupancy(Usage::default(), TurnStatus::Success)
             .context_window
             .is_none());
         assert!(mapper(500_000)
-            .with_occupancy(counted)
+            .with_occupancy(counted, TurnStatus::Success)
             .context_window
             .is_some());
     }

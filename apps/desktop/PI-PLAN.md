@@ -1477,9 +1477,17 @@ and it agrees with pi's own figure exactly: 2139 in `live_turn.jsonl`, 2840 in
 `no_approvals.jsonl`, against the `get_session_stats` answer captured in each.
 The denominator is `get_state`'s `model.contextWindow`, taken at the handshake
 that already runs, held in an `AtomicU64` the mapper reads at `agent_settled`.
-One reading stands for the child's life, since pi respawns for a model change.
-Cost: nothing per turn, and a window Dray never learns draws no ring rather
-than a wrong one. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
+The window is re-read on `model_changed`, since Dray respawns for a model
+change but a pi extension calling `setModel` does not.
+
+Three states carry no reading rather than a wrong one, and the last two are
+what pi's own `getContextUsage` does: a window Dray never learned, a turn that
+**failed or was aborted** — its message describes a call that did not land —
+and a turn closing **after a compaction**, whose held total describes the
+context that compaction just threw away. The ring settles on the newest event
+carrying a figure, so a stale total there lands after `context_compacted`'s own
+count and jumps the ring back up for the rest of the session. In all three the
+previous reading stands, which is the safe direction. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
 reads both numbers out of the captures rather than restating them.
 
 Two edges the docs name and a capture should confirm: `contextUsage` is

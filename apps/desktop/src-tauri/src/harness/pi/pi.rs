@@ -559,6 +559,31 @@ async fn read_stdout(
             continue;
         }
 
+        // The model moved under a running child, which Dray itself never does
+        // — it respawns — but a pi extension calling `setModel` does, and pi
+        // reports it here whoever asked. The ring's denominator belongs to the
+        // model, so it is re-read rather than left describing the old one.
+        //
+        // Spawned, never awaited: a request is settled by a line off stdout and
+        // this loop is what reads them, so awaiting one here waits on itself.
+        // Ordering does not matter the way it does for occupancy — a window is
+        // a standing fact, so the worst a late answer costs is one turn drawn
+        // against the previous model's.
+        if matches!(event, parser::PiEvent::ModelChanged { .. }) {
+            let client = client.clone();
+            let context_window = mapper.context_window();
+            tokio::spawn(async move {
+                match client.request("get_state", Value::Null).await {
+                    Ok(state) => {
+                        if let Some(window) = state["model"]["contextWindow"].as_u64() {
+                            context_window.store(window, Relaxed);
+                        }
+                    }
+                    Err(error) => eprintln!("[pi] could not re-read the context window: {error:#}"),
+                }
+            });
+        }
+
         // An extension asking the reader something. Answered from here and
         // never merely ignored: pi blocks the tool call until an
         // `extension_ui_response` carrying this id comes back, and
