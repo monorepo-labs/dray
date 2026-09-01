@@ -229,7 +229,7 @@ Dialog get **no** such confirmation: it close, and enough else on screen already
 
 Button = `View`, and it lead somewhere real for same reason: last step = one clearing index entry, so cleanup that stop anywhere leave settled bar still carrying its Delete worktree button. Reason on card, rest of run at end of button. Bar take destructive colour offer wore — same deletion, only place reader learn it stopped part way.
 
-**Card only where reader been told something.** Tidy-up pass over worktree already gone raise none: nothing drawn, nothing promised, and session pointed at missing directory before it ran, so card there = state reader never seen and cannot act on.
+**Card follow who asked, not what happened.** Worktree already gone skip question either way — nothing left to weigh — but settle's own pass raise nothing on failure (nothing drawn, nothing promised, session pointed at missing directory before it ran) where **button press still report**: reader watched that dialog close, so silence there = click with nothing to show for it, which whole thing this section exist to remove.
 
 Error banner cannot carry any of this and that not preference: banner draw above **composer**, settled session draw settled bar instead, so one state this reachable from = one state banner not on screen in.
 

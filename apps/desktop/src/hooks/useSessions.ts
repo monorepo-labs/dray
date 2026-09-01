@@ -825,12 +825,14 @@ const reportWorktreeFailure = (sessionId: string, title: string, reason: string)
 // and the two things that can only be known later — the relocated row, and a
 // refusal — arrive on their own.
 //
-// `origin` is which of those two callers it was, and all it decides is whether
-// a failure is reported. `"asked"` means the reader pressed something and was
-// told it worked, so a failure has to be taken back. `"tidy"` is the pass over
-// a worktree that had already gone — nothing was drawn, nothing was promised,
-// and the session was pointing at a missing directory before this ran, so a
-// card there would raise a state the reader has never seen and cannot act on.
+// `origin` is who asked, and all it decides is whether a failure is reported.
+// `"asked"` means the reader pressed something — a button, a card, or one that
+// skipped its confirm because the tree had already gone — so they are owed the
+// answer, whether that is the close they saw or a card taking it back.
+// `"tidy"` is the app's own pass on settle over a worktree that was not there:
+// nothing was drawn and nothing was promised, and the session was pointing at a
+// missing directory before this ran, so a card would raise a state the reader
+// has never seen and cannot act on.
 const removeWorktree = (sessionId: string, origin: "asked" | "tidy" = "asked") => {
   // A second press cannot be allowed through, and the window this opened is
   // why. The row keeps its "Delete worktree" button until the write lands, so
