@@ -795,6 +795,7 @@ pub fn run() {
             transcription::start_transcription,
             transcription::transcription_level,
             transcription::stop_transcription,
+            transcription::retry_transcription,
             transcription::cancel_transcription,
         ])
         .run(tauri::generate_context!())

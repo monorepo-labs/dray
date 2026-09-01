@@ -22,6 +22,10 @@ pub mod catalog;
 pub mod download;
 #[path = "engine.rs"]
 pub mod engine;
+#[path = "recordings.rs"]
+pub mod recordings;
+
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -59,9 +63,10 @@ pub struct TranscriptionStatus {
 
 /// What a stop answers with.
 ///
-/// Three of these are outcomes rather than errors because the frontend *acts*
-/// on each — opens settings, points at System Settings, says nothing — where an
-/// error string could only be shown.
+/// Every one of these is an outcome rather than an error, because the frontend
+/// *acts* on each — opens settings, points at System Settings, offers a retry,
+/// says nothing — where an error string could only be shown. `Failed` escaped
+/// that rule for a while, and it took the recording down with it.
 ///
 /// `NoAudio` earns its place the hard way: macOS answers a process without
 /// microphone permission with a stream of **silence** rather than a refusal, so
@@ -73,11 +78,27 @@ pub struct TranscriptionStatus {
 pub enum TranscribeOutcome {
     Text(String),
     /// Nothing is downloaded, or the selection names a deleted model.
-    NeedsModel,
+    ///
+    /// Carries the recording, since this is the one failure the reader can go
+    /// and fix: download a model, come back, retry, and the words already spoken
+    /// are still there rather than owed a second recital.
+    //
+    // On the variant, not the container: the container's `rename_all` names
+    // *variants*, and a struct variant's fields keep their snake case without
+    // this — which crosses the bridge as `audio_path` and reads as undefined.
+    #[serde(rename_all = "camelCase")]
+    NeedsModel { audio_path: Option<String> },
     /// The device fed nothing but zeros — permission, or a muted input.
     NoAudio,
     /// Audio arrived and the model found no words in it. Ordinary.
     Empty,
+    /// The model ran and could not answer. `audio_path` is `None` only where
+    /// parking the file failed too, which is the one case with nothing to retry.
+    #[serde(rename_all = "camelCase")]
+    Failed {
+        message: String,
+        audio_path: Option<String>,
+    },
 }
 
 /// Recorder and loaded model, held for the process.
@@ -283,6 +304,55 @@ pub async fn start_transcription(
     Ok(None)
 }
 
+/// Runs the model over audio already parked on disk.
+///
+/// Shared by [`stop_transcription`] and [`retry_transcription`], so a retry
+/// cannot drift from a first attempt — the deletion rule above all, which is the
+/// one thing standing between a failed run and a lost recording.
+async fn transcribe_audio(
+    state: &TranscriptionState,
+    audio: Vec<f32>,
+    saved: Option<PathBuf>,
+) -> TranscribeOutcome {
+    let kept = || saved.as_ref().map(|p| p.to_string_lossy().into_owned());
+
+    // Read after recording, not before: settings can change while the mic is
+    // open, and the model that runs should be the one selected now.
+    let Some(model) = ready_model().await else {
+        return TranscribeOutcome::NeedsModel { audio_path: kept() };
+    };
+
+    let run = async {
+        let path = download::model_path(model).await?;
+
+        state.engine.transcribe(model.id, &path, audio).await
+    };
+
+    match run.await {
+        Ok(text) => {
+            // The file was insurance against this run, and the run answered. An
+            // empty answer counts: the model read the audio and found no words
+            // in it, which is a verdict rather than a failure.
+            if let Some(path) = &saved {
+                recordings::discard(path).await;
+            }
+
+            if text.is_empty() {
+                TranscribeOutcome::Empty
+            } else {
+                TranscribeOutcome::Text(text)
+            }
+        }
+        // `{:#}` rather than `to_string`, which prints the outermost context
+        // alone — so every model failure read as the bare words "transcription
+        // failed" with the cause it was wrapping thrown away.
+        Err(e) => TranscribeOutcome::Failed {
+            message: format!("{e:#}"),
+            audio_path: kept(),
+        },
+    }
+}
+
 /// Stops the microphone and transcribes what was captured.
 #[tauri::command]
 pub async fn stop_transcription(
@@ -302,25 +372,39 @@ pub async fn stop_transcription(
         return Ok(TranscribeOutcome::NoAudio);
     };
 
-    // Read after recording, not before: settings can change while the mic is
-    // open, and the model that runs should be the one selected now.
-    let Some(model) = ready_model().await else {
-        return Ok(TranscribeOutcome::NeedsModel);
+    // Parked before the model is even resolved, at any length. The samples used
+    // to travel into the engine by value, so a failed run took them with it and
+    // the only cure left was saying the whole thing again.
+    //
+    // Best effort: a recording that cannot be written is worth a line in the log
+    // and carrying on, since the alternative is a full disk taking down a
+    // dictation that would otherwise have worked perfectly.
+    let saved = match recordings::save(&audio).await {
+        Ok(path) => Some(path),
+        Err(e) => {
+            eprintln!("[recording save err] {e:#}");
+            None
+        }
     };
 
-    let path = download::model_path(model).await.map_err(|e| e.to_string())?;
+    Ok(transcribe_audio(&state, audio, saved).await)
+}
 
-    let text = state
-        .engine
-        .transcribe(model.id, &path, audio)
-        .await
-        .map_err(|e| e.to_string())?;
+/// Runs a kept recording through the model again.
+///
+/// The path is the one a failing outcome handed out, and [`recordings::read`]
+/// is what refuses anything outside the recordings directory — this opens a file
+/// named by the frontend, so the directory is the only thing that says which
+/// files it may.
+#[tauri::command]
+pub async fn retry_transcription(
+    state: State<'_, TranscriptionState>,
+    path: String,
+) -> Result<TranscribeOutcome, String> {
+    let path = PathBuf::from(path);
+    let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    if text.is_empty() {
-        return Ok(TranscribeOutcome::Empty);
-    }
-
-    Ok(TranscribeOutcome::Text(text))
+    Ok(transcribe_audio(&state, audio, Some(path)).await)
 }
 
 /// The loudest sample since this was last asked, 0.0–1.0.

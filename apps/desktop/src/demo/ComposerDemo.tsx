@@ -79,6 +79,11 @@ export default function ComposerDemo() {
       }}
       // Silent, like the real one.
       onCancel={() => recorder.setState("idle")}
+      // The happy path here; the failure pair is a swatch below, since a demo
+      // that failed at random would be a demo nobody could look at twice.
+      savedAudio={null}
+      onRetry={() => {}}
+      onReveal={() => {}}
     />
   );
 
@@ -94,34 +99,55 @@ export default function ComposerDemo() {
 
         <section className="flex flex-col gap-3">
           <h2 className="text-ui font-medium text-muted-foreground">
-            Dictation, all three states
+            Dictation, every state
           </h2>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <Swatch label="Idle">
               <DictateControl
                 state="idle"
                 level={0}
+                savedAudio={null}
                 onStart={() => {}}
                 onStop={() => {}}
                 onCancel={() => {}}
+                onRetry={() => {}}
+                onReveal={() => {}}
               />
             </Swatch>
             <Swatch label="Recording">
               <DictateControl
                 state="recording"
                 level={recorder.state === "recording" ? recorder.level : 0.6}
+                savedAudio={null}
                 onStart={() => {}}
                 onStop={() => {}}
                 onCancel={() => {}}
+                onRetry={() => {}}
+                onReveal={() => {}}
+              />
+            </Swatch>
+            <Swatch label="Failed, audio kept">
+              <DictateControl
+                state="idle"
+                level={0}
+                savedAudio="/tmp/demo.wav"
+                onStart={() => {}}
+                onStop={() => {}}
+                onCancel={() => {}}
+                onRetry={() => {}}
+                onReveal={() => {}}
               />
             </Swatch>
             <Swatch label="Transcribing">
               <DictateControl
                 state="transcribing"
                 level={0}
+                savedAudio={null}
                 onStart={() => {}}
                 onStop={() => {}}
                 onCancel={() => {}}
+                onRetry={() => {}}
+                onReveal={() => {}}
               />
             </Swatch>
           </div>
