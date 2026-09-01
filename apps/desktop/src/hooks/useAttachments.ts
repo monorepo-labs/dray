@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -20,6 +20,12 @@ import type { Attachment } from "@/types/events";
 const bySession = new Map<string | null, Attachment[]>();
 const listeners = new Set<() => void>();
 
+/// Everything the backend has described this run, keyed by path — the identity
+/// the composer already dedupes on. Never invalidated: an attachment is a
+/// reading of a file taken when the user picked it, and the row that reads one
+/// back is drawing what they attached rather than what the file says now.
+const byPath = new Map<string, Attachment>();
+
 // One frozen array for every empty key. `useSyncExternalStore` re-renders on any
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
 // would loop forever.
@@ -32,6 +38,11 @@ function emit() {
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+function remember(attachments: Attachment[]) {
+  for (const attachment of attachments) byPath.set(attachment.path, attachment);
+  return attachments;
 }
 
 function write(sessionId: string | null, next: Attachment[]) {
@@ -48,7 +59,7 @@ export async function addAttachmentPaths(sessionId: string | null, paths: string
   const fresh = paths.filter((path) => !current.some((a) => a.path === path));
   if (!fresh.length) return;
 
-  const added = await invoke<Attachment[]>("read_attachments", { paths: fresh });
+  const added = remember(await invoke<Attachment[]>("read_attachments", { paths: fresh }));
   if (!added.length) return;
 
   // Re-read rather than closing over `current`: the dialog and the reads above
@@ -88,4 +99,57 @@ export function useAttachments(sessionId: string | null): Attachment[] {
   const getSnapshot = useCallback(() => bySession.get(sessionId) ?? EMPTY, [sessionId]);
 
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+function fromCache(paths: string[]): Attachment[] {
+  if (!paths.length) return EMPTY;
+
+  const found = paths.flatMap((path) => {
+    const attachment = byPath.get(path);
+    return attachment ? [attachment] : [];
+  });
+
+  return found.length ? found : EMPTY;
+}
+
+/// What the backend says about a list of paths, described once and remembered.
+///
+/// The queued row's own read, and it needs one: a held prompt carries paths and
+/// not attachments, because they are resolved at flush so that a cancel hands
+/// the composer back exactly what was typed. Asking is also the only honest way
+/// to draw one — whether a file travels as pixels is decided by extension *and*
+/// size in Rust, and a second copy of that rule here would be free to disagree
+/// with what actually goes down the wire.
+///
+/// A path `read_attachments` skips — a file cleared out from under a prompt
+/// still holding it — caches nothing and is simply absent from the answer, so a
+/// later mount asks again rather than remembering a gap.
+export function useAttachmentsByPath(paths: string[]): Attachment[] {
+  const key = paths.join("\0");
+  const [read, setRead] = useState(() => ({ key, attachments: fromCache(paths) }));
+
+  useEffect(() => {
+    const wanted = key ? key.split("\0") : [];
+    if (wanted.every((path) => byPath.has(path))) return;
+
+    let live = true;
+    void describeUncached(wanted).then(() => {
+      if (live) setRead({ key, attachments: fromCache(wanted) });
+    });
+    return () => {
+      live = false;
+    };
+  }, [key]);
+
+  // Taken from the cache during render rather than only in the effect above:
+  // state alone leaves one frame of the previous prompt's pictures sitting
+  // under this one's text.
+  return read.key === key ? read.attachments : fromCache(paths);
+}
+
+async function describeUncached(paths: string[]) {
+  const missing = paths.filter((path) => !byPath.has(path));
+  if (!missing.length) return;
+
+  remember(await invoke<Attachment[]>("read_attachments", { paths: missing }));
 }

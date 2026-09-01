@@ -386,6 +386,12 @@ export default function ChatInput({
       void onCancelQueued().then((cancelled) => {
         if (!cancelled) return;
         setMessage(before ? `${before}\n${cancelled.text}` : cancelled.text);
+        // What was attached comes back with the sentence it was attached to, or
+        // taking a prompt back would cost the reader the files silently — the
+        // tray is cleared on send and nothing else holds them. Paths, since that
+        // is all a held prompt carries; the tray takes them the same way a drop
+        // does, so a file already pinned again is not pinned twice.
+        void addAttachmentPaths(sessionId, cancelled.attachmentPaths);
         textareaRef.current?.focus();
       });
       return true;
