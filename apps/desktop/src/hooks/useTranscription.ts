@@ -128,6 +128,14 @@ export function useTranscriptionSettings(active: boolean) {
     [refresh],
   );
 
+  const setMute = useCallback(
+    async (mute: boolean) => {
+      await invoke("set_transcription_mute", { mute });
+      await refresh();
+    },
+    [refresh],
+  );
+
   return {
     status,
     downloads,
@@ -137,6 +145,7 @@ export function useTranscriptionSettings(active: boolean) {
     remove,
     selectModel,
     selectDevice,
+    setMute,
   };
 }
 
@@ -177,6 +186,10 @@ export function useRecorder<T>({
   const [state, setState] = useState<RecorderState>("idle");
   /// Loudest sample in the last window, 0–1. Drives the bars.
   const [level, setLevel] = useState(0);
+  /// What a run that could not answer left on disk, and the whole of what Retry
+  /// needs. Held here rather than sent out through `onMessage`, which takes a
+  /// sentence and has nowhere to put a path.
+  const [savedAudio, setSavedAudio] = useState<string | null>(null);
 
   // The callbacks close over the composer's draft, which changes on every
   // keystroke; a ref keeps the returned functions stable so the button does not
@@ -251,6 +264,12 @@ export function useRecorder<T>({
       // Committed only once the mic is actually open, so a refusal leaves the
       // previous recording's target alone.
       pinnedTarget.current = spokenFrom;
+      // And leaves the kept recording on offer, for the same reason. Talking
+      // again is the reader answering that offer — but a press that never
+      // opened the microphone is not talking again, and clearing it above the
+      // refusals took Retry off screen with the file still on disk, in the one
+      // case (`needsModel`) where the retry is the whole point.
+      setSavedAudio(null);
       setState("recording");
       // After the refusals, never before: a tone that plays and is then
       // followed by "Dray needs microphone access" has already told the reader
@@ -264,37 +283,54 @@ export function useRecorder<T>({
     }
   }, []);
 
+  /// The one place an outcome is read, so a retry cannot answer differently
+  /// from the stop that preceded it.
+  const apply = useCallback((outcome: TranscribeOutcome) => {
+    switch (outcome.kind) {
+      case "text":
+        // The pair closes here rather than where the microphone did, since the
+        // wait between the two is what the reader is listening for the end of.
+        // Only on words: the outcomes below say their own piece, and this tone
+        // would be claiming something landed.
+        playDictationSound("stop");
+        setSavedAudio(null);
+        handlers.current.onText(outcome.value, pinnedTarget.current);
+        break;
+      case "needsModel":
+        // The audio is kept, so downloading a model and pressing Retry gets the
+        // words already spoken rather than asking for them a second time.
+        setSavedAudio(outcome.value.audioPath);
+        handlers.current.onNeedsModel();
+        break;
+      case "noAudio":
+        // The one failure with a cure the reader can act on, and the one that
+        // used to be invisible.
+        handlers.current.onMessage(
+          "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone.",
+        );
+        break;
+      case "empty":
+        setSavedAudio(null);
+        handlers.current.onMessage("Nothing was said.");
+        break;
+      case "failed":
+        setSavedAudio(outcome.value.audioPath);
+        handlers.current.onMessage(
+          outcome.value.audioPath
+            ? `Transcription failed: ${outcome.value.message}`
+            : `Transcription failed, and the recording could not be saved: ${outcome.value.message}`,
+        );
+        break;
+    }
+  }, []);
+
   const stop = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
     setState("transcribing");
 
     try {
-      const outcome = await invoke<TranscribeOutcome>("stop_transcription");
-
-      switch (outcome.kind) {
-        case "text":
-          // The pair closes here rather than where the microphone did, since
-          // the wait between the two is what the reader is listening for the
-          // end of. Only on words: the outcomes below say their own piece, and
-          // this tone would be claiming something landed.
-          playDictationSound("stop");
-          handlers.current.onText(outcome.value, pinnedTarget.current);
-          break;
-        case "needsModel":
-          handlers.current.onNeedsModel();
-          break;
-        case "noAudio":
-          // The one failure with a cure the reader can act on, and the one that
-          // used to be invisible.
-          handlers.current.onMessage(
-            "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone.",
-          );
-          break;
-        case "empty":
-          handlers.current.onMessage("Nothing was said.");
-          break;
-      }
+      apply(await invoke<TranscribeOutcome>("stop_transcription"));
     } catch (e) {
       console.error("transcription failed", e);
       handlers.current.onMessage(String(e));
@@ -302,7 +338,32 @@ export function useRecorder<T>({
       setState("idle");
       inFlight.current = false;
     }
-  }, []);
+  }, [apply]);
+
+  /// Runs the kept recording through the model again.
+  ///
+  /// Same states as a stop, since from the reader's side it is the same wait —
+  /// the spinner belongs in the same place whether the audio came from the
+  /// microphone a moment ago or from disk.
+  const retry = useCallback(async () => {
+    if (inFlight.current || !savedAudio) return;
+    inFlight.current = true;
+    setState("transcribing");
+    handlers.current.onMessage(null);
+
+    try {
+      apply(await invoke<TranscribeOutcome>("retry_transcription", { path: savedAudio }));
+    } catch (e) {
+      console.error("retrying the transcription failed", e);
+      // The file is gone or unreadable, so the offer cannot stand: leaving
+      // Retry on screen after this points at nothing.
+      setSavedAudio(null);
+      handlers.current.onMessage(String(e));
+    } finally {
+      setState("idle");
+      inFlight.current = false;
+    }
+  }, [apply, savedAudio]);
 
   /// Throws the recording away. The words are the point of the press, so
   /// cancelling has to be a separate control from stopping — not a second
@@ -329,5 +390,5 @@ export function useRecorder<T>({
     return Promise.resolve();
   }, [state, start, stop]);
 
-  return { state, level, toggle, start, stop, cancel };
+  return { state, level, toggle, start, stop, cancel, retry, savedAudio };
 }

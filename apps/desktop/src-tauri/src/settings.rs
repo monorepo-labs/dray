@@ -50,8 +50,8 @@ pub struct AppSettings {
     pub transcription: TranscriptionSettings,
 }
 
-/// The transcription picks, both meaning "not chosen" when absent.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// The transcription picks. Model and device mean "not chosen" when absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptionSettings {
@@ -66,6 +66,21 @@ pub struct TranscriptionSettings {
     /// device. See [`crate::transcription::audio::InputDevice`].
     #[serde(default)]
     pub device: Option<String>,
+    /// Whether the speakers are silenced while the microphone is open. On by
+    /// default: the mic hears them, so whatever is playing otherwise lands in
+    /// the transcript as words nobody said.
+    #[serde(default = "enabled_by_default")]
+    pub mute_while_recording: bool,
+}
+
+impl Default for TranscriptionSettings {
+    fn default() -> Self {
+        Self {
+            model: None,
+            device: None,
+            mute_while_recording: enabled_by_default(),
+        }
+    }
 }
 
 fn enabled_by_default() -> bool {

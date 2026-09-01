@@ -698,6 +698,10 @@ pub fn run() {
                 if let Err(e) = store::backfill_removed_worktrees().await {
                     eprintln!("[worktree backfill err] {e}");
                 }
+                // Dictations kept past a failure. Pruning on write alone left
+                // the last one on disk forever, since nothing else sweeps them
+                // and a reader who gives up after one failure writes no more.
+                transcription::recordings::prune().await;
             });
 
             // Orchestration is a side channel: a socket that won't bind must
@@ -799,11 +803,24 @@ pub fn run() {
             transcription::delete_transcription_model,
             transcription::select_transcription_model,
             transcription::select_transcription_device,
+            transcription::set_transcription_mute,
             transcription::start_transcription,
             transcription::transcription_level,
             transcription::stop_transcription,
+            transcription::retry_transcription,
             transcription::cancel_transcription,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // The record of what the output was before a dictation muted it
+            // lives in this process and nowhere else, so quitting mid-recording
+            // is the one ordinary way to leave a machine silent with nothing
+            // left to undo it. Synchronous and blocking, since the runtime is
+            // already going down and there is nothing to spawn onto. A hard
+            // kill still gets past this — see `Known issues`.
+            if matches!(event, tauri::RunEvent::Exit) {
+                transcription::audio::restore_other_audio();
+            }
+        });
 }

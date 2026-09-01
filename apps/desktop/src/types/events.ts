@@ -1543,16 +1543,17 @@ export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: 
 /**
  * What a stop answers with.
  *
- * Three of these are outcomes rather than errors because the frontend *acts*
- * on each — opens settings, points at System Settings, says nothing — where an
- * error string could only be shown.
+ * Every one of these is an outcome rather than an error, because the frontend
+ * *acts* on each — opens settings, points at System Settings, offers a retry,
+ * says nothing — where an error string could only be shown. `Failed` escaped
+ * that rule for a while, and it took the recording down with it.
  *
  * `NoAudio` earns its place the hard way: macOS answers a process without
  * microphone permission with a stream of **silence** rather than a refusal, so
  * the first build of this transcribed zeros to an empty string and did nothing
  * at all, which reads exactly like a broken model.
  */
-export type TranscribeOutcome = { "kind": "text", "value": string } | { "kind": "needsModel" } | { "kind": "noAudio" } | { "kind": "empty" };
+export type TranscribeOutcome = { "kind": "text", "value": string } | { "kind": "needsModel", "value": { audioPath: string | null, } } | { "kind": "noAudio" } | { "kind": "empty" } | { "kind": "failed", "value": { message: string, audioPath: string | null, } };
 
 /**
  * One downloadable model.
@@ -1593,7 +1594,7 @@ languages: string,
 speed: number, accuracy: number, };
 
 /**
- * The transcription picks, both meaning "not chosen" when absent.
+ * The transcription picks. Model and device mean "not chosen" when absent.
  */
 export type TranscriptionSettings = { 
 /**
@@ -1608,7 +1609,13 @@ model: string | null,
  * mic is unplugged, so a stored one silently starts naming a different
  * device. See [`crate::transcription::audio::InputDevice`].
  */
-device: string | null, };
+device: string | null, 
+/**
+ * Whether the speakers are silenced while the microphone is open. On by
+ * default: the mic hears them, so whatever is playing otherwise lands in
+ * the transcript as words nobody said.
+ */
+muteWhileRecording: boolean, };
 
 /**
  * Everything the transcription tab draws in one read.
@@ -1634,6 +1641,10 @@ recommended: string, devices: Array<InputDevice>,
  * Stored device name, or `None` for the system default.
  */
 selectedDevice: string | null, 
+/**
+ * Whether the speakers are silenced while the microphone is open.
+ */
+muteWhileRecording: boolean, 
 /**
  * False where no model is installed, or the picked one has been deleted.
  */
