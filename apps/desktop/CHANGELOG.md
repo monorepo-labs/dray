@@ -5,6 +5,32 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.3
+
+### Added
+
+- **A failed dictation keeps the audio.** The samples used to go into
+  the engine and vanish with it, so the only cure was saying the whole
+  thing again. Every recording is now parked on disk until the model
+  answers, and Retry sends the same audio back through — including when
+  the failure was a model that wasn't installed yet.
+- **Other audio is muted while you dictate.** The microphone hears the
+  speakers, so anything playing landed in the transcript as words nobody
+  said. Your prior state is restored, so a machine already muted stays
+  that way.
+
+### Changed
+
+- **The model loads before you press the mic**, at launch and whenever
+  the selected model changes. Loading takes seconds and a first
+  dictation is usually one word, so it could not hide behind the
+  recording. Costs a resident model for a reader who never dictates.
+- **Deleting a worktree from a notice is ⌘⇧D**, since plain ⌘D is
+  dictation app-wide and a card raising itself mid-sentence must not
+  take a chord the composer owns.
+- **The composer takes focus when dictated words land**, and only if
+  you are still on the session you spoke into.
+
 ## 0.12.2
 
 ### Added
