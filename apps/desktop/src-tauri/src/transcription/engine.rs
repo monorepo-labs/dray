@@ -14,7 +14,8 @@
 //! resolves to the GPU on Apple Silicon and to CPU on every other target.
 //! Nothing here can change that, which is why there is no accelerator setting.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
@@ -26,9 +27,12 @@ use transcribe_cpp::{Model, ModelOptions, RunOptions, Session};
 /// every recording would put that cost on every press. The id rides along
 /// because the reader can switch models in settings while one is loaded, and
 /// the *only* way to notice is to compare against what was asked for.
-#[derive(Default)]
+///
+/// Cloneable, so [`Engine::warm`] can be spawned off a command that only
+/// borrows the managed state.
+#[derive(Default, Clone)]
 pub struct Engine {
-    loaded: Mutex<Option<Loaded>>,
+    loaded: Arc<Mutex<Option<Loaded>>>,
 }
 
 struct Loaded {
@@ -86,6 +90,27 @@ impl Engine {
         Ok(result?.trim().to_string())
     }
 
+    /// Loads the model now, so a dictation started this second doesn't pay for
+    /// it when it ends.
+    ///
+    /// The first load is seconds where every later one is free, which is felt
+    /// as the *first* dictation being slow and the rest instant. Called when
+    /// recording starts: the reader is talking for that whole window, so the
+    /// load lands before they press stop. Failures are silent — the real
+    /// transcribe loads again and reports for itself.
+    pub async fn warm(&self, model_id: String, path: PathBuf) {
+        let mut guard = self.loaded.lock().await;
+
+        if guard.as_ref().is_some_and(|l| l.model_id == model_id) {
+            return;
+        }
+
+        match load(&path).await {
+            Ok(session) => *guard = Some(Loaded { model_id, session }),
+            Err(e) => eprintln!("could not warm the transcription model: {e:#}"),
+        }
+    }
+
     /// Drops the loaded model.
     ///
     /// Called when the reader deletes or switches models, so the weights on
@@ -126,6 +151,19 @@ mod tests {
             .unwrap();
 
         assert!(text.is_empty());
+    }
+
+    /// A warm that cannot load must leave the engine exactly as it found it,
+    /// since the transcribe behind it is the one that reports the failure.
+    #[tokio::test]
+    async fn a_failed_warm_loads_nothing_and_does_not_panic() {
+        let engine = Engine::default();
+
+        engine
+            .warm("whisper-small".into(), PathBuf::from("/nonexistent"))
+            .await;
+
+        assert!(engine.loaded.lock().await.is_none());
     }
 
     #[tokio::test]

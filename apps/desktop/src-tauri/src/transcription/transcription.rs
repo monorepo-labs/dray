@@ -84,7 +84,8 @@ pub enum TranscribeOutcome {
 #[derive(Default)]
 pub struct TranscriptionState {
     recording: Mutex<Option<Recording>>,
-    engine: Engine,
+    /// Public so `setup` can warm it at launch, before any command runs.
+    pub engine: Engine,
 }
 
 /// The selected model, if one is picked *and* still on disk.
@@ -97,6 +98,30 @@ async fn ready_model() -> Option<&'static TranscriptionModel> {
     let model = catalog::find(&selected)?;
 
     download::is_installed(model).await.then_some(model)
+}
+
+/// Loads the selected model into memory, off to one side.
+///
+/// The load is seconds and a first dictation is usually one word, so waiting
+/// for the mic press is too late to hide it — by the time the reader stops
+/// talking the load has barely started. Called instead at every moment the
+/// answer to "which model" changes: launch, download, switch, and the press
+/// itself as a backstop. Warming an already-warm engine returns immediately,
+/// so calling it more often than needed costs nothing.
+///
+/// Spawned and silent: nothing here is worth delaying a command for, and the
+/// transcribe behind it loads again and reports for itself.
+pub fn warm_selected(engine: Engine) {
+    tauri::async_runtime::spawn(async move {
+        let Some(model) = ready_model().await else {
+            return;
+        };
+        let Ok(path) = download::model_path(model).await else {
+            return;
+        };
+
+        engine.warm(model.id.to_string(), path).await;
+    });
 }
 
 #[tauri::command]
@@ -127,6 +152,7 @@ pub async fn transcription_status() -> Result<TranscriptionStatus, String> {
 #[tauri::command]
 pub async fn download_transcription_model(
     app: AppHandle,
+    state: State<'_, TranscriptionState>,
     model_id: String,
 ) -> Result<(), String> {
     let model = catalog::find(&model_id).ok_or_else(|| format!("unknown model \"{model_id}\""))?;
@@ -149,6 +175,8 @@ pub async fn download_transcription_model(
         next.transcription.model = Some(model.id.to_string());
         settings::write(&next).await.map_err(|e| e.to_string())?;
     }
+
+    warm_selected(state.engine.clone());
 
     Ok(())
 }
@@ -202,7 +230,11 @@ pub async fn select_transcription_model(
     let mut next = settings::read().await;
     next.transcription.model = model_id;
 
-    settings::write(&next).await.map_err(|e| e.to_string())
+    settings::write(&next).await.map_err(|e| e.to_string())?;
+
+    warm_selected(state.engine.clone());
+
+    Ok(())
 }
 
 /// Picks an input by name, or `None` for the system default.
@@ -279,6 +311,10 @@ pub async fn start_transcription(
     // Replaces whatever was there, which stops it: two live streams would both
     // be filling buffers and only one could ever be read.
     *state.recording.lock().await = Some(recording);
+
+    // Backstop: launch and every model change warm already, so this only ever
+    // catches a load that failed then or a model installed since.
+    warm_selected(state.engine.clone());
 
     Ok(None)
 }
