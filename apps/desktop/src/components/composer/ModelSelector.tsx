@@ -26,7 +26,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { isUnsetModel } from "@/lib/model";
+import { HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -41,11 +41,12 @@ const EFFORT_LABELS: Record<Effort, string> = {
 /// the screen reader's alone — the row is marks, since two of them side by side
 /// say "pick one" in less space than two words do, and a tooltip repeating the
 /// name is longer than the row it hangs off.
-const AGENTS: { id: Harness; label: string }[] = [
-  { id: "claude_code", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
-  { id: "pi", label: "pi" },
-];
+const AGENT_LABELS: Record<Harness, string> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+  pi: "pi",
+};
+const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 
 /// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
 /// where the model offers nothing to cycle, so the chord no-ops rather than

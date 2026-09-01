@@ -39,6 +39,7 @@ import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { nextEffort } from "@/components/composer/ModelSelector";
+import { nextHarness } from "@/lib/model";
 import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
@@ -790,11 +791,12 @@ function App() {
   // ⌘⇧T is reopen-closed-tab in a webview: left bound on a session that cannot
   // use it, it would eat the key and do nothing.
   const composingNewSession = !selectedSessionId && !issuesOpen;
-  useHotkey(
-    "a",
-    () => setHarness(harness === "codex" ? "claude_code" : "codex"),
-    { shift: true, enabled: composingNewSession },
-  );
+  // Steps the picker's own row in its own order, rather than toggling between
+  // two — a toggle written when there were two silently never reached pi.
+  useHotkey("a", () => setHarness(nextHarness(harness)), {
+    shift: true,
+    enabled: composingNewSession,
+  });
   useHotkey("t", () => setUseWorktree((v) => !v), {
     shift: true,
     // A worktree has nothing to fork from until a project is picked, which is
