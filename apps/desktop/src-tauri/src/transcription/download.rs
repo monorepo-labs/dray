@@ -145,13 +145,27 @@ impl std::fmt::Display for Cancelled {
 
 impl std::error::Error for Cancelled {}
 
+/// Whether the bytes actually landed on disk.
+///
+/// A cancel is what the reader asked for, so [`download`] answers `Ok` — which
+/// left the caller unable to tell it from a finished download, and it went on
+/// to select a model that was never written. Selection then named a file
+/// `is_installed` does not believe in, so the tab drew a tick beside a model
+/// the composer kept refusing to dictate with. The distinction has to ride the
+/// success path, since that is the path both take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Downloaded {
+    Installed,
+    Cancelled,
+}
+
 /// Streams the model to a temp file, verifies it, then renames it into place.
 ///
 /// The rename is what makes the whole thing safe to interrupt: the real path
 /// only ever holds a file that already passed verification, so a process killed
 /// mid-download leaves a `.part` to be overwritten and nothing that
 /// [`is_installed`] would believe.
-pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<()> {
+pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<Downloaded> {
     let path = model_path(model).await?;
     let part = path.with_extension("part");
 
@@ -168,7 +182,7 @@ pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<()>
         // without an error message the settings tab would have to draw.
         if e.downcast_ref::<Cancelled>().is_some() {
             emit(app, model, 0, model.size_bytes, None);
-            return Ok(());
+            return Ok(Downloaded::Cancelled);
         }
 
         emit(app, model, 0, model.size_bytes, Some(e.to_string()));
@@ -182,7 +196,7 @@ pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<()>
 
     emit(app, model, model.size_bytes, model.size_bytes, None);
 
-    Ok(())
+    Ok(Downloaded::Installed)
 }
 
 async fn stream_to(app: &AppHandle, model: &TranscriptionModel, part: &Path) -> Result<()> {

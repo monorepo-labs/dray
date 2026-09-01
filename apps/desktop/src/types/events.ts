@@ -1571,7 +1571,17 @@ revision: string, filename: string, sizeBytes: number, sha256: string,
  * fixed compiled-in list, so spelling it here costs nothing and keeps the
  * judgement beside the data it describes.
  */
-languages: string, };
+languages: string, 
+/**
+ * How quick it is, 0–100, and how right it is, 0–100.
+ *
+ * Both are Handy's own `speed_score` / `accuracy_score` from its catalog,
+ * copied rather than measured — we have run no benchmark and inventing
+ * numbers that look like one would be worse than having none. They are
+ * **relative to each other**, so the pair answers "which of these two"
+ * and nothing about seconds or word error rate.
+ */
+speed: number, accuracy: number, };
 
 /**
  * The transcription picks, both meaning "not chosen" when absent.

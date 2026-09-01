@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
+import { playDictationSound } from "@/lib/dictationSound";
 import type { DownloadProgress, TranscribeOutcome, TranscriptionStatus } from "@/types/events";
 
 /// How far each in-flight download has got, keyed by model id.
@@ -231,6 +231,10 @@ export function useRecorder<T>({
       // unambiguously "where the reader was when they started speaking".
       pinnedTarget.current = liveTarget.current;
       setState("recording");
+      // After the refusals, never before: a tone that plays and is then
+      // followed by "Dray needs microphone access" has already told the reader
+      // the mic is open.
+      playDictationSound("start");
     } catch (e) {
       console.error("could not start recording", e);
       handlers.current.onMessage(String(e));
@@ -245,6 +249,11 @@ export function useRecorder<T>({
 
       switch (outcome.kind) {
         case "text":
+          // The pair closes here rather than where the microphone did, since
+          // the wait between the two is what the reader is listening for the
+          // end of. Only on words: the outcomes below say their own piece, and
+          // this tone would be claiming something landed.
+          playDictationSound("stop");
           handlers.current.onText(outcome.value, pinnedTarget.current);
           break;
         case "needsModel":

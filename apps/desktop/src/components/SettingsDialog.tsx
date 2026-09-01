@@ -764,15 +764,24 @@ function SettingsTabs({
         ))}
       </div>
 
-      {/* A floor rather than a fixed height: without one the dialog resizes
-          under the cursor on every tab change, which reads as the window
-          having jumped rather than as the content having changed. Sized to
-          Appearance, the tallest. */}
+      {/* Fixed, and scrolling past it. A floor was enough while the tabs were
+          within a line or two of each other, and stopped being enough the
+          moment Transcription arrived carrying a list of models — the dialog
+          then doubled in height on the way in and halved on the way out, which
+          reads as the window jumping rather than as the content changing.
+          Raising the floor to the tallest tab instead would spend that height
+          on About, which is four lines.
+
+          The negative margin is for the model rows' focus ring: `overflow-y`
+          clips the other axis too, so a ring drawn at the panel's own edge
+          loses its outer edge without it. */}
       <div
         role="tabpanel"
         id={`${id}-panel`}
         aria-labelledby={`${id}-${tab}`}
-        className="flex min-h-56 flex-col gap-7"
+        // `shrink-0` on the sections, since a column flex item's default is to
+        // shrink toward its content before the container agrees to scroll.
+        className="-mx-1 flex h-96 flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
       >
         {children[tab]}
       </div>

@@ -1,4 +1,7 @@
-import { Check, Download, Trash2, X } from "lucide-react";
+import { useState } from "react";
+
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Check, ChevronDown, Download, ExternalLink, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +28,45 @@ function formatSize(bytes: number): string {
 /// entry in the menu rather than the state of having picked nothing.
 const SYSTEM_DEFAULT = "__default__";
 
+/// One of the two model scores, as a labelled bar.
+///
+/// A bar rather than the number, because a number invites a precision that is
+/// not there: these are Handy's relative catalog scores, not a measured word
+/// error rate or a real-time factor. A bar answers the question the reader
+/// actually has, which is which of two models to pick.
+function ScoreBar({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="flex items-center gap-1.5" title={`${label} ${value} of 100`}>
+      <span className="text-[10px] text-muted-foreground">{label}</span>
+      <span
+        role="meter"
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        // `--muted` is a couple of percent off the card it sits on, which at
+        // 4px tall left the empty part of the bar invisible — so a low score
+        // read as a short stray mark rather than as a bar that is mostly
+        // unfilled. A share of the foreground instead, which separates from the
+        // surface in both modes by construction.
+        className="h-1 w-12 overflow-hidden rounded-full bg-foreground/20"
+      >
+        {/* `--accent-add` is the app's one green — the same token the diff's
+            added lines, an open PR and an unread session use, so this reads as
+            "good" in the palette's own vocabulary rather than as a fourth
+            literal. Dark takes the foreground instead — the green is tuned for
+            contrast against a light page and goes muddy on a dark one — held
+            just off full, since a pure white bar out-shouts the model name
+            above it. */}
+        <span
+          className="block h-full rounded-full bg-accent-add dark:bg-foreground/90"
+          style={{ width: `${value}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
 /// One model: what it is, how big, and the one action available on it.
 ///
 /// Downloaded models are selectable and deletable; the rest offer a download.
@@ -36,20 +78,27 @@ function ModelRow({
   selected,
   recommended,
   progress,
+  confirming,
   onSelect,
   onDownload,
   onCancelDownload,
+  onAskDelete,
   onDelete,
+  onKeepIt,
 }: {
   model: TranscriptionModel;
   installed: boolean;
   selected: boolean;
   recommended: boolean;
   progress?: { received: number; total: number };
+  /// The bin has been pressed and the row is waiting to be told twice.
+  confirming: boolean;
   onSelect: () => void;
   onDownload: () => void;
   onCancelDownload: () => void;
+  onAskDelete: () => void;
   onDelete: () => void;
+  onKeepIt: () => void;
 }) {
   const downloading = progress !== undefined;
   const percent = progress ? Math.round((progress.received / progress.total) * 100) : 0;
@@ -59,6 +108,10 @@ function ModelRow({
   // and downloading several hundred megabytes is too big a thing to trigger by
   // clicking a row — that keeps its own button.
   const pickable = installed && !selected;
+
+  // The catalog writes the phrase two ways on purpose — named where they fit,
+  // counted where they don't — and only the counted one leaves a question open.
+  const counted = /^\d+ languages$/.test(model.languages);
 
   return (
     <div
@@ -82,28 +135,61 @@ function ModelRow({
         pickable && "cursor-pointer hover:bg-muted/30",
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex items-center gap-2">
-            {selected && <Check className="size-4 shrink-0" aria-hidden />}
-            <span className="text-ui font-medium">{model.name}</span>
-            {recommended && (
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                Recommended
-              </span>
-            )}
-          </div>
-          <p className="text-ui text-muted-foreground">{model.description}</p>
-          <p className="text-ui text-muted-foreground">
-            {formatSize(model.sizeBytes)}
-            {" · "}
-            {model.languages}
-          </p>
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          {selected && <Check className="size-4 shrink-0" aria-hidden />}
+          <span className="text-ui font-medium">{model.name}</span>
+          {recommended && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              Recommended
+            </span>
+          )}
+        </div>
+        <p className="text-ui text-muted-foreground">{model.description}</p>
+        <p className="flex flex-wrap items-center gap-x-1 text-ui text-muted-foreground">
+          {/* Languages first: it decides whether the model is usable at all,
+              where the size only decides what it costs. A reader who needs
+              German is done reading at the first word.
+
+              A count raises the question a name already answers — *which* 28?
+              — so only a count links out, at the model's own page rather than
+              expanding a list this row would have to hold. "English, German,
+              Spanish, French" has nowhere left to send anybody. */}
+          {counted ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void openUrl(`https://huggingface.co/${model.repo}`);
+              }}
+              className="inline-flex cursor-pointer items-center gap-1 underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              {model.languages}
+              <ExternalLink className="size-3" aria-hidden />
+            </button>
+          ) : (
+            <span>{model.languages}</span>
+          )}
+          <span aria-hidden>·</span>
+          <span>{formatSize(model.sizeBytes)}</span>
+        </p>
+      </div>
+
+      {/* Actions ride the bar row rather than the title's, which is what lets
+          the confirmation sit in the flow instead of floating over the bin.
+          Beside the title they shared a line with prose that had to give up
+          width for them, so anything wider than an icon re-wrapped the
+          description and moved every row below; the bars are fixed-width and
+          give up nothing, so the buttons can grow into the gap between. */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <ScoreBar label="Speed" value={model.speed} />
+          <ScoreBar label="Accuracy" value={model.accuracy} />
         </div>
 
-        {/* Every button here sits inside the row's own click target, so each
-            stops the event — otherwise deleting a model would select it on the
-            way down. */}
+        {/* Every button here sits inside the row's own click target, so the
+            group stops the event — otherwise deleting a model would select it
+            on the way down. */}
         <div
           className="flex shrink-0 items-center gap-1"
           onClick={(e) => e.stopPropagation()}
@@ -124,27 +210,53 @@ function ModelRow({
                 <X />
               </Button>
             </>
+          ) : installed && confirming ? (
+            // Asked in the row rather than in a dialog, which would take the
+            // whole window over a file Download gets back.
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                onClick={onDelete}
+                aria-label={`Delete ${model.name}`}
+                className="cursor-pointer"
+              >
+                Confirm
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={onKeepIt}
+                aria-label={`Keep ${model.name}`}
+                className="cursor-pointer text-muted-foreground hover:text-foreground"
+              >
+                <X />
+              </Button>
+            </>
           ) : installed ? (
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
-              onClick={onDelete}
+              onClick={onAskDelete}
               aria-label={`Delete ${model.name}`}
               className="cursor-pointer text-muted-foreground hover:text-foreground"
             >
               <Trash2 />
             </Button>
           ) : (
+            // Icon alone. The word said what the arrow already says.
             <Button
               type="button"
-              size="sm"
+              size="icon-sm"
               variant="ghost"
               onClick={onDownload}
-              className="cursor-pointer"
+              aria-label={`Download ${model.name}`}
+              className="cursor-pointer text-muted-foreground hover:text-foreground"
             >
               <Download />
-              Download
             </Button>
           )}
         </div>
@@ -153,7 +265,7 @@ function ModelRow({
       {/* Only while downloading, and driven by the same numbers as the
           percentage beside it, so the two cannot disagree. */}
       {downloading && (
-        <div className="h-1 overflow-hidden rounded-full bg-muted">
+        <div className="h-1 overflow-hidden rounded-full bg-foreground/20">
           <div
             className="h-full bg-primary transition-[width] duration-300"
             style={{ width: `${percent}%` }}
@@ -186,6 +298,10 @@ export default function TranscriptionSettings({
   onSelectModel: (id: string) => void;
   onSelectDevice: (device: string | null) => void;
 }) {
+  // One id, not a flag per row: two rows asking the question at once would be
+  // two red buttons where only one press was ever made.
+  const [confirming, setConfirming] = useState<string | null>(null);
+
   if (!status) {
     return (
       <p className="text-ui text-muted-foreground">Reading transcription settings…</p>
@@ -220,10 +336,25 @@ export default function TranscriptionSettings({
               selected={status.selectedModel === model.id}
               recommended={status.recommended === model.id}
               progress={downloads[model.id]}
-              onSelect={() => onSelectModel(model.id)}
+              confirming={confirming === model.id}
+              // Picking a row closes any question open on another, so the red
+              // button never outlives the reader's attention on it.
+              onSelect={() => {
+                setConfirming(null);
+                onSelectModel(model.id);
+              }}
               onDownload={() => onDownload(model.id)}
               onCancelDownload={() => onCancelDownload(model.id)}
-              onDelete={() => onDelete(model.id)}
+              // Asks first. The file is hundreds of megabytes over somebody's
+              // connection, the bin sits a few pixels from the row that
+              // *selects* the model, and there is no undo — three reasons a
+              // misread click must not be the whole action.
+              onAskDelete={() => setConfirming(model.id)}
+              onDelete={() => {
+                setConfirming(null);
+                onDelete(model.id);
+              }}
+              onKeepIt={() => setConfirming(null)}
             />
           ))}
         </div>
@@ -244,9 +375,10 @@ export default function TranscriptionSettings({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="max-w-56 cursor-pointer justify-start"
+                  className="max-w-56 cursor-pointer justify-between"
                 >
                   <span className="truncate">{deviceLabel}</span>
+                  <ChevronDown className="size-3 shrink-0 opacity-60" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

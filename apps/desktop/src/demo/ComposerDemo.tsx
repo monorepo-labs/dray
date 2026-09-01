@@ -4,6 +4,7 @@ import ChatInput from "@/components/ChatInput";
 import DictateControl from "@/components/composer/DictateControl";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RecorderState } from "@/hooks/useTranscription";
+import { playDictationSound } from "@/lib/dictationSound";
 
 /// A recorder with no microphone behind it.
 ///
@@ -62,12 +63,21 @@ export default function ComposerDemo() {
     <DictateControl
       state={recorder.state}
       level={recorder.level}
-      onStart={() => recorder.setState("recording")}
+      onStart={() => {
+        playDictationSound("start");
+        recorder.setState("recording");
+      }}
       onStop={() => {
         recorder.setState("transcribing");
-        // The real one takes about this long on a short phrase.
-        setTimeout(() => recorder.setState("idle"), 1400);
+        // The real one takes about this long on a short phrase, and the tone
+        // lands at the *end* of it — where `useRecorder` plays it, on words
+        // arriving rather than on the microphone closing.
+        setTimeout(() => {
+          playDictationSound("stop");
+          recorder.setState("idle");
+        }, 1400);
       }}
+      // Silent, like the real one.
       onCancel={() => recorder.setState("idle")}
     />
   );

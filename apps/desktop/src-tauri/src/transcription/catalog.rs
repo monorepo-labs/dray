@@ -43,6 +43,15 @@ pub struct TranscriptionModel {
     /// fixed compiled-in list, so spelling it here costs nothing and keeps the
     /// judgement beside the data it describes.
     pub languages: &'static str,
+    /// How quick it is, 0–100, and how right it is, 0–100.
+    ///
+    /// Both are Handy's own `speed_score` / `accuracy_score` from its catalog,
+    /// copied rather than measured — we have run no benchmark and inventing
+    /// numbers that look like one would be worse than having none. They are
+    /// **relative to each other**, so the pair answers "which of these two"
+    /// and nothing about seconds or word error rate.
+    pub speed: u8,
+    pub accuracy: u8,
 }
 
 impl TranscriptionModel {
@@ -67,9 +76,12 @@ impl TranscriptionModel {
 
 /// Every model on offer, in the order the settings tab draws them.
 ///
-/// Ordered smallest-commitment first within each tier rather than by accuracy:
-/// the reader is choosing what to spend several hundred megabytes on, and the
-/// list is short enough that ranking by quality would just restate the sizes.
+/// Ordered English-first, then by how many languages each adds. The reader who
+/// only ever dictates in one language should not have to read past three
+/// multilingual models to find that out, and the reader who needs a second
+/// language is looking for exactly the thing the ordering sorts on. It also
+/// puts the two Whispers together at the end, where the choice between them is
+/// the ordinary size-against-accuracy one.
 pub const MODELS: &[TranscriptionModel] = &[
     TranscriptionModel {
         id: "parakeet-unified-en-0.6b",
@@ -81,6 +93,8 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 731_357_568,
         sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
         languages: "English",
+        speed: 79,
+        accuracy: 90,
     },
     TranscriptionModel {
         id: "canary-180m-flash",
@@ -92,28 +106,47 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 218_447_552,
         sha256: "e13c7f5d0952b056a027cfffec13e3a3a134d1608babed24f983568f141e297c",
         languages: "English, German, Spanish, French",
+        speed: 98,
+        accuracy: 88,
+    },
+    TranscriptionModel {
+        id: "nemotron-3.5-asr-streaming-0.6b",
+        name: "Nemotron Streaming 3.5",
+        description: "Fast, and the only one here that handles two languages in one sentence.",
+        repo: "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+        revision: "6d44e540bc31b0de1dbe174a3cea87f53a7f22fb",
+        filename: "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
+        size_bytes: 751_094_240,
+        sha256: "b94545b313b3223fda7b2857a52681da813935c2127643d1e9ff0c23d988089c",
+        languages: "28 languages",
+        speed: 84,
+        accuracy: 82,
     },
     TranscriptionModel {
         id: "whisper-small",
         name: "Whisper Small",
-        description: "Broad language coverage, with automatic detection.",
+        description: "Broad language coverage in a small download, with automatic detection.",
         repo: "handy-computer/whisper-small-gguf",
         revision: "c0214bd34be9296695486f838e0142f900803159",
         filename: "whisper-small-Q8_0.gguf",
         size_bytes: 269_751_136,
         sha256: "9b9c8811bbcc82a7766f0fb0925614bdacb0923b2cc630daeac17108b655b860",
         languages: "99 languages",
+        speed: 78,
+        accuracy: 80,
     },
     TranscriptionModel {
         id: "whisper-large-v3-turbo",
         name: "Whisper Large v3 Turbo",
-        description: "The most accurate on offer here, and the slowest.",
+        description: "The widest language coverage on offer here, and the slowest.",
         repo: "handy-computer/whisper-large-v3-turbo-gguf",
         revision: "5eaf945c7978e564bae5b28a5b1639dd93c2bfb1",
         filename: "whisper-large-v3-turbo-Q8_0.gguf",
         size_bytes: 886_381_760,
         sha256: "b2e30cc286bc9f3aba4db9099fc7403543497c05ce7100d0d83091ddfd25a183",
         languages: "100 languages",
+        speed: 35,
+        accuracy: 88,
     },
 ];
 
@@ -194,6 +227,40 @@ mod tests {
             assert!(
                 m.languages.len() < 60,
                 "{}: language label too long to sit in a row",
+                m.id
+            );
+        }
+    }
+
+    /// Both are drawn as a share of a bar, so anything past 100 overflows its
+    /// track and a zero reads as a missing value rather than a slow model.
+    #[test]
+    fn scores_are_percentages() {
+        for m in MODELS {
+            assert!(
+                (1..=100).contains(&m.speed),
+                "{}: speed {} is not 1–100",
+                m.id,
+                m.speed
+            );
+            assert!(
+                (1..=100).contains(&m.accuracy),
+                "{}: accuracy {} is not 1–100",
+                m.id,
+                m.accuracy
+            );
+        }
+    }
+
+    /// The settings row links the language phrase at this page, so a repo that
+    /// is not `<owner>/<name>` builds a URL that 404s.
+    #[test]
+    fn repos_are_owner_and_name() {
+        for m in MODELS {
+            assert_eq!(
+                m.repo.split('/').count(),
+                2,
+                "{}: repo is not owner/name",
                 m.id
             );
         }

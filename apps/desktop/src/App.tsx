@@ -280,10 +280,11 @@ function App() {
     onMessage: setError,
   });
 
-  // Both ⌘D and ⌃D, since `useHotkey` treats the two accelerators as one chord.
-  // Enabled always: pressed with nothing downloaded it opens settings, which is
-  // the answer the reader needs rather than a key that does nothing.
-  useHotkey("d", () => void recorder.toggle());
+  // ⌘ only. `platformOnly` is what keeps this off ⌃D, which macOS already
+  // assigns to delete-forward in every text field — including the composer this
+  // shortcut is for. Enabled always: pressed with nothing downloaded it opens
+  // settings, which is the answer the reader needs rather than a dead key.
+  useHotkey("d", () => void recorder.toggle(), { platformOnly: true });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 

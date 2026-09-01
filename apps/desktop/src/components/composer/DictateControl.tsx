@@ -1,19 +1,19 @@
 import { Check, Mic, X } from "lucide-react";
 
-import Orb from "@/components/Orb";
 import AudioVisualizer from "@/components/composer/AudioVisualizer";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RecorderState } from "@/hooks/useTranscription";
 import { cn } from "@/lib/utils";
 
 /// The controls are 28px (`icon-sm`), so every state of this component is too.
 ///
-/// Transcribing draws no button at all, and without a floor the row collapses
-/// to the height of a line of text the moment the model starts — the composer
-/// jumps, then jumps back a second later. Matching the button height means the
-/// row is the same size in all three states and nothing moves.
+/// Stated rather than inherited, since transcribing draws a `span` where the
+/// other two states draw buttons — without a floor the row would collapse to
+/// the height of a line of text the moment the model starts, so the composer
+/// jumps and then jumps back a second later.
 const ROW_H = "h-7";
 
 /// Dictation, in whichever of its three shapes applies.
@@ -39,23 +39,30 @@ export default function DictateControl({
 }) {
   if (state === "transcribing") {
     return (
-      // The orb alone, no label. "Transcribing" was here and lasted about as
-      // long as it took to read — on a short phrase the model answers in well
-      // under a second, so the word appeared and vanished as a flash. The orb
-      // says the same thing without asking to be read.
+      // The stop button again, with the tick swapped for a spinner. Recording's
+      // rightmost control is where the press just landed, so keeping the same
+      // filled circle in the same place says the app is working on what was
+      // asked rather than that the control went away.
       //
-      // Boxed to the button's own 28px so swapping in and out of this state
-      // moves nothing, and *scaled* to fill it: `OrbSize` is 20 or 64 and
-      // nothing between, so the 28px this row wants can only be reached by
-      // drawing the 20 and transforming it. A transform rather than a width,
-      // since the orb sizes its own canvas from the prop.
-      <div
-        className={cn("flex w-7 items-center justify-center", ROW_H)}
+      // A `span` carrying the button's own classes, not a disabled `Button`:
+      // there is nothing to press, and `disabled` would dim the fill to half
+      // for a state that lasts under a second — a flicker, not information.
+      //
+      // `pointer-events-none` is what takes the hover and press states back off
+      // it. Those ride along with the fill, and a shape that lightens under the
+      // cursor is promising a click that does nothing.
+      <span
+        className={cn(
+          buttonVariants({ size: "icon-sm" }),
+          "pointer-events-none rounded-full",
+          ROW_H,
+        )}
+        role="status"
         aria-label="Transcribing"
         aria-live="polite"
       >
-        <Orb state="solving" size={20} aria-hidden style={{ transform: "scale(1.4)" }} />
-      </div>
+        <Spinner />
+      </span>
     );
   }
 

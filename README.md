@@ -101,20 +101,30 @@ attribution, which is why it is the only row here.
 
 ## Transcription
 
-Dictation in the composer is local, and it stands on
-[Handy](https://github.com/cjpais/Handy) by [CJ Pais](https://cjpais.com) — MIT.
-Handy is a privacy-focused speech-to-text app that got there first and got it
-right, and Dray runs on the engine crates its author publishes separately:
+Dictation in the composer is local, and it runs on
+[transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — MIT, the
+`transcribe-cpp` crate, which executes the GGUF model and is Metal-accelerated
+on Apple Silicon.
 
-| Crate | Does |
-| ----- | ---- |
-| [transcribe-cpp](https://crates.io/crates/transcribe-cpp) | Runs the GGUF model, Metal-accelerated on Apple Silicon |
-| [transcribe-rs](https://github.com/cjpais/transcribe-rs) | The ONNX half of the same family, not currently used here |
+That engine is its own repository under the `handy-computer` org, published and
+licensed separately from the app below, and Dray depends on it the ordinary way
+through Cargo. Updates arrive as crate versions; **nothing here tracks the Handy
+app, because none of it is vendored.**
+
+The debt is to [Handy](https://github.com/cjpais/Handy) by
+[CJ Pais](https://cjpais.com) — MIT — the privacy-focused speech-to-text app
+that got there first and got it right, and the reason that engine exists at all.
+Two files are taken from it directly: the dictation sounds, below.
 
 The models are the `handy-computer` org's own GGUF conversions, fetched from
 Hugging Face and pinned to a revision
 (`apps/desktop/src-tauri/src/transcription/catalog.rs`). Weights are CC-BY-4.0
 and carry their base models' own terms.
+
+The two dictation sounds are Handy's own marimba pair, copied verbatim from its
+repository under its MIT licence
+(`apps/desktop/src/assets/dictate-{start,stop}.wav`). They are the only Handy
+files in this tree.
 
 **What Dray did not take is the app.** Handy solves global hotkeys, injecting
 text into whatever window has focus, a tray and a history — none of which Dray

@@ -120,9 +120,10 @@ pub async fn transcription_status() -> Result<TranscriptionStatus, String> {
 
 /// Downloads a model, and selects it if nothing is selected yet.
 ///
-/// Selecting is what makes one download enough to start dictating. Only where
-/// the slot is *empty*, never replacing a working choice — a reader adding a
-/// second model to compare has not asked to switch to it.
+/// Selecting is what makes one download enough to start dictating. Two things
+/// it never does: replace a working choice — a reader adding a second model to
+/// compare has not asked to switch to it — or select a download that was
+/// called off.
 #[tauri::command]
 pub async fn download_transcription_model(
     app: AppHandle,
@@ -130,9 +131,16 @@ pub async fn download_transcription_model(
 ) -> Result<(), String> {
     let model = catalog::find(&model_id).ok_or_else(|| format!("unknown model \"{model_id}\""))?;
 
-    download::download(&app, model)
+    let outcome = download::download(&app, model)
         .await
         .map_err(|e| e.to_string())?;
+
+    // A cancel answers `Ok`, since it is what the reader asked for — but it
+    // wrote no file, so selecting here would point the setting at a model that
+    // is not on disk.
+    if outcome == download::Downloaded::Cancelled {
+        return Ok(());
+    }
 
     // Re-read rather than checking before the download: it takes minutes, and
     // the reader may have selected something else in the meantime.
