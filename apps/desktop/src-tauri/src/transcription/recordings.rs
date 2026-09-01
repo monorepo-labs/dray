@@ -179,10 +179,15 @@ fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         let body = at + 8;
 
         if id == b"data" {
-            // Clamped rather than refused, deliberately. A file shorter than
-            // its header claims is one a killed process left half-written, and
-            // this whole feature exists to get a reader's words back — most of
-            // a dictation beats an error saying the file was untidy.
+            // Clamped rather than refused, deliberately: a kept recording that
+            // is damaged or cut short between the failure and the retry still
+            // holds most of what was said, and this whole feature exists to get
+            // a reader's words back. Most of a dictation beats a refusal.
+            //
+            // Not a crash-recovery path, whatever the shape suggests — a file a
+            // killed process left behind is unreachable anyway, since the only
+            // handle on it is `savedAudio` in React memory and nothing goes
+            // looking for orphans at startup.
             let end = (body + len).min(bytes.len());
             return Ok(bytes[body..end]
                 .chunks_exact(2)
@@ -294,10 +299,10 @@ mod tests {
         assert_eq!(back.len(), samples.len());
     }
 
-    /// A file cut short mid-write answers with the audio that survived rather
-    /// than an error. Pinned because it is a judgement, not an oversight: this
-    /// feature exists to give a reader their words back, and most of a
-    /// dictation beats a refusal.
+    /// A file cut short answers with the audio that survived rather than an
+    /// error. Pinned because it is a judgement, not an oversight: this feature
+    /// exists to give a reader their words back, and most of a dictation beats
+    /// a refusal.
     #[test]
     fn a_truncated_file_yields_what_is_there() {
         let mut wav = encode(&[0.5; 100]);
