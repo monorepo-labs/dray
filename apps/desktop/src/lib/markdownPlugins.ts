@@ -26,11 +26,48 @@ const HARDEN = [
   { ...hardenDefaults, linkBlockPolicy: "text-only", imageBlockPolicy: "text-only" },
 ];
 
+/// The block `rehypeTableCells` puts inside every table cell, and the hook
+/// `Markdown` hangs the cell's width cap on. The name is spelled again in
+/// `Markdown`'s class list — Tailwind only reads literal class strings, so the
+/// two cannot share the constant.
+export const TABLE_CELL_CLASS = "dray-table-cell";
+
+/// Wraps each table cell's content in one block, so a width cap has an element
+/// it actually works on. A wide table is meant to scroll in its wrapper, not
+/// squeeze — but with no cap at all, one long-prose cell runs its whole
+/// paragraph out on a single line. The cap cannot sit on the cell: min/max
+/// width on a `td` is undefined in auto table layout and WebKit ignores it,
+/// where a block child is ordinary block layout, whose `max-width` clamps the
+/// column the cell measures out to.
+function rehypeTableCells() {
+  return (tree: HastNode) => wrapCells(tree);
+}
+
+export function wrapCells(node: HastNode) {
+  if (node.tagName === "th" || node.tagName === "td") {
+    node.children = [
+      {
+        type: "element",
+        tagName: "div",
+        properties: { className: [TABLE_CELL_CLASS] },
+        children: node.children ?? [],
+      },
+    ];
+    return;
+  }
+  for (const child of node.children ?? []) {
+    if (child.type === "element") wrapCells(child);
+  }
+}
+
 /// Streamdown's own rehype pipeline, with harden told to block a link by
-/// unwrapping it rather than by annotating the text around it.
+/// unwrapping it rather than by annotating the text around it, and every table
+/// cell given the block its width cap rides on. Cell wrapping sits after
+/// sanitize, which would otherwise strip the block it adds; harden stays last.
 export const REHYPE_PLUGINS = [
   defaultRehypePlugins.raw,
   defaultRehypePlugins.sanitize,
+  rehypeTableCells,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];
 
@@ -184,6 +221,7 @@ export function walk(node: HastNode) {
 export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   defaultRehypePlugins.raw,
   defaultRehypePlugins.sanitize,
+  rehypeTableCells,
   rehypeFilePaths,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];
