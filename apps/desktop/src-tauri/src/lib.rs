@@ -698,6 +698,10 @@ pub fn run() {
                 if let Err(e) = store::backfill_removed_worktrees().await {
                     eprintln!("[worktree backfill err] {e}");
                 }
+                // Dictations kept past a failure. Pruning on write alone left
+                // the last one on disk forever, since nothing else sweeps them
+                // and a reader who gives up after one failure writes no more.
+                transcription::recordings::prune().await;
             });
 
             // Orchestration is a side channel: a socket that won't bind must

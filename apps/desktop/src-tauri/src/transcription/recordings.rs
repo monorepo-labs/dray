@@ -66,13 +66,29 @@ pub async fn save(samples: &[f32]) -> Result<PathBuf> {
 /// The path arrives from the frontend, so it is checked rather than trusted —
 /// this command opens a file and hands its contents to a model, and the
 /// directory is the only thing that says which files it may.
+///
+/// **Both sides are canonicalized, and comparing the lexical parent is not
+/// enough.** `..` is caught either way, but a symlink *inside* the directory
+/// pointing anywhere on disk passes a lexical check while resolving somewhere
+/// this has no business reading — and the contents would then be transcribed
+/// into the reader's draft. Resolving first is what makes the boundary the
+/// directory rather than the spelling of the path.
 pub async fn read(path: &Path) -> Result<Vec<f32>> {
-    let home = dir().await?;
-    if path.parent() != Some(home.as_path()) {
+    let home = fs::canonicalize(dir().await?).await?;
+    let real = fs::canonicalize(path)
+        .await
+        .with_context(|| format!("{} is not there any more", path.display()))?;
+
+    // `is_file` as well as the parent: a directory or a device node under this
+    // directory is not a recording, and reading one is not a thing to attempt.
+    let ours = real.parent() == Some(home.as_path())
+        && fs::metadata(&real).await.is_ok_and(|m| m.is_file());
+
+    if !ours {
         bail!("{} is not a saved recording", path.display());
     }
 
-    let bytes = fs::read(path)
+    let bytes = fs::read(&real)
         .await
         .with_context(|| format!("could not read {}", path.display()))?;
 
@@ -89,10 +105,12 @@ pub async fn discard(path: &Path) {
 
 /// Deletes recordings older than [`RETAIN`].
 ///
-/// Run on write rather than at startup, since that is the one moment something
-/// is definitely being added — and a reader who never dictates again should not
-/// have the app tidying up behind them for nothing.
-async fn prune() {
+/// Run at startup as well as on write, and the startup half is the one that
+/// makes the retention true rather than nearly true: pruning on write alone
+/// leaves the *last* failed recording on disk forever, since the sweep that
+/// would clear it only runs when another one is written. A reader who gives up
+/// on dictation after one failure is exactly who keeps that file.
+pub async fn prune() {
     let Ok(home) = dir().await else { return };
     let Ok(mut entries) = fs::read_dir(&home).await else {
         return;
@@ -161,6 +179,10 @@ fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         let body = at + 8;
 
         if id == b"data" {
+            // Clamped rather than refused, deliberately. A file shorter than
+            // its header claims is one a killed process left half-written, and
+            // this whole feature exists to get a reader's words back — most of
+            // a dictation beats an error saying the file was untidy.
             let end = (body + len).min(bytes.len());
             return Ok(bytes[body..end]
                 .chunks_exact(2)
@@ -223,5 +245,75 @@ mod tests {
     #[test]
     fn rubbish_is_not_read_as_audio() {
         assert!(decode(b"not a wav at all").is_err());
+    }
+
+    /// Splices a chunk in ahead of `fmt `, so everything after it is found only
+    /// if the walk advanced by the right amount.
+    fn with_leading_chunk(id: &[u8; 4], body: &[u8], samples: &[f32]) -> Vec<u8> {
+        let tail = encode(samples);
+        let mut wav = tail[..12].to_vec();
+
+        wav.extend(id);
+        wav.extend((body.len() as u32).to_le_bytes());
+        wav.extend(body);
+        if body.len() % 2 == 1 {
+            wav.push(0); // the pad byte, which the length does not count
+        }
+        wav.extend(&tail[12..]);
+
+        // The size field counts everything after it, and the walk does not read
+        // it — but a fixture that lies about its own length is one nobody can
+        // trust a later failure against.
+        let size = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&size.to_le_bytes());
+
+        wav
+    }
+
+    /// The pad byte is the trap: an odd chunk length does not count it, so a
+    /// walk that trusts the length alone lands one byte into every later chunk
+    /// and finds no `data` at all.
+    #[test]
+    fn an_odd_length_chunk_does_not_shift_the_walk() {
+        let samples = [0.5, -0.5, 0.25];
+
+        let back = decode(&with_leading_chunk(b"JUNK", b"odd", &samples)).expect("decodes");
+
+        assert_eq!(back.len(), samples.len());
+        assert!((back[0] - 0.5).abs() < 1e-4);
+    }
+
+    /// The even case has no pad byte, so adding one would break it just as
+    /// surely — both halves of the rule need a witness.
+    #[test]
+    fn an_even_length_chunk_does_not_shift_the_walk() {
+        let samples = [0.5, -0.5];
+
+        let back = decode(&with_leading_chunk(b"LIST", b"even", &samples)).expect("decodes");
+
+        assert_eq!(back.len(), samples.len());
+    }
+
+    /// A file cut short mid-write answers with the audio that survived rather
+    /// than an error. Pinned because it is a judgement, not an oversight: this
+    /// feature exists to give a reader their words back, and most of a
+    /// dictation beats a refusal.
+    #[test]
+    fn a_truncated_file_yields_what_is_there() {
+        let mut wav = encode(&[0.5; 100]);
+        wav.truncate(wav.len() - 100);
+
+        assert_eq!(decode(&wav).expect("decodes").len(), 50);
+    }
+
+    /// A header naming a chunk longer than the file must not panic on the
+    /// slice, which is the same clamp read from the other side.
+    #[test]
+    fn a_data_length_past_the_end_is_survivable() {
+        let mut wav = encode(&[0.5; 4]);
+        let len = wav.len();
+        wav[len - 12..len - 8].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        assert_eq!(decode(&wav).expect("decodes").len(), 4);
     }
 }

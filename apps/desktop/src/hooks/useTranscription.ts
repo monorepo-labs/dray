@@ -231,10 +231,6 @@ export function useRecorder<T>({
     if (inFlight.current) return;
     inFlight.current = true;
     handlers.current.onMessage(null);
-    // Talking again is the reader answering the offer to retry the last one, so
-    // the kept recording stops being on offer here rather than when it is
-    // eventually overwritten.
-    setSavedAudio(null);
     // Read *before* the await, not after. `liveTarget` moves with the reader,
     // and the IPC below is a real gap — switching sessions inside it pinned the
     // session arrived at rather than the one spoken from, which is the exact bug
@@ -259,6 +255,12 @@ export function useRecorder<T>({
       // Committed only once the mic is actually open, so a refusal leaves the
       // previous recording's target alone.
       pinnedTarget.current = spokenFrom;
+      // And leaves the kept recording on offer, for the same reason. Talking
+      // again is the reader answering that offer — but a press that never
+      // opened the microphone is not talking again, and clearing it above the
+      // refusals took Retry off screen with the file still on disk, in the one
+      // case (`needsModel`) where the retry is the whole point.
+      setSavedAudio(null);
       setState("recording");
       // After the refusals, never before: a tone that plays and is then
       // followed by "Dray needs microphone access" has already told the reader
