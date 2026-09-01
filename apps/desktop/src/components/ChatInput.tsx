@@ -30,13 +30,14 @@ import {
   slashQuery,
 } from "@/lib/slash";
 import { cn } from "@/lib/utils";
-import type { FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
+import type { Attachment, FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
 
 type ChatInputProps = {
-  /// `attachmentPaths` is what the tray held, as absolute paths. The backend
-  /// re-reads each one — nothing but paths crosses the bridge, so a pinned
-  /// screenshot is never uploaded twice.
-  onSend: (message: string, attachmentPaths: string[]) => void;
+  /// `attachments` is what the tray held. Only paths cross the bridge — the
+  /// backend re-reads each one, so a pinned screenshot is never uploaded twice —
+  /// but a prompt that ends up *queued* is drawn from these, rather than having
+  /// its paths described a second time.
+  onSend: (message: string, attachments: Attachment[]) => void;
   /// What the `/` picker offers. Empty until the backend's probe lands, and
   /// empty forever if it failed — the picker simply never opens, and a command
   /// typed by hand still works, since the CLI parses the text either way.
@@ -383,6 +384,9 @@ export default function ChatInput({
     // Takes back the newest prompt still waiting on the CLI.
     if (onCancelQueued && queuedCount > 0) {
       const before = message;
+      // The attachments come back with it, pinned by `onCancelQueued` itself —
+      // synchronously, so an Enter straight after this cannot send the sentence
+      // without them.
       void onCancelQueued().then((cancelled) => {
         if (!cancelled) return;
         setMessage(before ? `${before}\n${cancelled.text}` : cancelled.text);
@@ -489,10 +493,7 @@ export default function ChatInput({
     const command = parseSlashCommand(trimmed);
     if (command) recordCommand(command.name);
 
-    onSend(
-      trimmed,
-      attachments.map((a) => a.path),
-    );
+    onSend(trimmed, attachments);
     setMessage("");
     clearAttachments(sessionId);
   };
@@ -676,13 +677,8 @@ export default function ChatInput({
               // shadow: a shadow under a dark card falls on something already
               // darker than itself, and the card is glass there, so being lighter
               // than the page does not draw the box on its own.
-              //
-              // The focus hairline is not part of that trade and stays in both:
-              // a shadow can say "above" and cannot say "focused". The resting
-              // border keeps its width in light and spends only its colour, so
-              // focus swaps a value and reflows nothing.
               !isNewTask &&
-                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl focus-within:border-hairline-strong",
+                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl",
             )}
           >
             {/* Covers the card rather than replacing anything, so the text and

@@ -410,26 +410,35 @@ fn fork_title(parent: &str) -> String {
     format!("{}…{SUFFIX}", truncated.trim_end())
 }
 
-/// A worktree name no tree and no session has claimed. Wider than
-/// [`resolve_worktree_name`] on purpose, and every caller wants the wider one: a
-/// fork's tree is not created until its first send, so its name lives only in the
-/// index until then. Resolving against disk alone lets anything else drawing a
-/// name — another fork, or an ordinary new worktree session — take one a pending
-/// fork is already holding, and that fork's `-w` then fails against the tree the
-/// other one made. Permanently, since the name is on its index entry by then and
-/// every retry redraws the same one.
+/// A worktree name no tree, no session and no branch has claimed. Wider than
+/// [`resolve_worktree_name`] on purpose, and every caller wants the wider one.
 ///
-/// Only 16³ names exist, so this is not the vanishing odds it looks like.
+/// The index, because a fork's tree is not created until its first send, so its
+/// name lives only there until then. Resolving against disk alone lets anything
+/// else drawing a name — another fork, or an ordinary new worktree session — take
+/// one a pending fork is already holding, and that fork's `-w` then fails against
+/// the tree the other one made. Permanently, since the name is on its index entry
+/// by then and every retry redraws the same one.
+///
+/// Branches, because a settled session frees its name everywhere but there: the
+/// `worktree-<name>` branch stays on `origin` after its PR lands, and the PR tab
+/// looks a session up by that branch, so a redrawn name opened onto somebody
+/// else's merged PR. A stale local branch is the same one rung down — `-B`
+/// reuses it silently.
+///
+/// Every landed PR retires a name for good, so the pool drains; 32³ of them is
+/// what keeps that slow.
 pub async fn resolve_unclaimed_worktree_name(
     project_path: &str,
     requested: Option<&str>,
 ) -> Result<String> {
-    let claimed: Vec<String> = list_session_index_items()
+    let mut claimed: Vec<String> = list_session_index_items()
         .await?
         .into_iter()
         .filter(|i| i.project_path == project_path)
         .filter_map(|i| i.worktree_name)
         .collect();
+    claimed.extend(crate::git::worktree_branch_names(project_path).await);
 
     // A name the user asked for is answered, never silently swapped — so a
     // collision here is an error rather than a redraw.
@@ -494,32 +503,42 @@ pub fn worktree_path(project_path: &str, name: &str) -> String {
         .into_owned()
 }
 
-const ADJECTIVES: [&str; 16] = [
+const ADJECTIVES: [&str; 32] = [
     "amber", "brisk", "calm", "dusky", "eager", "fleet", "gentle", "hazy", "ivory", "jolly",
-    "keen", "lucid", "mellow", "noble", "opal", "quiet",
+    "keen", "lucid", "mellow", "noble", "opal", "quiet", "rapid", "sunny", "tidy", "vivid",
+    "witty", "young", "zesty", "bold", "crisp", "deft", "fair", "glad", "humble", "kind",
+    "lively", "merry",
 ];
 
-const COLORS: [&str; 16] = [
+const COLORS: [&str; 32] = [
     "azure", "bronze", "crimson", "denim", "emerald", "fuchsia", "gold", "hazel", "indigo", "jade",
-    "khaki", "lilac", "maroon", "navy", "olive", "plum",
+    "khaki", "lilac", "maroon", "navy", "olive", "plum", "rose", "sage", "teal", "umber",
+    "violet", "wheat", "coral", "cobalt", "ochre", "pearl", "ruby", "slate", "topaz", "cream",
+    "mint", "peach",
 ];
 
-const NOUNS: [&str; 16] = [
+const NOUNS: [&str; 32] = [
     "atlas", "beacon", "cedar", "delta", "ember", "fjord", "grove", "harbor", "isle", "jetty",
-    "kite", "lantern", "meadow", "nimbus", "orchard", "pebble",
+    "kite", "lantern", "meadow", "nimbus", "orchard", "pebble", "quarry", "ridge", "summit",
+    "tundra", "valley", "willow", "yarrow", "zephyr", "bay", "canyon", "dune", "falcon",
+    "glacier", "heron", "inlet", "lagoon",
 ];
 
-/// Three-word name from v7 UUID entropy — avoids a `rand` dependency, and
-/// collisions only matter against worktrees that already exist on disk.
+/// Three-word name from v7 UUID entropy — avoids a `rand` dependency. List
+/// lengths stay powers of two so `% len` on a byte draws every word evenly.
+///
+/// Bytes 13–15 only: `uuid` fills bytes 6–11 with a monotonic counter that is
+/// reseeded once per millisecond, so a redraw loop running inside one drew the
+/// same adjective and colour every time and varied nothing but the noun.
 fn random_worktree_name() -> String {
     let bytes = Uuid::now_v7().into_bytes();
-    let pick = |i: usize, list: &[&'static str; 16]| list[(bytes[i] as usize) % list.len()];
+    let pick = |i: usize, list: &[&'static str; 32]| list[(bytes[i] as usize) % list.len()];
 
     format!(
         "{}-{}-{}",
-        pick(8, &ADJECTIVES),
-        pick(10, &COLORS),
-        pick(12, &NOUNS)
+        pick(13, &ADJECTIVES),
+        pick(14, &COLORS),
+        pick(15, &NOUNS)
     )
 }
 
@@ -1217,6 +1236,19 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A redraw loop runs inside one millisecond, where v7's counter bytes hold
+    /// still — so the name must be drawn from the random tail, or every retry
+    /// keeps the same adjective and colour. 16 draws over 1024 prefixes all
+    /// agreeing by chance is 1024⁻¹⁵.
+    #[test]
+    fn fast_redraws_vary_every_word() {
+        let prefixes: std::collections::HashSet<String> = (0..16)
+            .map(|_| random_worktree_name())
+            .map(|n| n.rsplit_once('-').unwrap().0.to_string())
+            .collect();
+        assert!(prefixes.len() > 1, "only drew {prefixes:?}");
+    }
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     /// A field a *newer* build wrote has to survive being read and written back

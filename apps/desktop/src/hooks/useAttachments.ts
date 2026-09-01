@@ -89,3 +89,17 @@ export function useAttachments(sessionId: string | null): Attachment[] {
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }
+
+/// Pins attachments already described — what a cancelled prompt hands back.
+/// Synchronous, unlike `addAttachmentPaths`, since these need no describing.
+/// Appended and deduped like a drop, because whatever is pinned now is the
+/// user's too.
+export function restoreAttachments(sessionId: string | null, attachments: Attachment[]) {
+  if (!attachments.length) return;
+
+  const current = bySession.get(sessionId) ?? EMPTY;
+  const fresh = attachments.filter((a) => !current.some((b) => b.path === a.path));
+  if (!fresh.length) return;
+
+  write(sessionId, [...current, ...fresh]);
+}

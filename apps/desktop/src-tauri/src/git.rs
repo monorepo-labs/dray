@@ -81,6 +81,47 @@ pub async fn list_branches(cwd: &str) -> Result<BranchList> {
     })
 }
 
+/// Every `worktree-<name>` branch this repo knows of, local and remote-tracking,
+/// with the prefix stripped. A settled worktree frees its name in the index and
+/// on disk, but the branch it minted stays on `origin` and often locally too —
+/// and both the PR tab and the sidebar marks look a session's PR up by branch
+/// name, so a redrawn name inherits the old branch's pull request. No fetch is
+/// needed: pushing from a linked worktree writes the remote-tracking ref in this
+/// same repo. A stale one after a remote delete over-claims, the safe direction.
+pub async fn worktree_branch_names(cwd: &str) -> Vec<String> {
+    match git(
+        cwd,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"],
+    )
+    .await
+    {
+        Some(raw) => parse_worktree_branch_names(&raw),
+        None => Vec::new(),
+    }
+}
+
+/// Only a branch named exactly `worktree-<name>` claims — `fix/worktree-x` is
+/// no PR key for `x` and must not drain the pool. The remote is stripped by
+/// its first segment, so any remote counts, not only `origin`. A remote whose
+/// own name holds a slash (`git remote add a/b …` is legal) is read as a nested
+/// branch and claims nothing; being exact there costs a `git remote` read on
+/// every session creation, for a shape Dray never pushes to.
+fn parse_worktree_branch_names(raw: &str) -> Vec<String> {
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("refs/heads/").or_else(|| {
+                line.strip_prefix("refs/remotes/")
+                    .and_then(|rest| rest.split_once('/'))
+                    .map(|(_, branch)| branch)
+            })
+        })
+        .filter_map(|branch| branch.strip_prefix("worktree-"))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The ref a `-w` worktree forks from. Mirrors the CLI's own resolution, which
 /// reads `origin/HEAD` and falls back through `origin/main` then `origin/master`
 /// — so the composer names the same commit the CLI will actually use.
@@ -1603,6 +1644,18 @@ fn is_stale_worktree_error(stderr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Local and remote-tracking `worktree-*` branches both claim their name;
+    /// every other ref is ignored, nested ones included, and the remote need
+    /// not be `origin`.
+    #[test]
+    fn worktree_branch_names_come_from_both_ref_spaces() {
+        let raw = "refs/heads/main\nrefs/heads/worktree-jolly-gold-cedar\nrefs/heads/fix/worktree-amber-jade-kite\nrefs/heads/fix/pr-tab-survives-worktree-delete\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/main\nrefs/remotes/origin/worktree-calm-navy-isle\nrefs/remotes/origin/fix/worktree-amber-jade-kite\nrefs/remotes/fork/worktree-keen-plum-kite\nrefs/remotes/origin/worktree-\nrefs/tags/worktree-tagged\n";
+        assert_eq!(
+            parse_worktree_branch_names(raw),
+            vec!["jolly-gold-cedar", "calm-navy-isle", "keen-plum-kite"]
+        );
+    }
 
     // The verbatim reason `claude -p --worktree` leaves behind, captured from
     // v2.1.239 — a `-p` run never releases it, so this is the string almost

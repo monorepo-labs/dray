@@ -818,6 +818,25 @@
   opacity: 1;
 }
 
+/* MarkdownTable's scroll box, horizontal-only. `overflow-y: auto` here feeds
+   itself under classic scrollbars: the horizontal bar eats interior height,
+   the table no longer fits, and a vertical bar appears for exactly one
+   scrollbar's worth of scroll. The box has no max-height, so there is never
+   anything real to scroll vertically — hidden costs nothing and ends the
+   loop. Same overlay treatment as the sidebar: thin, invisible until the
+   cursor is over the table. */
+.md-table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.md-table-scroll:hover {
+  scrollbar-color: color-mix(in oklab, var(--color-muted-foreground) 35%, transparent)
+    transparent;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
