@@ -18,7 +18,13 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label.** Copy tweak, doc, prompt wording, config — label keep review bot off diff with nothing to find. Add at open (`gh pr create --label no-review`), since review fire on open. Anything touching behaviour = no label.
 
-**Open PR as draft, then spawn Codex reviewer.** `dray new --harness codex --effort medium --from <this session's id>`, briefed with issue, change and PR url — push first, since `--from` carry committed work only. It report through `dray send`; you fix and push until nothing left, then mark ready. `no-review` PR skip both.
+**Default road = work → draft PR → Codex reviewer → talk to it till nothing left → mark ready.** Reaching work you judge done, take that road without being told. Open draft, then `dray new --harness codex --effort medium --from <this session's id>`, briefed with issue, change and PR url — push first, since `--from` carry committed work only. It report through `dray send`; you answer on same channel, fix and push, until it find nothing. Then ready.
+
+**Reader saying "open a PR" = ready PR, no reviewer.** Their word for it mean work already good to go in their judgement, so `gh pr create` with no `--draft` and nobody spawned. That the one instruction outranking road above.
+
+**Draft = the ask for review, so the two never part.** Draft with no reviewer leave PR sitting unready for nothing; reviewer on ready PR review work already declared done. Never one without other.
+
+**Be smart about which change earn that road.** Two-line copy fix, a class removed, a tooltip dropped — review there cost reader a session to read and delete and find nothing worth the turn. Real change, anything touching behaviour or spanning files, take it. Wrong call fixable either way: unasked reviewer = noise, missed one = they ask.
 
 **One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
 
