@@ -76,12 +76,15 @@ impl TranscriptionModel {
 
 /// Every model on offer, in the order the settings tab draws them.
 ///
-/// Ordered English-first, then by how many languages each adds. The reader who
-/// only ever dictates in one language should not have to read past three
-/// multilingual models to find that out, and the reader who needs a second
-/// language is looking for exactly the thing the ordering sorts on. It also
-/// puts the two Whispers together at the end, where the choice between them is
-/// the ordinary size-against-accuracy one.
+/// Ordered by what most readers should pick, best first: English-only Parakeet,
+/// then Nemotron as the multilingual answer, then Canary for hardware that
+/// cannot carry either. The two Whispers sit together at the end, where the
+/// choice between them is the ordinary size-against-accuracy one.
+///
+/// Nemotron above Canary despite being three times the download: a reader
+/// scanning for a second language is reading for the *count*, and stopping at
+/// four when twenty-eight sits below it is the wrong answer to the question
+/// they came with.
 pub const MODELS: &[TranscriptionModel] = &[
     TranscriptionModel {
         id: "parakeet-unified-en-0.6b",
@@ -97,19 +100,6 @@ pub const MODELS: &[TranscriptionModel] = &[
         accuracy: 90,
     },
     TranscriptionModel {
-        id: "canary-180m-flash",
-        name: "Canary 180M Flash",
-        description: "Tiny and instant. Runs well on any hardware.",
-        repo: "handy-computer/canary-180m-flash-gguf",
-        revision: "b147f9dc52b59f0998e410540a84727bd86457fd",
-        filename: "canary-180m-flash-Q8_0.gguf",
-        size_bytes: 218_447_552,
-        sha256: "e13c7f5d0952b056a027cfffec13e3a3a134d1608babed24f983568f141e297c",
-        languages: "English, German, Spanish, French",
-        speed: 98,
-        accuracy: 88,
-    },
-    TranscriptionModel {
         id: "nemotron-3.5-asr-streaming-0.6b",
         name: "Nemotron Streaming 3.5",
         description: "Fast, and the only one here that handles two languages in one sentence.",
@@ -121,6 +111,19 @@ pub const MODELS: &[TranscriptionModel] = &[
         languages: "28 languages",
         speed: 84,
         accuracy: 82,
+    },
+    TranscriptionModel {
+        id: "canary-180m-flash",
+        name: "Canary 180M Flash",
+        description: "Tiny and instant. Runs well on any hardware.",
+        repo: "handy-computer/canary-180m-flash-gguf",
+        revision: "b147f9dc52b59f0998e410540a84727bd86457fd",
+        filename: "canary-180m-flash-Q8_0.gguf",
+        size_bytes: 218_447_552,
+        sha256: "e13c7f5d0952b056a027cfffec13e3a3a134d1608babed24f983568f141e297c",
+        languages: "English, German, Spanish, French",
+        speed: 98,
+        accuracy: 88,
     },
     TranscriptionModel {
         id: "whisper-small",

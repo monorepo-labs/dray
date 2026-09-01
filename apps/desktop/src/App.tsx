@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -1118,9 +1119,17 @@ function App() {
             <DictateControl
               state={recorder.state}
               level={recorder.level}
+              savedAudio={recorder.savedAudio}
               onStart={() => void recorder.start()}
               onStop={() => void recorder.stop()}
               onCancel={() => void recorder.cancel()}
+              onRetry={() => void recorder.retry()}
+              // Reveals rather than opens: the reader asking for the file wants
+              // to keep it, play it, or send it on, and Finder is the one place
+              // all three are reachable. Same reasoning `pickFileOpener` gives.
+              onReveal={() =>
+                recorder.savedAudio && void revealItemInDir(recorder.savedAudio)
+              }
             />
           }
           queuedCount={queuedMessages.length}

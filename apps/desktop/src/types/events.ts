@@ -1543,16 +1543,17 @@ export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: 
 /**
  * What a stop answers with.
  *
- * Three of these are outcomes rather than errors because the frontend *acts*
- * on each — opens settings, points at System Settings, says nothing — where an
- * error string could only be shown.
+ * Every one of these is an outcome rather than an error, because the frontend
+ * *acts* on each — opens settings, points at System Settings, offers a retry,
+ * says nothing — where an error string could only be shown. `Failed` escaped
+ * that rule for a while, and it took the recording down with it.
  *
  * `NoAudio` earns its place the hard way: macOS answers a process without
  * microphone permission with a stream of **silence** rather than a refusal, so
  * the first build of this transcribed zeros to an empty string and did nothing
  * at all, which reads exactly like a broken model.
  */
-export type TranscribeOutcome = { "kind": "text", "value": string } | { "kind": "needsModel" } | { "kind": "noAudio" } | { "kind": "empty" };
+export type TranscribeOutcome = { "kind": "text", "value": string } | { "kind": "needsModel", "value": { audioPath: string | null, } } | { "kind": "noAudio" } | { "kind": "empty" } | { "kind": "failed", "value": { message: string, audioPath: string | null, } };
 
 /**
  * One downloadable model.

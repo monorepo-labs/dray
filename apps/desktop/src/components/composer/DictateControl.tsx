@@ -1,4 +1,4 @@
-import { Check, Mic, X } from "lucide-react";
+import { Check, FolderOpen, Mic, RotateCcw, X } from "lucide-react";
 
 import AudioVisualizer from "@/components/composer/AudioVisualizer";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -27,15 +27,24 @@ const ROW_H = "h-7";
 export default function DictateControl({
   state,
   level,
+  savedAudio,
   onStart,
   onStop,
   onCancel,
+  onRetry,
+  onReveal,
 }: {
   state: RecorderState;
   level: number;
+  /// Where a run that could not answer left the audio, or `null` where the last
+  /// one landed. Its presence is the whole condition for the retry pair — the
+  /// backend only hands a path back when there is a file behind it.
+  savedAudio: string | null;
   onStart: () => void;
   onStop: () => void;
   onCancel: () => void;
+  onRetry: () => void;
+  onReveal: () => void;
 }) {
   if (state === "transcribing") {
     return (
@@ -124,7 +133,7 @@ export default function DictateControl({
     );
   }
 
-  return (
+  const mic = (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
@@ -146,5 +155,53 @@ export default function DictateControl({
         </KbdGroup>
       </TooltipContent>
     </Tooltip>
+  );
+
+  if (!savedAudio) return mic;
+
+  // A run that could not answer left the audio on disk, so the words are still
+  // recoverable and the offer to recover them belongs here — beside the control
+  // that produced them, not in the error line above, which is shared with git
+  // and the CLI and says what happened rather than what can be done about it.
+  //
+  // The mic keeps its place at the end: talking again is still the primary
+  // action, and pressing it is what retires this pair.
+  return (
+    <div className={cn("flex items-center gap-1", ROW_H)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onReveal}
+            aria-label="Show the recording"
+            className="rounded-full text-muted-foreground"
+          >
+            <FolderOpen strokeWidth={2} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Show the recording</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* Filled, like the stop it stands in for: of the controls on this
+              row it is the one carrying the press the reader already made. */}
+          <Button
+            type="button"
+            size="icon-sm"
+            onClick={onRetry}
+            aria-label="Transcribe the recording again"
+            className="rounded-full"
+          >
+            <RotateCcw strokeWidth={2.5} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Transcribe again</TooltipContent>
+      </Tooltip>
+
+      {mic}
+    </div>
   );
 }
