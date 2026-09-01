@@ -7,9 +7,9 @@
 //! a truncated GGUF loads far enough to produce garbage rather than an error.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -123,6 +123,34 @@ fn is_cancelled(model_id: &str) -> bool {
         .is_some_and(|ids| ids.contains(model_id))
 }
 
+/// One running download per model, so a restart cannot race the task it is
+/// restarting.
+///
+/// The window is real and small: cancelling drops the settings row's progress
+/// entry **on the click**, before the backend has stopped, so Download is
+/// offered again while the old task still sits awaiting its next chunk. Pressing
+/// it cleared the shared cancel flag before the old task ever read it, leaving
+/// two writers on one `.part` — and since each hasher is fed from its *own*
+/// network stream rather than from the file, the interleaved result can pass
+/// verification at exactly the right size and be renamed into place as a model
+/// that loads far enough to produce garbage.
+///
+/// A per-model lock rather than a refusal: the second press is a reasonable
+/// thing to do, and it only has to *wait*. The old task observes the flag at its
+/// next chunk and releases, which is why the flag is cleared after the lock is
+/// taken and not before.
+static IN_FLIGHT: Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = Mutex::new(None);
+
+fn in_flight_slot(model_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    IN_FLIGHT
+        .lock()
+        .expect("in-flight set poisoned")
+        .get_or_insert_with(HashMap::new)
+        .entry(model_id.to_string())
+        .or_default()
+        .clone()
+}
+
 /// Asks a running download to stop. Harmless where none is.
 ///
 /// Cooperative rather than aborting the task: the stream loop owns a half-written
@@ -166,10 +194,17 @@ pub enum Downloaded {
 /// mid-download leaves a `.part` to be overwritten and nothing that
 /// [`is_installed`] would believe.
 pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<Downloaded> {
+    // Held for the whole download. A restart blocks here until the task it is
+    // restarting has seen its cancel flag and gone, which is what keeps the
+    // `.part` to one writer.
+    let slot = in_flight_slot(model.id);
+    let _running = slot.lock().await;
+
     let path = model_path(model).await?;
     let part = path.with_extension("part");
 
-    // Clears a flag left by a previous cancel, so starting again actually runs.
+    // After the lock, never before: clearing it while the previous task is still
+    // reading it is exactly the race the lock exists to close.
     cancel_flag(model.id, false);
 
     let result = stream_to(app, model, &part).await;

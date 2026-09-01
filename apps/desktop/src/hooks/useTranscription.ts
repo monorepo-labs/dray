@@ -185,6 +185,15 @@ export function useRecorder<T>({
   // The copy taken when recording began, which is what `onText` is given.
   const pinnedTarget = useRef(target);
 
+  // Claimed synchronously, because `state` only moves once the IPC it is waiting
+  // on resolves — so two ⌘D presses inside that gap both read `idle` and both
+  // start. The backend replaces the first recording with the second, and whose
+  // response lands last decides which target the surviving stream is filed
+  // under. Cancel has the same shape from the other side: it sets `idle` before
+  // its own call resolves, so a start pressed in that window can be killed by
+  // the cancel it preceded.
+  const inFlight = useRef(false);
+
   // Polled rather than pushed: a level is only interesting *now*, so a missed
   // reading should be a dropped frame and not a queued event arriving late.
   useEffect(() => {
@@ -210,6 +219,8 @@ export function useRecorder<T>({
   }, [state]);
 
   const start = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     handlers.current.onMessage(null);
     // Read *before* the await, not after. `liveTarget` moves with the reader,
     // and the IPC below is a real gap — switching sessions inside it pinned the
@@ -243,10 +254,14 @@ export function useRecorder<T>({
     } catch (e) {
       console.error("could not start recording", e);
       handlers.current.onMessage(String(e));
+    } finally {
+      inFlight.current = false;
     }
   }, []);
 
   const stop = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setState("transcribing");
 
     try {
@@ -280,6 +295,7 @@ export function useRecorder<T>({
       handlers.current.onMessage(String(e));
     } finally {
       setState("idle");
+      inFlight.current = false;
     }
   }, []);
 
@@ -287,9 +303,16 @@ export function useRecorder<T>({
   /// cancelling has to be a separate control from stopping — not a second
   /// meaning for the same one.
   const cancel = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setState("idle");
     handlers.current.onMessage(null);
-    await invoke("cancel_transcription").catch(() => {});
+
+    try {
+      await invoke("cancel_transcription").catch(() => {});
+    } finally {
+      inFlight.current = false;
+    }
   }, []);
 
   /// What the button and the shortcut both do: start, or finish.
