@@ -1429,6 +1429,14 @@ Several things deliberately unfinished — don't mistake for bugs:
 
   Tray = state, not control: [useAttachments](apps/desktop/src/hooks/useAttachments.ts) = module-level store keyed by session, same shape and reasoning as [useDraft](apps/desktop/src/hooks/useDraft.ts). Have second reason too: `+` button live in `ComposerToolbar`, which reach `ChatInput` as opaque `ReactNode`, so two cannot pass props and share this instead.
 
+  **Queued prompt carry paths, so queued row describe them itself.** Resolution happen at flush, so cancel hand composer back exactly what was typed — which leave `QueuedMessage.attachmentPaths` as raw path and nothing drawable. `useAttachmentsByPath` read them through same `read_attachments` tray use, cached module-level by path and **budgeted by bytes** for `useChanges`' reason twice over: entry carry whole base64 preview, so count cap measure wrong thing and no cap grow ~6.7MB per accepted screenshot for life of process. Cache = the answer, always; state hold only counter saying answer may have changed. Holding attachment *in* state let them go stale for good — read abandoned on key change still populate cache, so coming back to that key found state holding empty answer it mounted with while effect saw everything cached and stood down.
+
+  **Image reach `ImageRow` on `url`, never `path`.** Asset protocol's scope = exactly `~/.dray/attachments`, and archived copy written at flush — so queued attachment still name where reader picked it from and `convertFileSrc` resolve it to nothing. Backend's own `data:` preview stand in until delivery.
+
+  **Queued file draw nothing, deliberately.** Delivered bubble have no tile for one either: file's whole appearance there = `@path` mention `attachments::prepare` append **at flush**, so it not yet in queued text either. Tile here would be swapped for prose moment message land, which = one shape change this row exist not to make. Cost = queued file invisible until delivery; smaller of two.
+
+  **Cancel put paths back in tray, synchronously where cached.** Esc restore text at once, so Enter pressed straight after would otherwise send that sentence without its file — and file then arrive in tray attached to whatever get typed next. `addAttachmentPaths` therefore write cached entry *before* its await; composer's own read = what fill that cache, so cancelled prompt's path always in it.
+
   **Drop target = window, affordance = card.** Tauri intercept native drop before webview see it, so no HTML drag events to bind — `onDragDropEvent` only source, and it report paths not `File` handles, what backend wanted anyway. Window-wide because file aimed at composer under full transcript otherwise have to hit 60px strip.
 
   **Picture a tool hand back.** `Read` of `.png` come back as `image` content block and nothing else — no text — so before this row said "Read /tmp/shot.png" and had nothing to open. Most common way it happen = agent take screenshot itself.

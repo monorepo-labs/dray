@@ -12,17 +12,17 @@ import type { Attachment, ImageRef, QueuedMessage } from "@/types/events";
 /// transcript proper the moment the backend hands it to the CLI, which arrives
 /// as an ordinary `user_message` and retires the row drawn here.
 ///
-/// Deliberately the same bubble `UserMessage` uses, dimmed rather than
-/// restyled — it is the same message a moment early, and giving it its own
-/// shape would read as a different kind of thing.
+/// Deliberately the same bubble and the same image row `UserMessage` uses,
+/// dimmed rather than restyled — it is the same message a moment early, and
+/// giving it its own shape would read as a different kind of thing.
 export default function QueuedMessages({ messages }: { messages: QueuedMessage[] }) {
   if (!messages.length) return null;
 
   return (
     <div className="flex flex-col items-end gap-1.5">
       {messages.map((message, i) => (
-        // One component per row rather than a `map` in place: each has its own
-        // paths to describe, and a hook cannot be called in a loop.
+        // A component per row, because each has its own paths to resolve and a
+        // hook cannot be called in a loop.
         <QueuedRow
           key={message.id}
           message={message}
@@ -45,17 +45,13 @@ function QueuedRow({ message, hint }: { message: QueuedMessage; hint: boolean })
   return (
     <div className="flex w-full flex-col items-end gap-1">
       {/* Dimmed as one, so what was attached waits at the same strength as the
-          sentence it was attached to. The hint below stays outside it: that is
-          the app talking, not the message. */}
+          sentence it was attached to. The hint is outside it: that is the app
+          talking, not the message. */}
       <div className="flex w-full flex-col items-end gap-1.5 opacity-55">
-        {/* The delivered bubble's own row, in its own place — above the text,
-            growing from the same edge. Reused rather than restated so a picture
-            cannot sit one way waiting and another way sent. */}
         <ImageRow images={imagesOf(attachments)} variant="sent" align="end" />
 
-        {/* Guarded like the delivered bubble's, and now that it has to be: a
-            prompt can be an attachment and nothing else, where an empty bubble
-            under the picture is a grey box saying nothing. */}
+        {/* Guarded like the delivered bubble's: a prompt can be an attachment
+            and nothing else. */}
         {body && (
           <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
             {/* Same bubble, same break rule — see `UserMessage`. */}
@@ -87,19 +83,11 @@ function QueuedRow({ message, hint }: { message: QueuedMessage; hint: boolean })
 }
 
 /// The pictures among the attachments, in the shape the delivered bubble's row
-/// takes.
+/// takes. A file draws nothing — see CLAUDE.md.
 ///
-/// Through `url` and never `path`: the asset protocol's scope is exactly
-/// `~/.dray/attachments`, and these still point at wherever the user picked them
-/// from — the copy under that directory is written at flush, so a path handed to
-/// `convertFileSrc` here resolves to nothing. The preview the backend read for
-/// the composer's tray stands in until then.
-///
-/// Anything that is not a picture draws nothing, deliberately. The delivered
-/// bubble has no tile for one either: a file is handed to the model as an
-/// `@path` mention appended to the prompt, which `attachments::prepare` writes
-/// at flush and not before. A tile here would be swapped for a line of prose the
-/// moment the message landed, which is the one thing this row exists not to do.
+/// Through `url` and never `path`: the archived copy the asset protocol's scope
+/// allows is written at flush, so these still name where the user picked them
+/// from and `convertFileSrc` would resolve one to nothing.
 function imagesOf(attachments: Attachment[]): ImageRef[] {
   return attachments.flatMap((attachment) =>
     attachment.isImage && attachment.preview

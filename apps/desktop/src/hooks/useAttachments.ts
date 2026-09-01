@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -24,7 +24,21 @@ const listeners = new Set<() => void>();
 /// the composer already dedupes on. Never invalidated: an attachment is a
 /// reading of a file taken when the user picked it, and the row that reads one
 /// back is drawing what they attached rather than what the file says now.
+///
+/// Budgeted by bytes rather than count, for `useChanges`' reason and against a
+/// worse failure: an entry carries the image's whole base64 preview, so a count
+/// cap would be measuring the wrong thing entirely and no cap at all grows by
+/// ~6.7MB per accepted screenshot for as long as the app runs.
 const byPath = new Map<string, Attachment>();
+
+/// Enough for a handful of images at the API's own 5MB ceiling and hundreds of
+/// ordinary screenshots. Matching `useChanges`' budget so the two caches cost
+/// the same to reason about.
+const PREVIEW_BYTES_BUDGET = 32 << 20;
+
+let previewBytes = 0;
+
+const sizeOf = (attachment: Attachment) => (attachment.preview?.length ?? 0) + 1;
 
 // One frozen array for every empty key. `useSyncExternalStore` re-renders on any
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
@@ -41,7 +55,27 @@ function subscribe(listener: () => void) {
 }
 
 function remember(attachments: Attachment[]) {
-  for (const attachment of attachments) byPath.set(attachment.path, attachment);
+  for (const attachment of attachments) {
+    const prev = byPath.get(attachment.path);
+    if (prev) {
+      previewBytes -= sizeOf(prev);
+      byPath.delete(attachment.path);
+    }
+    // Re-inserting moves the key to the end, so iteration order is least- to
+    // most-recently written and the first key is the one to drop.
+    byPath.set(attachment.path, attachment);
+    previewBytes += sizeOf(attachment);
+  }
+
+  // `> 1` so a single over-budget entry is kept rather than evicted the moment
+  // it lands — half a cache beats none.
+  while (previewBytes > PREVIEW_BYTES_BUDGET && byPath.size > 1) {
+    const oldest = byPath.keys().next().value;
+    if (oldest === undefined) break;
+    previewBytes -= sizeOf(byPath.get(oldest)!);
+    byPath.delete(oldest);
+  }
+
   return attachments;
 }
 
@@ -54,12 +88,25 @@ function write(sessionId: string | null, next: Attachment[]) {
 /// Describes each path in the backend and pins the ones that can be attached.
 /// Deduped on path, so dropping the same screenshot twice pins one — the path is
 /// the identity, and a second copy of one file says nothing the first didn't.
+/// Anything already described lands **before** the await, and taking a prompt
+/// back off the queue is why. Esc restores the text synchronously, so an Enter
+/// pressed straight after it would otherwise send that sentence without the
+/// files it was queued with — and they would then appear in the tray, attached
+/// to whatever the user typed next. The composer's own read is what fills the
+/// cache, so a cancelled prompt's paths are always in it and that window closes
+/// entirely; a path nothing has described has no synchronous answer to give.
 export async function addAttachmentPaths(sessionId: string | null, paths: string[]) {
   const current = bySession.get(sessionId) ?? EMPTY;
   const fresh = paths.filter((path) => !current.some((a) => a.path === path));
   if (!fresh.length) return;
 
-  const added = remember(await invoke<Attachment[]>("read_attachments", { paths: fresh }));
+  const known = fromCache(fresh);
+  if (known.length) write(sessionId, [...current, ...known]);
+
+  const missing = fresh.filter((path) => !byPath.has(path));
+  if (!missing.length) return;
+
+  const added = remember(await invoke<Attachment[]>("read_attachments", { paths: missing }));
   if (!added.length) return;
 
   // Re-read rather than closing over `current`: the dialog and the reads above
@@ -126,26 +173,34 @@ function fromCache(paths: string[]): Attachment[] {
 /// later mount asks again rather than remembering a gap.
 export function useAttachmentsByPath(paths: string[]): Attachment[] {
   const key = paths.join("\0");
-  const [read, setRead] = useState(() => ({ key, attachments: fromCache(paths) }));
+  // Bumped when a read lands. The cache above is the answer, always — this only
+  // says the answer may have changed for a key that has not itself changed.
+  // Holding the attachments in state instead let them go stale for good: a read
+  // abandoned on a key change still populates the cache, so coming back to that
+  // key found state holding the empty answer it was mounted with while the
+  // effect saw everything cached and stood down.
+  const [landed, setLanded] = useState(0);
 
   useEffect(() => {
-    const wanted = key ? key.split("\0") : [];
+    const wanted = split(key);
     if (wanted.every((path) => byPath.has(path))) return;
 
     let live = true;
     void describeUncached(wanted).then(() => {
-      if (live) setRead({ key, attachments: fromCache(wanted) });
+      if (live) setLanded((n) => n + 1);
     });
     return () => {
       live = false;
     };
   }, [key]);
 
-  // Taken from the cache during render rather than only in the effect above:
-  // state alone leaves one frame of the previous prompt's pictures sitting
-  // under this one's text.
-  return read.key === key ? read.attachments : fromCache(paths);
+  // Memoized so the row is handed the same array while nothing has changed, and
+  // read during render rather than in the effect: state alone leaves one frame
+  // of the previous prompt's pictures sitting under this one's text.
+  return useMemo(() => fromCache(split(key)), [key, landed]);
 }
+
+const split = (key: string) => (key ? key.split("\0") : []);
 
 async function describeUncached(paths: string[]) {
   const missing = paths.filter((path) => !byPath.has(path));
