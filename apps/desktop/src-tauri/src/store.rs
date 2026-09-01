@@ -1302,7 +1302,7 @@ pub async fn record_parse_failure(
     Ok(())
 }
 
-/// Tail-reads the log's last line to continue its `seq` counter on resume.
+/// Reads the log's highest `seq` to continue its counter on resume.
 pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
     let path = get_session_path(session_id).await?;
 
@@ -1312,15 +1312,30 @@ pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
         Err(e) => return Err(e).context("could not read session file"),
     };
 
-    let seq = match buf.lines().next_back() {
-        Some(v) => {
-            let json: Value = serde_json::from_str(v)?;
-            json.get("seq").and_then(|s| s.as_u64()).unwrap_or(0)
-        }
-        None => 0,
-    };
+    Ok(max_seq(&buf).map_or(0, |seq| seq + 1))
+}
 
-    Ok(seq + 1)
+/// The highest `seq`, never the last line's: a Claude Code subagent's events
+/// carry their *own* sequence restarting at 0 and are persisted into this same
+/// log, so a log settling on one restarted the whole session at 0 and every
+/// later event sorted above the entire history.
+///
+/// Every line counts, subagent or not. Codex numbers all of its through the
+/// main counter, so filtering those out would hand a live `seq` out twice —
+/// where over-counting only ever leaves a gap, and nothing reads `seq` but
+/// comparison. The max also heals a log already written the broken way. A line
+/// that will not parse is skipped, since refusing to resume over one is worse
+/// than the gap.
+fn max_seq(buf: &str) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct SeqLine {
+        seq: u64,
+    }
+
+    buf.lines()
+        .filter_map(|line| serde_json::from_str::<SeqLine>(line).ok())
+        .map(|line| line.seq)
+        .max()
 }
 
 /// Path to a session's `.jsonl` log under the sessions dir.
@@ -2068,5 +2083,38 @@ mod tests {
             json.get("indexItem").is_none(),
             "must stay flat for the generated TS type"
         );
+    }
+
+    /// The two harnesses number subagents differently and one rule has to serve
+    /// both. Claude Code restarts a subagent at 0 in this same log, so reading
+    /// the last line reset a resumed session to 0 and every event after sorted
+    /// above the whole history — the transcript looked like the reply had never
+    /// arrived. Codex numbers its subagent lines through the main counter, so
+    /// skipping them would hand the same `seq` out twice.
+    #[test]
+    fn resumes_past_a_subagent_that_settled_last() {
+        let claude = concat!(
+            r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
+            "\n",
+            r#"{"seq":0,"subagent":{"id":"toolu_1","label":null},"payload":{"type":"subagent_completed"}}"#,
+            "\n",
+        );
+
+        assert_eq!(max_seq(claude), Some(41));
+
+        let codex = concat!(
+            r#"{"seq":41,"subagent":null,"payload":{"type":"turn_completed"}}"#,
+            "\n",
+            r#"{"seq":42,"subagent":{"id":"t_1","label":null},"payload":{"type":"subagent_completed"}}"#,
+            "\n",
+        );
+
+        assert_eq!(
+            max_seq(codex),
+            Some(42),
+            "Codex numbers a subagent line through the main counter"
+        );
+
+        assert_eq!(max_seq(""), None);
     }
 }

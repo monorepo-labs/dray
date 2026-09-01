@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, UNSET_MODEL, usableModel } from "./model";
+import {
+  DEFAULT_MODEL_FOR,
+  HARNESS_ORDER,
+  isUnsetModel,
+  nextHarness,
+  rememberedModel,
+  UNSET_MODEL,
+  usableModel,
+} from "./model";
 import type { Model } from "@/types/events";
 
 const model = (id: string): Model =>
@@ -89,5 +97,28 @@ describe("the unset model", () => {
   /// that discovers its list lands.
   it("stands while the list is empty", () => {
     expect(usableModel([], UNSET_MODEL, "pi")).toBe(UNSET_MODEL);
+  });
+
+  /// A pick pi cannot run falls to "let pi decide", never to the head of the
+  /// list. The head is a model the reader never starred, and it reached the
+  /// spawn as a `--model` nobody asked for — with nothing on screen saying the
+  /// remembered pick had been replaced.
+  it("is where a pick pi cannot run falls, not the head of the list", () => {
+    expect(usableModel(CLAUDE, "gpt55" as never, "pi")).toBe(UNSET_MODEL);
+  });
+});
+
+describe("nextHarness", () => {
+  /// Toggling between two was written when there were two, and silently never
+  /// reached the third. The chord steps the picker's own row instead.
+  it("steps through every harness in the picker's order and wraps", () => {
+    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi"]);
+    expect(nextHarness("claude_code")).toBe("codex");
+    expect(nextHarness("codex")).toBe("pi");
+    expect(nextHarness("pi")).toBe("claude_code");
+  });
+
+  it("parks an unknown harness on the first", () => {
+    expect(nextHarness("other" as never)).toBe("claude_code");
   });
 });
