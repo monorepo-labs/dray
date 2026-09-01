@@ -1,8 +1,11 @@
 //! Loading a model and running audio through it.
 //!
-//! The engine is [`transcribe-cpp`](https://crates.io/crates/transcribe-cpp) —
-//! MIT, by CJ Pais, and the same one [Handy](https://github.com/cjpais/Handy)
-//! runs on. It covers the whole GGUF family behind one type, so Whisper,
+//! The engine is [`transcribe-cpp`](https://github.com/handy-computer/transcribe.cpp)
+//! — MIT, `Copyright (c) 2026 The transcribe.cpp authors`. Its own repository
+//! and its own notice, published separately from the
+//! [Handy](https://github.com/cjpais/Handy) app that made it; crediting it to
+//! Handy names the wrong holder. It covers the whole GGUF family behind one
+//! type, so Whisper,
 //! Parakeet and Canary all load through the same call and this module needs no
 //! per-architecture branch.
 //!

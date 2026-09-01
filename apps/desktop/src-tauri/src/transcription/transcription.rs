@@ -290,8 +290,12 @@ pub async fn stop_transcription(
 ) -> Result<TranscribeOutcome, String> {
     let recording = state.recording.lock().await.take();
 
+    // Not `Text("")`, which the frontend takes as success: it plays the closing
+    // tone and appends nothing, which is the one shape every other outcome here
+    // exists to prevent. Unreachable through the UI, since stop is only drawn
+    // while recording — but the command is public and this is the honest answer.
     let Some(recording) = recording else {
-        return Ok(TranscribeOutcome::Text(String::new()));
+        return Ok(TranscribeOutcome::Empty);
     };
 
     let Some(audio) = recording.finish().map_err(|e| e.to_string())? else {

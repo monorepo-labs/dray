@@ -211,6 +211,11 @@ export function useRecorder<T>({
 
   const start = useCallback(async () => {
     handlers.current.onMessage(null);
+    // Read *before* the await, not after. `liveTarget` moves with the reader,
+    // and the IPC below is a real gap — switching sessions inside it pinned the
+    // session arrived at rather than the one spoken from, which is the exact bug
+    // pinning exists to stop, just through a smaller window.
+    const spokenFrom = liveTarget.current;
 
     try {
       const refusal = await invoke<{ kind: string } | null>("start_transcription");
@@ -227,9 +232,9 @@ export function useRecorder<T>({
         return;
       }
 
-      // Taken here and nowhere else: this is the last moment that is
-      // unambiguously "where the reader was when they started speaking".
-      pinnedTarget.current = liveTarget.current;
+      // Committed only once the mic is actually open, so a refusal leaves the
+      // previous recording's target alone.
+      pinnedTarget.current = spokenFrom;
       setState("recording");
       // After the refusals, never before: a tone that plays and is then
       // followed by "Dray needs microphone access" has already told the reader

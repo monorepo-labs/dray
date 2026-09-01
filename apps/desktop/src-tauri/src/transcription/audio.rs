@@ -84,6 +84,9 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 /// device is feeding us something" from "a device is feeding us nothing".
 const SILENCE_PEAK: f32 = 1e-4;
 
+/// Seconds of capture the buffer is sized for up front. See `Recording::start`.
+const PREALLOC_SECS: usize = 60;
+
 /// A capture in flight. Dropping it stops the stream.
 pub struct Recording {
     stream: cpal::Stream,
@@ -119,7 +122,15 @@ impl Recording {
 
         let channels = config.channels();
         let rate = config.sample_rate().0;
-        let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+        // Preallocated, and that is about the realtime callback rather than
+        // speed. `extend` on a growing `Vec` reallocates by doubling, and each
+        // one memcpys the whole buffer *on the audio thread* — at 48kHz stereo
+        // the later copies run to tens of megabytes, which is a dropout, which
+        // is a word the reader has to notice is missing. A minute of headroom
+        // covers dictation; past it the doubling resumes, no worse than before.
+        let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
+            rate as usize * channels as usize * PREALLOC_SECS,
+        )));
         let peak = Arc::new(AtomicU32::new(0));
 
         let sink = Arc::clone(&samples);

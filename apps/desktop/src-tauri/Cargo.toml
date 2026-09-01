@@ -61,8 +61,8 @@ reqwest = { version = "0.12", default-features = false, features = [
   "stream",
 ] }
 
-# Local speech-to-text. The engine is `transcribe-cpp` (MIT, CJ Pais), the same
-# one https://github.com/cjpais/Handy runs on; `cpal` captures the microphone
+# Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp
+# authors") — its own repo, not the Handy app's; `cpal` captures the microphone
 # and `rubato` resamples it to the 16kHz mono every model here expects. Audio
 # never leaves the machine. See transcription/.
 cpal = "0.16"
