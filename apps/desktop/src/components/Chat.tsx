@@ -22,12 +22,12 @@ import {
 } from "@/components/ui/tooltip";
 import { ChatCwdContext } from "@/hooks/useChatCwd";
 import { useHotkey } from "@/hooks/useHotkey";
-import type { ApiRetryState, StreamingBlock, Working } from "@/hooks/useSessions";
+import type { ApiRetryState, QueuedPrompt, StreamingBlock, Working } from "@/hooks/useSessions";
 import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
-import type { QueuedMessage, SessionSnapshot } from "@/types/events";
+import type { SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
   session: SessionSnapshot | null;
@@ -68,7 +68,7 @@ type ChatProps = {
   /// Prompts typed into the running turn that the app has not handed to the CLI
   /// yet. Rendered here rather than built from the log, because a held prompt is
   /// deliberately unpersisted until it is delivered.
-  queuedMessages?: QueuedMessage[];
+  queuedMessages?: QueuedPrompt[];
   /// Both side panes are open, so the pane is at its narrowest and the rail sits
   /// close to the text. Passed in rather than measured here: the shell owns those
   /// two toggles, and the rail overlays the transcript at every width anyway — so

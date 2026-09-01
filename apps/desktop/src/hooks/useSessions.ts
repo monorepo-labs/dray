@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
 import {
@@ -14,9 +15,26 @@ import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
+
+/// A held prompt and what it was sent with.
+///
+/// The attachments ride the queue entry rather than a store beside it, because
+/// they have exactly its lifetime: one state write both queues the prompt and
+/// gives the row something to draw, and one removal releases both. Held apart —
+/// an imperative map pruned from an effect over this state — a prune still
+/// pending from an earlier queue could flush *after* the attachments were
+/// stashed and delete them before the row that wanted them ever mounted.
+///
+/// Resolved, not paths, and that is the point: `QueuedMessage.attachmentPaths`
+/// is deliberately unresolved so a cancel hands back what the user typed, so
+/// the row would otherwise have to describe them a second time.
+export type QueuedPrompt = {
+  message: QueuedMessage;
+  attachments: Attachment[];
+};
 
 /// A stretch where the agent is busy and the transcript has nothing to show —
 /// a request in flight, or a thinking block, which Claude Code streams as an
@@ -126,7 +144,14 @@ export function useSessions() {
     // `Session`, which is the authority; this copy exists so the composer can
     // draw them. Nothing is persisted on either side, so both die with the
     // process and neither can come back stale.
-    const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedMessage[]>>({});
+    const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedPrompt[]>>({});
+
+    // Read across the cancel's await, so it comes from a ref rather than the
+    // closure's copy — the rule `sessionsRef` follows. Assigned during render
+    // and not in an effect, which would leave it a render behind.
+    const queuedRef = useRef(queuedBySession);
+    queuedRef.current = queuedBySession;
+
     // sessionId → the request ids of the consent cards and questionnaires the
     // agent is standing still behind. Ids rather than a count, so the
     // `permission_decided` that retires one clears the right one when two are
@@ -279,8 +304,12 @@ const upsertSession = (snapshot: SessionSnapshot) =>
 
 const handleSendMsg = async (
   message: string,
-  attachmentPaths: string[] = [],
+  // Resolved, not paths, and only because a queued prompt needs them: the row
+  // that draws it is handed these rather than describing its paths a second
+  // time. The wire still takes paths alone.
+  attachments: Attachment[] = [],
 ) => {
+  const attachmentPaths = attachments.map((a) => a.path);
 
   let sessionId = selectedSessionId;
   const isNewSession = !sessionId;
@@ -357,7 +386,7 @@ const handleSendMsg = async (
       const queued = outcome.queued;
       setQueuedBySession((prev) => ({
         ...prev,
-        [sessionId]: [...(prev[sessionId] ?? []), queued],
+        [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
       }));
       applySentIssues();
       return;
@@ -419,9 +448,18 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
       setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
       return null;
     }
+    // What was attached goes back with the sentence it was attached to, or a
+    // cancel keeps the files silently — the tray was cleared on send and
+    // nothing else holds them. Synchronous, so an Enter pressed straight after
+    // Esc cannot send that sentence without them.
+    const held = (queuedRef.current[sessionId] ?? []).find(
+      (q) => q.message.id === cancelled.id,
+    );
+    if (held) restoreAttachments(sessionId, held.attachments);
+
     setQueuedBySession((prev) => ({
       ...prev,
-      [sessionId]: (prev[sessionId] ?? []).filter((m) => m.id !== cancelled.id),
+      [sessionId]: (prev[sessionId] ?? []).filter((q) => q.message.id !== cancelled.id),
     }));
     return cancelled;
   } catch (e) {
