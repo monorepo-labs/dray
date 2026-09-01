@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Check, Loader2 } from "lucide-react";
+import { Check } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,9 @@ type NoticeStackProps = {
   /// its PR tab. Selecting alone would land the reader on a transcript that
   /// says nothing about the pull request the card is about.
   onOpenPr: (sessionId: string) => void;
-  onDeleteWorktree: (sessionId: string) => Promise<boolean>;
+  /// Starts the removal, which answers nothing: git finishes in the background
+  /// and a refusal comes back as a card of its own.
+  onDeleteWorktree: (sessionId: string) => void;
 };
 
 /// What the button promises. Named for what the reader will do there rather
@@ -44,6 +46,11 @@ const ACTION: Record<NoticeKind, string> = {
   // the one irreversible thing in the app reachable by a stray click on a
   // notice nobody asked for.
   pr: "Review",
+  // Where the retry is. The step that clears the index entry is the last one,
+  // so a cleanup that stopped anywhere left the settled bar carrying its
+  // "Delete worktree" button — the card names the reason and this puts the
+  // reader back in front of the control that runs the rest.
+  "worktree-failed": "View",
 };
 
 /// The bar's colour, matching the rail mark the row will be wearing when the
@@ -63,6 +70,10 @@ const BAR: Record<NoticeKind, string> = {
   // colour to separate them would spend the palette on a distinction the label
   // already makes.
   pr: "bg-accent-add/70",
+  // The colour the offer wore, kept for the card that reports it did not go
+  // through: the two are the same deletion, and this one is the only place the
+  // reader learns it stopped part way.
+  "worktree-failed": "bg-destructive/70",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to
@@ -120,9 +131,12 @@ function NoticeCard({
   notice: Notice;
   isNext: boolean;
   onTake: () => void;
-  onDeleteWorktree: () => Promise<boolean>;
+  onDeleteWorktree: () => void;
 }) {
-  const [phase, setPhase] = useState<"idle" | "working" | "done">("idle");
+  // Two states, not three. There was a `working` one holding a spinner while
+  // git ran; the removal no longer waits, so the press goes straight to the
+  // answer and a refusal arrives later as its own card.
+  const [phase, setPhase] = useState<"idle" | "done">("idle");
   const [hovered, setHovered] = useState(false);
   const worktree = notice.kind === "worktree";
 
@@ -159,26 +173,27 @@ function NoticeCard({
     };
   }, [duration, notice.sessionId]);
 
-  // Nothing runs down while the reader is on the card or while the git work is
-  // in flight. `done` deliberately keeps running under the cursor: the reader
-  // just clicked this, and the pause exists to protect a button they are still
-  // reaching for — past that press there is no target left to protect, and a
-  // card waiting for the mouse to leave reads as stuck.
-  const frozen = phase === "working" || (hovered && phase === "idle");
+  // Nothing runs down while the reader is on the card. `done` deliberately
+  // keeps running under the cursor: the reader just clicked this, and the pause
+  // exists to protect a button they are still reaching for — past that press
+  // there is no target left to protect, and a card waiting for the mouse to
+  // leave reads as stuck.
+  const frozen = hovered && phase === "idle";
   useEffect(() => {
     if (frozen) timer.current?.pause();
     else timer.current?.play();
   }, [frozen, duration]);
 
-  const confirm = async () => {
-    setPhase("working");
-    if (await onDeleteWorktree()) {
-      setPhase("done");
-      return;
-    }
-    // The error banner already carries the reason, so the card leaves rather
-    // than sitting there implying the deletion is still going to happen.
-    dismissNotice(notice.sessionId, notice.kind);
+  // Said, not awaited — and "Deleted" is *optimistic*, deliberately. It reports
+  // a removal that is under way rather than one that has happened, which is the
+  // trade this whole surface now makes: the alternative is a spinner saying
+  // "still going" over three git commands, which is the click that reads as
+  // missed. Nothing the reader does from here changes the outcome, and a
+  // cleanup that fails comes back on a `worktree-failed` card, which exists to
+  // take this word back.
+  const confirm = () => {
+    onDeleteWorktree();
+    setPhase("done");
   };
 
   // ⌘D deletes without the trip to a 40px button, which is the whole point of
@@ -190,9 +205,10 @@ function NoticeCard({
   // A key of its own rather than more meaning on ⌘G: one chord that sometimes
   // navigates and sometimes destroys is the shape that burns someone once.
   // Guarded on `isNext` so a stack of cards has exactly one target, the same
-  // one ⌘G has, and on `idle` so a repeat press can't land mid-flight.
+  // one ⌘G has, and on `idle` so a repeat press cannot ask for the removal a
+  // second time while the card sits there saying it already happened.
   useHotkey("d", () => {
-    if (worktree && isNext && phase === "idle") void confirm();
+    if (worktree && isNext && phase === "idle") confirm();
   });
 
   return (
@@ -247,7 +263,6 @@ function NoticeCard({
               variant="ghost"
               size="xs"
               className="text-muted-foreground"
-              disabled={phase === "working"}
               onClick={() => dismissNotice(notice.sessionId, notice.kind)}
             >
               Skip
@@ -269,27 +284,17 @@ function NoticeCard({
             // card the reader did not ask for, it is the difference between a
             // button they read and one they click past.
             worktree && "bg-destructive text-white hover:bg-destructive/90",
-            // Full strength while the git work runs: the spinner and the verb
-            // are the state, and dimming them makes the one live thing on the
-            // card the hardest part of it to read.
-            "disabled:opacity-100",
             // Done is a statement, not a control. It keeps the fill so the card
             // doesn't reflow into a different shape at the moment the eye is on
             // it, and drops the pointer so nothing invites a second press.
             phase === "done" && "pointer-events-none",
           )}
-          disabled={phase === "working"}
-          onClick={worktree ? () => void confirm() : onTake}
+          onClick={worktree ? confirm : onTake}
         >
           {phase === "done" ? (
             <>
               <Check className="size-3.5" />
               Deleted
-            </>
-          ) : phase === "working" ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" />
-              Deleting…
             </>
           ) : (
             ACTION[notice.kind]
@@ -344,6 +349,10 @@ export default function NoticeStack({
   // Where a card leads, which is the same for the key and for the button. The
   // navigating kinds go somewhere and a worktree card only leaves: its Skip is
   // what this lands on, which is what keeps the key below non-destructive.
+  //
+  // `worktree-failed` navigates like the rest, and has to: it is the one card
+  // whose subject is a session the reader is being sent back to, where the
+  // button that tries the removal again still is.
   const take = (notice: Notice) => {
     dismissNotice(notice.sessionId, notice.kind);
     if (notice.kind === "pr") onOpenPr(notice.sessionId);

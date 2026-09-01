@@ -254,8 +254,9 @@ function App() {
 
   // Reads what the removal would cost *before* deciding whether to ask, so a
   // worktree that isn't there any more — deleted by hand, or by a `claude` run
-  // that had an exit prompt of its own — is tidied up silently. Asking about a
-  // directory the reader can no longer see is a question with one answer.
+  // that had an exit prompt of its own — is tidied up without a question.
+  // Asking about a directory the reader can no longer see is a question with
+  // one answer.
   //
   // `ask` is the whole difference between the two routes in. Settling raises a
   // notice that expires into "keep it", because the reader was doing something
@@ -279,7 +280,13 @@ function App() {
     }
 
     if (!disposition.exists) {
-      void removeWorktree(sessionId);
+      // Skipping the question is right either way — there is nothing left to
+      // weigh — but *who asked* still decides whether a failure is reported.
+      // The dialog route is a button the reader pressed and watched close, so
+      // a relocation that then fails has to say so, or that press is the click
+      // with nothing to show for it this whole change is about. Settling asked
+      // for nothing and hears nothing.
+      removeWorktree(sessionId, ask === "dialog" ? "asked" : "tidy");
       return;
     }
 

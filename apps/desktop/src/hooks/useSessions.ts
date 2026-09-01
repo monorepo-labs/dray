@@ -58,6 +58,13 @@ export type StreamingBlock = {
     callId: string | null,
 }
 
+/// Sessions whose worktree removal has been asked for and not refused.
+///
+/// Module-level rather than a ref because it guards a write to disk, not a
+/// render: nothing draws from it, and the one thing it has to survive is the
+/// composer remounting under a session switch while git is still working.
+const removingWorktrees = new Set<string>();
+
 export function useSessions() {
 
     // The sticky defaults. Live state below seeds from these and writes back on
@@ -733,22 +740,15 @@ const unlinkIssue = async (sessionId: string, key: string) => {
   }
 };
 
-// Deletes the worktree a session was running in, keeping the session. The
-// backend kills the child, removes the tree and its branch, and relocates the
-// index entry to the project root; the row is replaced from what it returns,
-// for the reason `setSessionFlags` above gives.
-//
-// The relocated item no longer carries a `worktreeName`, which is what retires
-// every control that offers this — the button disappears because the thing it
-// acted on is gone, rather than because anything tracks that it was pressed.
-const removeWorktree = async (sessionId: string): Promise<boolean> => {
-  let updated: SessionIndexItem;
-  try {
-    updated = await invoke<SessionIndexItem>("remove_session_worktree", { sessionId });
-  } catch (e) {
-    setError(String(e));
-    return false;
-  }
+// The half of the removal that can only run once git has answered: the
+// relocated entry, applied to both copies of the session.
+const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
+  // A retry that worked retires the card that reported the first attempt.
+  // Reachable without going through it: the failure leaves the settled bar's
+  // own button on screen, so the reader can press that instead of View, and
+  // the card would sit there for the rest of its fifteen seconds still saying
+  // the cleanup failed.
+  dismissNotice(sessionId, "worktree-failed");
 
   setSessionIndexItems((prev) =>
     prev.map((i) => (i.sessionId === sessionId ? updated : i)),
@@ -776,11 +776,101 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
   // A killed child leaves no `session_status`, so the sidebar would sit on
   // whatever it last saw — `in_progress` for a session that was mid-turn.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
+};
 
-  // Reported so the notice card can say "Deleted" and mean it. A failure has
-  // already reached the reader through the error banner, and the card retires
-  // itself rather than claiming something that didn't happen.
-  return true;
+// Takes back the "Deleted" the reader has already been shown.
+//
+// A card rather than the error banner, which is where this used to go and can
+// no longer carry it: that banner is drawn above the composer, and a settled
+// session draws the settled bar instead — so the one state this can be reached
+// from is the one state the banner is not on screen in.
+//
+// **It says the cleanup failed, not that the tree is still there**, and the
+// difference is the whole of the copy. The removal is a run of steps and any of
+// them can be the one that answers: git refusing leaves the directory, but the
+// index write is *last*, so a failure there is a tree already deleted and a
+// session that was never moved off it. Naming the outcome would mean naming
+// which step, which the backend does not report; naming the operation is true
+// of every one of them.
+//
+// `reason` is the backend's own sentence and the whole of the detail line — the
+// only thing that says which step this was. The button is the nearest thing to
+// a cure: the entry is only cleared by that last step, so the settled bar is
+// still carrying the control that runs the rest, whichever end it stopped at.
+const reportWorktreeFailure = (sessionId: string, title: string, reason: string) => {
+  pushNotice({
+    sessionId,
+    kind: "worktree-failed",
+    // The news, not an action: there is nothing here for the reader to decide,
+    // and a card that opened with a verb would be asking them to.
+    label: "Worktree cleanup failed",
+    subject: title,
+    detail: reason,
+  });
+};
+
+// Deletes the worktree a session was running in, keeping the session. The
+// backend kills the child, removes the tree and its branch, and relocates the
+// index entry to the project root; the row is replaced from what it returns,
+// for the reason `setSessionFlags` above gives.
+//
+// The relocated item no longer carries a `worktreeName`, which is what retires
+// every control that offers this — the button disappears because the thing it
+// acted on is gone, rather than because anything tracks that it was pressed.
+//
+// **Started, not awaited.** Unlocking the tree, removing it and deleting its
+// branch is three git commands over a directory that can be large, and both
+// callers have something better to say than "wait": the dialog closes and the
+// card goes to "Deleted". So this returns as soon as the work is under way,
+// and the two things that can only be known later — the relocated row, and a
+// refusal — arrive on their own.
+//
+// `origin` is who asked, and all it decides is whether a failure is reported.
+// `"asked"` means the reader pressed something — a button, a card, or one that
+// skipped its confirm because the tree had already gone — so they are owed the
+// answer, whether that is the close they saw or a card taking it back.
+// `"tidy"` is the app's own pass on settle over a worktree that was not there:
+// nothing was drawn and nothing was promised, and the session was pointing at a
+// missing directory before this ran, so a card would raise a state the reader
+// has never seen and cannot act on.
+const removeWorktree = (sessionId: string, origin: "asked" | "tidy" = "asked") => {
+  // A second press cannot be allowed through, and the window this opened is
+  // why. The row keeps its "Delete worktree" button until the write lands, so
+  // the same tree can be asked for twice — and the second call, arriving after
+  // the first relocated the entry, is refused with "that session is not running
+  // in a worktree". That is a cleanup that worked, reported to the reader as
+  // one that failed, which is the failure `merge_pr` re-reads the pull request
+  // to avoid.
+  //
+  // **Held for good on success, not until the promise settles.** Clearing it
+  // there looks equivalent and is a frame early: React schedules the re-render
+  // that retires the button, so the button outlives the guard by however long
+  // that takes to commit — which is the exact window above, still open. Nothing
+  // is leaked by keeping it, because `worktree_name` is written at creation and
+  // at fork and cleared in one place, so a session that has been relocated can
+  // never want this again.
+  if (removingWorktrees.has(sessionId)) return;
+  removingWorktrees.add(sessionId);
+
+  // Read now rather than on the way out: by the time a refusal lands the row
+  // may have moved, and the title is what says which session the card is about.
+  const title = sessionIndexItems.find((i) => i.sessionId === sessionId)?.title ?? "";
+
+  void invoke<SessionIndexItem>("remove_session_worktree", { sessionId })
+    // Two callbacks rather than `.then(…).catch(…)`, so the failure card can
+    // only ever report the backend refusing. Chained, a throw out of the write
+    // above would land in the same handler and be described as a cleanup that
+    // failed, when it was the one thing here that succeeded.
+    .then(
+      (updated) => applyWorktreeRemoval(sessionId, updated),
+      (e) => {
+        // Cleared only here. A failure is the one outcome that wants pressing
+        // again, and every other path leaves the entry claimed for good — see
+        // above for why that is the right length to hold it.
+        removingWorktrees.delete(sessionId);
+        if (origin === "asked") reportWorktreeFailure(sessionId, title, String(e));
+      },
+    );
 };
 
 // Copies a session onto a new id so it can be carried on in two directions at

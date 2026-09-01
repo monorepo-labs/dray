@@ -1057,6 +1057,15 @@ impl SessionManager {
         // go. `git worktree remove` by hand is the recovery. Failing the
         // delete instead would be worse — the session the user asked to be rid
         // of would still be there.
+        //
+        // Deliberately *not* covered by the card the frontend raises when
+        // [`remove_worktree`] above is refused. That card corrects a "Deleted"
+        // the reader was shown and sends them back to the session to try again;
+        // here they were shown nothing to correct, and the session it would be
+        // keyed to is the one being deleted — so it would be a card about a row
+        // that is gone, whose button leads nowhere. Saying this properly means
+        // naming the orphaned path with no session behind it, which is a
+        // channel of its own and not this one.
         if let Some(item) = get_session_index_item(session_id).await? {
             if let Err(e) = remove_session_worktree(&item).await {
                 eprintln!("could not remove worktree for {session_id}: {e}");

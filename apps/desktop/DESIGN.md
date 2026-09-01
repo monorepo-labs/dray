@@ -221,7 +221,21 @@ It only card with **two** button. Skip = answer card give itself when bar run ou
 
 Dialog get **no** such confirmation: it close, and enough else on screen already say so.
 
-Card also only one naming its subject, breaking `NoticeStack`'s own "verb and nothing else" rule on purpose — several card can stack, and "Settled" alone say nothing about which settle it answer for. Detail line say "its worktree", which reach directory through thing that own it. Title run to 60 char and card `w-fit`, so it capped and truncated with `title` attribute restoring rest. Dialog keep worktree name instead: it open from settled bar, where title already two inches away in header.
+**Neither route wait on git.** Unlock, remove, `branch -D` = three command over directory that can be large, and both surface used to sit through them — dialog unchanged, card spinning "Deleting…". Press now start work and answer straight away: dialog close, card go to its **Deleted** state. Reversal deliberate. Spinner said "still going" and nothing else, and dialog holding still through it read as click that missed.
+
+**"Deleted" therefore optimistic, and card exist to take it back.** `worktree-failed`, raised whatever window doing (like `pr`, opposite reason — reader already seen wrong answer). Detail = backend's own sentence, only thing saying which step stopped.
+
+**Label name operation, never outcome** — `Worktree cleanup failed`, not "not deleted". Removal = run of step and any can answer: git refusing leave directory, but index write come **last**, so failure there = tree already gone and session simply never moved off it. Which step reached not reported, so copy claiming state of disk wrong roughly half the time.
+
+Button = `View`, and it lead somewhere real for same reason: last step = one clearing index entry, so cleanup that stop anywhere leave settled bar still carrying its Delete worktree button. Reason on card, rest of run at end of button. Bar take destructive colour offer wore — same deletion, only place reader learn it stopped part way.
+
+**Card follow who asked, not what happened.** Worktree already gone skip question either way — nothing left to weigh — but settle's own pass raise nothing on failure (nothing drawn, nothing promised, session pointed at missing directory before it ran) where **button press still report**: reader watched that dialog close, so silence there = click with nothing to show for it, which whole thing this section exist to remove.
+
+Error banner cannot carry any of this and that not preference: banner draw above **composer**, settled session draw settled bar instead, so one state this reachable from = one state banner not on screen in.
+
+Failure inside session **delete** stay quiet, deliberately: card keyed to session about to stop existing, whose button lead nowhere. Naming orphaned path with no session behind it = channel of its own.
+
+Card name its subject — it and `worktree-failed` the only two that do — breaking `NoticeStack`'s own "verb and nothing else" rule on purpose — several card can stack, and "Settled" alone say nothing about which settle it answer for. Detail line say "its worktree", which reach directory through thing that own it. Title run to 60 char and card `w-fit`, so it capped and truncated with `title` attribute restoring rest. Dialog keep worktree name instead: it open from settled bar, where title already two inches away in header.
 
 **Counts _are_ warning, so dialog one step not two.** Sidebar's delete and PR panel's merge take second confirm precisely because they carry no such detail; adding one here make reader confirm sentence they already read. Destructive fill only where something actually lost — on clean tree this tidying up, and red make safe answer look like dangerous one.
 
