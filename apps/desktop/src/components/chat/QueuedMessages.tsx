@@ -1,8 +1,8 @@
 import ImageRow from "@/components/chat/ImageRow";
-import { queuedAttachments } from "@/hooks/useAttachments";
+import type { QueuedPrompt } from "@/hooks/useSessions";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { stripSenderPrefix } from "@/lib/relay";
-import type { Attachment, ImageRef, QueuedMessage } from "@/types/events";
+import type { Attachment, ImageRef } from "@/types/events";
 
 /// Prompts typed into the running turn that the app is still holding.
 ///
@@ -15,12 +15,12 @@ import type { Attachment, ImageRef, QueuedMessage } from "@/types/events";
 /// Deliberately the same bubble and the same image row `UserMessage` uses,
 /// dimmed rather than restyled — it is the same message a moment early, and
 /// giving it its own shape would read as a different kind of thing.
-export default function QueuedMessages({ messages }: { messages: QueuedMessage[] }) {
+export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] }) {
   if (!messages.length) return null;
 
   return (
     <div className="flex flex-col items-end gap-1.5">
-      {messages.map((message, i) => {
+      {messages.map(({ message, attachments }, i) => {
         // Same strip the delivered bubble makes: a relayed prompt waits here
         // carrying the line written for the receiving agent, and it must not
         // read one way queued and another way sent.
@@ -32,7 +32,7 @@ export default function QueuedMessages({ messages }: { messages: QueuedMessage[]
                 the sentence it was attached to. The hint is outside it: that is
                 the app talking, not the message. */}
             <div className="flex w-full flex-col items-end gap-1.5 opacity-55">
-              <ImageRow images={imagesOf(queuedAttachments(message.id))} variant="sent" align="end" />
+              <ImageRow images={imagesOf(attachments)} variant="sent" align="end" />
 
               {/* Guarded like the delivered bubble's: a prompt can be an
                   attachment and nothing else. */}

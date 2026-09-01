@@ -20,24 +20,6 @@ import type { Attachment } from "@/types/events";
 const bySession = new Map<string | null, Attachment[]>();
 const listeners = new Set<() => void>();
 
-/// What a held prompt was sent with, keyed by the queued message's id.
-///
-/// Handed over by the composer at send rather than resolved again from the
-/// message's paths, which is what keeps it exact: a queued row draws the very
-/// attachments the tray held, with no second read to fail, go stale, or answer
-/// asynchronously. `send_msg` is the only producer — a relayed `dray send`
-/// passes no attachments — so nothing else can queue a prompt this cannot
-/// describe.
-///
-/// Bounded by the queue itself, and deliberately by nothing else. An earlier
-/// version cached every described path under a byte budget, which is a cap on
-/// the wrong thing: eviction could drop an attachment a row was still drawing,
-/// and refetching it evicted another of the same message's own images, so a
-/// prompt carrying more than the budget could never draw all of it.
-/// [`retainQueuedAttachments`] prunes against the live queue instead, so an
-/// entry lives exactly as long as something can draw it.
-const byQueuedMessage = new Map<string, Attachment[]>();
-
 // One frozen array for every empty key. `useSyncExternalStore` re-renders on any
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
 // would loop forever.
@@ -108,39 +90,10 @@ export function useAttachments(sessionId: string | null): Attachment[] {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-/// Hands a held prompt's attachments over, at the moment the backend says it
-/// was queued. Written before the row that draws them exists, so the read below
-/// needs no subscription.
-export function holdQueuedAttachments(messageId: string, attachments: Attachment[]) {
-  if (attachments.length) byQueuedMessage.set(messageId, attachments);
-}
-
-/// Drops everything no longer queued. Driven off the queue rather than from each
-/// place one leaves it — delivery, cancel, a dropped queue and a deleted session
-/// are four, and a release stated four times is three chances to miss one.
-export function retainQueuedAttachments(messageIds: string[]) {
-  if (!byQueuedMessage.size) return;
-
-  const live = new Set(messageIds);
-  for (const id of byQueuedMessage.keys()) {
-    if (!live.has(id)) byQueuedMessage.delete(id);
-  }
-}
-
-/// What a queued prompt was sent with. Read during render, and safe to be a
-/// plain lookup: the entry is written before the message reaches the queue the
-/// row is drawn from, so there is no state here to subscribe to.
-export function queuedAttachments(messageId: string): Attachment[] {
-  return byQueuedMessage.get(messageId) ?? EMPTY;
-}
-
 /// Pins attachments already described — what a cancelled prompt hands back.
-///
-/// Synchronous, and that is the point: Esc restores the text at once, so an
-/// Enter pressed straight after would otherwise send that sentence without the
-/// files it was queued with, and they would land in the tray attached to
-/// whatever was typed next. Appended and deduped like a drop, since whatever is
-/// pinned now is the user's too.
+/// Synchronous, unlike `addAttachmentPaths`, since these need no describing.
+/// Appended and deduped like a drop, because whatever is pinned now is the
+/// user's too.
 export function restoreAttachments(sessionId: string | null, attachments: Attachment[]) {
   if (!attachments.length) return;
 
