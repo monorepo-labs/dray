@@ -102,7 +102,10 @@ pub async fn worktree_branch_names(cwd: &str) -> Vec<String> {
 
 /// Only a branch named exactly `worktree-<name>` claims — `fix/worktree-x` is
 /// no PR key for `x` and must not drain the pool. The remote is stripped by
-/// its first segment, so any remote counts, not only `origin`.
+/// its first segment, so any remote counts, not only `origin`. A remote whose
+/// own name holds a slash (`git remote add a/b …` is legal) is read as a nested
+/// branch and claims nothing; being exact there costs a `git remote` read on
+/// every session creation, for a shape Dray never pushes to.
 fn parse_worktree_branch_names(raw: &str) -> Vec<String> {
     raw.lines()
         .filter_map(|line| {
