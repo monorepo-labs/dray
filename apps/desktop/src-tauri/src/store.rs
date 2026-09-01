@@ -526,15 +526,19 @@ const NOUNS: [&str; 32] = [
 
 /// Three-word name from v7 UUID entropy — avoids a `rand` dependency. List
 /// lengths stay powers of two so `% len` on a byte draws every word evenly.
+///
+/// Bytes 13–15 only: `uuid` fills bytes 6–11 with a monotonic counter that is
+/// reseeded once per millisecond, so a redraw loop running inside one drew the
+/// same adjective and colour every time and varied nothing but the noun.
 fn random_worktree_name() -> String {
     let bytes = Uuid::now_v7().into_bytes();
     let pick = |i: usize, list: &[&'static str; 32]| list[(bytes[i] as usize) % list.len()];
 
     format!(
         "{}-{}-{}",
-        pick(8, &ADJECTIVES),
-        pick(10, &COLORS),
-        pick(12, &NOUNS)
+        pick(13, &ADJECTIVES),
+        pick(14, &COLORS),
+        pick(15, &NOUNS)
     )
 }
 
@@ -1232,6 +1236,19 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A redraw loop runs inside one millisecond, where v7's counter bytes hold
+    /// still — so the name must be drawn from the random tail, or every retry
+    /// keeps the same adjective and colour. 16 draws over 1024 prefixes all
+    /// agreeing by chance is 1024⁻¹⁵.
+    #[test]
+    fn fast_redraws_vary_every_word() {
+        let prefixes: std::collections::HashSet<String> = (0..16)
+            .map(|_| random_worktree_name())
+            .map(|n| n.rsplit_once('-').unwrap().0.to_string())
+            .collect();
+        assert!(prefixes.len() > 1, "only drew {prefixes:?}");
+    }
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     /// A field a *newer* build wrote has to survive being read and written back
