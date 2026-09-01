@@ -1,5 +1,5 @@
 import ImageRow from "@/components/chat/ImageRow";
-import { useAttachmentsByPath } from "@/hooks/useAttachments";
+import { queuedAttachments } from "@/hooks/useAttachments";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { stripSenderPrefix } from "@/lib/relay";
 import type { Attachment, ImageRef, QueuedMessage } from "@/types/events";
@@ -20,64 +20,55 @@ export default function QueuedMessages({ messages }: { messages: QueuedMessage[]
 
   return (
     <div className="flex flex-col items-end gap-1.5">
-      {messages.map((message, i) => (
-        // A component per row, because each has its own paths to resolve and a
-        // hook cannot be called in a loop.
-        <QueuedRow
-          key={message.id}
-          message={message}
-          // Only under the newest, because Esc takes that one back and a hint
-          // on every row would promise each of them a key that reaches one.
-          hint={i === messages.length - 1}
-        />
-      ))}
-    </div>
-  );
-}
+      {messages.map((message, i) => {
+        // Same strip the delivered bubble makes: a relayed prompt waits here
+        // carrying the line written for the receiving agent, and it must not
+        // read one way queued and another way sent.
+        const body = stripSenderPrefix(message.text, message.from);
 
-function QueuedRow({ message, hint }: { message: QueuedMessage; hint: boolean }) {
-  // Same strip the delivered bubble makes: a relayed prompt waits here carrying
-  // the line written for the receiving agent, and it must not read one way
-  // queued and another way sent.
-  const body = stripSenderPrefix(message.text, message.from);
-  const attachments = useAttachmentsByPath(message.attachmentPaths);
+        return (
+          <div key={message.id} className="flex w-full flex-col items-end gap-1">
+            {/* Dimmed as one, so what was attached waits at the same strength as
+                the sentence it was attached to. The hint is outside it: that is
+                the app talking, not the message. */}
+            <div className="flex w-full flex-col items-end gap-1.5 opacity-55">
+              <ImageRow images={imagesOf(queuedAttachments(message.id))} variant="sent" align="end" />
 
-  return (
-    <div className="flex w-full flex-col items-end gap-1">
-      {/* Dimmed as one, so what was attached waits at the same strength as the
-          sentence it was attached to. The hint is outside it: that is the app
-          talking, not the message. */}
-      <div className="flex w-full flex-col items-end gap-1.5 opacity-55">
-        <ImageRow images={imagesOf(attachments)} variant="sent" align="end" />
-
-        {/* Guarded like the delivered bubble's: a prompt can be an attachment
-            and nothing else. */}
-        {body && (
-          <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
-            {/* Same bubble, same break rule — see `UserMessage`. */}
-            <span className="whitespace-pre-wrap wrap-anywhere">
-              {highlightSegments(body).map((segment, s) => {
-                if (segment.kind === "mention") {
-                  const { dir, name } = splitMention(segment.text);
-                  return (
-                    <span key={s} className={SEGMENT_COLOR.mention}>
-                      <span className="opacity-45">{dir}</span>
-                      {name}
-                    </span>
-                  );
-                }
-                return (
-                  <span key={s} className={SEGMENT_COLOR[segment.kind]}>
-                    {segment.text}
+              {/* Guarded like the delivered bubble's: a prompt can be an
+                  attachment and nothing else. */}
+              {body && (
+                <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
+                  {/* Same bubble, same break rule — see `UserMessage`. */}
+                  <span className="whitespace-pre-wrap wrap-anywhere">
+                    {highlightSegments(body).map((segment, s) => {
+                      if (segment.kind === "mention") {
+                        const { dir, name } = splitMention(segment.text);
+                        return (
+                          <span key={s} className={SEGMENT_COLOR.mention}>
+                            <span className="opacity-45">{dir}</span>
+                            {name}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span key={s} className={SEGMENT_COLOR[segment.kind]}>
+                          {segment.text}
+                        </span>
+                      );
+                    })}
                   </span>
-                );
-              })}
-            </span>
-          </div>
-        )}
-      </div>
+                </div>
+              )}
+            </div>
 
-      {hint && <span className="pr-1 text-ui text-muted-foreground/60">Esc to cancel</span>}
+            {/* Only under the newest, because Esc takes that one back and a hint
+                on every row would promise each of them a key that reaches one. */}
+            {i === messages.length - 1 && (
+              <span className="pr-1 text-ui text-muted-foreground/60">Esc to cancel</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

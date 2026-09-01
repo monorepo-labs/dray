@@ -2,6 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
+import {
+  holdQueuedAttachments,
+  queuedAttachments,
+  restoreAttachments,
+  retainQueuedAttachments,
+} from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
 import {
@@ -14,7 +20,7 @@ import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -127,6 +133,16 @@ export function useSessions() {
     // draw them. Nothing is persisted on either side, so both die with the
     // process and neither can come back stale.
     const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedMessage[]>>({});
+
+    // The attachments a held prompt was sent with live exactly as long as the
+    // queue holds it. One place, driven off the queue, rather than a release
+    // beside each of the four writes that shrink it.
+    useEffect(() => {
+      retainQueuedAttachments(
+        Object.values(queuedBySession).flatMap((queue) => queue.map((m) => m.id)),
+      );
+    }, [queuedBySession]);
+
     // sessionId → the request ids of the consent cards and questionnaires the
     // agent is standing still behind. Ids rather than a count, so the
     // `permission_decided` that retires one clears the right one when two are
@@ -279,8 +295,12 @@ const upsertSession = (snapshot: SessionSnapshot) =>
 
 const handleSendMsg = async (
   message: string,
-  attachmentPaths: string[] = [],
+  // Resolved, not paths, and only because a queued prompt needs them: the row
+  // that draws it is handed these rather than describing its paths a second
+  // time. The wire still takes paths alone.
+  attachments: Attachment[] = [],
 ) => {
+  const attachmentPaths = attachments.map((a) => a.path);
 
   let sessionId = selectedSessionId;
   const isNewSession = !sessionId;
@@ -355,6 +375,8 @@ const handleSendMsg = async (
 
     if (outcome.queued) {
       const queued = outcome.queued;
+      // Before the row exists, so it can read them during its first render.
+      holdQueuedAttachments(queued.id, attachments);
       setQueuedBySession((prev) => ({
         ...prev,
         [sessionId]: [...(prev[sessionId] ?? []), queued],
@@ -419,6 +441,11 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
       setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
       return null;
     }
+    // Here rather than in the composer, and before the state write: the entry
+    // is pruned against the live queue, so reading it after that write is
+    // reading something already released. What was attached goes back with the
+    // sentence it was attached to, or a cancel keeps the files silently.
+    restoreAttachments(sessionId, queuedAttachments(cancelled.id));
     setQueuedBySession((prev) => ({
       ...prev,
       [sessionId]: (prev[sessionId] ?? []).filter((m) => m.id !== cancelled.id),

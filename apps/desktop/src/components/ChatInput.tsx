@@ -30,13 +30,14 @@ import {
   slashQuery,
 } from "@/lib/slash";
 import { cn } from "@/lib/utils";
-import type { FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
+import type { Attachment, FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
 
 type ChatInputProps = {
-  /// `attachmentPaths` is what the tray held, as absolute paths. The backend
-  /// re-reads each one — nothing but paths crosses the bridge, so a pinned
-  /// screenshot is never uploaded twice.
-  onSend: (message: string, attachmentPaths: string[]) => void;
+  /// `attachments` is what the tray held. Only paths cross the bridge — the
+  /// backend re-reads each one, so a pinned screenshot is never uploaded twice —
+  /// but a prompt that ends up *queued* is drawn from these, rather than having
+  /// its paths described a second time.
+  onSend: (message: string, attachments: Attachment[]) => void;
   /// What the `/` picker offers. Empty until the backend's probe lands, and
   /// empty forever if it failed — the picker simply never opens, and a command
   /// typed by hand still works, since the CLI parses the text either way.
@@ -383,15 +384,12 @@ export default function ChatInput({
     // Takes back the newest prompt still waiting on the CLI.
     if (onCancelQueued && queuedCount > 0) {
       const before = message;
+      // The attachments come back with it, pinned by `onCancelQueued` itself —
+      // synchronously, so an Enter straight after this cannot send the sentence
+      // without them.
       void onCancelQueued().then((cancelled) => {
         if (!cancelled) return;
         setMessage(before ? `${before}\n${cancelled.text}` : cancelled.text);
-        // What was attached comes back with the sentence it was attached to, or
-        // taking a prompt back would cost the reader the files silently — the
-        // tray is cleared on send and nothing else holds them. Paths, since that
-        // is all a held prompt carries; the tray takes them the same way a drop
-        // does, so a file already pinned again is not pinned twice.
-        void addAttachmentPaths(sessionId, cancelled.attachmentPaths);
         textareaRef.current?.focus();
       });
       return true;
@@ -495,10 +493,7 @@ export default function ChatInput({
     const command = parseSlashCommand(trimmed);
     if (command) recordCommand(command.name);
 
-    onSend(
-      trimmed,
-      attachments.map((a) => a.path),
-    );
+    onSend(trimmed, attachments);
     setMessage("");
     clearAttachments(sessionId);
   };

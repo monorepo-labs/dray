@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -20,25 +20,23 @@ import type { Attachment } from "@/types/events";
 const bySession = new Map<string | null, Attachment[]>();
 const listeners = new Set<() => void>();
 
-/// Everything the backend has described this run, keyed by path — the identity
-/// the composer already dedupes on. Never invalidated: an attachment is a
-/// reading of a file taken when the user picked it, and the row that reads one
-/// back is drawing what they attached rather than what the file says now.
+/// What a held prompt was sent with, keyed by the queued message's id.
 ///
-/// Budgeted by bytes rather than count, for `useChanges`' reason and against a
-/// worse failure: an entry carries the image's whole base64 preview, so a count
-/// cap would be measuring the wrong thing entirely and no cap at all grows by
-/// ~6.7MB per accepted screenshot for as long as the app runs.
-const byPath = new Map<string, Attachment>();
-
-/// Enough for a handful of images at the API's own 5MB ceiling and hundreds of
-/// ordinary screenshots. Matching `useChanges`' budget so the two caches cost
-/// the same to reason about.
-const PREVIEW_BYTES_BUDGET = 32 << 20;
-
-let previewBytes = 0;
-
-const sizeOf = (attachment: Attachment) => (attachment.preview?.length ?? 0) + 1;
+/// Handed over by the composer at send rather than resolved again from the
+/// message's paths, which is what keeps it exact: a queued row draws the very
+/// attachments the tray held, with no second read to fail, go stale, or answer
+/// asynchronously. `send_msg` is the only producer — a relayed `dray send`
+/// passes no attachments — so nothing else can queue a prompt this cannot
+/// describe.
+///
+/// Bounded by the queue itself, and deliberately by nothing else. An earlier
+/// version cached every described path under a byte budget, which is a cap on
+/// the wrong thing: eviction could drop an attachment a row was still drawing,
+/// and refetching it evicted another of the same message's own images, so a
+/// prompt carrying more than the budget could never draw all of it.
+/// [`retainQueuedAttachments`] prunes against the live queue instead, so an
+/// entry lives exactly as long as something can draw it.
+const byQueuedMessage = new Map<string, Attachment[]>();
 
 // One frozen array for every empty key. `useSyncExternalStore` re-renders on any
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
@@ -54,31 +52,6 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-function remember(attachments: Attachment[]) {
-  for (const attachment of attachments) {
-    const prev = byPath.get(attachment.path);
-    if (prev) {
-      previewBytes -= sizeOf(prev);
-      byPath.delete(attachment.path);
-    }
-    // Re-inserting moves the key to the end, so iteration order is least- to
-    // most-recently written and the first key is the one to drop.
-    byPath.set(attachment.path, attachment);
-    previewBytes += sizeOf(attachment);
-  }
-
-  // `> 1` so a single over-budget entry is kept rather than evicted the moment
-  // it lands — half a cache beats none.
-  while (previewBytes > PREVIEW_BYTES_BUDGET && byPath.size > 1) {
-    const oldest = byPath.keys().next().value;
-    if (oldest === undefined) break;
-    previewBytes -= sizeOf(byPath.get(oldest)!);
-    byPath.delete(oldest);
-  }
-
-  return attachments;
-}
-
 function write(sessionId: string | null, next: Attachment[]) {
   if (next.length) bySession.set(sessionId, next);
   else bySession.delete(sessionId);
@@ -88,25 +61,12 @@ function write(sessionId: string | null, next: Attachment[]) {
 /// Describes each path in the backend and pins the ones that can be attached.
 /// Deduped on path, so dropping the same screenshot twice pins one — the path is
 /// the identity, and a second copy of one file says nothing the first didn't.
-/// Anything already described lands **before** the await, and taking a prompt
-/// back off the queue is why. Esc restores the text synchronously, so an Enter
-/// pressed straight after it would otherwise send that sentence without the
-/// files it was queued with — and they would then appear in the tray, attached
-/// to whatever the user typed next. The composer's own read is what fills the
-/// cache, so a cancelled prompt's paths are always in it and that window closes
-/// entirely; a path nothing has described has no synchronous answer to give.
 export async function addAttachmentPaths(sessionId: string | null, paths: string[]) {
   const current = bySession.get(sessionId) ?? EMPTY;
   const fresh = paths.filter((path) => !current.some((a) => a.path === path));
   if (!fresh.length) return;
 
-  const known = fromCache(fresh);
-  if (known.length) write(sessionId, [...current, ...known]);
-
-  const missing = fresh.filter((path) => !byPath.has(path));
-  if (!missing.length) return;
-
-  const added = remember(await invoke<Attachment[]>("read_attachments", { paths: missing }));
+  const added = await invoke<Attachment[]>("read_attachments", { paths: fresh });
   if (!added.length) return;
 
   // Re-read rather than closing over `current`: the dialog and the reads above
@@ -148,63 +108,45 @@ export function useAttachments(sessionId: string | null): Attachment[] {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-function fromCache(paths: string[]): Attachment[] {
-  if (!paths.length) return EMPTY;
-
-  const found = paths.flatMap((path) => {
-    const attachment = byPath.get(path);
-    return attachment ? [attachment] : [];
-  });
-
-  return found.length ? found : EMPTY;
+/// Hands a held prompt's attachments over, at the moment the backend says it
+/// was queued. Written before the row that draws them exists, so the read below
+/// needs no subscription.
+export function holdQueuedAttachments(messageId: string, attachments: Attachment[]) {
+  if (attachments.length) byQueuedMessage.set(messageId, attachments);
 }
 
-/// What the backend says about a list of paths, described once and remembered.
-///
-/// The queued row's own read, and it needs one: a held prompt carries paths and
-/// not attachments, because they are resolved at flush so that a cancel hands
-/// the composer back exactly what was typed. Asking is also the only honest way
-/// to draw one — whether a file travels as pixels is decided by extension *and*
-/// size in Rust, and a second copy of that rule here would be free to disagree
-/// with what actually goes down the wire.
-///
-/// A path `read_attachments` skips — a file cleared out from under a prompt
-/// still holding it — caches nothing and is simply absent from the answer, so a
-/// later mount asks again rather than remembering a gap.
-export function useAttachmentsByPath(paths: string[]): Attachment[] {
-  const key = paths.join("\0");
-  // Bumped when a read lands. The cache above is the answer, always — this only
-  // says the answer may have changed for a key that has not itself changed.
-  // Holding the attachments in state instead let them go stale for good: a read
-  // abandoned on a key change still populates the cache, so coming back to that
-  // key found state holding the empty answer it was mounted with while the
-  // effect saw everything cached and stood down.
-  const [landed, setLanded] = useState(0);
+/// Drops everything no longer queued. Driven off the queue rather than from each
+/// place one leaves it — delivery, cancel, a dropped queue and a deleted session
+/// are four, and a release stated four times is three chances to miss one.
+export function retainQueuedAttachments(messageIds: string[]) {
+  if (!byQueuedMessage.size) return;
 
-  useEffect(() => {
-    const wanted = split(key);
-    if (wanted.every((path) => byPath.has(path))) return;
-
-    let live = true;
-    void describeUncached(wanted).then(() => {
-      if (live) setLanded((n) => n + 1);
-    });
-    return () => {
-      live = false;
-    };
-  }, [key]);
-
-  // Memoized so the row is handed the same array while nothing has changed, and
-  // read during render rather than in the effect: state alone leaves one frame
-  // of the previous prompt's pictures sitting under this one's text.
-  return useMemo(() => fromCache(split(key)), [key, landed]);
+  const live = new Set(messageIds);
+  for (const id of byQueuedMessage.keys()) {
+    if (!live.has(id)) byQueuedMessage.delete(id);
+  }
 }
 
-const split = (key: string) => (key ? key.split("\0") : []);
+/// What a queued prompt was sent with. Read during render, and safe to be a
+/// plain lookup: the entry is written before the message reaches the queue the
+/// row is drawn from, so there is no state here to subscribe to.
+export function queuedAttachments(messageId: string): Attachment[] {
+  return byQueuedMessage.get(messageId) ?? EMPTY;
+}
 
-async function describeUncached(paths: string[]) {
-  const missing = paths.filter((path) => !byPath.has(path));
-  if (!missing.length) return;
+/// Pins attachments already described — what a cancelled prompt hands back.
+///
+/// Synchronous, and that is the point: Esc restores the text at once, so an
+/// Enter pressed straight after would otherwise send that sentence without the
+/// files it was queued with, and they would land in the tray attached to
+/// whatever was typed next. Appended and deduped like a drop, since whatever is
+/// pinned now is the user's too.
+export function restoreAttachments(sessionId: string | null, attachments: Attachment[]) {
+  if (!attachments.length) return;
 
-  remember(await invoke<Attachment[]>("read_attachments", { paths: missing }));
+  const current = bySession.get(sessionId) ?? EMPTY;
+  const fresh = attachments.filter((a) => !current.some((b) => b.path === a.path));
+  if (!fresh.length) return;
+
+  write(sessionId, [...current, ...fresh]);
 }
