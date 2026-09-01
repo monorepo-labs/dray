@@ -1,13 +1,14 @@
 # Third-party licences
 
-Palettes Dray ships that are ports of other people's work. Each is MIT, and MIT
-asks that the copyright notice and permission notice travel with the work — so
-they are reproduced in full here rather than linked. The credit table in
-[README](README.md) names who each one is by; this file is the licence itself.
+Other people's work that Dray ships: the palettes it ports, and the engine its
+dictation runs on. Each is MIT, and MIT asks that the copyright notice and
+permission notice travel with the work — so they are reproduced in full here
+rather than linked. The credit tables in [README](README.md) name who each one
+is by; this file is the licence itself.
 
-Ports live in `apps/desktop/src/App.css`. Colours are theirs, token names are
-ours, and each value carries the name it has upstream so a port can be checked
-against its source rather than taken on trust.
+Ported palettes live in `apps/desktop/src/App.css`. Colours are theirs, token
+names are ours, and each value carries the name it has upstream so a port can be
+checked against its source rather than taken on trust.
 
 ---
 
@@ -121,6 +122,85 @@ nothing. The VS Code port below is the one that may be shipped.
 MIT License
 
 Copyright (c) 2018 Wes Bos, Roberto Achar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## transcribe.cpp
+
+<https://github.com/handy-computer/transcribe.cpp>
+
+The speech-to-text engine dictation runs on, as the `transcribe-cpp` and
+`transcribe-cpp-sys` crates. Its **own** repository and its **own** copyright
+line — it is published separately from the Handy app below, and this notice is
+not that one.
+
+```
+MIT License
+
+Copyright (c) 2026 The transcribe.cpp authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Handy
+
+<https://github.com/cjpais/Handy>
+
+**One thing is taken from this repository: the two dictation sounds.**
+`marimba_start.wav` and `marimba_stop.wav`, copied verbatim to
+`apps/desktop/src/assets/dictate-{start,stop}.wav`. Handy carries no separate
+attribution for them, so they are taken as part of the repository this notice
+grants.
+
+Nothing else here is Handy's code. The engine is `transcribe.cpp` above — a
+different repository under a different copyright line, and reachable without
+Handy — and what is owed beyond the sounds is judgement rather than code: which
+models are worth offering, and that local dictation was worth building at all.
+
+The Handy **name, logo, icon and brand assets are excluded** from this grant by
+their author and are not used in Dray.
+
+```
+MIT License
+
+Copyright (c) 2025 CJ Pais
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

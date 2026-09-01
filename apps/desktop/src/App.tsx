@@ -11,7 +11,7 @@ import DiffWorkerPool from "@/components/DiffWorkerPool";
 import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
 import QuitDialog from "@/components/QuitDialog";
-import SettingsDialog from "@/components/SettingsDialog";
+import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
@@ -36,6 +36,7 @@ import Sidebar, {
 } from "@/components/Sidebar";
 import SubagentPanel from "@/components/SubagentPanel";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
+import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { nextEffort } from "@/components/composer/ModelSelector";
@@ -59,7 +60,9 @@ import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import type { Issue, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
+import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
+import { appendToDraft } from "@/hooks/useDraft";
 import { authFailedTurn } from "@/lib/auth";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
@@ -252,6 +255,37 @@ function App() {
   // reopening the app into them would be the app remembering the wrong half of
   // a session.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Which tab the *next* open lands on. Reset to Appearance as settings close,
+  // so a mic press that sent the reader to Transcription does not leave every
+  // later ⌘, opening there too.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+
+  // Dictation writes into the composer's draft through the module-level store,
+  // not through a prop: the controls reach `ChatInput` as an opaque node, so
+  // they cannot hand it the text. Same bargain `useAttachments` makes.
+  //
+  // A press with no model downloaded opens settings on Transcription rather
+  // than pulling hundreds of megabytes nobody asked for.
+  const recorder = useRecorder({
+    // Pinned when recording starts, so a dictation survives switching sessions
+    // and still lands where it was spoken. Drafts are per session, so it is
+    // waiting there on the way back.
+    target: selectedSessionId,
+    onText: (text, session) => appendToDraft(session, text),
+    onNeedsModel: () => {
+      setSettingsTab("transcription");
+      setSettingsOpen(true);
+    },
+    // Drawn in the composer's own error slot, which is where every other thing
+    // that went wrong with a message already reports.
+    onMessage: setError,
+  });
+
+  // ⌘ only. `platformOnly` is what keeps this off ⌃D, which macOS already
+  // assigns to delete-forward in every text field — including the composer this
+  // shortcut is for. Enabled always: pressed with nothing downloaded it opens
+  // settings, which is the answer the reader needs rather than a dead key.
+  useHotkey("d", () => void recorder.toggle(), { platformOnly: true });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -1047,6 +1081,21 @@ function App() {
           cwd={composerCwd}
           onStop={handleInterrupt}
           onCancelQueued={handleCancelQueued}
+          onCancelRecording={() => {
+            if (recorder.state !== "recording") return false;
+            void recorder.cancel();
+            return true;
+          }}
+          dictating={recorder.state !== "idle"}
+          dictation={
+            <DictateControl
+              state={recorder.state}
+              level={recorder.level}
+              onStart={() => void recorder.start()}
+              onStop={() => void recorder.stop()}
+              onCancel={() => void recorder.cancel()}
+            />
+          }
           queuedCount={queuedMessages.length}
           busy={busy}
           sessionId={selectedSessionId}
@@ -1205,7 +1254,11 @@ function App() {
         collapses and would take ⌘, with it. */}
     <SettingsDialog
       open={settingsOpen}
-      onOpenChange={setSettingsOpen}
+      onOpenChange={(next) => {
+        setSettingsOpen(next);
+        if (!next) setSettingsTab("appearance");
+      }}
+      initialTab={settingsTab}
       integrations={integrations}
       updateChannel={updateChannel}
       onUpdateChannelChange={setUpdateChannel}

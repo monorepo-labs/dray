@@ -53,7 +53,36 @@ tauri-plugin-aptabase = "1.0.0"
 # Linear's GraphQL API, and the only service this app talks to directly — `gh`
 # and `claude` are reached by spawning them instead. `rustls` rather than the
 # platform TLS so a Linux build needs no OpenSSL. See issues/linear.rs.
+# `stream` is for the model download, which is hundreds of megabytes and must
+# reach disk a chunk at a time — `bytes()` buffers the whole body first.
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
+  "stream",
 ] }
+
+# Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp
+# authors") — its own repo, not the Handy app's; `cpal` captures the microphone
+# and `rubato` resamples it to the 16kHz mono every model here expects. Audio
+# never leaves the machine. See transcription/.
+cpal = "0.16"
+rubato = "0.16"
+# macOS hands a *silent* stream to a process without microphone permission
+# rather than refusing it, so nothing downstream can tell "denied" from "quiet
+# room". This is what actually raises the system prompt. See transcription/.
+tauri-plugin-macos-permissions = "2.3"
+futures-util = "0.3"
+# Verifies a downloaded model against the catalog's hash. A partial file left by
+# a killed process is otherwise indistinguishable from a whole one.
+sha2 = "0.10"
+
+# Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
+# so it cannot be switched per model or per machine. Split across two tables
+# rather than one entry, since the `metal` feature does not compile elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+transcribe-cpp = { version = "0.2", default-features = false, features = [
+  "metal",
+] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+transcribe-cpp = { version = "0.2", default-features = false }

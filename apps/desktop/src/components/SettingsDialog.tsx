@@ -32,6 +32,8 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
+import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -52,12 +54,17 @@ const REPO_URL = "https://github.com/monorepo-labs/dray";
 export default function SettingsDialog({
   open,
   onOpenChange,
+  initialTab = "appearance",
   integrations,
   updateChannel,
   onUpdateChannelChange,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
+  /// Which tab to open on. The composer's mic button sends the reader straight
+  /// to Transcription when no model is downloaded, which is the whole reason
+  /// this is a prop rather than internal state.
+  initialTab?: SettingsTab;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// Owned by `useUpdater`, for the reason its own doc comment gives: a second
@@ -66,6 +73,7 @@ export default function SettingsDialog({
   onUpdateChannelChange: (next: UpdateChannel) => void;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
+  const transcription = useTranscriptionSettings(open);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,13 +89,24 @@ export default function SettingsDialog({
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <SettingsTabs>
+        <SettingsTabs initialTab={initialTab}>
           {{
             appearance: (
               <Section>
                 <ThemeRow />
                 <ModeRow />
               </Section>
+            ),
+            transcription: (
+              <TranscriptionSettings
+                status={transcription.status}
+                downloads={transcription.downloads}
+                onDownload={transcription.download}
+                onCancelDownload={transcription.cancelDownload}
+                onDelete={transcription.remove}
+                onSelectModel={transcription.selectModel}
+                onSelectDevice={transcription.selectDevice}
+              />
             ),
             integrations: (
               <Section>
@@ -669,12 +688,13 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 }
 
 /// Set *and* order, so a group added later is one entry plus one body.
-const SETTINGS_TABS = ["appearance", "integrations", "about"] as const;
+const SETTINGS_TABS = ["appearance", "transcription", "integrations", "about"] as const;
 
-type SettingsTab = (typeof SETTINGS_TABS)[number];
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: "Appearance",
+  transcription: "Transcription",
   integrations: "Integrations",
   about: "About",
 };
@@ -698,9 +718,18 @@ const TAB_LABELS: Record<SettingsTab, string> = {
 /// would have the external-app scan run every time the dialog opens whichever
 /// tab the reader wanted. The pick resets on close for the same reason the
 /// dialog's own open state is not persisted.
-function SettingsTabs({ children }: { children: Record<SettingsTab, ReactNode> }) {
+function SettingsTabs({
+  initialTab,
+  children,
+}: {
+  initialTab: SettingsTab;
+  children: Record<SettingsTab, ReactNode>;
+}) {
   const id = useId();
-  const [tab, setTab] = useState<SettingsTab>("appearance");
+  // An initializer, not an effect: `DialogContent` unmounts on close, so every
+  // open builds this fresh and the caller's tab is simply where it starts.
+  // That is also what keeps "the pick resets on close" true.
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
 
   const index = SETTINGS_TABS.indexOf(tab);
   const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>
@@ -735,15 +764,24 @@ function SettingsTabs({ children }: { children: Record<SettingsTab, ReactNode> }
         ))}
       </div>
 
-      {/* A floor rather than a fixed height: without one the dialog resizes
-          under the cursor on every tab change, which reads as the window
-          having jumped rather than as the content having changed. Sized to
-          Appearance, the tallest. */}
+      {/* Fixed, and scrolling past it. A floor was enough while the tabs were
+          within a line or two of each other, and stopped being enough the
+          moment Transcription arrived carrying a list of models — the dialog
+          then doubled in height on the way in and halved on the way out, which
+          reads as the window jumping rather than as the content changing.
+          Raising the floor to the tallest tab instead would spend that height
+          on About, which is four lines.
+
+          The negative margin is for the model rows' focus ring: `overflow-y`
+          clips the other axis too, so a ring drawn at the panel's own edge
+          loses its outer edge without it. */}
       <div
         role="tabpanel"
         id={`${id}-panel`}
         aria-labelledby={`${id}-${tab}`}
-        className="flex min-h-56 flex-col gap-7"
+        // `shrink-0` on the sections, since a column flex item's default is to
+        // shrink toward its content before the container agrees to scroll.
+        className="-mx-1 flex h-96 flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
       >
         {children[tab]}
       </div>

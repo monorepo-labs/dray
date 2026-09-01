@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { IS_MAC } from "@/lib/platform";
+
 type HotkeyOptions = {
   /// Cmd on macOS, Ctrl elsewhere — the platform's own accelerator.
   meta?: boolean;
@@ -18,6 +20,14 @@ type HotkeyOptions = {
   /// the key from whatever *is* on screen — ⌘⇧← is select-to-line-start in the
   /// composer.
   enabled?: boolean;
+  /// Take **only** this platform's own accelerator, not either one.
+  ///
+  /// `meta` normally accepts Cmd or Ctrl without asking which platform it is
+  /// on, which costs nothing for a chord no platform assigns — but Ctrl is a
+  /// live modifier on macOS, where ⌃D is delete-forward in every text field.
+  /// A binding that claims both takes that away for nothing, since a Mac user
+  /// presses ⌘.
+  platformOnly?: boolean;
 };
 
 /// Binds a document-level shortcut. The handler is held in a ref so passing a
@@ -25,7 +35,14 @@ type HotkeyOptions = {
 export function useHotkey(
   key: string,
   handler: () => void,
-  { meta = true, shift = false, alt = false, code, enabled = true }: HotkeyOptions = {},
+  {
+    meta = true,
+    shift = false,
+    alt = false,
+    code,
+    enabled = true,
+    platformOnly = false,
+  }: HotkeyOptions = {},
 ) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
@@ -46,7 +63,10 @@ export function useHotkey(
       if (!matches) return;
       // Accept either modifier rather than branching on platform: a Mac reports
       // metaKey, everything else ctrlKey, and neither fires the other's chord.
-      if (meta && !e.metaKey && !e.ctrlKey) return;
+      // `platformOnly` narrows that to this platform's own, for a chord whose
+      // other spelling the OS has already assigned.
+      if (meta && platformOnly && !(IS_MAC ? e.metaKey : e.ctrlKey)) return;
+      if (meta && !platformOnly && !e.metaKey && !e.ctrlKey) return;
       if (!meta && (e.metaKey || e.ctrlKey)) return;
       if (e.shiftKey !== shift) return;
       // Exact, so ⌘⌥↑ can't also fire the plain ⌘ bindings.
@@ -60,5 +80,5 @@ export function useHotkey(
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [key, meta, shift, alt, code, enabled]);
+  }, [key, meta, shift, alt, code, enabled, platformOnly]);
 }
