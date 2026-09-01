@@ -40,6 +40,13 @@ pub struct DownloadProgress {
     pub total: u64,
     /// Set once, on the last event, when the model failed to land.
     pub error: Option<String>,
+    /// The reader called it off. Terminal, like `error`, and **not** derivable
+    /// from the counts: a cancel is over without being complete, so the closing
+    /// event carried `received: 0` against a non-zero total and the listener —
+    /// which ends an entry on `error` or `received >= total` — read it as
+    /// ordinary progress and put the row back at 0%, stuck offering Cancel for a
+    /// task that was already gone.
+    pub cancelled: bool,
 }
 
 /// `~/.dray/models/`, created on demand.
@@ -216,7 +223,7 @@ pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<Dow
         // A cancel is what the reader asked for, so it ends the progress entry
         // without an error message the settings tab would have to draw.
         if e.downcast_ref::<Cancelled>().is_some() {
-            emit(app, model, 0, model.size_bytes, None);
+            emit_cancelled(app, model);
             return Ok(Downloaded::Cancelled);
         }
 
@@ -304,6 +311,22 @@ async fn stream_to(app: &AppHandle, model: &TranscriptionModel, part: &Path) -> 
 }
 
 fn emit(app: &AppHandle, model: &TranscriptionModel, received: u64, total: u64, error: Option<String>) {
+    emit_progress(app, model, received, total, error, false);
+}
+
+/// The closing event for a download the reader called off.
+fn emit_cancelled(app: &AppHandle, model: &TranscriptionModel) {
+    emit_progress(app, model, 0, model.size_bytes, None, true);
+}
+
+fn emit_progress(
+    app: &AppHandle,
+    model: &TranscriptionModel,
+    received: u64,
+    total: u64,
+    error: Option<String>,
+    cancelled: bool,
+) {
     let _ = app.emit(
         "transcription_download_progress",
         DownloadProgress {
@@ -311,6 +334,7 @@ fn emit(app: &AppHandle, model: &TranscriptionModel, received: u64, total: u64, 
             received,
             total,
             error,
+            cancelled,
         },
     );
 }

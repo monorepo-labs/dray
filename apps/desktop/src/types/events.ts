@@ -485,7 +485,16 @@ export type DownloadProgress = { modelId: string, received: number, total: numbe
 /**
  * Set once, on the last event, when the model failed to land.
  */
-error: string | null, };
+error: string | null, 
+/**
+ * The reader called it off. Terminal, like `error`, and **not** derivable
+ * from the counts: a cancel is over without being complete, so the closing
+ * event carried `received: 0` against a non-zero total and the listener —
+ * which ends an entry on `error` or `received >= total` — read it as
+ * ordinary progress and put the row back at 0%, stuck offering Cancel for a
+ * task that was already gone.
+ */
+cancelled: boolean, };
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 

@@ -36,14 +36,19 @@ export function useTranscriptionSettings(active: boolean) {
   // to be there when they reopen.
   useEffect(() => {
     const unlisten = listen<DownloadProgress>("transcription_download_progress", (e) => {
-      const { modelId, received, total, error } = e.payload;
+      const { modelId, received, total, error, cancelled } = e.payload;
 
       setDownloads((prev) => {
-        // A finished or failed download stops being an entry rather than
-        // becoming a completed one — the row reads its state from `installed`,
-        // and a lingering 100% bar would sit over a model that is already
-        // downloaded.
-        if (error || received >= total) {
+        // A finished, failed or cancelled download stops being an entry rather
+        // than becoming a completed one — the row reads its state from
+        // `installed`, and a lingering 100% bar would sit over a model that is
+        // already downloaded.
+        //
+        // `cancelled` is carried rather than inferred: a cancel is over without
+        // being complete, so its closing event counts as *less* than total and
+        // was read here as ordinary progress — putting the row back at 0% and
+        // stuck offering Cancel for a task that had already gone.
+        if (error || cancelled || received >= total) {
           const { [modelId]: _done, ...rest } = prev;
           return rest;
         }
