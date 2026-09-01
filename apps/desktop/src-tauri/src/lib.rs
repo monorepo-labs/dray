@@ -714,6 +714,13 @@ pub fn run() {
                 }
             });
 
+            // Dictation's model load is seconds, and a first dictation is
+            // usually one word — too short to hide the load behind. So it is
+            // paid here, while the reader is doing something else, and the mic
+            // button is instant from the first press. Costs the memory of a
+            // model nobody may press, which is the trade.
+            transcription::warm_selected(app.state::<transcription::TranscriptionState>().engine.clone());
+
             // Spawned rather than awaited, but the two halves inside it are
             // ordered: the launch is reported only once the persisted opt-out
             // has been read, or an opted-out install would still send the one
