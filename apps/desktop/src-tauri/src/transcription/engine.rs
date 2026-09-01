@@ -15,6 +15,7 @@
 //! Nothing here can change that, which is why there is no accelerator setting.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -33,6 +34,11 @@ use transcribe_cpp::{Model, ModelOptions, RunOptions, Session};
 #[derive(Default, Clone)]
 pub struct Engine {
     loaded: Arc<Mutex<Option<Loaded>>>,
+    /// Bumped by every [`Engine::unload`], so a warm that started before one
+    /// can tell its answer is stale. Without it a load begun at launch lands
+    /// after a switch or a delete and installs a model the reader is done
+    /// with — for a delete, one whose weights are no longer on disk.
+    generation: Arc<AtomicU64>,
 }
 
 struct Loaded {
@@ -99,15 +105,35 @@ impl Engine {
     /// load lands before they press stop. Failures are silent — the real
     /// transcribe loads again and reports for itself.
     pub async fn warm(&self, model_id: String, path: PathBuf) {
-        let mut guard = self.loaded.lock().await;
+        let generation = self.generation.load(Ordering::SeqCst);
 
-        if guard.as_ref().is_some_and(|l| l.model_id == model_id) {
+        if self
+            .loaded
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|l| l.model_id == model_id)
+        {
             return;
         }
 
-        match load(&path).await {
-            Ok(session) => *guard = Some(Loaded { model_id, session }),
-            Err(e) => eprintln!("could not warm the transcription model: {e:#}"),
+        // Loaded with the lock *released*: holding it across seconds of load
+        // is what would make a switch or delete waiting in `unload` block for
+        // the whole of it.
+        let session = match load(&path).await {
+            Ok(session) => session,
+            Err(e) => {
+                eprintln!("could not warm the transcription model: {e:#}");
+                return;
+            }
+        };
+
+        let mut guard = self.loaded.lock().await;
+
+        // Re-read under the lock: an unload landing while this loaded means
+        // the model is one the reader has switched away from or deleted.
+        if self.generation.load(Ordering::SeqCst) == generation {
+            *guard = Some(Loaded { model_id, session });
         }
     }
 
@@ -117,6 +143,11 @@ impl Engine {
     /// disk and the ones in memory cannot disagree — and so a delete actually
     /// frees the memory rather than only the file.
     pub async fn unload(&self) {
+        // Before the lock, not after: a warm already waiting on it must see
+        // the new generation and drop what it loaded rather than installing
+        // it over the clear this is about to make.
+        self.generation.fetch_add(1, Ordering::SeqCst);
+
         *self.loaded.lock().await = None;
     }
 }
@@ -169,5 +200,17 @@ mod tests {
     #[tokio::test]
     async fn unload_on_an_empty_engine_is_fine() {
         Engine::default().unload().await;
+    }
+
+    /// The rule a stale warm is rejected by. Reachable with no weights on disk
+    /// because it is the counter, not the load, that decides.
+    #[tokio::test]
+    async fn unload_moves_the_generation_a_warm_is_judged_against() {
+        let engine = Engine::default();
+        let before = engine.generation.load(Ordering::SeqCst);
+
+        engine.unload().await;
+
+        assert_ne!(engine.generation.load(Ordering::SeqCst), before);
     }
 }
