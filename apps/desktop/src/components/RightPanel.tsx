@@ -205,6 +205,10 @@ type RightPanelProps = {
   /// Absent on the issues page, which is showing somebody else's issue and has
   /// no working directory of its own.
   cwd?: string | null;
+  /// Drawn at the far end of the top strip, ahead of Open and Refresh. For an
+  /// action belonging to whatever the pane is showing rather than to one tab —
+  /// the issues page's "Work on it" is the only one today.
+  actions?: React.ReactNode;
   /// A word in the top strip in place of the tab row.
   ///
   /// For a pane with one thing in it and no second thing to switch to. A row of
@@ -254,6 +258,7 @@ export default function RightPanel({
   issue = false,
   refresh,
   cwd,
+  actions,
   heading,
   children,
 }: RightPanelProps) {
@@ -348,6 +353,8 @@ export default function RightPanel({
             Refresh is gone on Subagents and the Open button is gone off a
             session, so whichever survives has to hold the same edge. */}
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {actions}
+
           {/* Ahead of Refresh, and outside the tab row's own logic: it acts on
               the session rather than on whatever tab is open, so unlike Refresh
               it does not change meaning from one tab to the next. */}

@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useState, type MutableRefObject, type SyntheticEvent } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronRight, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
 import LinearIcon from "@/components/LinearIcon";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -90,6 +90,7 @@ export default function IssuesView({
   connectError,
   picked,
   onPick,
+  onWorkOn,
   refreshRef,
 }: {
   /// The page is the thing on screen. Hidden pages do not read, for the reason
@@ -105,14 +106,16 @@ export default function IssuesView({
   /// say which one it is. Owned by `App`, because the pane is.
   picked: string | null;
   onPick: (issue: Issue) => void;
+  /// Takes the reader to the empty composer with this issue tagged. Owned by
+  /// `App`, which is the only thing that can leave this page.
+  onWorkOn: (issue: Issue) => void;
   /// Where this page hands its refresh up, so ⌘R can reach it. `App` owns the
   /// chord — it has to pick between this page and the right panel, and only it
   /// knows which one the reader is looking at.
   refreshRef?: MutableRefObject<(() => void) | null>;
 }) {
-  const { issues, settled, filters, query, setQuery, loading, unavailable, refresh } = useIssues(
-    active && connected,
-  );
+  const { issues, settled, filters, query, setQuery, loading, loaded, unavailable, refresh } =
+    useIssues(active && connected);
 
   // Kept current rather than set once: `refresh` is re-made whenever the hook
   // re-runs, and a handle captured at mount would close over a stale one.
@@ -212,7 +215,14 @@ export default function IssuesView({
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {issues.length === 0 && !loading && (
+        {/* Nothing else while the first read is out — not even the settled
+            headings, which are the one part of this list that can be drawn
+            without an answer and so were the only thing on screen. A page whose
+            finished work appears first, and whose open work arrives second,
+            reads as a workspace with nothing left to do. */}
+        {!loaded && <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>}
+
+        {loaded && issues.length === 0 && !loading && (
           <p className="px-3 py-4 text-ui text-muted-foreground">
             {query.text
               ? "No issue matches that."
@@ -222,18 +232,20 @@ export default function IssuesView({
           </p>
         )}
 
-        {groups.map((group) => (
-          <Group key={group.key} kind={group.key} label={group.label} count={group.issues.length}>
-            {group.issues.map((issue) => (
-              <IssueRow
-                key={issue.id}
-                issue={issue}
-                picked={issue.identifier === picked}
-                onPick={onPick}
-              />
-            ))}
-          </Group>
-        ))}
+        {loaded &&
+          groups.map((group) => (
+            <Group key={group.key} kind={group.key} label={group.label} count={group.issues.length}>
+              {group.issues.map((issue) => (
+                <IssueRow
+                  key={issue.id}
+                  issue={issue}
+                  picked={issue.identifier === picked}
+                  onPick={onPick}
+                  onWorkOn={onWorkOn}
+                />
+              ))}
+            </Group>
+          ))}
 
         {/* Done and Cancelled are always here and always start closed. Finished
             work is most of a workspace and almost never what the page was
@@ -241,35 +253,37 @@ export default function IssuesView({
             a filter they have to find first is worse than a heading they can
             see. Nothing is fetched until one is opened: the headings cost a
             round trip only when somebody asks a question of them. */}
-        {SETTLED_KINDS.map(({ key, label }) => {
-          const group = settledGroups.find((g) => g.key === key);
+        {loaded &&
+          SETTLED_KINDS.map(({ key, label }) => {
+            const group = settledGroups.find((g) => g.key === key);
 
-          return (
-            <Group
-              key={key}
-              kind={key}
-              label={label}
-              count={settled.loaded ? (group?.issues.length ?? 0) : null}
-              collapsedByDefault
-              onFirstOpen={settled.request}
-            >
-              {settled.loading && !settled.loaded ? (
-                <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>
-              ) : group ? (
-                group.issues.map((issue) => (
-                  <IssueRow
-                    key={issue.id}
-                    issue={issue}
-                    picked={issue.identifier === picked}
-                    onPick={onPick}
-                  />
-                ))
-              ) : (
-                <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
-              )}
-            </Group>
-          );
-        })}
+            return (
+              <Group
+                key={key}
+                kind={key}
+                label={label}
+                count={settled.loaded ? (group?.issues.length ?? 0) : null}
+                collapsedByDefault
+                onFirstOpen={settled.request}
+              >
+                {settled.loading && !settled.loaded ? (
+                  <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>
+                ) : group ? (
+                  group.issues.map((issue) => (
+                    <IssueRow
+                      key={issue.id}
+                      issue={issue}
+                      picked={issue.identifier === picked}
+                      onPick={onPick}
+                      onWorkOn={onWorkOn}
+                    />
+                  ))
+                ) : (
+                  <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
+                )}
+              </Group>
+            );
+          })}
       </div>
     </div>
   );
@@ -519,20 +533,27 @@ function FilterMenu({
 /// with. Linear is still one click away — the pane's own row carries the
 /// button — but it is the second thing offered rather than the first.
 ///
-/// No start button. It would have to name a project, and this page is
-/// workspace-wide — so the button either guesses which repo the work belongs in
-/// or grows a picker of its own beside every row. Tagging a session with `#` in
-/// the composer already starts work against an issue, from a place that knows
-/// which project it is in.
+/// "Work on it" starts nothing. It cannot: this page is workspace-wide, so a
+/// button that spawned a session would have to guess which repo the work belongs
+/// in. It hands the reader to the empty composer with the issue already tagged
+/// instead — which is the one place that *does* know how to ask, since the
+/// project, the model and the harness are all still sitting there unpicked.
 function IssueRow({
   issue,
   picked,
   onPick,
+  onWorkOn,
 }: {
   issue: Issue;
   picked: boolean;
   onPick: (issue: Issue) => void;
+  onWorkOn: (issue: Issue) => void;
 }) {
+  const workOn = (e: SyntheticEvent) => {
+    e.stopPropagation();
+    onWorkOn(issue);
+  };
+
   return (
     <button
       type="button"
@@ -561,6 +582,34 @@ function IssueRow({
           {issue.project}
         </span>
       )}
+
+      {/* A span carrying `buttonVariants` rather than a `Button`, because the
+          row itself is a button and a nested one is invalid markup — the click
+          would open the pane instead. Same bargain `FileLink` makes, and
+          `stopPropagation` on the key as well as the click is what keeps them
+          apart.
+
+          Its slot is reserved whether or not it is drawn: revealed by adding
+          width, the whole row would shift under the cursor that revealed it.
+          Hidden by opacity rather than `display`, or it could not be reached by
+          keyboard at all. */}
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={workOn}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          workOn(e);
+        }}
+        className={cn(
+          buttonVariants({ variant: "ghost", size: "xs" }),
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+        )}
+      >
+        Work on it
+        <Plus data-icon="inline-end" />
+      </span>
 
       {/* Who has it. Unassigned draws nothing rather than a placeholder head:
           the question is "whose is this", and a row with no answer should read

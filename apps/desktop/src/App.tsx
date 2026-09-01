@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { Plus } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 
 import "./App.css";
 import Chat from "@/components/Chat";
@@ -63,6 +66,7 @@ import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft } from "@/hooks/useDraft";
+import { issueTag } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
@@ -706,6 +710,18 @@ function App() {
     go();
   };
 
+  /// Leaves the issues page for the empty composer, with the issue tagged in
+  /// the draft.
+  ///
+  /// The tag alone is the whole handoff: `expand_tags` resolves it out of the
+  /// prompt text on send, so nothing is linked here. It lands in the composer
+  /// rather than starting a session, which is what leaves the project, the
+  /// model and the harness still to be picked.
+  const workOnIssue = (issue: { identifier: string; title: string }) => {
+    goToSession(handleNewSession);
+    appendToDraft(null, issueTag(issue.identifier, issue.title));
+  };
+
   /// Writes a session's settled or pinned flag and takes the sidebar wherever
   /// that write left the row.
   ///
@@ -998,6 +1014,17 @@ function App() {
               onRefresh: pickedIssueData.refresh,
               loading: pickedIssueData.loading,
             }}
+            // In the strip rather than on the issue's own row, beside Refresh:
+            // it acts on the issue the pane is showing, which is the pane's
+            // whole subject — the same slot Open takes for a session.
+            actions={
+              pickedIssue && (
+                <Button variant="secondary" size="xs" onClick={() => workOnIssue(pickedIssue)}>
+                  Work on it
+                  <Plus data-icon="inline-end" />
+                </Button>
+              )
+            }
           >
             <TabBody active>
               <IssuePanel
@@ -1186,6 +1213,7 @@ function App() {
           active={issuesOpen}
           picked={pickedIssue?.identifier ?? null}
           onPick={setPickedIssue}
+          onWorkOn={workOnIssue}
           refreshRef={issuesRefreshRef}
           connected={issuesConnected}
           onConnect={integrations.connect}

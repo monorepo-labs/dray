@@ -295,6 +295,10 @@ export function useIssues(active: boolean) {
     query,
     setQuery,
     loading: open.loading || settled.loading,
+    /// Whether the open list has ever answered. `issues.length` cannot say it:
+    /// an empty workspace and a first read still in flight both read as zero
+    /// rows, and the page draws them differently.
+    loaded: open.loaded,
     // The open half's failure is the one worth a banner: it is the list the
     // page is *for*, and a settled group that could not be read says so by
     // staying empty under a header the reader opened.
