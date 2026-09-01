@@ -78,9 +78,15 @@ impl Engine {
         // Absent where an `unload` landed between the load and here, which is
         // the reader deleting or switching the model in that gap. Reported
         // rather than loaded again: they have said they are done with it.
-        let Some(mut loaded) = guard.take().filter(|l| l.model_id == model_id) else {
+        //
+        // Read before it is taken, never `take().filter(..)` — that empties the
+        // slot on the way past, so a stale call bailing here would evict the
+        // model a live one just put in.
+        if !Self::holds(&guard, model_id) {
             bail!("the transcription model changed while transcribing");
-        };
+        }
+
+        let mut loaded = guard.take().expect("checked above");
 
         let (loaded, result) = tokio::task::spawn_blocking(move || {
             let result = loaded
@@ -133,7 +139,7 @@ impl Engine {
     /// once however many callers ask for it at the same moment — a warm at
     /// launch and a mic press a second later are the ordinary case.
     async fn ensure_loaded(&self, token: u64, model_id: &str, path: &Path) -> Result<()> {
-        if self.holds(model_id).await {
+        if Self::holds(&*self.loaded.lock().await, model_id) {
             return Ok(());
         }
 
@@ -141,7 +147,15 @@ impl Engine {
 
         // Re-checked: the load this queued behind is usually the very one it
         // was about to start.
-        if self.holds(model_id).await {
+        if Self::holds(&*self.loaded.lock().await, model_id) {
+            return Ok(());
+        }
+
+        // Queuing on `loading` can take as long as a whole load, so the token
+        // is judged here as well as at the install — a warm that went stale
+        // while waiting must not pull several hundred megabytes off disk it
+        // will then throw away.
+        if self.token() != token {
             return Ok(());
         }
 
@@ -161,12 +175,10 @@ impl Engine {
         Ok(())
     }
 
-    async fn holds(&self, model_id: &str) -> bool {
-        self.loaded
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|l| l.model_id == model_id)
+    /// Whether the slot holds this model. Takes the guard rather than the lock
+    /// so a caller already holding it can ask without deadlocking itself.
+    fn holds(slot: &Option<Loaded>, model_id: &str) -> bool {
+        slot.as_ref().is_some_and(|l| l.model_id == model_id)
     }
 
     /// Drops the loaded model.
