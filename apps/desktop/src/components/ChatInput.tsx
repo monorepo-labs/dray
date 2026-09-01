@@ -864,11 +864,35 @@ export default function ChatInput({
                       title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
                       className="rounded-full"
                     >
-                      {stopping ? (
-                        <Square className="fill-current" />
-                      ) : (
-                        <ArrowUp strokeWidth={2} />
-                      )}
+                      {/* Both icons are mounted and stacked in one grid cell,
+                          so the swap is a transition rather than a remount —
+                          React would otherwise tear one out and put the other
+                          in with nothing to animate between them.
+
+                          Both directions run the same length. Shortening the
+                          return to Send was tried and read as a flinch — the
+                          two icons are one control changing its mind, and a
+                          swap that goes out slower than it comes back stops
+                          looking like one movement. */}
+                      <span className="grid size-4 place-items-center">
+                        <ArrowUp
+                          strokeWidth={2}
+                          className={cn(
+                            "col-start-1 row-start-1 transition-all duration-200 ease-out motion-reduce:transition-none",
+                            stopping
+                              ? "scale-50 rotate-90 opacity-0"
+                              : "scale-100 rotate-0 opacity-100",
+                          )}
+                        />
+                        <Square
+                          className={cn(
+                            "col-start-1 row-start-1 fill-current transition-all duration-200 ease-out motion-reduce:transition-none",
+                            stopping
+                              ? "scale-100 rotate-0 opacity-100"
+                              : "scale-50 -rotate-90 opacity-0",
+                          )}
+                        />
+                      </span>
                     </Button>
                   );
                 })()}
