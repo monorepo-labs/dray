@@ -1,23 +1,23 @@
 {
-  "version": "0.12.3",
-  "notes": "### Added\n\n- **A failed dictation keeps the audio.** The samples used to go into\n  the engine and vanish with it, so the only cure was saying the whole\n  thing again. Every recording is now parked on disk until the model\n  answers, and Retry sends the same audio back through — including when\n  the failure was a model that wasn't installed yet.\n- **Other audio is muted while you dictate.** The microphone hears the\n  speakers, so anything playing landed in the transcript as words nobody\n  said. Your prior state is restored, so a machine already muted stays\n  that way.\n\n### Changed\n\n- **The model loads before you press the mic**, at launch and whenever\n  the selected model changes. Loading takes seconds and a first\n  dictation is usually one word, so it could not hide behind the\n  recording. Costs a resident model for a reader who never dictates.\n- **Deleting a worktree from a notice is ⌘⇧D**, since plain ⌘D is\n  dictation app-wide and a card raising itself mid-sentence must not\n  take a chord the composer owns.\n- **The composer takes focus when dictated words land**, and only if\n  you are still on the session you spoke into.",
-  "pub_date": "2026-09-01T14:40:54.154Z",
+  "version": "0.12.4",
+  "notes": "### Fixed\n\n- **Quitting no longer crashes.** Once a transcription model had been\n  loaded, quitting raised a crash report every time: the Metal backend\n  frees its residency sets on the way out, after the Metal runtime is\n  already down. 0.12.3 made this everyone's problem by loading a model\n  at launch rather than on the first press.",
+  "pub_date": "2026-09-01T15:24:22.139Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
     }
   }
 }
