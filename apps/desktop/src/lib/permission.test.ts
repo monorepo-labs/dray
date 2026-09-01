@@ -17,21 +17,27 @@ describe("honoursMode", () => {
     expect(honoursMode("codex", "auto")).toBe(true);
   });
 
-  /// pi's two survive for opposite reasons: `plan` is a spawn flag pi enforces,
-  /// and `bypassPermissions` is what pi does with no permission extension
-  /// loaded. The other two have nothing behind them at all.
-  it("leaves pi the two that mean something", () => {
-    expect(honoursMode("pi", "plan")).toBe(true);
-    expect(honoursMode("pi", "bypassPermissions")).toBe(true);
-    expect(honoursMode("pi", "manual")).toBe(false);
-    expect(honoursMode("pi", "auto")).toBe(false);
+  /// pi honours none of them: its gate is an extension the reader installs and
+  /// configures on disk, which no stance passed at spawn can reach.
+  it("leaves pi nothing to pick between", () => {
+    for (const mode of ["plan", "manual", "auto", "bypassPermissions"] as const) {
+      expect(honoursMode("pi", mode)).toBe(false);
+    }
   });
 });
 
 describe("stanceFor", () => {
   it("keeps a stance the harness honours", () => {
-    expect(stanceFor("pi", "plan")).toBe("plan");
+    expect(stanceFor("claude_code", "plan")).toBe("plan");
     expect(stanceFor("codex", "manual")).toBe("manual");
+  });
+
+  /// pi honours nothing, so every stance records as the ungated one it will
+  /// actually run at — `plan` included, now that the picker no longer offers it.
+  it("records pi as ungated whatever it inherits", () => {
+    for (const mode of ["plan", "manual", "auto", "bypassPermissions"] as const) {
+      expect(stanceFor("pi", mode)).toBe("bypassPermissions");
+    }
   });
 
   /// A session can arrive on a stance its harness never offered — a spawned one

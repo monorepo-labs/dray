@@ -74,6 +74,16 @@ const PLAN_TOOLS: [&str; 4] = ["read", "grep", "find", "ls"];
 /// `stanceFor` in [permission.ts](../../../../src/lib/permission.ts) is the
 /// other half of this and coerces anything else to `BypassPermissions` before
 /// it is recorded, so a session's index entry says what actually happened.
+///
+/// **The composer no longer offers `Plan`, and this stays anyway.** pi honours
+/// no stance now — its gate is an extension the reader installs and configures
+/// on disk, which nothing passed at spawn can reach, so a picker there could
+/// only have set something no extension reads. Two routes still reach `Plan`:
+/// an index entry written before it was withdrawn, and a spawned session
+/// inheriting a `plan` parent, which `orchestration` deliberately does not
+/// clamp. Deleting this would run both of those ungated while their entry still
+/// read `plan` — a restriction claimed and not carried, which is the alarming
+/// direction. Enforcement kept, control withdrawn.
 fn tools_for(mode: ApprovalPolicy) -> Option<Vec<&'static str>> {
     match mode {
         ApprovalPolicy::Plan => Some(PLAN_TOOLS.to_vec()),
