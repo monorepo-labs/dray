@@ -61,9 +61,9 @@ names are ours. Dray, the default, is our own.
 | Theme                                                   | By                       |
 | ------------------------------------------------------- | ------------------------ |
 | [Catppuccin](https://github.com/catppuccin/catppuccin)   | the Catppuccin org       |
-| [gruvbox](https://github.com/morhetz/gruvbox)            | Pavel Pertsev (@morhetz) |
-| [One Dark Pro](https://github.com/Binaryify/OneDark-Pro) | Binaryify                |
 | [Cobalt2](https://github.com/wesbos/cobalt2-vscode)      | Wes Bos, Roberto Achar   |
+| [One Dark Pro](https://github.com/Binaryify/OneDark-Pro) | Binaryify                |
+| [gruvbox](https://github.com/morhetz/gruvbox)            | Pavel Pertsev (@morhetz) |
 
 Full licence texts are in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) —
 MIT asks the notice travel with the work, so a credit line on its own is not

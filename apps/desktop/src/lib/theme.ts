@@ -59,11 +59,15 @@ export const THEMES: Theme[] = [
     flatInFullscreen: true,
     credit: { name: "Catppuccin", url: "https://github.com/catppuccin/catppuccin" },
   },
+  // Ported from `cobalt2-vscode` rather than `wesbos/cobalt2`, and the distinction
+  // is the licence rather than the colours: the original Sublime repo carries no
+  // licence file at all, so it grants nothing. The VS Code port is MIT.
   {
-    id: "gruvbox",
-    label: "Gruvbox",
+    id: "cobalt2",
+    label: "Cobalt2",
     flatInFullscreen: true,
-    credit: { name: "gruvbox", url: "https://github.com/morhetz/gruvbox" },
+    darkOnly: true,
+    credit: { name: "Cobalt2", url: "https://github.com/wesbos/cobalt2-vscode" },
   },
   // Dark only because the upstream theme is. Atom's One Light is the obvious light
   // side and is deliberately not reached for here: it is a different project under a
@@ -75,15 +79,11 @@ export const THEMES: Theme[] = [
     darkOnly: true,
     credit: { name: "One Dark Pro", url: "https://github.com/Binaryify/OneDark-Pro" },
   },
-  // Ported from `cobalt2-vscode` rather than `wesbos/cobalt2`, and the distinction
-  // is the licence rather than the colours: the original Sublime repo carries no
-  // licence file at all, so it grants nothing. The VS Code port is MIT.
   {
-    id: "cobalt2",
-    label: "Cobalt2",
+    id: "gruvbox",
+    label: "Gruvbox",
     flatInFullscreen: true,
-    darkOnly: true,
-    credit: { name: "Cobalt2", url: "https://github.com/wesbos/cobalt2-vscode" },
+    credit: { name: "gruvbox", url: "https://github.com/morhetz/gruvbox" },
   },
 ];
 
