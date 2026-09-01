@@ -821,6 +821,13 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
+                // Tao ends the process with `process::exit`, which runs the C
+                // atexit chain — and ggml-metal's global device registry frees
+                // its Metal residency sets there, after the Metal runtime is
+                // already down, and `ggml_abort`s. So every quit filed a crash
+                // report. `process::exit` skips every Rust destructor anyway,
+                // so skipping the C half too costs nothing we still rely on.
+                unsafe { libc::_exit(0) }
             }
         });
 }
