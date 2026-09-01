@@ -746,9 +746,6 @@ export default function Sidebar({
               <Fragment key={group.kind === "pinned" ? "pinned" : group.projectPath}>
                 {heading !== null ? (
                   <div
-                    // Full path on hover, since two projects can share a folder
-                    // name. Pinned has no one path to name.
-                    title={group.kind === "project" ? group.projectPath : undefined}
                     className={cn(
                       "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
                       // The first heading sits under the filter's own row, which
@@ -1002,8 +999,10 @@ function ProjectFilter({
       // The negative margin gives the band height without moving anything:
       // `items-center` keeps the column itself where it was. No focus ring: the
       // band is a strip of empty space, so a box drawn around it reads as a
-      // stray frame rather than as the label being focused.
-      className="group/projects -my-1 flex min-w-0 flex-1 cursor-pointer flex-col items-start py-1 pl-1 focus-visible:outline-none"
+      // stray frame rather than as the label being focused. Unselectable
+      // because the label is the target's face, not prose — a double-click
+      // aimed at the band highlighting it is only ever an accident.
+      className="group/projects -my-1 flex min-w-0 flex-1 cursor-pointer flex-col items-start py-1 pl-1 select-none focus-visible:outline-none"
     >
       {/* Hugs its own contents, so the dots stay centred under the label rather
           than under the band. */}
