@@ -64,10 +64,19 @@ export default function QuestionRequest({
   // blocked until this is answered, so it is the one thing on screen the reader
   // has to deal with. Once per mount — a re-render must not yank the caret back
   // out of the free-text box.
+  //
+  // The free-text box is the fallback, and it is not a nicety: pi's `input` and
+  // `editor` dialogs carry no choices at all, so a choice-only query found
+  // nothing and left focus in the composer. Typing then edited a prompt while
+  // the agent sat blocked behind the card, and Enter sent it.
   useEffect(() => {
-    formRef.current
-      ?.querySelector<HTMLInputElement>("[data-slot=questionnaire-choice] input")
-      ?.focus();
+    const form = formRef.current;
+    const target =
+      form?.querySelector<HTMLInputElement>(
+        "[data-slot=questionnaire-choice] input"
+      ) ?? form?.querySelector<HTMLInputElement>("[data-slot=questionnaire-input]");
+
+    target?.focus();
   }, []);
 
   return (
@@ -106,8 +115,15 @@ export default function QuestionRequest({
             {/* `header` is deliberately unrendered. It is a chip-sized label the
                 model writes alongside the question — "Indentation" over "Tabs or
                 spaces?" — which reads as a heading for a section that isn't
-                there, and says nothing the question doesn't. */}
-            <QuestionnaireTitle className="text-chat font-medium">
+                there, and says nothing the question doesn't. Anything a reader
+                must see belongs in the question text; `pi/dialog.rs` puts a
+                dialog's title there for exactly that reason.
+
+                `whitespace-pre-line` because that text can be two sentences: a
+                pi `confirm` carries a short question and the detail under it,
+                and run together on one line the detail reads as part of the
+                question. */}
+            <QuestionnaireTitle className="text-chat font-medium whitespace-pre-line">
               {question.question}
             </QuestionnaireTitle>
 
@@ -137,15 +153,24 @@ export default function QuestionRequest({
                 </QuestionnaireChoice>
               ))}
 
-              {/* Always offered, never optional. The harness promises the user a
-                  free-text box and tells the model not to add an "Other" option
-                  because of it, so leaving this out removes an answer the
-                  question was written to allow. */}
-              <QuestionnaireInput
-                aria-label="Another answer"
-                placeholder="Something else…"
-                className="min-h-0 h-8"
-              />
+              {/* Offered wherever the asker can take an answer that isn't on
+                  the list, which is every `AskUserQuestion`: the harness
+                  promises the user a box and tells the model not to add an
+                  "Other" option because of it, so dropping it there removes an
+                  answer the question was written to allow.
+
+                  pi's extension dialogs are the exception and the flag is
+                  theirs. A `select` resolves to one of the extension's own
+                  labels and a `confirm` to a boolean, so a typed sentence is
+                  not an answer either can be given — the extension would be
+                  handed a string it has no branch for. */}
+              {question.freeText && (
+                <QuestionnaireInput
+                  aria-label="Another answer"
+                  placeholder="Something else…"
+                  className="min-h-0 h-8"
+                />
+              )}
             </QuestionnaireChoices>
           </QuestionnaireItem>
         ))}

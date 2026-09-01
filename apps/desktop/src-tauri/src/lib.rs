@@ -43,7 +43,11 @@ async fn send_msg(
     session_id: &str,
     prompt: &str,
     attachment_paths: Vec<String>,
-    harness: &str,
+    // Deserialized straight into the enum rather than matched off a string: the
+    // wire spelling is `Harness`'s own `snake_case`, so a third arm here was a
+    // third list to keep in step and its failure was one word — "invalid
+    // harness" — for a name the enum could have named.
+    harness: Harness,
     model: ModelId,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
@@ -55,10 +59,13 @@ async fn send_msg(
     app: AppHandle,
     manager: State<'_, SessionManager>,
 ) -> Result<SendOutcome, String> {
-    // `from_wire_name`, not the tolerant `Deserialize`: this is the composer
-    // naming a harness to *start*, so an unknown one is a caller error, where
-    // off the index it is a session some other build wrote.
-    let harness = Harness::from_wire_name(harness).ok_or("invalid harness")?;
+    // The tolerant `Deserialize` reads a name this build doesn't know as
+    // `Other`, which is right off the index and wrong here: this is the
+    // composer naming a harness to *start*, so an unknown one is a caller
+    // error rather than a session some other build wrote.
+    if !harness.names_a_cli() {
+        return Err("invalid harness".to_string());
+    }
 
     manager
         .send_msg(
@@ -117,16 +124,50 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 async fn agent_availability() -> Vec<AgentAvailability> {
     let mut out = Vec::new();
     for harness in harness::Harness::ALL {
+        let (reason, curable) = unavailable_reason(harness).await;
+
         out.push(AgentAvailability {
             harness,
             available: binpath::agent_available(harness).await,
             label: harness.label().to_string(),
-            install_command: harness.install_command().to_string(),
-            docs_url: harness.docs_url().to_string(),
+            reason,
+            install_command: curable.then(|| harness.install_command().to_string()),
+            docs_url: curable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
+            login_hint: harness.login_hint().map(str::to_string),
         });
     }
     out
+}
+
+/// What to say about an agent that cannot run, and whether the install command
+/// is what fixes it.
+///
+/// Three answers wearing one word before this, and each wants a different cure.
+/// A CLI that is not on the machine is fixed by installing it. One that is
+/// present and too old is fixed by *re-running* the same installer, so the
+/// buttons still help — but a sentence saying "not installed" tells the reader
+/// to fix something they already have. And a harness this build cannot drive
+/// yet is fixed by neither, so it draws the sentence alone: sending someone to
+/// an installer for a CLI that is sitting right there is the worst of the
+/// three.
+async fn unavailable_reason(harness: harness::Harness) -> (String, bool) {
+    let label = harness.label();
+
+    // Asked before drivability, and the order is the whole of it. A CLI that is
+    // not on the machine is missing whatever this build could do with it, and
+    // the install command is the answer — the same one Claude and Codex give.
+    // Checking drivability first told a reader with no pi at all that Dray
+    // cannot run pi, which is true, useless, and hides the one thing they could
+    // have done about it.
+    if !binpath::agent_installed(harness).await {
+        return (
+            format!("{label} isn't installed, so this session can't start."),
+            true,
+        );
+    }
+
+    (format!("Dray can't run {label} sessions yet."), false)
 }
 
 #[derive(serde::Serialize, ts_rs::TS)]
@@ -136,19 +177,48 @@ struct AgentAvailability {
     harness: harness::Harness,
     available: bool,
     label: String,
-    install_command: String,
-    docs_url: String,
+    /// The sentence the composer's notice draws. Built here for the reason the
+    /// cure travels with the answer: a row saying "unavailable" and nothing
+    /// else is the errno reworded.
+    reason: String,
+    /// What fixes it, where installing is what fixes it. `None` where the CLI
+    /// is not the problem, so the notice draws no buttons rather than buttons
+    /// that change nothing.
+    install_command: Option<String>,
+    docs_url: Option<String>,
     /// Read by a different notice from the two fields above it: those cure a
     /// CLI that is missing, this cures one that is logged out. Both are facts
     /// about the harness rather than about the machine, so they ride one read.
     login_command: String,
+    /// What is left to do once `login_command` has run, for a harness whose
+    /// command is not the whole cure. `None` for the two whose command is.
+    login_hint: Option<String>,
 }
 
+/// The models a harness can run here.
+///
+/// Async because one harness's answer is not a table: pi is multi-provider, so
+/// its list depends on which providers the reader has logged into and only pi
+/// can say. That read is cached and cheap after the first, and it answers empty
+/// rather than erroring — a reader with no provider configured is in an
+/// ordinary state, and the picker draws its own empty row for it.
 #[tauri::command]
-fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
     // Defaulted rather than required so a caller that predates the second
     // harness still gets the list it always got.
-    models::models_for(harness.unwrap_or(harness::Harness::ClaudeCode))
+    match harness.unwrap_or(harness::Harness::ClaudeCode) {
+        harness::Harness::Pi => harness::pi::models::list().await,
+        other => models::models_for(other),
+    }
+}
+
+/// Drops pi's cached model list, so the next read asks pi again.
+///
+/// For the refresh a reader asks for by hand: they have just logged a provider
+/// in, and waiting out the freshness window would read as the list being wrong.
+#[tauri::command]
+async fn refresh_models() {
+    harness::pi::models::forget().await;
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
@@ -187,13 +257,28 @@ fn settings_view() -> settings::SettingsView {
     }
 }
 
-/// The slash commands available in a directory. Cached per directory in the
-/// backend, so the composer may call this whenever the project changes.
+/// The slash commands available in a directory, for the harness that will run
+/// there. Cached per directory in the backend, so the composer may call this
+/// whenever the project or the harness changes.
+///
+/// The harness is what makes this answer anything true. Every picker used to be
+/// filled from Claude Code's `initialize` whatever the session ran on, so a pi
+/// session offered `/compact`, `/dataviz` and 145 others pi has never heard of
+/// — and typing one sent it as a prompt, because pi expands no command it does
+/// not know.
+///
+/// Codex answers none, and that is its own fact rather than a gap here: nothing
+/// in `codex app-server` publishes a command list, so an empty picker is the
+/// honest one.
 #[tauri::command]
-async fn list_slash_commands(cwd: &str) -> Result<Vec<SlashCommand>, String> {
-    harness::claude_code::commands::list_commands(cwd)
-        .await
-        .map_err(|e| e.to_string())
+async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, String> {
+    Ok(match harness {
+        Harness::ClaudeCode => harness::claude_code::commands::list_commands(cwd)
+            .await
+            .map_err(|e| e.to_string())?,
+        Harness::Pi => harness::pi::commands::list_commands(cwd).await,
+        Harness::Codex | Harness::Other(_) => Vec::new(),
+    })
 }
 
 /// Starts indexing a directory's files so the `@` picker opens on a warm index.
@@ -479,9 +564,10 @@ async fn fork_session(
 async fn interrupt_session(
     session_id: &str,
     manager: State<'_, SessionManager>,
+    app: AppHandle,
 ) -> Result<(), String> {
     manager
-        .interrupt(session_id)
+        .interrupt(session_id, &app)
         .await
         .map_err(|e| e.to_string())
 }
@@ -635,6 +721,7 @@ pub fn run() {
             send_msg,
             read_attachments,
             list_models,
+            refresh_models,
             agent_availability,
             get_settings,
             set_analytics_enabled,

@@ -1,0 +1,11 @@
+{
+  "bin": "${PI_BIN}",
+  "cwd": "${PROBE}/work",
+  "env": { "PATH": "${NODE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" },
+  "args": ["--no-session", "--no-skills", "--no-context-files"],
+  "steps": [
+    { "sleep": 3000 },
+    { "send": { "id": "m1", "type": "get_available_models" }, "sleep": 1500 },
+    { "send": { "id": "m2", "type": "get_state" }, "sleep": 1200 }
+  ]
+}

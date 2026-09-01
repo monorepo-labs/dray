@@ -378,18 +378,37 @@ impl SessionManager {
         from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
-        let model_spec = find_model(model).with_context(|| format!("unknown model {model:?}"))?;
+        // Resolved against whichever table can name it. The two single-vendor
+        // harnesses have one written here; pi's list is answered by the machine,
+        // so its models are looked up in what the probe last reported.
+        //
+        // `None` is legal for pi alone and means "let pi decide" — its own
+        // settings already name a model, and Dray naming one it might have no
+        // key for is the worst possible first run.
+        let model_spec = match harness {
+            Harness::Pi => crate::harness::pi::models::find(&model).await,
+            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
+        };
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
         // defaults and the `dray` CLI's own flags — so nothing upstream makes
         // them agree. Refused rather than quietly repaired: a session running on
         // a model nobody picked is the failure that looks like success.
-        if !runs_on(model, harness) {
-            bail!("{} is not a {} model", model_spec.label, harness.label());
+        //
+        // The unset sentinel is exempt: it names no model, so there is nothing
+        // to be wrong about, and refusing it would refuse pi's own default.
+        if !model.is_unset() && !runs_on(&model, harness) {
+            let named = model_spec
+                .as_ref()
+                .map(|m| m.label.clone())
+                .unwrap_or_else(|| model.to_string());
+            bail!("{named} is not a {} model", harness.label());
         }
 
-        let effort = resolve_effort(&model_spec, effort);
+        let effort = model_spec
+            .as_ref()
+            .and_then(|spec| resolve_effort(spec, effort));
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -428,20 +447,21 @@ impl SessionManager {
                 );
             }
 
-            // Codex has no `-w`, so its worktree has to be one Dray makes — the
-            // same route `--from` already takes, started where the CLI would
-            // have started it. Without this the tree is never created, and the
-            // session bails inside `Session::init` with its row already in the
-            // index: a sidebar row pointing at a directory that never existed
-            // and can never start. `HEAD` where there is no remote, matching
-            // what the CLI itself falls back to when the fetch fails.
-            let codex_base = match (harness, use_worktree, base_ref) {
-                (Harness::Codex, true, None) => {
+            // Only Claude Code's `-w` makes its own tree. For everything else
+            // the tree has to be one Dray makes — the same route `--from`
+            // already takes, started where the CLI would have started it.
+            // Without this the tree is never created, and the session bails
+            // inside `Session::init` with its row already in the index: a
+            // sidebar row pointing at a directory that never existed and can
+            // never start. `HEAD` where there is no remote, matching what the
+            // CLI itself falls back to when the fetch fails.
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
+                (false, true, None) => {
                     Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
                 }
                 _ => None,
             };
-            let base_ref = base_ref.or(codex_base.as_deref());
+            let base_ref = base_ref.or(resolved_base.as_deref());
 
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
@@ -566,7 +586,7 @@ impl SessionManager {
             let mut session = Session::init(
                 session_id,
                 harness,
-                &model_spec,
+                model_spec.as_ref(),
                 effort,
                 permission_mode,
                 spawn_cwd,
@@ -650,9 +670,11 @@ impl SessionManager {
         // `thread/resume` carries the conversation across it.
         let respawn_needed = !busy
             && sessions_guard.get(session_id).is_some_and(|s| {
-                s.effort != effort
-                    || (s.harness == Harness::Codex
-                        && (s.model != model || s.permission_mode != permission_mode))
+                let caps = s.harness.caps();
+
+                (s.effort != effort && !caps.applies_effort_in_place)
+                    || (s.model != model && !caps.applies_model_in_place)
+                    || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
             });
 
         if respawn_needed {
@@ -697,7 +719,7 @@ impl SessionManager {
         if let Some(s) = sessions_guard.get_mut(session_id) {
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model, effort, permission_mode).await?;
+            touch_session_index_item(session_id, model.clone(), effort, permission_mode).await?;
 
             // A model call is open, so this prompt is held rather than sent, and
             // none of the live controls below fire with it. `set_model` and
@@ -722,6 +744,18 @@ impl SessionManager {
                 // The cost is that there is no window to cancel in — which the
                 // UI states by itself, since a prompt written straight through
                 // draws no pending row and so offers no Esc.
+                // pi holds a steering queue of its own and drains it at the next
+                // tool-call boundary inside the run, so there is nothing for
+                // Dray's queue to do here and no boundary for it to race for —
+                // whether or not a tool happens to be running right now.
+                if matches!(s.stdin, Transport::Pi(_)) {
+                    s.steer(prompt, attachment_paths, issues, from, app).await?;
+                    return Ok(SendOutcome {
+                        issues: linked,
+                        ..Default::default()
+                    });
+                }
+
                 if tool_in_flight {
                     s.queue_and_flush(prompt, attachment_paths, issues, from, app)
                         .await;
@@ -739,18 +773,28 @@ impl SessionManager {
                 });
             }
 
-            // Claude's alone: both are control requests on its own channel, and
-            // Codex has neither. Reaching here with a Codex session whose pick
-            // changed means the respawn above was skipped because work was
-            // outstanding — the index still records the pick, so the next idle
-            // send applies it, exactly as it does for effort.
-            if s.harness == Harness::ClaudeCode {
-                if s.model != model {
-                    s.set_model(&model_spec).await?;
-                }
-                if s.permission_mode != permission_mode {
-                    s.set_permission_mode(permission_mode).await?;
-                }
+            // The other side of the respawn rule above, and read off the same
+            // table so the two cannot disagree. They were two equality tests
+            // against two different harnesses, which is one edit away from a
+            // pick that neither respawns for nor applies — recorded in the
+            // index and never reaching the child.
+            //
+            // Reaching here with a changed pick at all means the respawn was
+            // skipped because work was outstanding. The index still records it,
+            // so the next idle send applies it.
+            let caps = s.harness.caps();
+
+            if caps.applies_model_in_place && s.model != model {
+                // A harness that applies a model in place is one Dray names a
+                // default for, so the spec is there by construction — the table
+                // and `default_model_for` agree on which harnesses those are.
+                let spec = model_spec
+                    .as_ref()
+                    .context("no model to switch the session to")?;
+                s.set_model(spec).await?;
+            }
+            if caps.applies_permission_in_place && s.permission_mode != permission_mode {
+                s.set_permission_mode(permission_mode).await?;
             }
 
             // Last thing before the prompt goes down the pipe: the child is idle
@@ -772,35 +816,80 @@ impl SessionManager {
         // carries out the CLI's, after which the session resumes like any other.
         let fork_from = indexed.as_ref().and_then(|i| i.fork_from.clone());
 
-        // A fork into a *new* worktree is the one resume whose tree does not
-        // exist yet, so it needs the creation treatment: `-w` to make the tree,
-        // the project root to spawn in because a missing directory cannot be
-        // `chdir`ed into, and the fork point as a baseline because there is no
-        // tree to snapshot. Every other resume runs in a directory already there.
-        let pending_worktree = fork_from
+        // A fork into a *new* worktree is the one resume whose directory does
+        // not exist yet, and a missing directory cannot be `chdir`ed into.
+        //
+        // Read off `fork_from`, which is why every fork sets it now — pi's has
+        // no CLI half to perform and ignores it, but "this fork has not spawned
+        // yet" is a fact both need and only the entry can carry. Probing the
+        // directory instead looks equivalent and is worse: a tree deleted by
+        // hand would also read as unmade, and remaking it runs
+        // `worktree add -B`, which *resets the branch* and takes any commits on
+        // it with it.
+        let unmade_worktree = fork_from
             .as_ref()
             .and(indexed.as_ref())
-            .and_then(|i| i.worktree_name.clone());
+            .filter(|item| item.worktree_name.is_some())
+            .cloned();
 
-        let (spawn_cwd, baseline) = match (&pending_worktree, &indexed) {
-            (Some(_), Some(item)) => (
-                item.project_path.clone(),
-                git::base_ref_tree(&item.project_path).await,
-            ),
-            _ => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
+        // Two ways to make it, and which one is the harness's own answer.
+        // Claude Code takes `-w` and creates the tree itself after launch, so
+        // the child spawns at the project root and the baseline can only be the
+        // fork point it is about to resolve. Every other harness needs the tree
+        // to exist first — so Dray makes it, and then the ordinary snapshot
+        // works, which is the more exact of the two baselines.
+        let mut pending_worktree = None;
+        let (spawn_cwd, baseline) = match unmade_worktree {
+            Some(item) if harness.caps().creates_own_worktree => {
+                pending_worktree = item.worktree_name.clone();
+                let baseline = git::base_ref_tree(&item.project_path).await;
+                (item.project_path.clone(), baseline)
+            }
+            Some(item) => {
+                // Made only once, however many times this runs. The tree is
+                // created before the child is spawned and `fork_from` is only
+                // cleared after it, so a spawn that fails leaves the
+                // instruction standing and the next send arrives here again —
+                // where `worktree add` on a path that exists refuses outright,
+                // and a fork that failed to start once could never start at
+                // all. Nothing is lost by adopting the tree: it belongs to this
+                // fork, whose first send is what this is, so there is no work
+                // in it yet to be surprised by.
+                if !tokio::fs::try_exists(&session_cwd).await.unwrap_or(false) {
+                    let name = item.worktree_name.clone().expect("checked just above");
+                    let base = git::default_base(&item.project_path)
+                        .await
+                        .unwrap_or_else(|| "HEAD".into());
+
+                    git::create_worktree(&item.project_path, &name, &base).await?;
+                }
+
+                (session_cwd.clone(), git::snapshot_tree(&session_cwd).await)
+            }
+            None => (session_cwd.clone(), git::snapshot_tree(&session_cwd).await),
         };
+
+        // The CLI's half of a fork, for a harness that has one. pi's fork was
+        // whole the moment its session file was copied, so it gets `None` here
+        // and its spawn is an ordinary resume — while `fork_from` above stays
+        // unfiltered, because both harnesses need the *other* fact in it: that
+        // this is a fork's first send, so a worktree may still have to be made
+        // and the instruction has to be cleared afterwards.
+        let cli_fork = fork_from
+            .as_deref()
+            .filter(|_| harness.caps().fork_needs_cli);
 
         let mut session = Session::init(
             session_id,
             harness,
-            &model_spec,
+            model_spec.as_ref(),
             effort,
             permission_mode,
             &spawn_cwd,
             &session_cwd,
             pending_worktree.as_deref(),
             is_new_session,
-            fork_from.as_deref(),
+            cli_fork,
             app,
         )
         .await?;
@@ -871,8 +960,8 @@ impl SessionManager {
         // the log and appends an index entry before any child exists, so a
         // refusal that late leaves a row in the sidebar holding a whole
         // conversation it can never carry on.
-        if parent.harness == Harness::Codex {
-            bail!("Codex sessions cannot be forked yet");
+        if !parent.harness.caps().forkable {
+            bail!("{} sessions cannot be forked yet", parent.harness.label());
         }
         if !parent.harness.names_a_cli() {
             bail!(
@@ -909,6 +998,21 @@ impl SessionManager {
             bail!("this session has no conversation to fork yet");
         }
 
+        // For pi this *is* the fork: its resume handle is the file, so the copy
+        // carries the conversation and the first send is an ordinary spawn.
+        // Propagated rather than logged, unlike the delete path's — a fork whose
+        // file failed to copy would open as an empty session claiming to hold
+        // its parent's conversation, and the entry has not been written yet, so
+        // failing here leaves nothing behind.
+        //
+        // Asked for by harness rather than by probing the path, so that a
+        // missing file is an error where it means something and never reached
+        // where it is the ordinary state. Every other harness forks through the
+        // CLI and has no transcript of its own here.
+        if parent.harness == Harness::Pi {
+            crate::store::copy_pi_session_file(session_id, fork_id).await?;
+        }
+
         let item = parent.fork(fork_id, worktree_name.as_deref());
         append_session_index_item(item.clone()).await?;
 
@@ -928,7 +1032,17 @@ impl SessionManager {
     /// — so a session held open by a task alone had a Stop button that acked and
     /// changed nothing. Naming the tasks here is what makes one Stop mean stop.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
-    pub async fn interrupt(&self, session_id: &str) -> Result<()> {
+    pub async fn interrupt(&self, session_id: &str, app: &AppHandle) -> Result<()> {
+        // pi stops off its own desk, for `answer_questions`' reason and one
+        // more: the optimistic row the composer draws for a new session puts
+        // Stop on screen while the backend `Session` is still a local inside
+        // `send_msg`, so reaching for the map here answered "no running session"
+        // over a blocked agent. pi has no background tasks either, so the desk
+        // does the whole job and the fan-out below is Claude Code's alone.
+        if let Some(desk) = crate::harness::pi::desk::find(session_id) {
+            return desk.stop(app).await;
+        }
+
         let mut sessions_guard = self.sessions.lock().await;
         let Some(session) = sessions_guard.get_mut(session_id) else {
             bail!("no running session {session_id}");
@@ -1000,6 +1114,15 @@ impl SessionManager {
         answers: HashMap<String, String>,
         app: &AppHandle,
     ) -> Result<()> {
+        // pi answers off its own desk and never touches the map below, because
+        // it can ask while the map does not hold the session or while this very
+        // lock is held by the send it is blocking. Both left the card drawn with
+        // buttons that did nothing until the prompt timed out 30 seconds later.
+        // See `harness::pi::desk`.
+        if let Some(desk) = crate::harness::pi::desk::find(session_id) {
+            return desk.answer(request_id, &answers, app);
+        }
+
         let mut sessions_guard = self.sessions.lock().await;
         let Some(session) = sessions_guard.get_mut(session_id) else {
             bail!("no running session {session_id}");
@@ -1079,6 +1202,15 @@ impl SessionManager {
             eprintln!("could not delete attachments for {session_id}: {e}");
         }
 
+        // pi keeps its own transcript beside Dray's, because the *file* is its
+        // resume handle. Left behind it is a whole conversation on disk that
+        // nothing can ever reach again, the index entry naming it having just
+        // gone. Best-effort and unconditional: a non-pi session has no such
+        // file, and a missing one reads as done.
+        if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
+            eprintln!("could not delete pi's session file for {session_id}: {e}");
+        }
+
         delete_session(session_id).await
     }
 
@@ -1125,18 +1257,25 @@ pub enum Transport {
     /// The conversation every Codex write is addressed to, and the settings
     /// each one restates. See [`Thread`](crate::harness::codex::Thread).
     Rpc(crate::harness::codex::Thread),
+    /// pi's connection. A peer like Codex's, but not JSON-RPC and with nothing
+    /// to address a write to: pi has one conversation per process, so the
+    /// client is the whole of it.
+    Pi(crate::harness::pi::rpc::PiClient),
 }
 
 impl Transport {
     /// The line-writing pipe, for the paths that only Claude Code has.
     ///
-    /// An error rather than a silent no-op: reaching one of those with a Codex
-    /// session is a wiring mistake, and a control that quietly does nothing is
-    /// the failure mode `control.rs` exists to warn about.
+    /// An error rather than a silent no-op: reaching one of those with a
+    /// session that writes some other way is a wiring mistake, and a control
+    /// that quietly does nothing is the failure mode `control.rs` exists to
+    /// warn about.
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) => bail!("this control is not wired for Codex yet"),
+            Transport::Rpc(_) | Transport::Pi(_) => {
+                bail!("this control is not wired for this harness")
+            }
         }
     }
 }
@@ -1166,12 +1305,16 @@ pub struct Session {
 }
 
 impl Session {
-    /// Spawns the child process for the given harness. Only `ClaudeCode` is
-    /// implemented; other harnesses bail.
+    /// Spawns the child process for the given harness.
+    ///
+    /// `model` is optional because pi's is: it is multi-provider, so Dray names
+    /// no default it could be wrong about and lets pi's own settings decide.
+    /// The other two name one in `default_model_for`, so `None` reaching them
+    /// is a caller that skipped resolution rather than a state to spawn in.
     pub async fn init(
         session_id: &str,
         harness: Harness,
-        model: &Model,
+        model: Option<&Model>,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
         cwd: &str,
@@ -1187,7 +1330,7 @@ impl Session {
             Harness::ClaudeCode => {
                 claude_code::init(
                     session_id,
-                    model,
+                    model.context("a Claude Code session needs a model")?,
                     effort,
                     permission_mode,
                     cwd,
@@ -1215,6 +1358,41 @@ impl Session {
                 }
 
                 crate::harness::codex::init(
+                    session_id,
+                    model.context("a Codex session needs a model")?,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
+            Harness::Pi => {
+                // A worktree reaches pi as a directory that already exists,
+                // never as a name to create — pi has no `-w`, so `send_msg`
+                // resolves a base and makes the tree itself. A name arriving
+                // here is a caller that skipped that, and a session that
+                // silently ran in the wrong tree is worth refusing outright.
+                if worktree_name.is_some() {
+                    bail!("pi cannot create a worktree — it has to be made first");
+                }
+                // A fork reaches here as an ordinary resume, because pi's fork
+                // is whole the moment its session file is copied — `send_msg`
+                // filters the instruction out on `fork_needs_cli`. One arriving
+                // anyway is a caller expecting a CLI-side fork pi cannot
+                // perform: its own `fork` names the file rather than taking the
+                // one Dray chose, since `--fork` and `--session` are refused
+                // together.
+                if fork_from.is_some() {
+                    bail!("a pi fork is the copied session file — there is nothing to resume from");
+                }
+
+                // `None` where pi picked for itself. The spawn omits `--model`
+                // there, which is the honest answer for a multi-provider CLI
+                // whose user has already configured one.
+                crate::harness::pi::init(
                     session_id,
                     model,
                     effort,
@@ -1261,6 +1439,7 @@ impl Session {
             issues,
             baseline,
             false,
+            crate::harness::pi::Delivery::WhenIdle,
             from,
             &self.seq,
             &self.events,
@@ -1310,6 +1489,53 @@ impl Session {
         self.queued.lock().await.pop()
     }
 
+    /// Sends a prompt *into* the turn already running, for a harness that takes
+    /// one.
+    ///
+    /// pi does, and it is the reason this is not a queue. `streamingBehavior:
+    /// "steer"` puts the prompt on pi's own steering queue, which it drains at
+    /// the next tool-call boundary inside the run — before the model call after
+    /// it, verified live. So the boundary is pi's to find and the prompt is
+    /// pi's to hold, where Dray's queue exists precisely because Claude Code
+    /// offers neither.
+    ///
+    /// Written through rather than held, which trades the same thing
+    /// [`queue_and_flush`](Self::queue_and_flush) trades and buys more for it:
+    /// there is no window to cancel in, and in exchange the prompt lands at a
+    /// boundary pi guarantees rather than one this side raced for. The UI
+    /// states the trade by itself — a prompt written straight through draws no
+    /// pending row, so it offers no Esc.
+    pub async fn steer(
+        &mut self,
+        prompt: &str,
+        attachment_paths: &[String],
+        issues: &[IssueRef],
+        from: Option<MessageSender>,
+        app: &AppHandle,
+    ) -> Result<()> {
+        deliver_prompt(
+            &self.id,
+            self.harness,
+            prompt,
+            attachment_paths,
+            issues,
+            // No baseline, for the reason a flushed prompt has none: the
+            // changes panel pairs the newest baseline with the newest head
+            // after it, so a snapshot taken mid-turn would cut the running
+            // turn's range in two and credit it with only the work that
+            // followed this prompt.
+            None,
+            false,
+            crate::harness::pi::Delivery::Steer,
+            from,
+            &self.seq,
+            &self.events,
+            &self.stdin,
+            app,
+        )
+        .await
+    }
+
     /// Holds a prompt and immediately hands it over, for the case where a tool
     /// call is already running.
     ///
@@ -1342,14 +1568,12 @@ impl Session {
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
     pub async fn set_model(&mut self, model: &Model) -> Result<()> {
-        let model_arg = model.id.as_arg().context("model has no CLI alias")?;
-
         write_line(
             self.stdin.lines()?,
-            &ControlLine::new(ControlRequest::SetModel { model: model_arg }),
+            &ControlLine::new(ControlRequest::SetModel { model: &model.arg }),
         )
         .await?;
-        self.model = model.id;
+        self.model = model.id.clone();
 
         Ok(())
     }
@@ -1366,6 +1590,14 @@ impl Session {
         // reports the stop — nothing waits here for the turn to actually end.
         if let Transport::Rpc(thread) = &self.stdin {
             return crate::harness::codex::interrupt_turn(thread).await;
+        }
+
+        // pi never reaches here: its Stop goes through
+        // [`pi::desk`](crate::harness::pi::desk), which is registered for the
+        // life of the reader. Arriving means the desk has gone and the child
+        // with it, so there is nothing left to abort.
+        if matches!(self.stdin, Transport::Pi(_)) {
+            bail!("that pi session is no longer running");
         }
 
         write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
@@ -1517,6 +1749,16 @@ impl Session {
         answers: HashMap<String, String>,
         app: &AppHandle,
     ) -> Result<()> {
+        // Refused *before* the entry is taken, which is the whole of the
+        // ordering. pi never reaches here — its answers go through
+        // [`pi::desk`](crate::harness::pi::desk) — so arriving means the desk
+        // has gone and the child with it. Taking the entry first and refusing
+        // second consumed the one thing the reader's own retirement needed to
+        // find, so the card it could no longer answer was never retired either.
+        if matches!(self.stdin, Transport::Pi(_)) {
+            bail!("that pi session is no longer running");
+        }
+
         let pending = {
             let mut guard = self
                 .pending_permissions
@@ -1528,42 +1770,87 @@ impl Session {
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
 
-        write_line(self.stdin.lines()?, &answer_response(request_id, &pending, &answers)).await?;
+        write_line(
+            self.stdin.lines()?,
+            &answer_response(request_id, &pending, &answers),
+        )
+        .await?;
 
-        let payload = AgentEventPayload::PermissionDecided {
-            request_id: request_id.to_string(),
-            tool_use_id: pending.tool_use_id,
-            behavior: PermissionBehavior::Allow,
-            label: if answers.is_empty() {
-                "Skipped".to_string()
-            } else {
-                "Answered".to_string()
-            },
-            automatic: false,
-        };
-
-        let decision = AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: self.id.clone(),
-            harness: self.harness,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: now_rfc3339(),
-            turn_id: None,
-            subagent: None,
-            payload,
-            raw: None,
-        };
+        let decision = dialog_decided(
+            &self.id,
+            self.harness,
+            &self.seq,
+            request_id,
+            pending.tool_use_id,
+            answers.is_empty(),
+        );
 
         app.emit("agent_event", &decision)?;
 
         Ok(())
     }
 
-    /// Kills the child process. Takes `self` by value — a killed session can't
+    /// Ends the child process. Takes `self` by value — a stopped session can't
     /// be reused.
+    ///
+    /// pi is asked to exit rather than killed, and that is not politeness: it
+    /// holds `~/.pi/agent/auth.json.lock` while it runs and a `SIGKILL`ed one
+    /// leaves it behind, so the cost of killing lands on the **next** pi, which
+    /// waits that stale lock out for ~30s before answering anything. Every
+    /// caller here is one where another pi follows — a respawn for an effort
+    /// change, an update install, a delete and retry.
     pub async fn kill(mut self) -> Result<()> {
+        if let Transport::Pi(client) = &self.stdin {
+            // The desk is deliberately *not* closed here. Its reader owns that,
+            // and closing ahead of the shutdown meant every explicit kill — a
+            // respawn, a delete, a first send that failed — left the reader
+            // nothing to retire and its cards up for good. Until EOF reaches the
+            // reader an answer still fails honestly: `close` breaks the writer,
+            // so the reply errors rather than being claimed as delivered.
+            crate::harness::pi::shutdown(&mut self.child, client).await;
+            return Ok(());
+        }
+
         let _ = self.child.kill().await?;
         Ok(())
+    }
+}
+
+/// The event that retires an answered question's card.
+///
+/// Shared with [`pi::desk`](crate::harness::pi::desk), which answers pi's
+/// dialogs without going through the session map at all — so this is the one
+/// place the shape is stated. Two copies would differ on exactly the field
+/// nobody is watching, and the card is retired by this event alone.
+///
+/// Always `Allow`: a question is not a consent, the call runs either way, and
+/// the answer *is* the reply. `Skipped` is a real answer too — pi resolves the
+/// dialog to the default it was built with — so the label reports which of the
+/// two happened rather than whether anything did.
+pub fn dialog_decided(
+    session_id: &str,
+    harness: Harness,
+    seq: &Arc<AtomicU64>,
+    request_id: &str,
+    tool_use_id: String,
+    skipped: bool,
+) -> AgentEvent {
+    AgentEvent {
+        id: Uuid::now_v7().to_string(),
+        session_id: session_id.to_string(),
+        harness,
+        seq: seq.fetch_add(1, Relaxed),
+        ts: now_rfc3339(),
+        turn_id: None,
+        subagent: None,
+        payload: AgentEventPayload::PermissionDecided {
+            request_id: request_id.to_string(),
+            tool_use_id,
+            behavior: PermissionBehavior::Allow,
+            label: if skipped { "Skipped" } else { "Answered" }.to_string(),
+            automatic: false,
+        },
+        raw: None,
     }
 }
 
@@ -1603,6 +1890,9 @@ async fn deliver_prompt(
     issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
+    // Where this lands on a harness that can take a prompt into a turn already
+    // running. Ignored by every other transport, which has one way in.
+    delivery: crate::harness::pi::Delivery,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
@@ -1614,7 +1904,7 @@ async fn deliver_prompt(
     // Ahead of the event, because it is what decides the event's own text:
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
-    let prepared = attachments::prepare(session_id, prompt, attachment_paths).await?;
+    let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
 
     let payload = AgentEventPayload::UserMessage {
@@ -1662,6 +1952,12 @@ async fn deliver_prompt(
     // ride a different shape there and are not wired yet; the text still goes.
     if let Transport::Rpc(thread) = transport {
         return crate::harness::codex::start_turn(thread, &text).await;
+    }
+    // pi takes a prompt as a command whose answer says it was accepted, so the
+    // write is the send rather than a line the child picks up on its own
+    // schedule.
+    if let Transport::Pi(client) = transport {
+        return crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await;
     }
     let stdin = transport.lines()?;
 
@@ -1934,6 +2230,8 @@ pub async fn flush_queued(
             &message.issues,
             None,
             true,
+            // A flush runs at a boundary, so there is no turn to steer into.
+            crate::harness::pi::Delivery::WhenIdle,
             message.from,
             seq,
             events,
@@ -2251,7 +2549,7 @@ mod tests {
         let mut mapper = Mapper::default();
         let mut tracker = StatusTracker::default();
 
-        let mut check = |tracker: &StatusTracker| {
+        let check = |tracker: &StatusTracker| {
             assert_eq!(
                 tracker.turn_in_flight(),
                 tracker.status() == SessionStatus::InProgress,

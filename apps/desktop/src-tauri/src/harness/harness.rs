@@ -9,6 +9,9 @@ pub mod claude_code;
 #[path = "codex/codex.rs"]
 pub mod codex;
 
+#[path = "pi/pi.rs"]
+pub mod pi;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -106,6 +109,42 @@ mod wire_tests {
 }
 
 #[cfg(test)]
+mod capability_tests {
+    use super::Harness;
+
+    /// Claude Code is the only CLI with a worktree flag, and a harness wrongly
+    /// marked here never gets a tree at all — it bails inside `Session::init`
+    /// with its index row already written.
+    #[test]
+    fn only_claude_code_makes_its_own_worktree() {
+        assert!(Harness::ClaudeCode.caps().creates_own_worktree);
+
+        for harness in Harness::ALL {
+            if harness != Harness::ClaudeCode {
+                assert!(
+                    !harness.caps().creates_own_worktree,
+                    "{harness:?} has no `-w`, so Dray has to make the tree"
+                );
+            }
+        }
+    }
+
+    /// No CLI here has a `set_effort`, so an effort change always replaces the
+    /// child. Stated because it is the one field that is `false` for a reason
+    /// nothing else in the table shares, and a `true` here would silently drop
+    /// the change.
+    #[test]
+    fn an_effort_change_always_replaces_the_child() {
+        for harness in Harness::ALL {
+            assert!(
+                !harness.caps().applies_effort_in_place,
+                "{harness:?} claims an effort route no CLI here has"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod install_tests {
     use super::Harness;
 
@@ -129,12 +168,20 @@ mod install_tests {
         }
 
         // And they are not each other's. One `match` arm copied and left
-        // unedited is the way this goes wrong, and it reads as correct.
-        assert_ne!(
-            Harness::ClaudeCode.install_command(),
-            Harness::Codex.install_command()
-        );
-        assert_ne!(Harness::ClaudeCode.docs_url(), Harness::Codex.docs_url());
+        // unedited is the way this goes wrong, and it reads as correct. Over
+        // every pair rather than the one pair, or the third harness ships
+        // Codex's installer and this still passes.
+        for (i, a) in Harness::ALL.iter().enumerate() {
+            for b in &Harness::ALL[i + 1..] {
+                assert_ne!(
+                    a.install_command(),
+                    b.install_command(),
+                    "{a:?} and {b:?} share an install command"
+                );
+                assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
+                assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
+            }
+        }
     }
 
     /// The login command is stated twice — once for the reader to copy, once
@@ -189,6 +236,7 @@ use ts_rs::TS;
 pub enum Harness {
     ClaudeCode,
     Codex,
+    Pi,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -243,14 +291,24 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 2] = [Harness::ClaudeCode, Harness::Codex];
+    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::Pi];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
     /// index entry holds.
+    ///
+    /// Every caller that needs the *set* of spellings builds it from
+    /// [`Harness::ALL`] rather than writing a second list — that second copy is
+    /// what drifts, and `--harness pi` was once refused by a hand-written match
+    /// in `orchestration` for a harness the app could already run.
+    ///
+    /// Spelled out here rather than read back out of the serializer: the enum
+    /// serializes `into = "String"` *through this function*, so asking serde
+    /// would recurse.
     pub fn wire_name(self) -> String {
         match self {
             Harness::ClaudeCode => "claude_code".to_string(),
             Harness::Codex => "codex".to_string(),
+            Harness::Pi => "pi".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -270,12 +328,158 @@ impl Harness {
     pub fn names_a_cli(self) -> bool {
         !matches!(self, Harness::Other(_))
     }
+}
+
+/// What [`crate::session`] has to know about a harness, in one place.
+///
+/// Every field here was an equality test against a *named* harness scattered
+/// through that file. Two of the eight branch sites are `match` arms the
+/// compiler checks; the other six were `==`, and a third harness slips past
+/// every one of them silently and in the wrong direction — the worktree rule
+/// kept treating "make the tree myself" as Codex's alone, so a pi worktree
+/// session would have bailed inside `Session::init` with its index row already
+/// written.
+///
+/// **These describe what Dray does, not what the CLI can do.** pi answers
+/// `set_model` on a live connection and this build still respawns for one,
+/// because nothing here drives that connection yet. A `false` is safe in a way
+/// a `true` is not: replacing a child always applies the change, where applying
+/// it in place is only correct if the wire really carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Whether this build can drive the harness at all.
+    ///
+    /// Answered *before* a session exists, because the index row is written
+    /// ahead of the spawn: a harness that bails inside `Session::init` leaves a
+    /// sidebar row pointing at an agent that can never run, and every retry
+    /// fails against it identically. All three are true today; the field stays
+    /// because the next harness is typed before it is driven, and that window
+    /// is exactly what this closes.
+    pub drivable: bool,
+    /// Whether the CLI creates a worktree itself, given a name.
+    ///
+    /// Claude Code's `-w` does. Nothing else has such a flag, so Dray resolves
+    /// a base ref and makes the tree before the spawn — and a harness wrongly
+    /// marked `true` here never gets a tree at all.
+    pub creates_own_worktree: bool,
+    /// Whether a running child can be moved onto another model without being
+    /// replaced.
+    pub applies_model_in_place: bool,
+    /// Whether a running child can be moved onto another effort.
+    ///
+    /// False for Claude Code, and that is the CLI's own fact rather than a
+    /// choice here: there is no `set_effort` control request, and an `effort`
+    /// field on `set_model` is accepted and ignored.
+    pub applies_effort_in_place: bool,
+    /// Whether a running child can be moved onto another permission mode.
+    pub applies_permission_in_place: bool,
+    /// Whether the CLI expands an `@path` mention in a prompt into the file's
+    /// contents.
+    ///
+    /// Claude Code's own parser does, before the model turn and with no tool
+    /// call on the wire, which is what makes a non-image attachment cost a path
+    /// rather than a context window. Neither other harness has such a parser, so
+    /// an `@path` sent there reaches the model as literal punctuation it has to
+    /// guess the meaning of — the file is named in prose instead, which any
+    /// model can read and act on with its own tools.
+    pub expands_at_mentions: bool,
+    /// Whether a session can be forked.
+    pub forkable: bool,
+    /// Whether a fork has a second half only the CLI can perform.
+    ///
+    /// Claude Code's does. What Dray copies is its *own* log; the conversation
+    /// the CLI holds is forked lazily on the first send, with
+    /// `--resume <parent> --fork-session`, so the fork's index entry carries
+    /// `fork_from` as an instruction until that happens.
+    ///
+    /// pi's does not, and that makes pi's fork the simpler of the two. Its
+    /// resume handle is a *file*, so copying that file is the entire fork — the
+    /// first send is an ordinary spawn on a session that already holds the
+    /// conversation. Setting `fork_from` there would be an instruction with
+    /// nothing to carry it out.
+    pub fork_needs_cli: bool,
+}
+
+impl Harness {
+    /// The one table. Exhaustive, so a harness added later is asked every
+    /// question the last one was asked.
+    pub fn caps(self) -> Capabilities {
+        match self {
+            // Both switches are control requests on its own channel, verified
+            // against the CLI: the reply after `set_model` comes from the new
+            // model, so no respawn is needed.
+            Harness::ClaudeCode => Capabilities {
+                drivable: true,
+                creates_own_worktree: true,
+                applies_model_in_place: true,
+                applies_effort_in_place: false,
+                applies_permission_in_place: true,
+                expands_at_mentions: true,
+                forkable: true,
+                fork_needs_cli: true,
+            },
+            // `turn/start` carries model, effort and approval policy on every
+            // turn, so this is not for want of a per-turn override. A stance is
+            // *two* settings and only one has a turn-level form: `sandbox` is
+            // thread-level, so applying a change in place would move the
+            // approval policy and leave the sandbox where it was — exactly the
+            // half-applied setting that makes a session freer than was asked
+            // for. Respawning settles both, and `thread/resume` carries the
+            // conversation across it.
+            Harness::Codex => Capabilities {
+                drivable: true,
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
+            // pi has no worktree flag, and the three settings are ones it takes
+            // at spawn and nowhere else, so changing any of them is a respawn.
+            //
+            // Forkable, and by the cheapest route of the three. pi's own `fork`
+            // is still the wrong tool — `clone` hijacks the running process,
+            // and `--fork` and `--session` are refused together, so pi would
+            // name the file rather than take the one Dray chose. It is not
+            // needed: pi's resume handle *is* a file, so copying it is the whole
+            // fork. Verified live — a pi spawned on a copy reports the new path,
+            // counts the parent's messages, and quotes its first prompt back.
+            Harness::Pi => Capabilities {
+                drivable: true,
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                expands_at_mentions: false,
+                forkable: true,
+                fork_needs_cli: false,
+            },
+            // A session some other build wrote and this one cannot run. `false`
+            // throughout, and `drivable` is what this variant exists for: the
+            // row still draws, so the reader can see the session is there and
+            // read its transcript, and nothing will try to spawn a child for a
+            // CLI it cannot name.
+            Harness::Other(_) => Capabilities {
+                drivable: false,
+                creates_own_worktree: false,
+                applies_model_in_place: false,
+                applies_effort_in_place: false,
+                applies_permission_in_place: false,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
+        }
+    }
 
     /// What to call it in a sentence somebody reads.
     pub fn label(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "Claude Code",
             Harness::Codex => "Codex",
+            Harness::Pi => "pi",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -299,6 +503,10 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
             Harness::Codex => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            // pi also publishes to npm, and the page below names that route for
+            // anyone who wants it. This is the one that needs nothing already
+            // installed, which is the rule the other two follow.
+            Harness::Pi => "curl -fsSL https://pi.dev/install.sh | sh",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -314,6 +522,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "https://code.claude.com/docs/en/quickstart",
             Harness::Codex => "https://learn.chatgpt.com/docs/codex/cli",
+            Harness::Pi => "https://pi.dev/docs/latest",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -331,6 +540,13 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude auth login",
             Harness::Codex => "codex login",
+            // pi's login is a slash command inside its TUI, not a subcommand:
+            // `pi auth` offers `print-api-key`, `print-bearer-token` and
+            // `check` and nothing that signs anyone in. So the command opens
+            // pi, and [`Harness::login_hint`] carries the rest — bare `pi`
+            // lands the reader in a TUI with no idea what to type next, which
+            // is a cure that does not cure.
+            Harness::Pi => "pi",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -348,7 +564,72 @@ impl Harness {
         match self {
             Harness::ClaudeCode => &["auth", "login"],
             Harness::Codex => &["login"],
+            Harness::Pi => &[],
             Harness::Other(_) => &[],
         }
+    }
+
+    /// What the reader still has to do once [`Harness::login_command`] has run,
+    /// or `None` where the command is the whole cure.
+    ///
+    /// Only pi needs one, and it needs one badly: its command opens a TUI
+    /// rather than starting a login, so without this the notice hands over a
+    /// terminal and no next step. Drawn beside the sentence rather than in the
+    /// button's tooltip — a reader who clicks without hovering would otherwise
+    /// meet the TUI never having been told.
+    ///
+    /// pi's credentials are **per provider**, which is why the hint names
+    /// picking one. It is also why pi can be logged in for one provider and
+    /// out for another, and why a working Codex session says nothing about
+    /// whether pi can reach the same account: the two keep separate stores.
+    pub fn login_hint(self) -> Option<&'static str> {
+        match self {
+            Harness::Pi => Some("then type /login and pick the provider"),
+            Harness::ClaudeCode | Harness::Codex | Harness::Other(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::Harness;
+
+    /// A harness that can be driven has to be able to say how to log into it.
+    /// An empty command reaches the notice as a Log in button that runs the
+    /// binary bare and a Copy button that copies nothing.
+    #[test]
+    fn every_drivable_harness_names_a_login() {
+        for harness in Harness::ALL {
+            assert!(
+                !harness.login_command().is_empty(),
+                "{harness:?} draws a login notice with no command in it"
+            );
+        }
+    }
+
+    /// The pairing is the rule, not pi being the one with a hint. A command
+    /// that lands somewhere other than a login needs the rest said out loud,
+    /// and `login_args` is how you tell the two apart: an empty one means the
+    /// command opens the CLI rather than starting anything.
+    #[test]
+    fn a_login_that_only_opens_the_cli_carries_a_hint() {
+        for harness in Harness::ALL {
+            if harness.login_args().is_empty() {
+                assert!(
+                    harness.login_hint().is_some(),
+                    "{harness:?} opens its CLI and says nothing about what to do there"
+                );
+            }
+        }
+    }
+
+    /// `Other` is the harness this build cannot name, let alone drive, so it
+    /// must not claim a cure. It is excluded from `ALL`, which is why the two
+    /// tests above cannot cover it.
+    #[test]
+    fn an_unknown_harness_offers_nothing() {
+        let unknown = Harness::Other("opencode");
+        assert!(unknown.login_command().is_empty());
+        assert!(unknown.login_hint().is_none());
     }
 }

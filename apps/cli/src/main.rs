@@ -485,11 +485,16 @@ fn download(url: &str, path: &Path) -> Result<(), String> {
     Err("curl or wget is required to update.".into())
 }
 
-/// Both agents read the same SKILL.md format from their own home dir, so one
-/// file lands in two places. Every install writes both: which agent the user
-/// runs is not something the CLI can know, and a Codex session with no skill
-/// is told by its prompt to read one.
-const SKILL_HOMES: [&str; 2] = [".claude", ".codex"];
+/// Every agent reads the same SKILL.md format from its own home dir, so one
+/// file lands in three places. Every install writes all of them: which agent
+/// the user runs is not something the CLI can know, and a session with no
+/// skill is told by its prompt to read one.
+///
+/// pi's is `.agents`, not `.pi` — its trust manager treats `~/.agents/skills`
+/// as the user-global directory, where a project-local one needs trusting
+/// first. Read out of the shipped binary rather than guessed: a skill written
+/// to a directory pi does not read is a feature that fails in total silence.
+const SKILL_HOMES: [&str; 3] = [".claude", ".codex", ".agents"];
 
 fn install_skill() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("could not resolve your home directory")?;

@@ -11,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { honoursMode, stanceFor } from "@/lib/permission";
 import { cn } from "@/lib/utils";
 import type { ApprovalPolicy, Harness } from "@/types/events";
 
@@ -29,13 +30,15 @@ const MODES: { id: ApprovalPolicy; label: string }[] = [
   { id: "auto", label: "Auto" },
 ];
 
-/// Codex has no plan mode. Its own three stances are ask / approve-for-me /
-/// full access, and `plan` maps onto read-only-and-ask — close, but a stance
-/// Codex never names, so offering it would promise a mode it does not have.
-/// Hidden rather than disabled: a dead entry in a four-item menu reads as a bug.
-const HIDDEN_BY_HARNESS: Partial<Record<Harness, ApprovalPolicy[]>> = {
-  codex: ["plan"],
-};
+/// Whether this harness has a stance worth picking between.
+///
+/// One honoured stance is not a menu — it is a control with a single state,
+/// which reads as broken. Zero is pi, which honours none: its gate is an
+/// extension the reader installs and configures on disk, so there is nothing
+/// here for a picker to set.
+export function offersPermissionModes(harness: Harness): boolean {
+  return MODES.filter((m) => honoursMode(harness, m.id)).length > 1;
+}
 
 export default function PermissionSelector({
   harness,
@@ -46,13 +49,21 @@ export default function PermissionSelector({
   value: ApprovalPolicy;
   onChange: (mode: ApprovalPolicy) => void;
 }) {
-  const modes = MODES.filter(
-    (m) => !(HIDDEN_BY_HARNESS[harness] ?? []).includes(m.id),
-  );
-  // Read off the full list, not the filtered one: a session can be on a stance
-  // this harness does not offer — a spawned one takes its parent's — and a
-  // trigger reading "Permissions" would say less than the stance it is on.
-  const selected = MODES.find((m) => m.id === value);
+  // Hidden rather than disabled: a dead entry in a four-item menu reads as a
+  // bug, where a shorter menu reads as this harness having fewer stances.
+  const modes = MODES.filter((m) => honoursMode(harness, m.id));
+  // The stance that will actually be applied, not the one the composer happens
+  // to hold. The pref is global and defaults to `auto`, so a reader arriving
+  // from Claude Code carries `auto` into a pi session — which honours no such
+  // thing, and whose send path folds it to `bypassPermissions`. Reading `value`
+  // raw put "Auto" on a session about to run ungated: the milder name over the
+  // wider behaviour, which is the worse direction to be wrong in. `stanceFor`
+  // is the same call the send path records with, so the two cannot disagree.
+  //
+  // The radio group reads it too, or the menu opens with nothing checked
+  // underneath a trigger that just named a stance.
+  const stance = stanceFor(harness, value);
+  const selected = MODES.find((m) => m.id === stance);
 
   return (
     <DropdownMenu>
@@ -78,7 +89,7 @@ export default function PermissionSelector({
 
       <DropdownMenuContent align="start" className="min-w-44">
         <DropdownMenuRadioGroup
-          value={value}
+          value={stance}
           onValueChange={(v) => onChange(v as ApprovalPolicy)}
         >
           {modes.map((mode) => (

@@ -1,31 +1,38 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
-import type { SlashCommand } from "@/types/events";
+import type { Harness, SlashCommand } from "@/types/events";
 
-/// Kept across mounts, keyed by directory. The backend caches these too, so this
-/// only saves the round trip — but the composer remounts on every session
-/// switch, and a picker that refetched each time would open empty on the first
-/// keystroke after every switch.
+/// Kept across mounts, keyed by harness *and* directory. The backend caches
+/// these too, so this only saves the round trip — but the composer remounts on
+/// every session switch, and a picker that refetched each time would open empty
+/// on the first keystroke after every switch.
+///
+/// The harness is half the key because it is half the answer: each publishes its
+/// own commands, and pi has never heard of Claude Code's.
 const cache = new Map<string, SlashCommand[]>();
 
-/// The slash commands available in `cwd`, empty until they land.
+/// The slash commands `harness` offers in `cwd`, empty until they land.
 ///
 /// A failed probe resolves to no commands rather than surfacing an error: the
 /// picker is an accelerator for text the user can always type by hand, so it
 /// staying shut is a smaller failure than an error banner over the composer.
-export function useSlashCommands(cwd: string | null): SlashCommand[] {
+export function useSlashCommands(
+  cwd: string | null,
+  harness: Harness,
+): SlashCommand[] {
+  const key = cwd ? `${harness}\u0000${cwd}` : null;
   const [commands, setCommands] = useState<SlashCommand[]>(
-    () => (cwd ? cache.get(cwd) : undefined) ?? [],
+    () => (key ? cache.get(key) : undefined) ?? [],
   );
 
   useEffect(() => {
-    if (!cwd) {
+    if (!cwd || !key) {
       setCommands([]);
       return;
     }
 
-    const hit = cache.get(cwd);
+    const hit = cache.get(key);
     if (hit) {
       setCommands(hit);
       return;
@@ -39,9 +46,9 @@ export function useSlashCommands(cwd: string | null): SlashCommand[] {
     // commands is worse than offering none.
     setCommands([]);
 
-    invoke<SlashCommand[]>("list_slash_commands", { cwd })
+    invoke<SlashCommand[]>("list_slash_commands", { cwd, harness })
       .then((list) => {
-        cache.set(cwd, list);
+        cache.set(key, list);
         if (!cancelled) setCommands(list);
       })
       .catch((e) => {
@@ -52,7 +59,7 @@ export function useSlashCommands(cwd: string | null): SlashCommand[] {
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+  }, [cwd, harness, key]);
 
   return commands;
 }

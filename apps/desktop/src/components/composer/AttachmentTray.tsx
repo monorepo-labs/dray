@@ -18,11 +18,22 @@ import type { Attachment } from "@/types/events";
 export default function AttachmentTray({
   attachments,
   onRemove,
+  modelTakesImages = true,
 }: {
   attachments: Attachment[];
   onRemove: (path: string) => void;
+  /// Whether the picked model can be handed an image at all. Some pi models
+  /// report `input: ["text"]` and mean it.
+  modelTakesImages?: boolean;
 }) {
   if (!attachments.length) return null;
+
+  // Said, not enforced. The image is still sent, because the harness's own
+  // refusal names what was wrong where a guess made here could not — and Dray's
+  // copy of what a model accepts can be stale, or absent where the harness
+  // picked the model itself. Removing the tile, or refusing the drop, would act
+  // on that guess.
+  const warn = !modelTakesImages && attachments.some((a) => a.preview);
 
   return (
     // Spacing from the composer is the caller's, which is the only side that
@@ -78,6 +89,15 @@ export default function AttachmentTray({
           </button>
         </li>
       ))}
+
+      {warn && (
+        // Inside the list so it wraps with the tiles it is about, and full
+        // width so it reads as a line under them rather than a tile of its own.
+        <li className="w-full text-ui text-muted-foreground">
+          This model takes text only — the image will be sent, and the provider
+          may refuse it.
+        </li>
+      )}
     </ul>
   );
 }

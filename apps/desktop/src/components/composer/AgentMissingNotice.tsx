@@ -34,6 +34,12 @@ const COPIED_MS = 1600;
 /// npm: it needs nothing already on the machine, and it's the same route their
 /// own docs point at. The link sits beside the button rather than behind it for
 /// the reader without `curl`, or wary of piping one into a shell.
+///
+/// **The sentence is Rust's, and so is whether there are buttons at all.** An
+/// agent can be unavailable for a reason installing does not fix — a harness
+/// this build cannot drive yet — and offering an installer there sends the
+/// reader to fix something that is not broken. So a missing `installCommand`
+/// draws the sentence alone rather than a disabled pair.
 export default function AgentMissingNotice({ agent }: { agent: AgentAvailability }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,6 +47,7 @@ export default function AgentMissingNotice({ agent }: { agent: AgentAvailability
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
 
   const copy = async () => {
+    if (!agent.installCommand) return;
     try {
       await navigator.clipboard.writeText(agent.installCommand);
     } catch (err) {
@@ -54,19 +61,19 @@ export default function AgentMissingNotice({ agent }: { agent: AgentAvailability
 
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
-      <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-        {agent.label} isn&rsquo;t installed, so this session can&rsquo;t start.
-      </p>
+      <p className="min-w-0 flex-1 truncate text-ui text-foreground">{agent.reason}</p>
 
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Button variant="secondary" size="sm" onClick={() => void copy()}>
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          {copied ? "Copied" : "Copy command"}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => void openUrl(agent.docsUrl)}>
-          Install guide
-        </Button>
-      </div>
+      {agent.installCommand && agent.docsUrl && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button variant="secondary" size="sm" onClick={() => void copy()}>
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {copied ? "Copied" : "Copy command"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void openUrl(agent.docsUrl!)}>
+            Install guide
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,15 +1,36 @@
 import type { Harness, Model, ModelId } from "@/types/events";
 
+/// The one spelling of "nothing here can name the model".
+///
+/// Written by an index entry made before the model was known, and by an older
+/// build that read an id it did not recognise. `models.rs` holds the same
+/// constant and normalises the older `"unknown"` onto it on the way in, so this
+/// is the only spelling that reaches the frontend.
+///
+/// **Never drawn.** It is not a model name and there is no name to draw — a
+/// surface holding one shows the picker's own placeholder instead.
+export const UNSET_MODEL = "" as ModelId;
+
+export function isUnsetModel(id: ModelId): boolean {
+  return id === UNSET_MODEL;
+}
+
 /// What each harness opens on before its reader has picked anything, and what a
 /// session indexed without a model reads back as.
 ///
-/// The strong model in both cases, deliberately: the picker is one click away
-/// for anyone who wants cheaper, where a weak default costs a turn that has to
-/// be redone by hand. Mirrors `default_model_for` in `models/models.rs` — two
-/// readers that cannot call each other, so the rule is stated twice.
+/// The strong model where there is one, deliberately: the picker is one click
+/// away for anyone who wants cheaper, where a weak default costs a turn that
+/// has to be redone by hand. Mirrors `default_model_for` in `models/models.rs`
+/// — two readers that cannot call each other, so the rule is stated twice.
+///
+/// pi names none, and that is the honest answer rather than a gap. It is
+/// multi-provider, so any constant here might name a model the reader has no
+/// key for — and pi's own settings already say which one they want. The
+/// composer reads that back instead of seeding it.
 export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   claude_code: "opus",
   codex: "gpt56_sol",
+  pi: UNSET_MODEL,
 };
 
 /// Which model each harness was last left on. Absent key = never picked one.
@@ -43,6 +64,14 @@ export function rememberedModel(remembered: ModelByHarness, harness: Harness): M
 /// reading it as an answer is what put sessions on Fable and Sol.
 export function usableModel(models: Model[], picked: ModelId, harness: Harness): ModelId {
   if (models.length === 0 || models.some((m) => m.id === picked)) return picked;
+
   const fallback = DEFAULT_MODEL_FOR[harness];
+
+  // Unset is a real answer where the harness names no default: pi picks for
+  // itself, and the spawn omits the flag. Without this the repair below reads
+  // it as a pick to replace and lands on whichever model leads the list —
+  // overriding a choice the reader made in pi's own settings.
+  if (isUnsetModel(picked) && isUnsetModel(fallback)) return picked;
+
   return models.some((m) => m.id === fallback) ? fallback : models[0].id;
 }

@@ -222,13 +222,18 @@ mod tests {
     /// A query carrying a separator has to match against the whole relative
     /// path, not just the filename — that is how a reader disambiguates two
     /// files with the same name in different directories.
+    ///
+    /// The *shape* is asserted, not one filename. Naming a file made the test
+    /// hostage to which files exist: a second `composer/Model…` landing in the
+    /// tree scored the same and sorted ahead of it, failing a test about
+    /// separators for a reason that had nothing to do with them.
     #[test]
     fn matches_on_a_path_segment() {
         let hits = search(&repo(), "composer/Model", 5).unwrap();
+        let top = hits.first().map(|h| h.path.as_str()).unwrap_or_default();
 
-        assert_eq!(
-            hits.first().map(|h| h.path.as_str()),
-            Some("src/components/composer/ModelSelector.tsx"),
+        assert!(
+            top.starts_with("src/components/composer/Model"),
             "got {hits:?}"
         );
     }

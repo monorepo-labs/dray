@@ -1,0 +1,31 @@
+{
+  "bin": "${PI_BIN}",
+  "cwd": "${PROBE}/work",
+  "env": { "PATH": "${NODE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" },
+  "args": [
+    "--session",
+    "${PROBE}/sessions/dray-live.jsonl",
+    "--provider",
+    "xai",
+    "--model",
+    "grok-4.6",
+    "--thinking",
+    "low",
+    "--no-skills",
+    "--no-context-files"
+  ],
+  "steps": [
+    { "sleep": 3000 },
+    { "send": { "id": "q0", "type": "get_available_thinking_levels" }, "sleep": 900 },
+    {
+      "send": {
+        "id": "p1",
+        "type": "prompt",
+        "message": "Read notes.txt, then write a file out.txt containing exactly the word ok. Then reply with one short sentence and stop."
+      },
+      "waitFor": { "type": "agent_settled" },
+      "timeout": 180000
+    },
+    { "send": { "id": "q9", "type": "get_session_stats" }, "sleep": 1500 }
+  ]
+}

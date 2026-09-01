@@ -9,6 +9,7 @@
 //! rather than a context window. That means a non-image attachment needs no
 //! wire surface at all: it is prompt text by the time it leaves here.
 use anyhow::{Context, Result};
+use crate::harness::Harness;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -278,7 +279,19 @@ fn parse_data_url(url: &str) -> Option<(&str, &str)> {
 ///
 /// A file is *not* copied: its mention has to resolve for the model, and the
 /// point of the path is that it names the real file in the real tree.
-pub async fn prepare(session_id: &str, prompt: &str, paths: &[String]) -> Result<Prepared> {
+/// `harness` decides how a non-image attachment is named, and the difference is
+/// whether the CLI has a parser for it. Claude Code expands `@/abs/path` into
+/// the file's contents before the model turn, with no tool call on the wire —
+/// which is what makes a 40MB CSV cost a path rather than a context window.
+/// Neither other harness has such a parser, so the same string arrives as
+/// literal punctuation the model has to guess the meaning of. Named in prose
+/// there instead, which any model can read and act on with its own tools.
+pub async fn prepare(
+    session_id: &str,
+    prompt: &str,
+    paths: &[String],
+    harness: Harness,
+) -> Result<Prepared> {
     if paths.is_empty() {
         return Ok(Prepared {
             text: prompt.to_string(),
@@ -295,7 +308,11 @@ pub async fn prepare(session_id: &str, prompt: &str, paths: &[String]) -> Result
         };
 
         if !attachment.is_image {
-            mentions.push(format!("@{path}"));
+            mentions.push(if harness.caps().expands_at_mentions {
+                format!("@{path}")
+            } else {
+                format!("Attached file: {path}")
+            });
             continue;
         }
 
@@ -322,10 +339,18 @@ pub async fn prepare(session_id: &str, prompt: &str, paths: &[String]) -> Result
     // One newline, not two. This text is what the transcript renders, and it
     // renders `whitespace-pre-wrap` — a blank line here draws as a gap under the
     // message with no margin or padding anywhere that explains it.
+    // One line each where they are prose and one run where they are mentions:
+    // `@a @b` reads as a list, `Attached file: /a Attached file: /b` does not.
+    let joined = if harness.caps().expands_at_mentions {
+        mentions.join(" ")
+    } else {
+        mentions.join("\n")
+    };
+
     let text = match (prompt.trim().is_empty(), mentions.is_empty()) {
         (_, true) => prompt.to_string(),
-        (true, false) => mentions.join(" "),
-        (false, false) => format!("{prompt}\n{}", mentions.join(" ")),
+        (true, false) => joined,
+        (false, false) => format!("{prompt}\n{joined}"),
     };
 
     Ok(Prepared { text, images })
@@ -334,6 +359,45 @@ pub async fn prepare(session_id: &str, prompt: &str, paths: &[String]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file is named the way the CLI reading it can act on.
+    ///
+    /// Claude Code's own parser expands `@/abs/path` into the file's contents
+    /// before the model turn, with no tool call on the wire — which is what
+    /// makes a 40MB CSV cost a path rather than a context window. Neither other
+    /// harness has such a parser, so the same string reaches the model as
+    /// literal punctuation it has to guess the meaning of, and prose it can act
+    /// on with its own tools is the honest substitute.
+    ///
+    /// Run against a temp file rather than a fixture: the branch is about the
+    /// *text*, and a path that does not exist is skipped before it reaches it.
+    #[tokio::test]
+    async fn a_file_is_named_the_way_its_harness_can_read_it() {
+        let dir = std::env::temp_dir().join(format!("dray-att-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.expect("temp dir");
+        let file = dir.join("rows.csv");
+        fs::write(&file, b"a,b\n1,2\n").await.expect("temp file");
+        let path = file.to_string_lossy().into_owned();
+
+        let claude = prepare("s", "look at this", &[path.clone()], Harness::ClaudeCode)
+            .await
+            .expect("prepared");
+        assert_eq!(claude.text, format!("look at this\n@{path}"));
+
+        for harness in [Harness::Pi, Harness::Codex] {
+            let other = prepare("s", "look at this", &[path.clone()], harness)
+                .await
+                .expect("prepared");
+
+            assert_eq!(
+                other.text,
+                format!("look at this\nAttached file: {path}"),
+                "{harness:?} expands no mention, so punctuation says nothing"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
 
     /// The mapper writes these and this reads them back, so the two halves of
     /// one round trip are pinned together. A `url` source — an API shape the CLI

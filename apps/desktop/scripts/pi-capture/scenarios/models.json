@@ -1,0 +1,32 @@
+{
+  "bin": "${PI_BIN}",
+  "cwd": "${PROBE}/work",
+  "env": {
+    "PI_CODING_AGENT_DIR": "${PROBE}/agentdir",
+    "PI_OFFLINE": "1",
+    "PATH": "${NODE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin"
+  },
+  "args": [
+    "--no-session",
+    "--provider",
+    "stub",
+    "--model",
+    "stub-1",
+    "--no-extensions",
+    "--no-skills",
+    "--no-context-files"
+  ],
+  "steps": [
+    { "sleep": 3000 },
+    { "send": { "id": "m1", "type": "get_available_models" }, "sleep": 1200 },
+    { "send": { "id": "m2", "type": "get_available_thinking_levels" }, "sleep": 900 },
+    { "send": { "id": "m3", "type": "set_model", "provider": "stub-two", "modelId": "no-reasoning-1" }, "sleep": 900 },
+    { "send": { "id": "m4", "type": "get_available_thinking_levels" }, "sleep": 900 },
+    { "send": { "id": "m5", "type": "set_thinking_level", "level": "max" }, "sleep": 900 },
+    { "send": { "id": "m6", "type": "get_state" }, "sleep": 900 },
+    { "send": { "id": "p1", "type": "prompt", "message": "LONGBASH go" }, "sleep": 2500 },
+    { "send": { "id": "p2", "type": "prompt", "message": "second, no streamingBehavior" }, "sleep": 1200 },
+    { "send": { "id": "p3", "type": "prompt", "message": "third, steer", "streamingBehavior": "steer" }, "sleep": 1200 },
+    { "send": { "id": "a1", "type": "abort" }, "sleep": 3000 }
+  ]
+}

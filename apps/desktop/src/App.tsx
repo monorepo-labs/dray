@@ -78,6 +78,8 @@ function App() {
     showArchived,
     setShowArchived,
     models,
+    refreshModels,
+    loadingModels,
     harness,
     setHarness,
     modelId,
@@ -502,7 +504,12 @@ function App() {
   // resolves against the same directory for the same reason, and off the same
   // expression so the two can't answer for different trees.
   const composerCwd = selectedSession?.cwd ?? projectPath;
-  const slashCommands = useSlashCommands(composerCwd);
+  const slashCommands = useSlashCommands(composerCwd, harness);
+  // `true` wherever Dray has no answer: the list may not have landed, and pi
+  // picks its own model when none is named. A warning drawn on a guess is worse
+  // than none, so absence reads as capable.
+  const modelTakesImages =
+    models.find((m) => m.id === modelId)?.acceptsImages ?? true;
 
   const { baseline, head } = useMemo(
     () => changeRange(selectedSession?.events ?? []),
@@ -1043,6 +1050,7 @@ function App() {
           sessionId={selectedSessionId}
           isNewTask={!selectedSession}
           issuesConnected={issuesConnected}
+          modelTakesImages={modelTakesImages}
           error={error}
           onDismissError={() => setError(null)}
           archived={selectedSession?.archived ?? false}
@@ -1092,6 +1100,8 @@ function App() {
               modelId={modelId}
               effort={effort}
               onModelChange={handleModelChange}
+              onRefreshModels={refreshModels}
+              loadingModels={loadingModels}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
               projects={projects}

@@ -123,6 +123,45 @@ pub async fn codex() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("codex"))
 }
 
+static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where `pi` is, or the bare name as a last resort — [`claude`]'s shape, and
+/// for its reason.
+///
+/// **There is no version floor here, and one is coming.** pi below 0.80.6 does
+/// not send `agent_settled`, which is the only line that closes a turn — so a
+/// turn opens and never ends, the session sits `in_progress` forever with the
+/// transcript complete on screen, and that reads as Dray being broken.
+///
+/// It is deliberately not a version compare. A number is a proxy for the
+/// question actually worth asking, which is whether *this* pi answers the
+/// commands Dray drives it with — and the model probe already has to spawn
+/// `pi --mode rpc` and ask, so the real check costs nothing extra there and a
+/// constant here would be a second thing to keep true.
+pub async fn pi() -> PathBuf {
+    if let Some(path) = PI_PATH.get() {
+        return path.clone();
+    }
+
+    let resolved = resolve("pi").await.unwrap_or_else(|| PathBuf::from("pi"));
+
+    let _ = PI_PATH.set(resolved);
+    PI_PATH.get().cloned().unwrap_or_else(|| PathBuf::from("pi"))
+}
+
+#[cfg(test)]
+mod pi_resolution_tests {
+    /// Prints what the resolver found rather than asserting about this machine,
+    /// so a `pi` that is installed and still not detected can be told apart
+    /// from one that is genuinely absent. Ignored by default: the answer is a
+    /// property of whoever is running it.
+    #[tokio::test]
+    #[ignore]
+    async fn where_pi_resolves_to() {
+        println!("pi -> {}", super::pi().await.display());
+    }
+}
+
 /// Whether the agent's CLI is installed and usable.
 ///
 /// Read off the resolver's own answer rather than probing again: both cache in
@@ -142,20 +181,34 @@ pub async fn codex() -> PathBuf {
 /// and it is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
+    harness.caps().drivable && agent_installed(harness).await
+}
+
+/// Whether the CLI is on this machine, whether or not this build can drive it.
+///
+/// Split from [`agent_available`] because the two are different questions with
+/// different cures, and folding them cost the reader the useful half: a pi that
+/// is genuinely missing was reported as "Dray can't run pi yet", which names no
+/// cure, while an installed one was never looked for at all.
+pub async fn agent_installed(harness: Harness) -> bool {
     agent_binary(harness).await.is_absolute()
 }
 
 /// The resolved binary, for the callers that need to name it rather than spawn
 /// it — the login launcher writes it into a shell script, where the bare name
 /// would be looked up under launchd's `PATH` and not found.
+///
+/// A bare name is the one relative answer any of these resolvers gives, which
+/// is what [`agent_installed`] reads to tell a resolved CLI from an absent one.
 pub async fn agent_binary(harness: Harness) -> PathBuf {
     match harness {
         Harness::ClaudeCode => claude().await,
         Harness::Codex => codex().await,
+        Harness::Pi => pi().await,
         // A harness only some other build knows. Its own spelling, which is
-        // relative and so reads as "not installed" through `is_absolute` above
-        // — the refusal has to happen here rather than by falling back to
-        // Claude Code, which would run the wrong agent in somebody's session.
+        // relative and so reads as "not installed" — the refusal has to happen
+        // here rather than by falling back to Claude Code, which would run the
+        // wrong agent in somebody's session.
         Harness::Other(name) => PathBuf::from(name),
     }
 }

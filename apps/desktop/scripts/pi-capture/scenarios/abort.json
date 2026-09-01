@@ -1,0 +1,29 @@
+{
+  "bin": "${PI_BIN}",
+  "cwd": "${PROBE}/work",
+  "env": {
+    "PI_CODING_AGENT_DIR": "${PROBE}/agentdir",
+    "PI_OFFLINE": "1",
+    "PATH": "${NODE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin"
+  },
+  "args": [
+    "--session",
+    "${PROBE}/sessions/dray-abort.jsonl",
+    "--provider",
+    "stub",
+    "--model",
+    "stub-1",
+    "--no-extensions",
+    "--no-skills",
+    "--no-context-files"
+  ],
+  "steps": [
+    { "sleep": 3000 },
+    { "send": { "id": "p1", "type": "prompt", "message": "LONGBASH please" }, "sleep": 3500 },
+    { "send": { "id": "s1", "type": "steer", "message": "actually stop and summarise" }, "sleep": 1000 },
+    { "send": { "id": "f1", "type": "follow_up", "message": "and then say bye" }, "sleep": 1000 },
+    { "send": { "id": "cq", "type": "clear_queue" }, "sleep": 1000 },
+    { "send": { "id": "a1", "type": "abort" }, "sleep": 6000 },
+    { "send": { "id": "q9", "type": "get_state" }, "sleep": 1500 }
+  ]
+}

@@ -210,6 +210,77 @@ pub async fn get_sessions_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// `~/.dray/pi-sessions`, creating it if needed.
+pub async fn get_pi_sessions_dir() -> Result<PathBuf> {
+    let path = get_home_app_dir().await?.join("pi-sessions");
+
+    fs::create_dir_all(&path).await?;
+
+    Ok(path)
+}
+
+/// Where pi writes this session's own transcript.
+///
+/// pi's resume handle is the *file*, not an id it adopts: it mints its own
+/// session id and reports it back, so the path is the one thing Dray gets to
+/// choose and the one thing a resume needs. Its own directory rather than
+/// beside Dray's `<id>.jsonl` logs, because two unrelated formats under one
+/// name pattern can only be told apart by whoever remembers the difference.
+pub async fn pi_session_file(session_id: &str) -> Result<PathBuf> {
+    Ok(get_pi_sessions_dir()
+        .await?
+        .join(format!("{session_id}.jsonl")))
+}
+
+/// Copies pi's transcript onto a fork's own path, which for pi *is* the fork.
+///
+/// pi's resume handle is the file, so a fork spawned on this copy opens holding
+/// the whole conversation and needs no CLI-side step at all — verified live: pi
+/// on a copied file reports the new path, counts the parent's messages and
+/// quotes its first prompt back.
+///
+/// The copy keeps pi's own session id inside it, so two files name one pi
+/// session. That collides with nothing: pi's id is not an address anything here
+/// uses — Dray's own id is — and pi reports the *file* as what it resumed.
+///
+/// A source that cannot be read is a failure, and the caller decides whether
+/// that matters: only a pi session has a transcript, so the fork path calls
+/// this for pi alone.
+///
+/// Probing first and answering "nothing to do" was the first shape, and it was
+/// wrong in the one case worth catching. A pi parent whose file is missing or
+/// unreadable would fork into a session showing the parent's whole conversation
+/// on screen over an empty pi context: it reads as a working fork and answers
+/// as a blank one.
+pub async fn copy_pi_session_file(from: &str, to: &str) -> Result<()> {
+    let source = pi_session_file(from).await?;
+    let destination = pi_session_file(to).await?;
+    fs::copy(&source, &destination)
+        .await
+        .with_context(|| format!("could not copy {}", source.display()))?;
+
+    Ok(())
+}
+
+/// Removes pi's transcript for a session being deleted.
+///
+/// A second file per session, so a second thing to delete — without this a
+/// deleted pi session leaves its whole conversation on disk under
+/// `~/.dray/pi-sessions/`, which is every file the agent read and wrote in it.
+/// Nothing would ever read it again, since the index entry naming it is gone.
+///
+/// A missing file is success, not an error: every non-pi session has none, and
+/// so does a pi session whose child never started.
+pub async fn delete_pi_session_file(session_id: &str) -> Result<()> {
+    let path = pi_session_file(session_id).await?;
+
+    match fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("could not delete {}", path.display())),
+    }
+}
+
 /// Reads and parses `index.json`. Missing or empty file reads as no sessions,
 /// not an error.
 pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {
@@ -359,7 +430,7 @@ impl SessionIndexItem {
             // has one of its own and reads HEAD straight.
             worktree_removed: worktree_name.is_none() && self.worktree_removed,
             title: fork_title(&self.title),
-            model: self.model,
+            model: self.model.clone(),
             effort: self.effort,
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
@@ -367,6 +438,14 @@ impl SessionIndexItem {
             // against the same work. Tagging one afterwards leaves the other
             // alone — the copy is a session, not a view of its source.
             issues: self.issues.clone(),
+            // Two facts in one field, and the second is why every fork sets
+            // it whatever its harness. It is an *instruction* only where the
+            // fork has a CLI half — Claude Code's conversation is forked lazily
+            // on the first send — and `send_msg` filters it on `fork_needs_cli`
+            // before any spawn reads it that way. It is also the only record
+            // that this fork has not spawned yet, which is what tells `send_msg`
+            // that a worktree fork's directory still has to be made, and what
+            // gets cleared once it has.
             fork_from: Some(self.session_id.clone()),
             // Inherited, so the copy sits exactly where the original does: the
             // sidebar draws it beside its source under the same parent, not
@@ -440,18 +519,38 @@ pub async fn resolve_unclaimed_worktree_name(
         .collect();
     claimed.extend(crate::git::worktree_branch_names(project_path).await);
 
+    // One spawn, read once. A directory that is not a repository answers
+    // nothing, which reads as no branches — right, since there is no branch
+    // there to reset.
+    let branches = crate::git::list_branches(project_path)
+        .await
+        .map(|list| list.branches)
+        .unwrap_or_default();
+
+    let taken = |name: &str| {
+        claimed.iter().any(|c| c == name)
+            || branches.contains(&crate::git::worktree_branch(name))
+    };
+
     // A name the user asked for is answered, never silently swapped — so a
     // collision here is an error rather than a redraw.
     if let Some(name) = requested {
         if claimed.iter().any(|c| c == name) {
             bail!("a session is already using the worktree name '{name}'");
         }
+        if branches.contains(&crate::git::worktree_branch(name)) {
+            bail!(
+                "the branch '{}' already exists, so a worktree named '{name}' \
+                 would reset it",
+                crate::git::worktree_branch(name)
+            );
+        }
         return resolve_worktree_name(project_path, Some(name));
     }
 
     for _ in 0..16 {
         let name = resolve_worktree_name(project_path, None)?;
-        if !claimed.contains(&name) {
+        if !taken(&name) {
             return Ok(name);
         }
     }
@@ -1279,6 +1378,120 @@ mod tests {
         assert!(item.unknown.get("sessionId").is_none());
     }
 
+    /// Every field of a fully populated entry, out and back, byte for byte.
+    ///
+    /// The index is rewritten *whole*, so a field this build reads into the
+    /// wrong place, or writes under a different key, is not a parse error — it
+    /// is silent data loss on the next write, and the reader finds out when
+    /// resume answers "no thread to resume" for work that is still alive.
+    ///
+    /// Deliberately a JSON literal rather than a constructed struct: a
+    /// constructed one round-trips through the same field list twice and so
+    /// agrees with itself whatever it is called on disk. This names the wire.
+    #[test]
+    fn a_whole_index_entry_round_trips_with_nothing_lost() {
+        let on_disk = serde_json::json!({
+            "sessionId": "0198c0de-dead-7000-8000-00000000beef",
+            "harness": "codex",
+            "cwd": "/work/proj/.claude/worktrees/calm-owl",
+            "projectPath": "/work/proj",
+            "branch": "worktree-calm-owl",
+            "worktreeName": "calm-owl",
+            "worktreeRemoved": true,
+            "title": "Add the issue panel (fork)",
+            "model": "gpt56_sol",
+            "effort": "xhigh",
+            "permissionMode": "plan",
+            "status": "completed",
+            "forkFrom": "0198c0de-dead-7000-8000-00000000cafe",
+            "threadId": "thread_01JABCDEF",
+            "issues": [{
+                "tracker": "linear",
+                "id": "b8f1e0aa-0000-4000-8000-000000000001",
+                "identifier": "DRA-53",
+                "title": "Add the issue panel",
+                "url": "https://linear.app/drayhq/issue/DRA-53",
+            }],
+            "parentSessionId": "0198c0de-dead-7000-8000-00000000f00d",
+            "created": "2026-08-30T09:00:00Z",
+            "modified": "2026-08-30T09:41:00Z",
+            "archived": false,
+            "pinned": true,
+            "somethingWeHaveNotShippedYet": {"keep": [1, 2]},
+        });
+
+        let item: SessionIndexItem = serde_json::from_value(on_disk.clone()).unwrap();
+        let written: Value = serde_json::to_value(&item).unwrap();
+
+        assert_eq!(
+            written, on_disk,
+            "a field changed shape between reading the index and writing it back"
+        );
+
+        // And it landed in the fields rather than all of it in the catch-all,
+        // which would satisfy the comparison above and lose every rule that
+        // reads one of these.
+        assert_eq!(item.model.as_str(), "gpt56_sol");
+        assert_eq!(item.thread_id.as_deref(), Some("thread_01JABCDEF"));
+        assert_eq!(item.issues.len(), 1);
+        assert!(item.worktree_removed);
+        assert_eq!(item.unknown.len(), 1);
+    }
+
+    /// The model id is the field this slice changed, so every spelling on disk
+    /// has to survive the trip that rewrites the index around it.
+    ///
+    /// These are the ten the closed enum could write, plus the two sentinels.
+    /// A pi model id joins them the day pi ships, and it is the reason the
+    /// closed enum had to go: no arm here could have named it.
+    #[test]
+    fn every_model_id_on_disk_survives_a_rewrite() {
+        for spelling in [
+            "opus",
+            "sonnet",
+            "fable",
+            "haiku",
+            "gpt56_sol",
+            "gpt56_terra",
+            "gpt56_luna",
+            "gpt55",
+            "gpt54",
+            "gpt54_mini",
+            "anthropic/claude-sonnet-4-5",
+            "opus-4-1-20250805",
+        ] {
+            let on_disk = serde_json::json!({
+                "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+                "branch": null, "worktreeName": null, "title": "t", "model": spelling,
+                "created": "c", "modified": "m", "archived": false, "pinned": false,
+            });
+
+            let item: SessionIndexItem = serde_json::from_value(on_disk.clone()).unwrap();
+            let written: Value = serde_json::to_value(&item).unwrap();
+
+            assert_eq!(
+                written.get("model"),
+                on_disk.get("model"),
+                "{spelling} did not survive being written back"
+            );
+        }
+
+        // Both spellings of "this build cannot name it" write as one, so the
+        // sentinel cannot drift into two values that compare unequal.
+        for sentinel in ["unknown", ""] {
+            let on_disk = serde_json::json!({
+                "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+                "branch": null, "worktreeName": null, "title": "t", "model": sentinel,
+                "created": "c", "modified": "m", "archived": false, "pinned": false,
+            });
+
+            let item: SessionIndexItem = serde_json::from_value(on_disk).unwrap();
+
+            assert!(item.model.is_unset());
+            assert_eq!(serde_json::to_value(&item.model).unwrap(), Value::from(""));
+        }
+    }
+
     #[test]
     fn index_entries_written_before_these_fields_still_read() {
         let legacy = r#"{"sessionId":"a","harness":"claude_code","cwd":"/p","projectPath":"/p",
@@ -1289,8 +1502,8 @@ mod tests {
 
         assert_eq!(item.status, SessionStatus::Idle);
         // Reads back as a model no build lists, so it can never reach a spawn.
-        assert_eq!(item.model, ModelId::Unknown);
-        assert!(crate::models::find_model(item.model).is_none());
+        assert!(item.model.is_unset());
+        assert!(crate::models::find_model(&item.model).is_none());
         // Absent reads as the composer's own default, so an old session resumes
         // under the mode its picker would show.
         assert_eq!(item.permission_mode, ApprovalPolicy::Auto);
@@ -1347,6 +1560,54 @@ mod tests {
         assert!(rewritten.contains(r#""harness":"some_future_agent""#));
     }
 
+    /// Every fork records where it came from, whatever its harness forks *by*.
+    ///
+    /// The field carries two facts and only one of them is Claude Code's. It is
+    /// an instruction to run `--resume <parent> --fork-session`, which
+    /// `send_msg` filters on `fork_needs_cli` so pi never sees it that way —
+    /// pi's fork is whole the moment its session file is copied. It is also the
+    /// only record that a fork has not spawned yet, and *that* is what tells
+    /// `send_msg` a worktree fork's directory still has to be made.
+    ///
+    /// Leaving it unset for pi was the first shape, and it cost exactly that:
+    /// a pi fork into a new worktree was spawned straight into a directory
+    /// nobody had made. Probing the directory instead is the other wrong fix —
+    /// a tree deleted by hand reads the same way, and remaking it runs
+    /// `worktree add -B`, which resets the branch and takes its commits along.
+    #[test]
+    fn a_fork_records_its_parent_whichever_harness_it_is_on() {
+        for harness in [Harness::ClaudeCode, Harness::Pi] {
+            let parent = SessionIndexItem::new(
+                "parent",
+                harness,
+                "/p",
+                "/p",
+                None,
+                None,
+                "add the PR panel",
+                ModelId::new("opus"),
+                Some(Effort::High),
+                ApprovalPolicy::Auto,
+                None,
+            );
+
+            assert_eq!(
+                parent.fork("child", None).fork_from.as_deref(),
+                Some("parent"),
+                "{harness:?} loses the one record that this fork has not spawned"
+            );
+        }
+
+        assert!(
+            Harness::ClaudeCode.caps().fork_needs_cli,
+            "its conversation is forked lazily, on the first send"
+        );
+        assert!(
+            !Harness::Pi.caps().fork_needs_cli,
+            "copying the session file is the whole of pi's fork"
+        );
+    }
+
     /// Forking in place must not claim the parent's tree: `worktree_name` is what
     /// settling and deleting act on, so a fork carrying it would take the
     /// directory out from under the session still working in it.
@@ -1360,7 +1621,7 @@ mod tests {
             Some("wt"),
             None,
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
             None,
@@ -1399,7 +1660,7 @@ mod tests {
             Some("wt"),
             None,
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1428,7 +1689,7 @@ mod tests {
             Some("calm-owl"),
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1453,7 +1714,7 @@ mod tests {
             None,
             Some("feature"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1486,7 +1747,7 @@ mod tests {
             None,
             None,
             "work the issue",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             Some("orchestrator"),
@@ -1515,7 +1776,7 @@ mod tests {
             None,
             Some("main"),
             "add the PR panel",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1660,7 +1921,7 @@ mod tests {
                 None,
                 None,
                 "hi",
-                ModelId::Opus,
+                ModelId::new("opus"),
                 None,
                 ApprovalPolicy::Auto,
                 None,
@@ -1703,7 +1964,7 @@ mod tests {
             Some("calm-owl"),
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             None,
             ApprovalPolicy::Auto,
             None,
@@ -1752,7 +2013,7 @@ mod tests {
                 worktree,
                 branch,
                 "hi",
-                ModelId::Opus,
+                ModelId::new("opus"),
                 None,
                 ApprovalPolicy::Auto,
                 None,
@@ -1789,7 +2050,7 @@ mod tests {
             None,
             Some("main"),
             "hi",
-            ModelId::Opus,
+            ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
             None,

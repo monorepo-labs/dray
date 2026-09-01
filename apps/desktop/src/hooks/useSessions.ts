@@ -12,8 +12,9 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { DEFAULT_MODEL_FOR, rememberedModel, usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
+import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -98,6 +99,11 @@ export function useSessions() {
     // archived is the exception view, so every launch starts on the active list.
     const [showArchived, setShowArchived] = useState(false);
     const [models, setModels] = useState<Model[]>([]);
+    // pi's list is a read, not a table, so it can be in flight. `0` is the
+    // resting value and every refresh bumps it, which is what re-arms the
+    // effect below without a second copy of the read beside it.
+    const [modelsGeneration, setModelsGeneration] = useState(0);
+    const [loadingModels, setLoadingModels] = useState(false);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
     const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
@@ -295,10 +301,78 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 // Dedupes against the queued array, not the render snapshot: two fast clicks
 // both miss an `existing` check made before their `await`, and would otherwise
 // each append the same session.
+// Events that arrived before the session they belong to was here.
+//
+// A new session reaches `sessions` only when its first `send_msg` resolves, and
+// its child is already streaming by then: pi answers a `prompt` only after its
+// extension `input` and `before_agent_start` handlers have run, and either can
+// raise a *blocking* question. That question is the one event nothing can
+// replace, because permission requests are never written to the log — so it does
+// not come back in the snapshot, and dropping it left a card that was never
+// drawn over an agent waiting for its answer until the prompt timed out.
+//
+// Module-level for `useDraft`'s reason: the write site is an event listener
+// registered once, and the read site is a fetch that resolves after it.
+// Keyed by event id within each session, and that is not tidiness. The hold
+// happens inside a `setSessions` updater — the only place with a true reading of
+// which sessions are here — and StrictMode invokes every updater twice in
+// development, so an array would take each event twice and draw two cards with
+// one React key. A map makes the second call a no-op.
+const earlyEvents = new Map<string, Map<string, AgentEvent>>();
+
+// A session whose snapshot never arrives keeps whatever it held, so both
+// dimensions are capped rather than trusted. Per session, well past any real
+// burst before one lands; and across sessions, because a failed send leaves an
+// entry under an id nothing will ever claim and every retry mints a fresh one.
+const MAX_EARLY_EVENTS = 200;
+const MAX_EARLY_SESSIONS = 32;
+
+const holdEarlyEvent = (event: AgentEvent) => {
+  const held = earlyEvents.get(event.sessionId) ?? new Map<string, AgentEvent>();
+  held.set(event.id, event);
+
+  // Insertion-ordered, so the oldest is the first key either way.
+  while (held.size > MAX_EARLY_EVENTS) {
+    held.delete(held.keys().next().value!);
+  }
+
+  earlyEvents.set(event.sessionId, held);
+  while (earlyEvents.size > MAX_EARLY_SESSIONS) {
+    earlyEvents.delete(earlyEvents.keys().next().value!);
+  }
+};
+
+// Merged by event id, which is exact: an event that *was* persisted carries the
+// same id in the snapshot as it did on the wire, so this can hold everything and
+// still duplicate nothing. Choosing by payload type instead would be a second
+// copy of which events the log carries, free to disagree with the one in Rust.
+const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
+  const held = earlyEvents.get(snapshot.sessionId);
+  earlyEvents.delete(snapshot.sessionId);
+  if (!held?.size) return snapshot;
+
+  return mergeEvents(snapshot, [...held.values()]);
+};
+
+// Merged by event id against whatever is already on screen, never a plain
+// replace. A snapshot's events come from the log, and the log does not carry a
+// permission request — so replacing a row that has been taking live events would
+// drop exactly the card the reader is being asked to answer. The same id rule as
+// `withEarlyEvents`, and for the same reason it is exact.
+const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
+  const seen = new Set(into.events.map((e) => e.id));
+  const missing = from.filter((e) => !seen.has(e.id));
+  if (!missing.length) return into;
+
+  return { ...into, events: [...into.events, ...missing].sort((a, b) => a.seq - b.seq) };
+};
+
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
     prev.some((s) => s.sessionId === snapshot.sessionId)
-      ? prev.map((s) => (s.sessionId === snapshot.sessionId ? snapshot : s))
+      ? prev.map((s) =>
+          s.sessionId === snapshot.sessionId ? mergeEvents(snapshot, s.events) : s,
+        )
       : [...prev, snapshot],
   );
 
@@ -345,6 +419,49 @@ const handleSendMsg = async (
   // first `model_request_started` is a cold start away.
   setWorkingBySession((prev) => ({ ...prev, [sessionId]: { tokens: 0 } }));
 
+  // A row for the session before the backend has answered for it, and this one
+  // is not a nicety like the two above. A new session reaches `sessions` only
+  // when `send_msg` resolves, and pi does not resolve that call until its
+  // `input` and `before_agent_start` extension handlers have run — either of
+  // which can raise a *blocking* question. With no row there is no transcript,
+  // so the card that would answer it is never drawn, and the prompt times out
+  // thirty seconds later having asked nobody. Holding the event was not enough:
+  // the merge that would have shown it runs on the reply that is doing the
+  // waiting.
+  //
+  // Every field is one this call is already passing, so nothing here is a guess.
+  // The three the backend alone resolves — the worktree name, the truncated
+  // title, the recorded branch — arrive with the snapshot and replace these.
+  if (isNewSession) {
+    const shell: SessionSnapshot = {
+      events: [],
+      sessionId,
+      harness,
+      cwd,
+      projectPath: projectPath ?? cwd,
+      branch: !useWorktree ? branch : null,
+      worktreeName: null,
+      worktreeRemoved: false,
+      // Provisional. The backend truncates its own way and `session_title`
+      // overwrites it again once generation lands, so this only has to be
+      // better than an empty header for the seconds in between.
+      title: message.trim().replace(/\n/g, " ").slice(0, 60),
+      model: modelId,
+      effort,
+      permissionMode: stanceFor(harness, permissionMode),
+      status: "in_progress",
+      forkFrom: null,
+      threadId: null,
+      issues: [],
+      parentSessionId: null,
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      archived: false,
+      pinned: false,
+    };
+    upsertSession(shell);
+  }
+
   try {
     const outcome = await invoke<SendOutcome>("send_msg", {
       sessionId,
@@ -353,7 +470,12 @@ const handleSendMsg = async (
       harness,
       model: modelId,
       effort,
-      permissionMode,
+      // What will actually happen, not what the picker last held. A stance can
+      // reach here that this harness never offered — a spawned session takes
+      // its parent's — and the index is read back, by a later build and by
+      // `dray new` inheriting it, so a stance nothing enforces is worse there
+      // than on screen, where the control is at least hidden.
+      permissionMode: stanceFor(harness, permissionMode),
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
       // worktree session, whose branch the CLI names itself.
@@ -397,7 +519,7 @@ const handleSendMsg = async (
     // Only a new session yields a snapshot. Built by the backend, so the resolved
     // worktree name and truncated title come from disk rather than a guess here.
     if (snapshot) {
-      upsertSession(snapshot);
+      upsertSession(withEarlyEvents(snapshot));
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       if (!showArchived) {
@@ -424,6 +546,18 @@ const handleSendMsg = async (
     if (!wasBusy) {
       setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
       setWorkingBySession((prev) => ({ ...prev, [sessionId]: null }));
+    }
+    // The shell described a session the backend never made, so it goes with the
+    // failure — left behind it is a transcript for a session no sidebar row
+    // names and no child is behind. The selection goes too, which puts the
+    // composer back where the reader typed, with `useDraft` still holding the
+    // text under the new-task key.
+    if (isNewSession) {
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      earlyEvents.delete(sessionId);
+      if (selectionRequestRef.current === sessionId) {
+        setSelectedSessionId(null);
+      }
     }
     setError(String(e));
   }
@@ -572,9 +706,12 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   // The raw setter, like the rest of this function: a session's harness is the
   // session's, and clicking through old ones must not rewrite the default.
   setHarnessState(item.harness);
-  // Sessions indexed before the model was recorded read back as "unknown".
-  // Answered from the session's own harness, since a model belongs to one.
-  const restored = item.model === "unknown" ? DEFAULT_MODEL_FOR[item.harness] : item.model;
+  // A session indexed before the model was recorded, or one whose id this build
+  // cannot name, reads back as the unset sentinel. Answered from the session's
+  // own harness, since a model belongs to exactly one — and for a harness that
+  // names no default the sentinel stands, which is what the picker reads as
+  // "not chosen yet".
+  const restored = isUnsetModel(item.model) ? DEFAULT_MODEL_FOR[item.harness] : item.model;
   setModelId(restored);
   // The index stores one model/effort pair, so it can only seed that model's
   // entry; the rest of the map falls back to per-model defaults.
@@ -621,7 +758,7 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   try {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
-      upsertSession(snapshot);
+      upsertSession(withEarlyEvents(snapshot));
       return;
     }
 
@@ -935,7 +1072,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   }
 
   setError(null);
-  upsertSession(snapshot);
+  upsertSession(withEarlyEvents(snapshot));
   // A fork is never archived, so it belongs to the active list alone — pushed
   // unconditionally it would show up under the archived filter too.
   if (!showArchived) {
@@ -983,14 +1120,41 @@ useEffect(() => {
 }, [showArchived])
 
 useEffect(() => {
-  invoke<Model[]>("list_models", { harness }).then((list) => {
-    setModels(list);
-    // A model belongs to exactly one harness, so switching harness leaves the
-    // pick naming something the new one cannot run. Repaired here, where the
-    // real list has just landed, rather than guessed at when the toggle moved.
-    setModelId((current) => usableModel(list, current, harness));
-  });
-}, [harness])
+  let cancelled = false;
+  setLoadingModels(true);
+
+  invoke<Model[]>("list_models", { harness })
+    .then((list) => {
+      // Guarded because pi's read spawns a child and can take a moment, so a
+      // reader switching harness twice would otherwise have the first answer
+      // land on the second harness's picker.
+      if (cancelled) return;
+      setModels(list);
+      // A model belongs to exactly one harness, so switching harness leaves the
+      // pick naming something the new one cannot run. Repaired here, where the
+      // real list has just landed, rather than guessed at when the toggle moved.
+      setModelId((current) => usableModel(list, current, harness));
+    })
+    .finally(() => {
+      if (!cancelled) setLoadingModels(false);
+    });
+
+  return () => {
+    cancelled = true;
+  };
+}, [harness, modelsGeneration])
+
+/// Drops whatever pi cached and reads again.
+///
+/// Only pi has a list that can change under the reader — a provider logged in
+/// while Dray is open is exactly the case somebody would then try to use, and
+/// waiting out the cache reads as the list being wrong. The other two are
+/// tables, so this costs them one round trip and answers the same thing.
+const refreshModels = () => {
+  invoke("refresh_models")
+    .catch(() => {})
+    .finally(() => setModelsGeneration((n) => n + 1));
+};
 
 useEffect(() => {
   invoke<Project[]>("list_projects")
@@ -1045,13 +1209,20 @@ useEffect(() => {
       const agentEvent = event.payload;
 
         if (agentEvent.payload.type != "delta") {
-            setSessions((prev) =>
-            prev.map((s) =>
+            setSessions((prev) => {
+            // Held rather than dropped where the session is not here yet. See
+            // `earlyEvents`: its child streams before its row exists.
+            if (!prev.some((s) => s.sessionId === agentEvent.sessionId)) {
+                holdEarlyEvent(agentEvent);
+                return prev;
+            }
+
+            return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
                 ? { ...s, events: [...s.events, agentEvent] }
                 : s,
-            ),
             );
+            });
 
             // A held prompt reached the CLI, so the pending row it was drawn as
             // gives way to the real one now in the transcript. Matched by
@@ -1649,6 +1820,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

@@ -92,6 +92,20 @@ const TOOL_VERBS: Record<string, Verbs> = {
   apply_patch: ["Editing", "Edited", "file"],
   web_search: ["Searching web", "Searched web", "query"],
   view_image: ["Viewing", "Viewed", "image"],
+
+  // pi's own, which are its Unix namesakes in lowercase. `find` is what pi
+  // calls the tool every other harness spells `Glob`, so it takes Glob's verbs
+  // rather than a third word for one act. An extension can register a tool
+  // under any name at all, and those fall through to that name verbatim — the
+  // right answer, since only its author knows how to conjugate it.
+  bash: ["Bash", "Bash", "command"],
+  powershell: ["PowerShell", "PowerShell", "command"],
+  read: ["Reading", "Read", "file"],
+  write: ["Writing", "Wrote", "file"],
+  edit: ["Editing", "Edited", "file"],
+  grep: ["Searching", "Searched", "pattern"],
+  find: ["Searching", "Searched", "pattern"],
+  ls: ["Listing", "Listed", "directory"],
 };
 
 /// The brief a `Skill` call was given — the sentence the model wrote for the
