@@ -5,6 +5,39 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.11.0
+
+### Added
+
+- **pi runs, as a third agent.** Pick it in the composer beside Claude Code and
+  Codex. Sessions stream, resume and stop; reasoning, answers, tool calls and
+  token counts all reach the transcript.
+
+  **A pi session runs ungated, and that is pi's own shape, not a setting.** pi
+  has no permission system — not a different one, none — so there is nothing
+  for Dray to ask through and the stance picker is hidden there. Everything the
+  agent runs, it runs. The gate is an extension Dray will ship; until then, know
+  what you are starting.
+
+  pi names no default model on purpose, since which models work depends on the
+  providers you have logged into. With none picked, pi's own settings decide.
+
+- **A model library, for agents with more models than a menu can hold.** pi's
+  list is whatever every provider you're logged into serves, so the picker draws
+  your starred models grouped by provider and a searchable dialog holds the
+  rest. A session's own model always draws, starred or not. Claude Code and
+  Codex keep their whole list — each ships a handful, where a shortlist would be
+  one more thing to set up.
+
+### Fixed
+
+- **Stopping a pi session asks it to leave rather than killing it.** pi holds a
+  lock while it runs and a clean exit releases it, where a kill leaves the next
+  pi waiting the stale one out for ~30 seconds — which looked exactly like Dray
+  hanging, in a different session.
+- **A pi that dies mid-turn closes its own turn**, rather than leaving the
+  session working with a finished transcript and a Stop that did nothing.
+
 ## 0.10.1
 
 ### Added
