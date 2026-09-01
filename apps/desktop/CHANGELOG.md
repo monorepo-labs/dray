@@ -5,7 +5,7 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.12.0
+## 0.12.1
 
 ### Added
 
@@ -35,6 +35,11 @@ second description of it. GitHub's generated commit list is appended below it.
   agent's list and landed on whatever led it.
 - **The send button turns into Stop rather than swapping**, and spinners no
   longer wobble on the pull request buttons.
+
+### Upgrading
+
+- **macOS 11 is now the minimum.** The transcription engine needs it, and the
+  version claimed before was a default nothing had tested.
 
 ## 0.11.0
 
