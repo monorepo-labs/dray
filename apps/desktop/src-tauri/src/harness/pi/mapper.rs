@@ -100,6 +100,11 @@ pub struct Mapper {
     ///
     /// Cleared by the next committed message, whose total is post-compaction
     /// and honest again.
+    ///
+    /// Never armed by a compaction that *aborted*: nothing left the window, so
+    /// the held total still describes it — and withholding a window there
+    /// leaves the reader settling on that compaction's own absent count, which
+    /// blanks the gauge outright.
     compacted_since_usage: bool,
 }
 
@@ -309,17 +314,23 @@ impl Mapper {
                 result,
                 aborted,
             } => {
-                // Whatever the mapper is holding describes the context this
-                // compaction has just replaced, so it must not close the turn
-                // as an occupancy reading. Armed even where the compaction
-                // aborted: it reports no saving either, and the ring is better
-                // left on its last known figure than moved by a guess.
-                self.compacted_since_usage = true;
-
                 // Dropped where the compaction did not finish: the numbers
                 // describe a context that was kept, and reporting a saving for
                 // one that was thrown away is worse than reporting none.
                 let saved = result.filter(|_| !aborted);
+
+                // Whatever the mapper is holding describes the context a
+                // compaction that *landed* has just replaced, so it must not
+                // close the turn as an occupancy reading.
+                //
+                // Only where one landed, and the difference is the ring going
+                // blank: an aborted compaction still publishes
+                // `context_compacted`, whose `post_tokens` is `None`, and the
+                // reader settles `used` on the newest event carrying a figure
+                // — so a turn withholding its window leaves that `None` as the
+                // answer and the gauge draws nothing. Nothing left the window
+                // in that case anyway, so the held total is still the truth.
+                self.compacted_since_usage = saved.is_some();
 
                 vec![self.event(AgentEventPayload::ContextCompacted {
                     trigger: reason,
@@ -920,6 +931,42 @@ mod tests {
             settled_usage(&settled).context_window.is_none(),
             "the ring would jump back to the context the compaction threw away"
         );
+    }
+
+    /// A compaction that *aborted* changed nothing, so the turn closing after
+    /// one keeps its reading.
+    ///
+    /// Withholding it there does not leave the ring on its last figure — it
+    /// blanks it. `context_compacted` still lands, carrying no count, and the
+    /// reader settles `used` on the newest event that carries one either way,
+    /// so an absent window on the turn above it makes that `None` the answer.
+    #[test]
+    fn an_aborted_compaction_leaves_the_reading_alone() {
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(500_000)),
+        );
+
+        feed(&mut mapper, r#"{"type":"agent_start"}"#);
+        feed(
+            &mut mapper,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],
+                "usage":{"input":180000,"output":16,"cacheRead":0,"cacheWrite":0,
+                         "reasoning":0,"totalTokens":180016}}}"#,
+        );
+        feed(
+            &mut mapper,
+            r#"{"type":"compaction_end","reason":"threshold","aborted":true,
+                "errorMessage":"Nothing to compact (session too small)"}"#,
+        );
+        let settled = feed(&mut mapper, r#"{"type":"agent_settled"}"#);
+
+        let window = settled_usage(&settled)
+            .context_window
+            .expect("the gauge would draw nothing at all");
+
+        assert_eq!(window.used_tokens, 180016);
     }
 
     /// A failed or aborted turn describes a call that did not land, so it

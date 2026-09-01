@@ -1478,16 +1478,27 @@ and it agrees with pi's own figure exactly: 2139 in `live_turn.jsonl`, 2840 in
 The denominator is `get_state`'s `model.contextWindow`, taken at the handshake
 that already runs, held in an `AtomicU64` the mapper reads at `agent_settled`.
 The window is re-read on `model_changed`, since Dray respawns for a model
-change but a pi extension calling `setModel` does not.
+change but a pi extension calling `setModel` does not — and dropped to `0` the
+moment that event lands, rather than left standing until the answer does. A
+turn settling in the gap draws no ring, where one drawn against the model that
+left is wrong in the direction that reassures: a switch onto a smaller window
+understates occupancy and the gauge says there is room where there is none.
 
 Three states carry no reading rather than a wrong one, and the last two are
 what pi's own `getContextUsage` does: a window Dray never learned, a turn that
 **failed or was aborted** — its message describes a call that did not land —
-and a turn closing **after a compaction**, whose held total describes the
-context that compaction just threw away. The ring settles on the newest event
-carrying a figure, so a stale total there lands after `context_compacted`'s own
-count and jumps the ring back up for the rest of the session. In all three the
-previous reading stands, which is the safe direction. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
+and a turn closing **after a compaction that landed**, whose held total
+describes the context that compaction just threw away. The ring settles on the
+newest event carrying a figure, so a stale total there lands after
+`context_compacted`'s own count and jumps the ring back up for the rest of the
+session. In all three the previous reading stands, which is the safe direction.
+
+A compaction that **aborted** is deliberately not among them, and the asymmetry
+is the reader's own rule: `context_compacted` lands either way and settles
+`used` on whatever count it carries, which for an aborted one is `None`. So
+withholding the turn's window there does not leave the gauge on its last figure
+— it blanks it. Nothing left the window anyway, so the held total is still the
+truth. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
 reads both numbers out of the captures rather than restating them.
 
 Two edges the docs name and a capture should confirm: `contextUsage` is

@@ -566,12 +566,16 @@ async fn read_stdout(
         //
         // Spawned, never awaited: a request is settled by a line off stdout and
         // this loop is what reads them, so awaiting one here waits on itself.
-        // Ordering does not matter the way it does for occupancy — a window is
-        // a standing fact, so the worst a late answer costs is one turn drawn
-        // against the previous model's.
+        //
+        // So the old window is dropped *here*, synchronously, rather than left
+        // standing until the answer lands. A turn settling in that gap draws no
+        // ring, where one drawn against the model that left is wrong in the
+        // direction that reassures — a switch onto a smaller window understates
+        // occupancy, and the gauge says there is room where there is none.
         if matches!(event, parser::PiEvent::ModelChanged { .. }) {
             let client = client.clone();
             let context_window = mapper.context_window();
+            context_window.store(0, Relaxed);
             tokio::spawn(async move {
                 match client.request("get_state", Value::Null).await {
                     Ok(state) => {
