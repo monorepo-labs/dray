@@ -35,21 +35,24 @@ describe("coerceTheme", () => {
 });
 
 describe("keepsGlassInFullscreen", () => {
-  // The field is an opt-out, and that shape is the point: a theme added later
-  // keeps its layering by saying nothing, so the failure mode of forgetting is a
-  // theme that looks right rather than one that goes flat with no clue why.
-  it("is on for a theme that says nothing", () => {
-    expect(keepsGlassInFullscreen("catppuccin", "dark")).toBe(true);
+  // Every shipped theme opts out today. That began as Default's own call and
+  // turned out to hold generally: nothing is behind a fullscreen window, so the
+  // veils sit on the theme's own backdrop and cost contrast without buying depth.
+  // Asserted over the array rather than theme by theme, so a palette added
+  // without the flag fails here and gets the question asked of it.
+  it("is off in fullscreen for every theme shipped today", () => {
+    for (const t of THEMES) expect(keepsGlassInFullscreen(t.id, "dark")).toBe(false);
   });
 
-  it("is off for the one theme that opts out", () => {
-    expect(keepsGlassInFullscreen("default", "dark")).toBe(false);
-  });
+  // No test for the glass branch, and it is a statement rather than a gap: the
+  // flag is an opt-out that everything now opts out of, so reaching the `true`
+  // case means pushing a fake theme onto the exported array — a test that edits
+  // the thing it checks. It earns one back the day a palette wants its veils in
+  // fullscreen, which is the case the flag is kept for.
 
-  // Light outranks the theme's own answer, and this is the test that says so: a
-  // light veil is black, and in fullscreen there is nothing behind it for the
-  // darkening to read as. Written against the themes that opt *in*, or it would
-  // pass on `flatInFullscreen` alone and prove nothing.
+  // Light outranks the theme's own answer. This cannot tell the two apart while
+  // every theme is flat anyway, so it is written against the *mode* and is here
+  // to fail if that precedence is ever inverted.
   it("is off in light whatever the theme says", () => {
     expect(keepsGlassInFullscreen("catppuccin", "light")).toBe(false);
     expect(keepsGlassInFullscreen("gruvbox", "light")).toBe(false);
@@ -65,21 +68,39 @@ describe("modeFor", () => {
     expect(modeFor("gruvbox", "system")).toBe("system");
   });
 
-  // Default was the last theme to carry `darkOnly`, and its light side is built.
-  // Asserted rather than left implied, because the flag reads as harmless and is
-  // not: it silently takes the whole mode picker away from whichever palette
-  // carries it, and every reader of Dray is on this one.
-  it("lets every shipped theme reach light", () => {
-    for (const t of THEMES) {
-      expect(hasLightMode(t.id)).toBe(true);
-      expect(modeFor(t.id, "light")).toBe("light");
+  // The forcing branch, and it is a shipped theme exercising it rather than a fake
+  // one pushed onto the exported array — which is what this file said it was
+  // waiting for. Cobalt2 has no light palette upstream, so
+  // `[data-theme="cobalt2"][data-mode="light"]` matches no block: without the
+  // forcing the app falls through to the light ramp's own neutrals and draws a grey
+  // that is legible, is not Cobalt2, and says nothing about why.
+  it("forces dark for a theme with no light palette", () => {
+    for (const id of ["cobalt2", "one-dark-pro"] as const) {
+      expect(hasLightMode(id)).toBe(false);
+      expect(modeFor(id, "light")).toBe("dark");
+      expect(modeFor(id, "system")).toBe("dark");
+      expect(modeFor(id, "dark")).toBe("dark");
     }
   });
 
-  // No test for the forcing branch, and that is a statement rather than a gap:
-  // nothing sets `darkOnly` now, so exercising it would mean pushing a fake theme
-  // onto the exported array — a test that edits the thing it is checking. The
-  // branch earns a test again the day a palette arrives without a light side.
+  // The default is what every reader lands on and what every retired id falls back
+  // to, so it reaching light is asserted on its own rather than as one row of a
+  // loop: `darkOnly` reads as harmless and is not, and on this palette it would
+  // take the mode picker away from everybody.
+  it("lets the default reach light", () => {
+    expect(hasLightMode(DEFAULT_THEME)).toBe(true);
+    expect(modeFor(DEFAULT_THEME, "light")).toBe("light");
+  });
+
+  // Whether a palette that claims a light side actually has one is a fact about
+  // App.css this cannot read. What it can pin is the direction: saying nothing
+  // means both modes, so a port that arrives light-less and forgets the flag fails
+  // here rather than on someone's screen.
+  it("passes light through for every theme that does not opt out", () => {
+    for (const t of THEMES.filter((t) => hasLightMode(t.id))) {
+      expect(modeFor(t.id, "light")).toBe("light");
+    }
+  });
 });
 
 describe("THEMES", () => {
