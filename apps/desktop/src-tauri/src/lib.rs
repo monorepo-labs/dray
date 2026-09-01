@@ -36,6 +36,8 @@ pub mod session;
 pub mod settings;
 pub mod store;
 pub mod title;
+#[path = "transcription/transcription.rs"]
+pub mod transcription;
 pub mod updater;
 
 #[tauri::command]
@@ -655,6 +657,7 @@ async fn mark_session_idle(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_macos_permissions::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -662,6 +665,7 @@ pub fn run() {
         .manage(SessionManager::default())
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
+        .manage(transcription::TranscriptionState::default())
         .menu(quit::menu)
         .on_menu_event(|app, event| {
             if event.id() == quit::QUIT_ID {
@@ -782,6 +786,16 @@ pub fn run() {
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,
+            transcription::transcription_status,
+            transcription::download_transcription_model,
+            transcription::cancel_transcription_download,
+            transcription::delete_transcription_model,
+            transcription::select_transcription_model,
+            transcription::select_transcription_device,
+            transcription::start_transcription,
+            transcription::transcription_level,
+            transcription::stop_transcription,
+            transcription::cancel_transcription,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

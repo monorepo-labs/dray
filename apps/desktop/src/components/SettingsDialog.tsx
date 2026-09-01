@@ -32,6 +32,8 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
+import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -52,12 +54,17 @@ const REPO_URL = "https://github.com/monorepo-labs/dray";
 export default function SettingsDialog({
   open,
   onOpenChange,
+  initialTab = "appearance",
   integrations,
   updateChannel,
   onUpdateChannelChange,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
+  /// Which tab to open on. The composer's mic button sends the reader straight
+  /// to Transcription when no model is downloaded, which is the whole reason
+  /// this is a prop rather than internal state.
+  initialTab?: SettingsTab;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// Owned by `useUpdater`, for the reason its own doc comment gives: a second
@@ -66,6 +73,7 @@ export default function SettingsDialog({
   onUpdateChannelChange: (next: UpdateChannel) => void;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
+  const transcription = useTranscriptionSettings(open);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,13 +89,24 @@ export default function SettingsDialog({
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <SettingsTabs>
+        <SettingsTabs initialTab={initialTab}>
           {{
             appearance: (
               <Section>
                 <ThemeRow />
                 <ModeRow />
               </Section>
+            ),
+            transcription: (
+              <TranscriptionSettings
+                status={transcription.status}
+                downloads={transcription.downloads}
+                onDownload={transcription.download}
+                onCancelDownload={transcription.cancelDownload}
+                onDelete={transcription.remove}
+                onSelectModel={transcription.selectModel}
+                onSelectDevice={transcription.selectDevice}
+              />
             ),
             integrations: (
               <Section>
@@ -669,12 +688,13 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 }
 
 /// Set *and* order, so a group added later is one entry plus one body.
-const SETTINGS_TABS = ["appearance", "integrations", "about"] as const;
+const SETTINGS_TABS = ["appearance", "transcription", "integrations", "about"] as const;
 
-type SettingsTab = (typeof SETTINGS_TABS)[number];
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: "Appearance",
+  transcription: "Transcription",
   integrations: "Integrations",
   about: "About",
 };
@@ -698,9 +718,18 @@ const TAB_LABELS: Record<SettingsTab, string> = {
 /// would have the external-app scan run every time the dialog opens whichever
 /// tab the reader wanted. The pick resets on close for the same reason the
 /// dialog's own open state is not persisted.
-function SettingsTabs({ children }: { children: Record<SettingsTab, ReactNode> }) {
+function SettingsTabs({
+  initialTab,
+  children,
+}: {
+  initialTab: SettingsTab;
+  children: Record<SettingsTab, ReactNode>;
+}) {
   const id = useId();
-  const [tab, setTab] = useState<SettingsTab>("appearance");
+  // An initializer, not an effect: `DialogContent` unmounts on close, so every
+  // open builds this fresh and the caller's tab is simply where it starts.
+  // That is also what keeps "the pick resets on close" true.
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
 
   const index = SETTINGS_TABS.indexOf(tab);
   const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>

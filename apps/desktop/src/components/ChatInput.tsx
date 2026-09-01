@@ -57,6 +57,12 @@ type ChatInputProps = {
   /// Takes back the newest prompt still waiting on the CLI, resolving to it so
   /// its text can go back in the box. `null` when the flush got there first.
   onCancelQueued?: () => Promise<QueuedMessage | null>;
+  /// Throws away a recording in flight, answering whether there was one.
+  ///
+  /// A prop rather than a hook here because the recorder lives in `App`, beside
+  /// the settings dialog a first press has to open. Escape is bound in this
+  /// component because that is where the one document-level handler lives.
+  onCancelRecording?: () => boolean;
   /// How many prompts are waiting. Only decides whether Esc is bound — the rows
   /// themselves are drawn by the transcript, above this component.
   queuedCount?: number;
@@ -64,6 +70,19 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
+  /// The dictate button and, while recording, the level and its two buttons.
+  ///
+  /// A node like `toolbar`, and for the same reason: the recorder lives in
+  /// `App`, beside the settings dialog a first press has to open. It sits
+  /// immediately left of Send, since both act on the message being written.
+  dictation?: ReactNode;
+  /// A recording or a transcription is under way, which **hides Send**.
+  ///
+  /// Dictation takes the row over while it runs: recording already offers a
+  /// stop and a discard, and a third button that sends whatever is in the box
+  /// is one the reader has to think about. Sent as a flag rather than read off
+  /// `dictation`, which is an opaque node this component cannot inspect.
+  dictating?: boolean;
   /// Drawn above the toolbar, and blocks sending while present.
   ///
   /// Separate from `error`: that reports something that was attempted and
@@ -160,8 +179,11 @@ export default function ChatInput({
   issuesConnected = false,
   onStop,
   onCancelQueued,
+  onCancelRecording,
   queuedCount = 0,
   toolbar,
+  dictation,
+  dictating = false,
   notice,
   modelTakesImages = true,
   handoff,
@@ -382,6 +404,11 @@ export default function ChatInput({
   // text back, since taking a prompt back is the start of editing it.
   const escapeRef = useRef<() => boolean>(() => false);
   escapeRef.current = () => {
+    // First, because it is the only state here holding a device open. Losing
+    // the words is the point — a recording escaped is one the reader has
+    // decided against.
+    if (onCancelRecording?.()) return true;
+
     // Shuts the picker without clearing what was typed.
     if (menuOpen) {
       setDismissed(true);
@@ -483,6 +510,46 @@ export default function ChatInput({
   // prompt and pressing a button that was never going to work.
   const canSend = !notice && (message.trim().length > 0 || attachments.length > 0);
 
+  /// Dictation and Send, drawn in exactly one of two places.
+  ///
+  /// Built once and placed by `singleLine` rather than written out twice: two
+  /// copies of a submit button is two things to keep in step, and the one that
+  /// is wrong is the one nobody is looking at.
+  const controls = (
+    <div className="flex shrink-0 items-center gap-1">
+      {dictation}
+
+      {/* One button, two jobs, and what is typed decides which. Stopping is what
+          an empty composer during a turn is for; with text in it the prompt is
+          queued onto the running turn instead, so Send has to stay reachable —
+          refusing it is the behaviour this replaced. `type="button"` on Stop so
+          pressing it can't also submit.
+
+          Enter-to-send lives in `onKeyDown`, not in this button being the form's
+          submitter, so the empty state can drop it for the hint below without
+          losing the keyboard path. Neither `busy` nor a queue is reachable
+          there — nothing runs before a session exists. */}
+      {!isNewTask &&
+        !dictating &&
+        (() => {
+          const stopping = busy && !canSend;
+
+          return (
+            <Button
+              type={stopping ? "button" : "submit"}
+              size="icon-sm"
+              disabled={stopping ? !onStop : !canSend}
+              onClick={stopping ? onStop : undefined}
+              title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
+              className="rounded-full"
+            >
+              {stopping ? <Square className="fill-current" /> : <ArrowUp strokeWidth={2} />}
+            </Button>
+          );
+        })()}
+    </div>
+  );
+
   const submit = () => {
     // Enter has its own path into here, so the disabled button is not the
     // guard — without this, the one route that never touches the button still
@@ -576,31 +643,23 @@ export default function ChatInput({
             are raw messages from git and the CLI, which carry their own line
             breaks — flattening them runs the offending filenames together.
 
-            The button is positioned out of flow and the first line cleared for
-            it with `text-indent`, rather than floating it or giving it a flex
-            column. Both of those reserve space per-line: a float clears after
-            line one, so a message with its own `\n` breaks lands on three
-            different left edges. This way every line shares one edge and only
-            the first is inset. */}
+            Dismiss sits at the right, out of the text's way entirely. It was on
+            the left, which put it between the reader and the first word of
+            every message and needed a `text-indent` on the first line to make
+            room. A flex row with the button after the text costs neither. */}
         {error && (
-          <div className="relative mb-2 px-1 text-ui break-words whitespace-pre-wrap text-destructive">
+          <div className="mb-2 flex items-start gap-2 px-1 text-ui text-destructive">
+            <span className="min-w-0 flex-1 break-words whitespace-pre-wrap">{error}</span>
             {onDismissError && (
               <button
                 type="button"
                 onClick={onDismissError}
                 aria-label="Dismiss error"
-                className="absolute top-px left-1 rounded p-0.5 opacity-70 transition-opacity hover:opacity-100"
+                className="mt-px shrink-0 rounded p-0.5 opacity-70 transition-opacity hover:opacity-100"
               >
                 <X className="size-3.5" strokeWidth={2} />
               </button>
             )}
-            {/* Matches the button's 14px glyph plus its padding and the gap.
-                Applied inline: an arbitrary Tailwind value would work, but the
-                number has to track the icon size above and reads clearer next
-                to it. */}
-            <span style={onDismissError ? { textIndent: "1.5rem" } : undefined} className="block">
-              {error}
-            </span>
           </div>
         )}
 
@@ -712,10 +771,13 @@ export default function ChatInput({
               </div>
             )}
 
-            {/* Both buttons sit on the last line. At one line that reads as
-                centered anyway, because the textarea's vertical padding below is
-                tuned to match the buttons' own height — no `self-center` needed,
-                and nothing drifts as the box grows. */}
+            {/* Controls ride the text's own row, always. Measuring the box and
+                dropping them to a second row once the text wrapped was tried
+                and reverted: the measurement lands a frame after the keystroke,
+                so the row appeared and vanished as the text crossed a line
+                boundary, and every wrap flickered. `items-end` is what makes
+                one row read correctly at both heights — at one line the buttons
+                sit beside the text, and past it they stay at the bottom. */}
             <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
               <div className="relative min-w-0 flex-1">
                 <textarea
@@ -840,38 +902,7 @@ export default function ChatInput({
                 )}
               </div>
 
-              {/* One button, two jobs, and what is typed decides which. Stopping
-                  is what an empty composer during a turn is for; with text in it
-                  the prompt is queued onto the running turn instead, so Send has
-                  to stay reachable — refusing it is the behaviour this replaced.
-                  `type="button"` on Stop so pressing it can't also submit.
-
-                  Enter-to-send lives in `onKeyDown`, not in this button being the
-                  form's submitter, so the empty state can drop it for the hint
-                  below without losing the keyboard path. Neither `busy` nor a
-                  queue is reachable there — nothing runs before a session
-                  exists. */}
-              {!isNewTask &&
-                (() => {
-                  const stopping = busy && !canSend;
-
-                  return (
-                    <Button
-                      type={stopping ? "button" : "submit"}
-                      size="icon-sm"
-                      disabled={stopping ? !onStop : !canSend}
-                      onClick={stopping ? onStop : undefined}
-                      title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
-                      className="rounded-full"
-                    >
-                      {stopping ? (
-                        <Square className="fill-current" />
-                      ) : (
-                        <ArrowUp strokeWidth={2} />
-                      )}
-                    </Button>
-                  );
-                })()}
+              {controls}
             </div>
           </div>
         </div>

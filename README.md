@@ -98,3 +98,29 @@ sits in a row of muted chrome rather than shouting over it
 Claude's and OpenAI's are trademarks of their owners, used to name the agent a
 session runs on and nothing else. pi's is under a licence that asks for
 attribution, which is why it is the only row here.
+
+## Transcription
+
+Dictation in the composer is local, and it stands on
+[Handy](https://github.com/cjpais/Handy) by [CJ Pais](https://cjpais.com) — MIT.
+Handy is a privacy-focused speech-to-text app that got there first and got it
+right, and Dray runs on the engine crates its author publishes separately:
+
+| Crate | Does |
+| ----- | ---- |
+| [transcribe-cpp](https://crates.io/crates/transcribe-cpp) | Runs the GGUF model, Metal-accelerated on Apple Silicon |
+| [transcribe-rs](https://github.com/cjpais/transcribe-rs) | The ONNX half of the same family, not currently used here |
+
+The models are the `handy-computer` org's own GGUF conversions, fetched from
+Hugging Face and pinned to a revision
+(`apps/desktop/src-tauri/src/transcription/catalog.rs`). Weights are CC-BY-4.0
+and carry their base models' own terms.
+
+**What Dray did not take is the app.** Handy solves global hotkeys, injecting
+text into whatever window has focus, a tray and a history — none of which Dray
+needs, because it owns the composer the words land in. The debt is to the engine
+and to the judgement about which models are worth offering, and Handy's own
+ranking is where this one's list started.
+
+Handy's name, logo and brand assets are **not** covered by its MIT licence and
+are not used here.

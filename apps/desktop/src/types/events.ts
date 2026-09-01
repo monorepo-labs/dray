@@ -299,7 +299,17 @@ analyticsEnabled: boolean,
  * therefore not the connection: an account here with no key behind it
  * reads as disconnected. See [`crate::issues::get_integrations`].
  */
-linearAccount: TrackerAccount | null, };
+linearAccount: TrackerAccount | null, 
+/**
+ * Which speech-to-text model and microphone to use.
+ *
+ * Here rather than in the webview's local storage, unlike every other
+ * composer pick, because Rust is what reads it: the recording commands
+ * resolve the model and device themselves, and a value the backend has to
+ * ask the frontend for is a value that can be missing when a keypress
+ * needs it.
+ */
+transcription: TranscriptionSettings, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -464,6 +474,19 @@ export type ContextWindow = { usedTokens: number, maxTokens: number, };
  */
 export type DeltaEvent = { "delta": "block_start", block: BlockRef, blockType: BlockType, } | { "delta": "text_delta", block: BlockRef, text: string, } | { "delta": "input_delta", block: BlockRef, partialJson: string, } | { "delta": "block_stop", block: BlockRef, };
 
+/**
+ * Progress for the settings tab's bar.
+ *
+ * Emitted rather than returned because a download outlives the dialog that
+ * started it — closing settings mid-download must not cancel it, and reopening
+ * must find it still running.
+ */
+export type DownloadProgress = { modelId: string, received: number, total: number, 
+/**
+ * Set once, on the last event, when the model failed to land.
+ */
+error: string | null, };
+
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ErrorSource = "harness" | "parser" | "process";
@@ -563,6 +586,19 @@ export type Harness = "claude_code" | "codex" | "pi";
 export type HookPhase = "started" | "finished";
 
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
+
+/**
+ * An input the reader can pick in settings.
+ */
+export type InputDevice = { 
+/**
+ * Also the identity: devices are stored and matched by name.
+ *
+ * cpal offers an enumeration index too, and Handy persists that. It is the
+ * wrong key — the order changes when a USB mic is unplugged, so a stored
+ * index silently starts naming a different device.
+ */
+name: string, isDefault: boolean, };
 
 /**
  * What the settings dialog draws. `None` is a tracker nobody has connected.
@@ -1420,6 +1456,11 @@ argumentHint: string,
 aliases: Array<string>, };
 
 /**
+ * Why a press could not start recording, or `None` where it did.
+ */
+export type StartRefusal = { "kind": "needsModel" } | { "kind": "needsPermission" };
+
+/**
  * A running subagent, whose events interleave with the main conversation's on
  * one stdout stream.
  *
@@ -1489,6 +1530,95 @@ export type ToolType = "shell" | "file_read" | "file_edit" | "search" | "web" | 
  * The connected account, as the settings row draws it.
  */
 export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: string, orgName: string, };
+
+/**
+ * What a stop answers with.
+ *
+ * Three of these are outcomes rather than errors because the frontend *acts*
+ * on each — opens settings, points at System Settings, says nothing — where an
+ * error string could only be shown.
+ *
+ * `NoAudio` earns its place the hard way: macOS answers a process without
+ * microphone permission with a stream of **silence** rather than a refusal, so
+ * the first build of this transcribed zeros to an empty string and did nothing
+ * at all, which reads exactly like a broken model.
+ */
+export type TranscribeOutcome = { "kind": "text", "value": string } | { "kind": "needsModel" } | { "kind": "noAudio" } | { "kind": "empty" };
+
+/**
+ * One downloadable model.
+ *
+ * `sha256` and `size_bytes` describe the *file*, not the repo, which is what
+ * makes a half-finished download recoverable: a file on disk at the right size
+ * and hash is complete whatever happened to the process that wrote it.
+ */
+export type TranscriptionModel = { id: string, name: string, description: string, 
+/**
+ * Hugging Face repo the file lives in.
+ */
+repo: string, 
+/**
+ * Pinned commit, so the URL cannot drift onto different bytes.
+ */
+revision: string, filename: string, sizeBytes: number, sha256: string, 
+/**
+ * What it transcribes, ready to draw.
+ *
+ * A phrase rather than a count, because the two useful answers have
+ * different shapes: a handful of languages is worth *naming* — "4
+ * languages" tells a French speaker nothing about whether this model is
+ * for them — while ninety-nine is only ever a number. The catalog is a
+ * fixed compiled-in list, so spelling it here costs nothing and keeps the
+ * judgement beside the data it describes.
+ */
+languages: string, };
+
+/**
+ * The transcription picks, both meaning "not chosen" when absent.
+ */
+export type TranscriptionSettings = { 
+/**
+ * A catalog id. `None` until a model is downloaded and picked, which is
+ * also what makes the mic button open settings instead of recording.
+ */
+model: string | null, 
+/**
+ * An input device *name*, `None` meaning the system default.
+ *
+ * The name and not cpal's enumeration index: the index shifts when a USB
+ * mic is unplugged, so a stored one silently starts naming a different
+ * device. See [`crate::transcription::audio::InputDevice`].
+ */
+device: string | null, };
+
+/**
+ * Everything the transcription tab draws in one read.
+ *
+ * One command rather than three, for the reason `work_status` gives: the tab
+ * must not be able to show a model as installed beside a selection that
+ * disagrees with it, which is what separate reads landing out of order allow.
+ */
+export type TranscriptionStatus = { models: Array<TranscriptionModel>, 
+/**
+ * Catalog ids present on disk at the right size.
+ */
+installed: Array<string>, 
+/**
+ * What the reader picked, which may name a model since deleted.
+ */
+selectedModel: string | null, 
+/**
+ * Suggested for this machine, and only a suggestion.
+ */
+recommended: string, devices: Array<InputDevice>, 
+/**
+ * Stored device name, or `None` for the system default.
+ */
+selectedDevice: string | null, 
+/**
+ * False where no model is installed, or the picked one has been deleted.
+ */
+ready: boolean, };
 
 /**
  * How a turn ended. Claude Code reports this as `is_error` on its result

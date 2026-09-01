@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundle's own Info.plist by Tauri's bundler.
+
+  NSMicrophoneUsageDescription is not optional: macOS kills a process that
+  reaches for the microphone without one, rather than refusing the request, so
+  its absence presents as the app disappearing the first time the mic button is
+  pressed. The sentence is what the system prompt shows, so it says what the
+  audio is for and where it goes.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Dray transcribes what you say into the composer. Audio is processed on this Mac and never leaves it.</string>
+  </dict>
+</plist>

@@ -39,6 +39,33 @@ pub struct AppSettings {
     /// reads as disconnected. See [`crate::issues::get_integrations`].
     #[serde(default)]
     pub linear_account: Option<TrackerAccount>,
+    /// Which speech-to-text model and microphone to use.
+    ///
+    /// Here rather than in the webview's local storage, unlike every other
+    /// composer pick, because Rust is what reads it: the recording commands
+    /// resolve the model and device themselves, and a value the backend has to
+    /// ask the frontend for is a value that can be missing when a keypress
+    /// needs it.
+    #[serde(default)]
+    pub transcription: TranscriptionSettings,
+}
+
+/// The transcription picks, both meaning "not chosen" when absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionSettings {
+    /// A catalog id. `None` until a model is downloaded and picked, which is
+    /// also what makes the mic button open settings instead of recording.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// An input device *name*, `None` meaning the system default.
+    ///
+    /// The name and not cpal's enumeration index: the index shifts when a USB
+    /// mic is unplugged, so a stored one silently starts naming a different
+    /// device. See [`crate::transcription::audio::InputDevice`].
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 fn enabled_by_default() -> bool {
@@ -50,6 +77,7 @@ impl Default for AppSettings {
         Self {
             analytics_enabled: enabled_by_default(),
             linear_account: None,
+            transcription: TranscriptionSettings::default(),
         }
     }
 }
@@ -101,6 +129,7 @@ fn opted_out() -> AppSettings {
     AppSettings {
         analytics_enabled: false,
         linear_account: None,
+        transcription: TranscriptionSettings::default(),
     }
 }
 
@@ -198,6 +227,7 @@ mod tests {
         let off = AppSettings {
             analytics_enabled: false,
             linear_account: None,
+            transcription: TranscriptionSettings::default(),
         };
 
         write_to(&dir, &off).await.unwrap();
