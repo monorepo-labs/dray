@@ -1109,8 +1109,9 @@ compiler names every one, and ts-rs emits `string` either way.
 **Two things come off `Model` that the first draft added.** `provider`
 duplicates the id — pi's `set_model` takes the halves separately, so the split
 belongs at the call site, on the **first** `/` (OpenRouter ids carry more than
-one). `context_window` has no reader: the ring takes occupancy from
-`get_session_stats`, not from the model table.
+one). `context_window` has no reader on `Model`: the ring takes its
+denominator from the handshake's own `get_state` answer, not from the model
+table — one number, read where it is already being asked for.
 
 **Two.** `Model` grows what a discovered entry knows and a static one can leave
 empty:
@@ -1461,6 +1462,59 @@ before the event is emitted. One round trip per turn, no model call, and the
 number is exact rather than derived — no summing of four disjoint counts, no
 per-model window table.
 
+**That is not what shipped, and the reason is the reader.** A request is
+settled by a line off stdout, and the read loop is what reads them — so
+awaiting `get_session_stats` from inside it waits on itself and gives up
+thirty seconds later, every turn. Asking from a spawned task escapes the
+deadlock and loses the ordering: `TurnCompleted` is emitted and logged before
+the answer lands, and there is no second event carrying occupancy for the
+ring to read.
+
+So the fallback below is the implementation. `message_end.message.usage`
+carries `totalTokens`, which **is** the occupancy — one model call's prompt
+plus its answer, so the turn's last call describes what the turn left behind —
+and it agrees with pi's own figure exactly: 2139 in `live_turn.jsonl`, 2840 in
+`no_approvals.jsonl`, against the `get_session_stats` answer captured in each.
+The denominator is `get_state`'s `model.contextWindow`, taken at the handshake
+that already runs, held in an `AtomicU64` the mapper reads at `agent_settled`.
+The window is re-read on `model_changed`, since Dray respawns for a model
+change but a pi extension calling `setModel` does not — and dropped to `0` the
+moment that event lands, rather than left standing until the answer does. That
+stops the *mixed* pair, which is the one nothing else could catch: a fresh
+occupancy measured against the window of the model that left, which after a
+switch onto a smaller one says there is room where there is none.
+
+**It does not make the gauge wait, and cannot.** The reader folds backwards to
+the newest event carrying a figure, so a turn with no window falls through to
+the previous turn's pair — the same reading, a turn older, and internally
+consistent because both halves came from one model. The window Dray no longer
+knows is therefore a stale gauge for as long as it takes `get_state` to answer,
+which is a local round trip against a turn that runs for seconds, and for the
+life of the child where that request fails.
+
+Making it go dark instead needs the fold to know that readings before a point
+are void — a persisted model-change event, which is a variant on the shared
+vocabulary and a fold rule to go with it. Not built: nothing Dray does reaches
+this, since it respawns for a model change, and the path exists only for a pi
+extension calling `setModel` mid-session.
+
+Three states carry no reading rather than a wrong one, and the last two are
+what pi's own `getContextUsage` does: a window Dray never learned, a turn that
+**failed or was aborted** — its message describes a call that did not land —
+and a turn closing **after a compaction that landed**, whose held total
+describes the context that compaction just threw away. The ring settles on the
+newest event carrying a figure, so a stale total there lands after
+`context_compacted`'s own count and jumps the ring back up for the rest of the
+session. In all three the previous reading stands, which is the safe direction.
+
+A compaction that **aborted** is deliberately not among them, and the asymmetry
+is the reader's own rule: `context_compacted` lands either way and settles
+`used` on whatever count it carries, which for an aborted one is `None`. So
+withholding the turn's window there does not leave the gauge on its last figure
+— it blanks it. Nothing left the window anyway, so the held total is still the
+truth. Pinned by `the_turn_carries_pis_own_occupancy_figure`, which
+reads both numbers out of the captures rather than restating them.
+
 Two edges the docs name and a capture should confirm: `contextUsage` is
 **omitted** when no model or window is available, and its `tokens`/`percent`
 are **null** immediately after a compaction until a fresh assistant response
@@ -1478,10 +1532,10 @@ would read zero on a real session and show an empty gauge with nothing saying
 why.
 
 So the per-message `usage` feeds `UsageUpdate` (emitted, never persisted) and
-nothing else, and `message_end.message.usage` — which *is* populated — is the
-fallback if `get_session_stats` ever proves too slow to ask on every turn. Its
-`cost` field has no home in Dray at all and is dropped: pi is the first harness
-to report money, and a surface for it is a product decision, not a mapping one.
+`TurnCompleted`, where `message_end.message.usage` — which *is* populated — is
+what the ring reads, for the reason above. Its `cost` field has no home in Dray
+at all and is dropped: pi is the first harness to report money, and a surface
+for it is a product decision, not a mapping one.
 
 ### Gaps, both directions
 

@@ -54,7 +54,9 @@ been believed:
 - **`usage` on `message_update` is all zeros for the whole stream** on xAI. The
   stub populated it. pi's docs warn that it "may remain zero until completion"
   and that is what a real provider does — which is why the context ring reads
-  `get_session_stats` rather than deriving from deltas.
+  the *committed* message's `usage.totalTokens` rather than deriving from
+  deltas. `get_session_stats` is captured beside it in both live files, and the
+  two agree: that is what pins the reading.
 - **`toolcall_delta` fired once per call, carrying the whole argument JSON.**
   The stub split it into twelve-character fragments. So the streaming-preview
   split — header from the stream, body from the committed event — *works*, but
