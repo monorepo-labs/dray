@@ -126,13 +126,8 @@ impl Mapper {
                 vec![self.event(AgentEventPayload::TurnCompleted {
                     status,
                     stop_reason,
-                    // Never claimed for pi. Its providers each fail in their
-                    // own words, so there is no one sentence to recognise —
-                    // and there is nothing to offer if we did, since pi has no
-                    // login command: credentials come from the environment or
-                    // from `pi config`. The prose still reaches the reader on
-                    // the failed-turn row, which is the half that matters.
-                    auth_failed: false,
+                    auth_failed: matches!(status, TurnStatus::Error)
+                        && final_text.as_deref().is_some_and(is_auth_failure),
                     final_text,
                     usage,
                     duration_ms: None,
@@ -456,6 +451,30 @@ fn flatten_content(result: &Value) -> String {
         .join("\n")
 }
 
+/// Whether a failed turn died for want of a login.
+///
+/// Matched on **pi's own wrapper**, not on the provider's prose. Every provider
+/// fails in its own words — the body of one of these is OpenAI's JSON, and xai
+/// or Anthropic would put something else there — but the sentence pi puts in
+/// front is pi's, and it is the same for all of them:
+///
+/// ```text
+/// OAuth refresh failed for openai-codex: OpenAI Codex token refresh failed (401): {…}
+/// ```
+///
+/// Deliberately narrow. This blocks sending, so a false positive costs the
+/// reader a composer they cannot use over an error a retry would have cleared —
+/// worse than the missed notice it replaces. A bare `401` would match a
+/// provider that is up but refusing this one call; pi's wrapper only appears
+/// when the credential itself could not be renewed.
+///
+/// Nothing else is matched yet, and that is a gap rather than a claim: pi can
+/// also fail with no credential at all, and no capture of that exists. Widen
+/// from a real one, never from a guess.
+fn is_auth_failure(text: &str) -> bool {
+    text.to_lowercase().contains("oauth refresh failed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +645,49 @@ mod tests {
 
         assert_eq!(status, TurnStatus::Error);
         assert_eq!(final_text.as_deref(), Some("This operation was aborted"));
+    }
+
+    /// The predicate blocks the composer, so the case that matters is the one
+    /// where it must stay quiet. This is a real captured failure — an abort —
+    /// and reading it as a login problem would leave the reader unable to send
+    /// after pressing Stop.
+    #[test]
+    fn an_ordinary_failed_turn_is_not_a_login_problem() {
+        let events = mapped(ABORT);
+
+        let auth_failed = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                AgentEventPayload::TurnCompleted { auth_failed, .. } => Some(*auth_failed),
+                _ => None,
+            })
+            .expect("the turn closed");
+
+        assert!(!auth_failed);
+    }
+
+    /// Verbatim from a live failure: pi holding an OpenAI refresh token that
+    /// Codex had already rotated. Both hold their own copy of a single-use
+    /// token, so one refreshing kills the other — and the sentence pi wraps it
+    /// in is the part that is pi's rather than the provider's.
+    #[test]
+    fn a_spent_refresh_token_reads_as_a_login_problem() {
+        assert!(is_auth_failure(
+            "OAuth refresh failed for openai-codex: OpenAI Codex token refresh failed (401): \
+             { \"error\": { \"message\": \"Your refresh token has already been used to generate \
+             a new access token. Please try signing in again.\", \"code\": \
+             \"refresh_token_reused\" } }"
+        ));
+    }
+
+    /// Matched on pi's wrapper, never on the status code inside it. A provider
+    /// that is up and refusing one call answers 401 too, and a retry clears
+    /// that where a login does nothing for it.
+    #[test]
+    fn a_bare_provider_failure_is_left_alone() {
+        assert!(!is_auth_failure("Request failed (401): rate limited"));
+        assert!(!is_auth_failure("This operation was aborted"));
+        assert!(!is_auth_failure("connection reset by peer"));
     }
 
     /// The version problem, demonstrated rather than described.

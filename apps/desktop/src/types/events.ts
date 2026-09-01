@@ -19,7 +19,12 @@ installCommand: string | null, docsUrl: string | null,
  * CLI that is missing, this cures one that is logged out. Both are facts
  * about the harness rather than about the machine, so they ride one read.
  */
-loginCommand: string, };
+loginCommand: string, 
+/**
+ * What is left to do once `login_command` has run, for a harness whose
+ * command is not the whole cure. `None` for the two whose command is.
+ */
+loginHint: string | null, };
 
 /**
  * One normalized event: an envelope (who, when, what order, which conversation)

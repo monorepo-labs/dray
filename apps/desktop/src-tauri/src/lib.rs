@@ -134,6 +134,7 @@ async fn agent_availability() -> Vec<AgentAvailability> {
             install_command: curable.then(|| harness.install_command().to_string()),
             docs_url: curable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
+            login_hint: harness.login_hint().map(str::to_string),
         });
     }
     out
@@ -189,6 +190,9 @@ struct AgentAvailability {
     /// CLI that is missing, this cures one that is logged out. Both are facts
     /// about the harness rather than about the machine, so they ride one read.
     login_command: String,
+    /// What is left to do once `login_command` has run, for a harness whose
+    /// command is not the whole cure. `None` for the two whose command is.
+    login_hint: Option<String>,
 }
 
 /// The models a harness can run here.

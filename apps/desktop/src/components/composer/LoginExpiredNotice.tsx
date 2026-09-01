@@ -104,9 +104,20 @@ export default function LoginExpiredNotice({
           already sets an icon against a sentence at. */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-        <p className="min-w-0 truncate text-ui text-foreground">
-          {agent.label} isn&rsquo;t logged in
-        </p>
+        {/* The hint sits under the sentence, not in the Log in button's
+            tooltip. pi's command opens a TUI rather than starting a login, so
+            a reader who clicks without hovering would otherwise arrive there
+            having never been told to type `/login`. Absent for the harnesses
+            whose command is the whole cure, which keeps this one line for
+            them. */}
+        <div className="min-w-0">
+          <p className="truncate text-ui text-foreground">
+            {agent.label} isn&rsquo;t logged in
+          </p>
+          {agent.loginHint && (
+            <p className="truncate text-ui text-muted-foreground">{agent.loginHint}</p>
+          )}
+        </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">

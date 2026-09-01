@@ -540,14 +540,13 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude auth login",
             Harness::Codex => "codex login",
-            // pi has no login at all. Verified against `pi auth --help`, which
-            // offers `print-api-key`, `print-bearer-token` and `check` and
-            // nothing that signs anyone in: credentials are per provider, and
-            // they arrive from the environment or from `pi config`'s TUI. So
-            // there is no one command to name, and naming the nearest thing
-            // would send a reader to a subcommand that only reads back what
-            // they have not got.
-            Harness::Pi => "",
+            // pi's login is a slash command inside its TUI, not a subcommand:
+            // `pi auth` offers `print-api-key`, `print-bearer-token` and
+            // `check` and nothing that signs anyone in. So the command opens
+            // pi, and [`Harness::login_hint`] carries the rest — bare `pi`
+            // lands the reader in a TUI with no idea what to type next, which
+            // is a cure that does not cure.
+            Harness::Pi => "pi",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -568,5 +567,69 @@ impl Harness {
             Harness::Pi => &[],
             Harness::Other(_) => &[],
         }
+    }
+
+    /// What the reader still has to do once [`Harness::login_command`] has run,
+    /// or `None` where the command is the whole cure.
+    ///
+    /// Only pi needs one, and it needs one badly: its command opens a TUI
+    /// rather than starting a login, so without this the notice hands over a
+    /// terminal and no next step. Drawn beside the sentence rather than in the
+    /// button's tooltip — a reader who clicks without hovering would otherwise
+    /// meet the TUI never having been told.
+    ///
+    /// pi's credentials are **per provider**, which is why the hint names
+    /// picking one. It is also why pi can be logged in for one provider and
+    /// out for another, and why a working Codex session says nothing about
+    /// whether pi can reach the same account: the two keep separate stores.
+    pub fn login_hint(self) -> Option<&'static str> {
+        match self {
+            Harness::Pi => Some("then type /login and pick the provider"),
+            Harness::ClaudeCode | Harness::Codex | Harness::Other(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::Harness;
+
+    /// A harness that can be driven has to be able to say how to log into it.
+    /// An empty command reaches the notice as a Log in button that runs the
+    /// binary bare and a Copy button that copies nothing.
+    #[test]
+    fn every_drivable_harness_names_a_login() {
+        for harness in Harness::ALL {
+            assert!(
+                !harness.login_command().is_empty(),
+                "{harness:?} draws a login notice with no command in it"
+            );
+        }
+    }
+
+    /// The pairing is the rule, not pi being the one with a hint. A command
+    /// that lands somewhere other than a login needs the rest said out loud,
+    /// and `login_args` is how you tell the two apart: an empty one means the
+    /// command opens the CLI rather than starting anything.
+    #[test]
+    fn a_login_that_only_opens_the_cli_carries_a_hint() {
+        for harness in Harness::ALL {
+            if harness.login_args().is_empty() {
+                assert!(
+                    harness.login_hint().is_some(),
+                    "{harness:?} opens its CLI and says nothing about what to do there"
+                );
+            }
+        }
+    }
+
+    /// `Other` is the harness this build cannot name, let alone drive, so it
+    /// must not claim a cure. It is excluded from `ALL`, which is why the two
+    /// tests above cannot cover it.
+    #[test]
+    fn an_unknown_harness_offers_nothing() {
+        let unknown = Harness::Other("opencode");
+        assert!(unknown.login_command().is_empty());
+        assert!(unknown.login_hint().is_none());
     }
 }
