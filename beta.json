@@ -1,23 +1,23 @@
 {
-  "version": "0.12.2",
-  "notes": "### Added\n\n- **Start work on an issue from the issues page.** The button hands you the\n  empty composer with the issue already tagged, rather than starting a session\n  behind your back — the page spans the whole workspace, so the project, agent\n  and model are still yours to pick.\n\n### Fixed\n\n- **Dictation can reach the microphone.** 0.12.1 shipped it unable to: the\n  bundle is signed with the hardened runtime, under which macOS refuses the\n  mic before ever prompting unless the audio-input entitlement is granted. No\n  dialog appeared and no row showed up in Privacy & Security.\n- **The context ring fills for pi sessions**, and stays empty rather than\n  showing a figure that would mislead — after a compaction, or on a turn that\n  failed or was stopped.\n- **The issues page waits for its first read.** Only the settled headings can\n  draw without an answer, so for a beat they were the whole page and it read\n  as a workspace with nothing left to do.",
-  "pub_date": "2026-09-01T12:57:13.789Z",
+  "version": "0.12.3",
+  "notes": "### Added\n\n- **A failed dictation keeps the audio.** The samples used to go into\n  the engine and vanish with it, so the only cure was saying the whole\n  thing again. Every recording is now parked on disk until the model\n  answers, and Retry sends the same audio back through — including when\n  the failure was a model that wasn't installed yet.\n- **Other audio is muted while you dictate.** The microphone hears the\n  speakers, so anything playing landed in the transcript as words nobody\n  said. Your prior state is restored, so a machine already muted stays\n  that way.\n\n### Changed\n\n- **The model loads before you press the mic**, at launch and whenever\n  the selected model changes. Loading takes seconds and a first\n  dictation is usually one word, so it could not hide behind the\n  recording. Costs a resident model for a reader who never dictates.\n- **Deleting a worktree from a notice is ⌘⇧D**, since plain ⌘D is\n  dictation app-wide and a card raising itself mid-sentence must not\n  take a chord the composer owns.\n- **The composer takes focus when dictated words land**, and only if\n  you are still on the session you spoke into.",
+  "pub_date": "2026-09-01T14:40:54.154Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXV5MjcvZm1zUG5sUjc1L1ZsaVB0NUZNMVhZdFVFNTRsNXZUTDhwMUhIMjE3WTkyLzJHcTlMTVhmMS9xSUVZYXY5bCtZWTRKVGVRL0hlY3FlTDVSSUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjY3NDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CkxJcDBCMmx2VS9TdEJrenR6b2JqWDJQUHZJNTRUQ1pub0NBYk1MRVNvWjJ5cVZ6eWdZcGY0cTFqRHk2dFFkR3FTc0FFcUE2ZWRTb2xJZEk4UHFMZUFRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXV5MjcvZm1zUG5sUjc1L1ZsaVB0NUZNMVhZdFVFNTRsNXZUTDhwMUhIMjE3WTkyLzJHcTlMTVhmMS9xSUVZYXY5bCtZWTRKVGVRL0hlY3FlTDVSSUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjY3NDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CkxJcDBCMmx2VS9TdEJrenR6b2JqWDJQUHZJNTRUQ1pub0NBYk1MRVNvWjJ5cVZ6eWdZcGY0cTFqRHk2dFFkR3FTc0FFcUE2ZWRTb2xJZEk4UHFMZUFRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXV5MjcvZm1zUG5sUjc1L1ZsaVB0NUZNMVhZdFVFNTRsNXZUTDhwMUhIMjE3WTkyLzJHcTlMTVhmMS9xSUVZYXY5bCtZWTRKVGVRL0hlY3FlTDVSSUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjY3NDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CkxJcDBCMmx2VS9TdEJrenR6b2JqWDJQUHZJNTRUQ1pub0NBYk1MRVNvWjJ5cVZ6eWdZcGY0cTFqRHk2dFFkR3FTc0FFcUE2ZWRTb2xJZEk4UHFMZUFRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXV5MjcvZm1zUG5sUjc1L1ZsaVB0NUZNMVhZdFVFNTRsNXZUTDhwMUhIMjE3WTkyLzJHcTlMTVhmMS9xSUVZYXY5bCtZWTRKVGVRL0hlY3FlTDVSSUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjY3NDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CkxJcDBCMmx2VS9TdEJrenR6b2JqWDJQUHZJNTRUQ1pub0NBYk1MRVNvWjJ5cVZ6eWdZcGY0cTFqRHk2dFFkR3FTc0FFcUE2ZWRTb2xJZEk4UHFMZUFRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXA5OGVEdlVaanhtREI5UEYyd1pwUVN1bkF5M3dRTExTcEZHaWNsMFp2NHR0QWlGSyszR2tqT21XS2dWdk5ZUmxlZm9UdGlNTWJOb1lKaitid3QyMkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjczNjQ2CWZpbGU6RHJheS5hcHAudGFyLmd6CnBVQVZhWFJxNFdqUmxMbjZnL0tjVzM2aUV0SmdqQ1JES0NXQ3VieW1HY2NIM3VCOEVWNGp1am11cnFZMnZTc25VV0pxWkVHb21ocElGeWNKdkR2NUNRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.3/Dray_universal.app.tar.gz"
     }
   }
 }
