@@ -122,8 +122,16 @@ pub fn restore_other_audio() {
 
     // Restored to what it was, never unconditionally unmuted: a reader who was
     // already muted before they started talking stays that way.
-    if let Some(was_muted) = prior.take() {
-        set_muted(was_muted);
+    let Some(was_muted) = *prior else {
+        return;
+    };
+
+    // Cleared only once the machine has actually been put back. Taking it
+    // first read as tidier and was the one way to leave somebody silent for
+    // good: a single failed `osascript` would drop the only record of what to
+    // restore, and every later stop would then find nothing to do.
+    if set_muted(was_muted) {
+        *prior = None;
     }
 }
 
