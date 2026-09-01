@@ -196,7 +196,7 @@ function NoticeCard({
     setPhase("done");
   };
 
-  // ⌘D deletes without the trip to a 40px button, which is the whole point of
+  // ⌘⇧D deletes without the trip to a 40px button, which is the whole point of
   // the card. Bound here rather than in the stack because pressing it has to
   // run the same `confirm` the button does — the "Deleted" state is this
   // card's, and a key that reached past it would delete the worktree while the
@@ -204,12 +204,18 @@ function NoticeCard({
   //
   // A key of its own rather than more meaning on ⌘G: one chord that sometimes
   // navigates and sometimes destroys is the shape that burns someone once.
+  // Shifted because plain ⌘D is dictation, app-wide — a card raising itself
+  // under the cursor must not take a chord the composer already owns.
   // Guarded on `isNext` so a stack of cards has exactly one target, the same
   // one ⌘G has, and on `idle` so a repeat press cannot ask for the removal a
   // second time while the card sits there saying it already happened.
-  useHotkey("d", () => {
-    if (worktree && isNext && phase === "idle") confirm();
-  });
+  useHotkey(
+    "d",
+    () => {
+      if (worktree && isNext && phase === "idle") confirm();
+    },
+    { shift: true },
+  );
 
   return (
     <Alert
@@ -275,7 +281,7 @@ function NoticeCard({
             it sits on and stops reading as a control at all. `pr-1` because the
             keycaps carry their own inset, which turns the size's own right
             padding into a gap. */}
-        <WithShortcut keys={isNext && phase !== "done" ? [worktree ? "D" : "G"] : []}>
+        <WithShortcut keys={isNext && phase !== "done" ? (worktree ? ["⇧", "D"] : ["G"]) : []}>
         <Button
           size="xs"
           className={cn(
