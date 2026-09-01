@@ -12,13 +12,21 @@ import { useSyncExternalStore } from "react";
 /// the worktree", which is why the card offers no way to say so: the safe
 /// choice is what doing nothing already does.
 ///
+/// `worktree-failed` is the correction, and it exists because the deletion no
+/// longer waits: the dialog closes and the card says "Deleted" the moment the
+/// click lands, so a git failure arrives after the reader has been told it
+/// worked. Nothing else can tell them otherwise — the error banner sits above a
+/// composer a settled session does not draw, and the row they would read it
+/// from is the one still carrying the tree.
+///
 /// `pr` is the only kind raised by something no session did. A turn ending, a
 /// question asked and a tree settled are all this app's own doing; a pull
 /// request turning green is CI reporting somewhere else, which is why it is the
 /// one kind that fires whether or not the window has focus — the reader cannot
-/// have seen it happen. See `announce` in [useSessions](./useSessions.ts) for
-/// the split the other three make.
-export type NoticeKind = "completed" | "asking" | "worktree" | "pr";
+/// have seen it happen. `worktree-failed` fires regardless of focus too, for
+/// the opposite reason: they have already seen the wrong answer. See `announce`
+/// in [useSessions](./useSessions.ts) for the split the other three make.
+export type NoticeKind = "completed" | "asking" | "worktree" | "pr" | "worktree-failed";
 
 /// How long each kind stays on screen. Read by the card to time its own progress
 /// bar, which is also what dismisses it — see [NoticeStack](../components/NoticeStack.tsx).
@@ -33,6 +41,10 @@ export const NOTICE_TTL_MS: Record<NoticeKind, number> = {
   // News that will keep, like a finished turn: the pull request stays ready,
   // and the card is a shortcut to it rather than the only way to find it.
   pr: 10_000,
+  // The long window for `worktree`'s reason once more: this one carries git's
+  // own sentence, which is the only thing naming why the removal was refused,
+  // and a reason nobody had time to read is a reason nobody was given.
+  "worktree-failed": 15_000,
 };
 
 /// One in-app notice — something happened in a session the reader was not
@@ -60,14 +72,15 @@ export type Notice = {
   /// know, and a card whose first line was a task title would make them read to
   /// the end to find out what it wanted.
   label: string;
-  /// A second line, which only the `worktree` card carries. The others are a
-  /// verb the reader acts on immediately; this one is a decision, and the facts
-  /// it turns on have to be on the card rather than a click away.
+  /// A second line, which only the two worktree cards carry. The others are a
+  /// verb the reader acts on immediately; one of these is a decision and the
+  /// other is a refusal, and the facts each turns on have to be on the card
+  /// rather than a click away.
   detail?: string;
   /// What the notice is about, drawn muted beside the label rather than under
   /// it. Two lines of heading for a card this size read as two separate things
   /// to deal with; on one line the eye takes the action first and the subject
-  /// as the qualifier it is. Only the `worktree` card has one.
+  /// as the qualifier it is. Only the two worktree cards have one.
   subject?: string;
 };
 
@@ -132,10 +145,19 @@ export function dismissNotice(sessionId: string, kind?: NoticeKind | NoticeKind[
 /// session, and stays true after they look away. That card runs its own
 /// countdown out and goes. See [usePrReady](./usePrReady.ts).
 ///
+/// `worktree-failed` is answered because the cure is in the session: the
+/// removal left the index entry alone, so the settled bar is still carrying the
+/// button that tries again, and opening the session is what puts it on screen.
+///
 /// Spelled out rather than written as "everything but `pr`", so a kind added
 /// later has to be placed here on purpose instead of inheriting a default that
 /// may not suit it.
-export const ANSWERED_BY_OPENING: NoticeKind[] = ["completed", "asking", "worktree"];
+export const ANSWERED_BY_OPENING: NoticeKind[] = [
+  "completed",
+  "asking",
+  "worktree",
+  "worktree-failed",
+];
 
 function subscribe(listener: () => void) {
   listeners.add(listener);

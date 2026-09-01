@@ -72,6 +72,16 @@ describe("the notice stack", () => {
     expect(keys()).toEqual(["a:pr"]);
   });
 
+  // A refused removal leaves the index entry alone, so the settled bar is still
+  // carrying the button that tries again — opening the session is what puts
+  // that cure on screen, which is the whole of what this card was asking for.
+  it("counts a refused worktree removal as answered by opening the session", () => {
+    pushNotice(notice("a", "worktree-failed"));
+
+    dismissNotice("a", ANSWERED_BY_OPENING);
+    expect(keys()).toEqual([]);
+  });
+
   // The stack's array identity is what `useSyncExternalStore` subscribes on, so
   // a dismissal that found nothing must not mint a new one — see the early
   // return in `dismissNotice`.

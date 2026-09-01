@@ -58,6 +58,12 @@ export type StreamingBlock = {
     callId: string | null,
 }
 
+/// Sessions whose worktree removal is out. Module-level rather than a ref
+/// because it guards a write to disk, not a render: nothing draws from it, and
+/// the one thing it has to survive is the composer remounting under a session
+/// switch while git is still working.
+const removingWorktrees = new Set<string>();
+
 export function useSessions() {
 
     // The sticky defaults. Live state below seeds from these and writes back on
@@ -733,23 +739,9 @@ const unlinkIssue = async (sessionId: string, key: string) => {
   }
 };
 
-// Deletes the worktree a session was running in, keeping the session. The
-// backend kills the child, removes the tree and its branch, and relocates the
-// index entry to the project root; the row is replaced from what it returns,
-// for the reason `setSessionFlags` above gives.
-//
-// The relocated item no longer carries a `worktreeName`, which is what retires
-// every control that offers this — the button disappears because the thing it
-// acted on is gone, rather than because anything tracks that it was pressed.
-const removeWorktree = async (sessionId: string): Promise<boolean> => {
-  let updated: SessionIndexItem;
-  try {
-    updated = await invoke<SessionIndexItem>("remove_session_worktree", { sessionId });
-  } catch (e) {
-    setError(String(e));
-    return false;
-  }
-
+// The half of the removal that can only run once git has answered: the
+// relocated entry, applied to both copies of the session.
+const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
   setSessionIndexItems((prev) =>
     prev.map((i) => (i.sessionId === sessionId ? updated : i)),
   );
@@ -776,11 +768,71 @@ const removeWorktree = async (sessionId: string): Promise<boolean> => {
   // A killed child leaves no `session_status`, so the sidebar would sit on
   // whatever it last saw — `in_progress` for a session that was mid-turn.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
+};
 
-  // Reported so the notice card can say "Deleted" and mean it. A failure has
-  // already reached the reader through the error banner, and the card retires
-  // itself rather than claiming something that didn't happen.
-  return true;
+// Takes back the "Deleted" the reader has already been shown.
+//
+// A card rather than the error banner, which is where this used to go and can
+// no longer carry it: that banner is drawn above the composer, and a settled
+// session draws the settled bar instead — so the one state this can be reached
+// from is the one state the banner is not on screen in.
+//
+// `reason` is git's own sentence and the whole of the detail line. It is the
+// only thing that names the cause — a tree another session still holds a lock
+// on, a removal git refused — and the card's own button is the cure, since the
+// entry was left alone and the settled bar is still offering to try again.
+const reportWorktreeFailure = (sessionId: string, title: string, reason: string) => {
+  pushNotice({
+    sessionId,
+    kind: "worktree-failed",
+    // The news, not an action: there is nothing here for the reader to decide,
+    // and a card that opened with a verb would be asking them to.
+    label: "Worktree not deleted",
+    subject: title,
+    detail: reason,
+  });
+};
+
+// Deletes the worktree a session was running in, keeping the session. The
+// backend kills the child, removes the tree and its branch, and relocates the
+// index entry to the project root; the row is replaced from what it returns,
+// for the reason `setSessionFlags` above gives.
+//
+// The relocated item no longer carries a `worktreeName`, which is what retires
+// every control that offers this — the button disappears because the thing it
+// acted on is gone, rather than because anything tracks that it was pressed.
+//
+// **Started, not awaited.** Unlocking the tree, removing it and deleting its
+// branch is three git commands over a directory that can be large, and both
+// callers have something better to say than "wait": the dialog closes and the
+// card goes to "Deleted". So this returns as soon as the work is under way,
+// and the two things that can only be known later — the relocated row, and a
+// refusal — arrive on their own.
+const removeWorktree = (sessionId: string) => {
+  // A second press cannot be allowed through, and the window this opened is
+  // why. The row keeps its "Delete worktree" button until the write lands, so
+  // the same tree can be asked for twice — and the second call, arriving after
+  // the first relocated the entry, is refused with "that session is not running
+  // in a worktree". That is a deletion that worked, reported to the reader as
+  // one that failed, which is the failure `merge_pr` re-reads the pull request
+  // to avoid.
+  if (removingWorktrees.has(sessionId)) return;
+  removingWorktrees.add(sessionId);
+
+  // Read now rather than on the way out: by the time a refusal lands the row
+  // may have moved, and the title is what says which session the card is about.
+  const title = sessionIndexItems.find((i) => i.sessionId === sessionId)?.title ?? "";
+
+  void invoke<SessionIndexItem>("remove_session_worktree", { sessionId })
+    // Two callbacks rather than `.then(…).catch(…)`, so the failure card can
+    // only ever report git refusing. Chained, a throw out of the write above
+    // would land in the same handler and be described as a removal that did
+    // not happen, when it did.
+    .then(
+      (updated) => applyWorktreeRemoval(sessionId, updated),
+      (e) => reportWorktreeFailure(sessionId, title, String(e)),
+    )
+    .finally(() => removingWorktrees.delete(sessionId));
 };
 
 // Copies a session onto a new id so it can be carried on in two directions at

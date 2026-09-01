@@ -1,6 +1,3 @@
-import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,13 +36,27 @@ export type WorktreePrompt = {
 /// destructive controls — the sidebar's delete, the PR panel's merge — use a
 /// second confirm precisely because they carry no such detail. Adding one here
 /// would make the reader confirm a sentence they had already read.
+///
+/// **And it does not wait for git.** Unlocking the tree, removing it and
+/// deleting its branch is three commands over a directory that can be large,
+/// and this used to stay up through all three behind a spinner — which said
+/// "still going" for a second and a half and nothing else. The press starts the
+/// work and the dialog leaves on it, so there is no `deleting` state here at
+/// all: nothing on this surface outlives the click.
+///
+/// Closing is the whole of the confirmation, and it can be, because the reader
+/// is looking straight at it. What that costs is the one answer that arrives
+/// too late to draw here — a removal git refuses. The notice stack takes it as
+/// a `worktree-failed` card, because by then the reader has been told it worked
+/// and has to be told otherwise.
 export default function WorktreeDialog({
   prompt,
   onConfirm,
   onClose,
 }: {
   prompt: WorktreePrompt | null;
-  onConfirm: (sessionId: string) => Promise<boolean>;
+  /// Starts the removal. It answers nothing, by design — see above.
+  onConfirm: (sessionId: string) => void;
   onClose: () => void;
 }) {
   // Held for the fade: Radix keeps `Content` mounted while it closes, and the
@@ -53,30 +64,8 @@ export default function WorktreeDialog({
   // state for the frame the eye is still on.
   const cost = prompt && worktreeCost(prompt.disposition);
 
-  // The dialog stays up while git works. Unlocking the tree, removing it and
-  // deleting its branch is three commands over a directory that can be large,
-  // and a dialog sitting unchanged through them reads as one the click missed.
-  //
-  // Reset on *open* rather than on close, for the reason `cost` is held:
-  // clearing it as the dialog leaves flips the button back to "Delete anyway"
-  // for the length of the fade.
-  const [deleting, setDeleting] = useState(false);
-  useEffect(() => {
-    if (prompt) setDeleting(false);
-  }, [prompt]);
-
-  // No "Deleted" state to match the notice card's. That card has to keep
-  // saying so because the reader is looking elsewhere by then; this dialog is
-  // the thing they are looking at, and it closing says it. A failure closes it
-  // too — the error banner already carries the reason.
-  const confirm = async (sessionId: string) => {
-    setDeleting(true);
-    await onConfirm(sessionId);
-    onClose();
-  };
-
   return (
-    <AlertDialog open={prompt !== null} onOpenChange={(next) => !next && !deleting && onClose()}>
+    <AlertDialog open={prompt !== null} onOpenChange={(next) => !next && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this worktree?</AlertDialogTitle>
@@ -97,28 +86,19 @@ export default function WorktreeDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={deleting}>Keep it</AlertDialogCancel>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
           {/* Red whether or not anything is lost: this deletes a directory
               either way, and a button that only turns red sometimes teaches
               the reader to read the colour instead of the sentence. What the
               cost changes is the label. */}
           <AlertDialogAction
             destructive
-            // Full strength while disabled: the spinner and the verb are the
-            // state, and dimming them as well makes the one live thing on the
-            // dialog the hardest part of it to read.
-            className="disabled:opacity-100"
-            disabled={deleting}
-            // Radix's `Action` closes the dialog itself, through
-            // `composeEventHandlers` — so `preventDefault` is what holds it up
-            // for the work. Without it the deleting state lasts one frame.
-            onClick={(e) => {
-              e.preventDefault();
-              if (prompt) void confirm(prompt.sessionId);
-            }}
+            // No `preventDefault`. Radix's `Action` closes the dialog itself
+            // through `composeEventHandlers`, which used to be the thing held
+            // up for the git work and is now exactly what is wanted.
+            onClick={() => prompt && onConfirm(prompt.sessionId)}
           >
-            {deleting && <Loader2 className="animate-spin" />}
-            {deleting ? "Deleting…" : cost ? "Delete anyway" : "Delete worktree"}
+            {cost ? "Delete anyway" : "Delete worktree"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
