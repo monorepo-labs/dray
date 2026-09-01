@@ -19,14 +19,6 @@ import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Eff
 
 const DEFAULT_EFFORT: Effort = "high";
 
-/// A stretch where the agent is busy and the transcript has nothing to show —
-/// a request in flight, or a thinking block, which Claude Code streams as an
-/// *empty* string with only a token estimate and so renders nothing at all from
-/// open to commit.
-///
-/// The two are not told apart. The indicator's word is picked at random and
-/// "Thinking" is one of the options, so knowing which kind of wait this is would
-/// change nothing on screen.
 /// A held prompt and what it was sent with.
 ///
 /// The attachments ride the queue entry rather than a store beside it, because
@@ -44,6 +36,14 @@ export type QueuedPrompt = {
   attachments: Attachment[];
 };
 
+/// A stretch where the agent is busy and the transcript has nothing to show —
+/// a request in flight, or a thinking block, which Claude Code streams as an
+/// *empty* string with only a token estimate and so renders nothing at all from
+/// open to commit.
+///
+/// The two are not told apart. The indicator's word is picked at random and
+/// "Thinking" is one of the options, so knowing which kind of wait this is would
+/// change nothing on screen.
 export type Working = {
   /// Live estimate off `usage_update.reasoningTokens`, which ticks a few times a
   /// second while a thinking block is open. Zero on every other wait, and until
