@@ -347,8 +347,12 @@ export function sessionGroups(
   items: SessionIndexItem[],
   projects: Project[] = [],
   live?: LiveSessions,
+  settled = false,
 ): SessionGroup[] {
-  const [pinned, rest] = splitPinned(items);
+  // A pin is what the reader keeps in reach while they work, so it says nothing
+  // in a history — every row there is already done with. Settled draws its pins
+  // under their own projects like any other row.
+  const [pinned, rest] = settled ? [[], items] : splitPinned(items);
 
   // Every subtree the walk emits opens with its own root, so a depth-0 row is
   // where one nest ends and the next begins.
@@ -462,8 +466,9 @@ export function sortSessions(
   items: SessionIndexItem[],
   projects: Project[] = [],
   live?: LiveSessions,
+  settled = false,
 ): SessionIndexItem[] {
-  return sessionGroups(items, projects, live).flatMap((group) =>
+  return sessionGroups(items, projects, live, settled).flatMap((group) =>
     group.rows.map((row) => row.item),
   );
 }
@@ -673,8 +678,8 @@ export default function Sidebar({
     [showArchived, statusBySession, askingSessions],
   );
   const groups = useMemo(
-    () => sessionGroups(items, projects, live),
-    [items, projects, live],
+    () => sessionGroups(items, projects, live, showArchived),
+    [items, projects, live, showArchived],
   );
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
@@ -1842,8 +1847,13 @@ function SessionRow({
                 where there is no parent drawn: the row sits in the Pinned group
                 whichever way its own flag reads, so both verbs would move
                 nothing — and Pin would quietly leave a flag behind to surprise
-                the reader once the ancestor is unpinned. */}
-            {!inheritsPin && (
+                the reader once the ancestor is unpinned.
+
+                Absent on a settled row for the same reason the settled list
+                draws no Pinned group: the verb moves nothing there. Unsettle
+                is next to it, and a pin the reader wants back is one press
+                away after that. */}
+            {!inheritsPin && !item.archived && (
               <RowAction
                 label={item.pinned ? "Unpin" : "Pin"}
                 active={item.pinned}
