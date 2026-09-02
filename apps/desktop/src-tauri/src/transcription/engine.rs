@@ -58,6 +58,9 @@ pub struct Engine {
     /// it is unchanged when it wakes, so a use inside the window defers the
     /// unload with nothing to cancel.
     uses: Arc<AtomicU64>,
+    /// Times the idle clock ran out. What the test reads, since no weights
+    /// load in CI and the slot is empty either way.
+    idle_unloads: Arc<AtomicU64>,
     idle_after: Duration,
 }
 
@@ -80,6 +83,7 @@ impl Engine {
             generation: Default::default(),
             loading: Default::default(),
             uses: Default::default(),
+            idle_unloads: Default::default(),
             idle_after,
         }
     }
@@ -95,11 +99,30 @@ impl Engine {
 
         tokio::spawn(async move {
             tokio::time::sleep(engine.idle_after).await;
-
-            if engine.uses.load(Ordering::SeqCst) == epoch {
-                engine.unload().await;
-            }
+            engine.idle_unload(epoch).await;
         });
+    }
+
+    /// Drops the model if nothing has used the engine since `epoch`.
+    ///
+    /// The check and the clear happen under `loaded`, the lock every use takes
+    /// after its `touch` — so a press landing at the ten-minute mark either
+    /// moves the count before this reads it, or finds the slot already empty
+    /// and loads. Checked first then cleared, the press could slip between.
+    ///
+    /// Not [`Engine::unload`]: that bumps `generation`, which is right for a
+    /// reader switching models and wrong here. A transcribe that took its
+    /// token a moment before the bump would refuse to load and bail with "the
+    /// model changed", where an empty slot under a live token just reloads.
+    async fn idle_unload(&self, epoch: u64) {
+        let mut guard = self.loaded.lock().await;
+
+        if self.uses.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+
+        self.idle_unloads.fetch_add(1, Ordering::SeqCst);
+        *guard = None;
     }
 
     /// Transcribes 16kHz mono audio, loading the model first if it is not
@@ -236,8 +259,8 @@ impl Engine {
     ///
     /// Called when the reader deletes or switches models, so the weights on
     /// disk and the ones in memory cannot disagree — and so a delete actually
-    /// frees the memory rather than only the file. Also where the idle clock
-    /// ends.
+    /// frees the memory rather than only the file. The idle clock does not
+    /// come through here — see [`Engine::idle_unload`] for why.
     pub async fn unload(&self) {
         // Before the lock, not after: a warm already waiting on it must see
         // the new generation and drop what it loaded rather than installing
@@ -321,13 +344,14 @@ mod tests {
         assert!(engine.loaded.lock().await.is_none());
     }
 
-    /// The idle rule, read off the token since `unload` is what moves it and
-    /// no weights load in CI. A use inside the window must push the deadline
-    /// out, not merely add a second one.
+    /// The idle rule. A use inside the window must push the deadline out, not
+    /// merely add a second one, and the idle path must leave the token alone
+    /// — a bump there is what would make a fresh transcribe bail.
     #[tokio::test(start_paused = true)]
     async fn a_use_inside_the_idle_window_defers_the_unload() {
         let engine = Engine::with_idle(Duration::from_secs(100));
-        let before = engine.token();
+        let fired = || engine.idle_unloads.load(Ordering::SeqCst);
+        let token = engine.token();
 
         engine.touch();
         // The sleeper reads the clock on its first poll, so it must run once
@@ -343,14 +367,15 @@ mod tests {
         // what lets the sleeper reach its unload before the assert.
         tokio::time::sleep(Duration::from_millis(1)).await;
 
-        assert_eq!(engine.token(), before, "first sleeper must see the second use");
+        assert_eq!(fired(), 0, "first sleeper must see the second use");
 
         tokio::time::advance(Duration::from_secs(60)).await;
         // Auto-advance only fires once every woken task has run, which is
         // what lets the sleeper reach its unload before the assert.
         tokio::time::sleep(Duration::from_millis(1)).await;
 
-        assert_ne!(engine.token(), before, "idle engine must unload");
+        assert_eq!(fired(), 1, "idle engine must unload");
+        assert_eq!(engine.token(), token, "idle unload must not move the token");
     }
 
     #[tokio::test]
