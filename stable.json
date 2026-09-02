@@ -1,23 +1,23 @@
 {
-  "version": "0.12.4",
-  "notes": "### Fixed\n\n- **Quitting no longer crashes.** Once a transcription model had been\n  loaded, quitting raised a crash report every time: the Metal backend\n  frees its residency sets on the way out, after the Metal runtime is\n  already down. 0.12.3 made this everyone's problem by loading a model\n  at launch rather than on the first press.",
-  "pub_date": "2026-09-01T15:24:22.139Z",
+  "version": "0.12.5",
+  "notes": "### Added\n\n- **A More models submenu, and Ultra on Codex.** The model menu keeps the\n  models worth a chord at its top level and folds the rest under \"More\n  models\"; Shift+Tab cycles exactly what the top level draws. Claude Code\n  cycles Fable 5.1 and Opus 5, with Fable 5, Sonnet and Haiku below —\n  where a pinned previous generation is the only route to a model no CLI\n  lists. Effort gains Ultra above Max, offered per model, since that is\n  how Codex reports it.\n- **The sidebar leads with what is waiting on you.** Each project splits\n  into needs-attention, then completed, then the rest, so a session\n  blocked on a question no longer sits wherever recency put it. A nest\n  takes the strongest state anything in it holds, and a project under\n  three rows is left whole.\n- **Start a task from a project heading.** Hovering a heading reveals a\n  plus; clicking it opens the empty composer with that project picked.\n  ⌘⇧P steps the project picker where it is drawn.\n\n### Fixed\n\n- **Agent CLIs installed through a version manager are found.** A bundled\n  app inherits launchd's PATH, so only the known-directories list can find\n  a CLI, and it knew nvm alone — a mise- or asdf-managed install went\n  undetected. Every child also gets a `node` it can actually run, which is\n  what an npm-installed CLI needs to start at all.\n- **A new session's first prompt draws straight away.** It used to wait on\n  the worktree, the spawn and the harness ack — one to two seconds on\n  Codex and pi — while every later prompt appeared at once.\n- **The spinner stops wobbling over glass.** Unpromoted, the rotating box\n  was snapped to whole device pixels every frame, so a small arc orbited\n  by a subpixel wherever it sat over the window's vibrancy.\n- **Switching agent no longer flickers the model menu.** One list carried\n  the previous harness's answer until the next landed, drawing one agent's\n  models under the other's name.",
+  "pub_date": "2026-09-02T09:39:41.899Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWpaaTgrY0FoSVhweUJWZzBOb2pXaU15b2tsV3VqRkhGOURuYlQ4aW0wNWo0bGNudEZIRHM4bnE4YW1zejVZYS95UUIxYWFpTDFIdVBJdUVSYVVQT1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQxOTcyCWZpbGU6RHJheS5hcHAudGFyLmd6ClJtRDBwNjlxSUxDdUdTSXdEMFpmQWFEMUErNWg1emY3cDlmNHgwTHFCb3NUTE42NjdtRHMwU2dnNmgybnBvL0F3L0hwVUZraG5Ed1pMZTdRREprbUNBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.5/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWpaaTgrY0FoSVhweUJWZzBOb2pXaU15b2tsV3VqRkhGOURuYlQ4aW0wNWo0bGNudEZIRHM4bnE4YW1zejVZYS95UUIxYWFpTDFIdVBJdUVSYVVQT1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQxOTcyCWZpbGU6RHJheS5hcHAudGFyLmd6ClJtRDBwNjlxSUxDdUdTSXdEMFpmQWFEMUErNWg1emY3cDlmNHgwTHFCb3NUTE42NjdtRHMwU2dnNmgybnBvL0F3L0hwVUZraG5Ed1pMZTdRREprbUNBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.5/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWpaaTgrY0FoSVhweUJWZzBOb2pXaU15b2tsV3VqRkhGOURuYlQ4aW0wNWo0bGNudEZIRHM4bnE4YW1zejVZYS95UUIxYWFpTDFIdVBJdUVSYVVQT1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQxOTcyCWZpbGU6RHJheS5hcHAudGFyLmd6ClJtRDBwNjlxSUxDdUdTSXdEMFpmQWFEMUErNWg1emY3cDlmNHgwTHFCb3NUTE42NjdtRHMwU2dnNmgybnBvL0F3L0hwVUZraG5Ed1pMZTdRREprbUNBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.5/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJVanRxNUdaSW1zclR1cFphOWhtbVdJeFkvSkhOa0xuZlNaSk1NTnM5d3hwVEV0MTl5eEN4YUthcWVSUnpaSktlcnVOV0dTYlA4eEF4ZzM1dUhTREFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mjc2MjUzCWZpbGU6RHJheS5hcHAudGFyLmd6Cm1DYklkSWRjNXo4Vno1cm5DaWVaK2xOV0hmNWdPaGppdWYwL3NYM2hMYldSQWJ0dFNSL1ZSY1N0NVNWeFBoVGJJZWRSS3ZEY0llUTVyM0xzQXhhNUNRPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWpaaTgrY0FoSVhweUJWZzBOb2pXaU15b2tsV3VqRkhGOURuYlQ4aW0wNWo0bGNudEZIRHM4bnE4YW1zejVZYS95UUIxYWFpTDFIdVBJdUVSYVVQT1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQxOTcyCWZpbGU6RHJheS5hcHAudGFyLmd6ClJtRDBwNjlxSUxDdUdTSXdEMFpmQWFEMUErNWg1emY3cDlmNHgwTHFCb3NUTE42NjdtRHMwU2dnNmgybnBvL0F3L0hwVUZraG5Ed1pMZTdRREprbUNBPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.5/Dray_universal.app.tar.gz"
     }
   }
 }
