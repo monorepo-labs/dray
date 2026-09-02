@@ -21,6 +21,15 @@ function obj(input: JsonValue): Record<string, JsonValue> | null {
   return input as Record<string, JsonValue>;
 }
 
+/// The replaced region of one edit, in either spelling: Claude Code writes
+/// `old_string`/`new_string`, pi writes `oldText`/`newText`.
+function pair(edit: Record<string, JsonValue>): readonly [string, string] {
+  return [
+    str(edit, "old_string") ?? str(edit, "oldText") ?? "",
+    str(edit, "new_string") ?? str(edit, "newText") ?? "",
+  ] as const;
+}
+
 /// Resolves a `file_edit` tool's input into the two sides of a diff, or null
 /// when the call carries nothing comparable.
 ///
@@ -32,6 +41,9 @@ function obj(input: JsonValue): Record<string, JsonValue> | null {
 ///   also the only region worth reading.
 /// - `MultiEdit` sends an `edits` array of those same pairs. They apply in
 ///   sequence to one file, so the sides are the concatenation of each end.
+/// - pi's `edit` is those same shapes spelled `oldText`/`newText`. Its `edits`
+///   entries match against the *original* file rather than in sequence, which
+///   changes nothing here: the sides are the replaced regions either way.
 /// - `Write` sends `content` and no prior text. Treated as a creation even when
 ///   it overwrites, since the call never reports what it replaced.
 export function editSides(input: JsonValue): EditSides | null {
@@ -46,7 +58,7 @@ export function editSides(input: JsonValue): EditSides | null {
     const pairs = edits
       .map(obj)
       .filter((e): e is Record<string, JsonValue> => e !== null)
-      .map((e) => [str(e, "old_string") ?? "", str(e, "new_string") ?? ""] as const)
+      .map(pair)
       .filter(([before, after]) => before !== "" || after !== "");
 
     if (!pairs.length) return null;
@@ -57,10 +69,9 @@ export function editSides(input: JsonValue): EditSides | null {
     };
   }
 
-  const oldText = str(root, "old_string");
-  const newText = str(root, "new_string");
-  if (oldText !== null || newText !== null) {
-    return { path, oldText: oldText ?? "", newText: newText ?? "" };
+  const [oldText, newText] = pair(root);
+  if (oldText !== "" || newText !== "") {
+    return { path, oldText, newText };
   }
 
   // NotebookEdit calls its payload `new_source`; Write calls it `content`.

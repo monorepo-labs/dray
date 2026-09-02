@@ -1,6 +1,54 @@
 import { describe, expect, it } from "vitest";
 
-import { countUnifiedChanges, diffSide, diffSides } from "./diff";
+import { countUnifiedChanges, diffSide, diffSides, editSides } from "./diff";
+
+describe("editSides", () => {
+  it("reads Claude Code's spelling, single and multi", () => {
+    expect(editSides({ file_path: "x.ts", old_string: "a", new_string: "b" })).toEqual({
+      path: "x.ts",
+      oldText: "a",
+      newText: "b",
+    });
+    expect(
+      editSides({
+        file_path: "x.ts",
+        edits: [
+          { old_string: "a", new_string: "b" },
+          { old_string: "c", new_string: "d" },
+        ],
+      }),
+    ).toEqual({ path: "x.ts", oldText: "a\nc", newText: "b\nd" });
+  });
+
+  // pi's edit tool is `{path, edits: [{oldText, newText}]}` — the same two
+  // shapes under different keys, and unread they left every pi edit drawing no
+  // diff at all.
+  it("reads pi's spelling, single and multi", () => {
+    expect(editSides({ path: "x.ts", oldText: "a", newText: "b" })).toEqual({
+      path: "x.ts",
+      oldText: "a",
+      newText: "b",
+    });
+    expect(
+      editSides({
+        path: "x.ts",
+        edits: [
+          { oldText: "a", newText: "b" },
+          { oldText: "c", newText: "d" },
+        ],
+      }),
+    ).toEqual({ path: "x.ts", oldText: "a\nc", newText: "b\nd" });
+  });
+
+  it("still reads a whole-file write as a creation", () => {
+    expect(editSides({ path: "x.ts", content: "n" })).toEqual({
+      path: "x.ts",
+      oldText: null,
+      newText: "n",
+    });
+    expect(editSides({ path: "x.ts" })).toBeNull();
+  });
+});
 
 describe("diffSide", () => {
   it("keys on full path and content, names by basename", () => {
