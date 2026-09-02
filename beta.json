@@ -1,23 +1,23 @@
 {
-  "version": "0.12.6",
-  "notes": "### Fixed\n\n- **pi's edits draw a diff again.** pi spells a replaced region\n  `oldText`/`newText`, where the diff reader only knew\n  `old_string`/`new_string` — so every pi edit printed raw JSON instead of\n  the change it made.",
-  "pub_date": "2026-09-02T10:39:23.686Z",
+  "version": "0.12.7",
+  "notes": "### Changed\n\n- **Light mode is tinted, and it is Default's own palette now.** Light was\n  the derived ramp at no hue; it runs cool blue throughout — tinted greys,\n  a blue primary, and veils mixed off the foreground so they take the hue\n  without naming a colour.",
+  "pub_date": "2026-09-02T12:55:23.200Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZwYWNLUUNlTWc4SnVZSXBGbGxhSE5qaDZpamd0UDFXbHBaQkpTMEVtcU9uSkpTZ2NBZjBxcy9pd29EUjgxWGQycUEzZlBKREs3L2dkMkVEVktuaGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQ1NTU0CWZpbGU6RHJheS5hcHAudGFyLmd6Ck9hbnhPSGpLc1lTSDduSW0yei8wdVJxUEg3UHc1TlVMRGdrYzdoTWNteXd6eXAvNXZWbTU4YTV0MGEvQ0lSd2piQzkrem9Zck54ZHBOQVZScVFZTERnPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.6/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWw1bVBWd2sxbmlLMUdvNzIrM1lVOEk1NjkrVytBdjVzeURHeXB6NEJrT2JGMTlLbzFYekRkT0ZLdUNoQVRpYVBHRkx5OEV0dGMrSnMzaXN1cmw2d3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzUzNzE1CWZpbGU6RHJheS5hcHAudGFyLmd6CklFMnJsRVdKejhPYlU0TDY3aVQrczU1SFgyWWZaSkxYWGVzL3lVb0pxQmt6VldMNHNCMUUzNzQzTzRBak9TNnY1NEFVSVlVRnhKbzhxOUwyNU1kZ0NRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.7/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZwYWNLUUNlTWc4SnVZSXBGbGxhSE5qaDZpamd0UDFXbHBaQkpTMEVtcU9uSkpTZ2NBZjBxcy9pd29EUjgxWGQycUEzZlBKREs3L2dkMkVEVktuaGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQ1NTU0CWZpbGU6RHJheS5hcHAudGFyLmd6Ck9hbnhPSGpLc1lTSDduSW0yei8wdVJxUEg3UHc1TlVMRGdrYzdoTWNteXd6eXAvNXZWbTU4YTV0MGEvQ0lSd2piQzkrem9Zck54ZHBOQVZScVFZTERnPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.6/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWw1bVBWd2sxbmlLMUdvNzIrM1lVOEk1NjkrVytBdjVzeURHeXB6NEJrT2JGMTlLbzFYekRkT0ZLdUNoQVRpYVBHRkx5OEV0dGMrSnMzaXN1cmw2d3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzUzNzE1CWZpbGU6RHJheS5hcHAudGFyLmd6CklFMnJsRVdKejhPYlU0TDY3aVQrczU1SFgyWWZaSkxYWGVzL3lVb0pxQmt6VldMNHNCMUUzNzQzTzRBak9TNnY1NEFVSVlVRnhKbzhxOUwyNU1kZ0NRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.7/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZwYWNLUUNlTWc4SnVZSXBGbGxhSE5qaDZpamd0UDFXbHBaQkpTMEVtcU9uSkpTZ2NBZjBxcy9pd29EUjgxWGQycUEzZlBKREs3L2dkMkVEVktuaGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQ1NTU0CWZpbGU6RHJheS5hcHAudGFyLmd6Ck9hbnhPSGpLc1lTSDduSW0yei8wdVJxUEg3UHc1TlVMRGdrYzdoTWNteXd6eXAvNXZWbTU4YTV0MGEvQ0lSd2piQzkrem9Zck54ZHBOQVZScVFZTERnPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.6/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWw1bVBWd2sxbmlLMUdvNzIrM1lVOEk1NjkrVytBdjVzeURHeXB6NEJrT2JGMTlLbzFYekRkT0ZLdUNoQVRpYVBHRkx5OEV0dGMrSnMzaXN1cmw2d3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzUzNzE1CWZpbGU6RHJheS5hcHAudGFyLmd6CklFMnJsRVdKejhPYlU0TDY3aVQrczU1SFgyWWZaSkxYWGVzL3lVb0pxQmt6VldMNHNCMUUzNzQzTzRBak9TNnY1NEFVSVlVRnhKbzhxOUwyNU1kZ0NRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.7/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZwYWNLUUNlTWc4SnVZSXBGbGxhSE5qaDZpamd0UDFXbHBaQkpTMEVtcU9uSkpTZ2NBZjBxcy9pd29EUjgxWGQycUEzZlBKREs3L2dkMkVEVktuaGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzQ1NTU0CWZpbGU6RHJheS5hcHAudGFyLmd6Ck9hbnhPSGpLc1lTSDduSW0yei8wdVJxUEg3UHc1TlVMRGdrYzdoTWNteXd6eXAvNXZWbTU4YTV0MGEvQ0lSd2piQzkrem9Zck54ZHBOQVZScVFZTERnPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.6/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWw1bVBWd2sxbmlLMUdvNzIrM1lVOEk1NjkrVytBdjVzeURHeXB6NEJrT2JGMTlLbzFYekRkT0ZLdUNoQVRpYVBHRkx5OEV0dGMrSnMzaXN1cmw2d3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzUzNzE1CWZpbGU6RHJheS5hcHAudGFyLmd6CklFMnJsRVdKejhPYlU0TDY3aVQrczU1SFgyWWZaSkxYWGVzL3lVb0pxQmt6VldMNHNCMUUzNzQzTzRBak9TNnY1NEFVSVlVRnhKbzhxOUwyNU1kZ0NRPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.7/Dray_universal.app.tar.gz"
     }
   }
 }
