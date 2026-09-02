@@ -953,6 +953,12 @@ function App() {
             goToSession(() => void handleSelectSessionIndexItem(sessionId))
           }
           onNewSession={() => goToSession(handleNewSession)}
+          onNewSessionInProject={(path) =>
+            goToSession(() => {
+              handleSelectProject(path);
+              handleNewSession();
+            })
+          }
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
           onDetach={detachSession}
