@@ -23,7 +23,7 @@ const aeonik = localFont({
   display: "swap",
 });
 
-const title = "Dray: run Claude Code and Codex in one app";
+const title = "Dray: run Claude Code, Codex and pi in one app";
 const description =
   "Fast, feels right, runs agents in parallel — on your existing subscriptions.";
 
