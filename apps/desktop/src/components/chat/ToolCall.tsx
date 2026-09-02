@@ -46,6 +46,9 @@ const EDIT_FIELDS = [
   ...SUMMARY_FIELDS,
   "old_string",
   "new_string",
+  // pi's spelling of the same pair.
+  "oldText",
+  "newText",
   "content",
   "new_source",
   "edits",
