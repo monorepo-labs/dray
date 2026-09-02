@@ -665,6 +665,7 @@ function App() {
         // The same reading the sidebar groups by, and withheld on the same list
         // — the walk has to step the runs the eye is looking at.
         showArchived ? undefined : { statusBySession, asking: askingSessions },
+        showArchived,
       ),
     [searchedSessions, projects, showArchived, statusBySession, askingSessions],
   );

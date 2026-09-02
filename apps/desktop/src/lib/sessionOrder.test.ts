@@ -380,6 +380,19 @@ describe("sessionGroups", () => {
     expect(shape(sessionGroups(items))).toEqual([["Pinned", ["newer", "older"]]]);
   });
 
+  it("opens no Pinned group in the settled list", () => {
+    // A pin is what the reader keeps in reach while they work, and a history has
+    // nothing left to reach for.
+    const items = [
+      pin("kept", "2026-02-01T00:00:00Z"),
+      item("plain", "2026-01-01T00:00:00Z"),
+    ];
+
+    expect(shape(sessionGroups(items, [], undefined, true))).toEqual([
+      ["/repo", ["kept", "plain"]],
+    ]);
+  });
+
   it("takes a pinned session's children with it", () => {
     // Leaving them behind would split one nest across two headings, drawing a
     // child under a parent that isn't there.
