@@ -223,17 +223,16 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
 // reader had chosen otherwise.
 const setHarness = (next: Harness) => {
   setHarnessState(next);
-  // Repaired against the new harness's own list in this same commit, so the
-  // trigger never names a model for a frame before the fetch corrects it. An
-  // unvisited harness has no entry, and `usableModel` leaves the pick standing
-  // on an empty list — so that case is exactly what it was before the cache.
-  setModelId(
-    usableModel(
-      modelsByHarness[next] ?? [],
-      rememberedModel(prefs.modelByHarness, next),
-      next,
-    ),
-  );
+  // The remembered pick, taken as read — **not** repaired against the cached
+  // list, however tempting that is for the one frame it would tidy up.
+  //
+  // A cached entry is the last answer, not the current one, and pi's changes
+  // with the reader's logins. Repairing here against a list missing a model pi
+  // now serves again resolved it to the unset sentinel, and the fetch then
+  // validated *that* — the sentinel is in no list either — so the remembered
+  // pick was gone for good. The fetch below repairs against the list it just
+  // read, which is the only one that can answer.
+  setModelId(rememberedModel(prefs.modelByHarness, next));
   setPrefs({ harness: next });
 };
 
