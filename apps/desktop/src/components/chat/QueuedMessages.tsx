@@ -36,7 +36,7 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
               {/* Guarded like the delivered bubble's: a prompt can be an
                   attachment and nothing else. */}
               {body && (
-                <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
+                <div className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
                   {/* Same bubble, same break rule — see `UserMessage`. */}
                   <span className="whitespace-pre-wrap wrap-anywhere">
                     {highlightSegments(body).map((segment, s) => {

@@ -488,6 +488,105 @@
   --vibrancy-alpha: 70%;
 }
 
+/* Default's light palette, and the one block that breaks the filing system's own
+   rule — Default *is* the ramp, at hue 0 and chroma 0, so it has never needed a
+   block of its own.
+
+   It needs one now because the tint does not fit the ramp's shape. Rungs there are
+   derived as `chroma * <multiplier>`, and no single chroma produces these: the page
+   wants 0.012 at a multiplier of 0.4 where `--primary` wants 0.17 at 0.5, which is
+   not a tinted neutral at all but a real blue. Setting `--hue`/`--chroma` on
+   `[data-mode="light"]` would also have reached every token a *ported* palette
+   leaves alone, so Latte and Gruvbox light would have taken a cool veil and a cool
+   selected row neither theme asked for. A block keeps all of it here.
+
+   Dark stays derived and has no block. The ramp is untouched in both modes, so it
+   is still what a ported theme falls through to. */
+[data-theme="default"][data-mode="light"] {
+  --background: oklch(0.965 0.012 250);
+  --surface-raised: oklch(0.94 0.01 250);
+  /* L 1 admits no chroma at all — `oklch(1 0.01 250)` leaves sRGB and clips, so
+     the cool tint written there never reached the screen. 0.004 is the most this
+     hue carries at 0.99, and naming the value that survives is what keeps the
+     swatch honest. Chasing the full 0.01 means dropping to L 0.978, which closes
+     the card's step above the page to almost nothing — the one thing this rung
+     cannot give up. */
+  --surface-card: oklch(0.99 0.004 250);
+  --muted: oklch(0.92 0.01 250);
+  --muted-foreground: oklch(0.52 0.01 250);
+  --foreground: oklch(0.22 0.01 250);
+  --primary: oklch(0.65 0.17 250);
+  --primary-foreground: oklch(0.99 0 0);
+  /* The primary blue itself, at 5.45:1 against the page. It was `oklch(0.8 0.01
+     250)`, which measured 3.03:1 — sitting exactly on the floor a non-text
+     indicator may not go below, where the ramp's own grey ring gives 8.67. A
+     focus ring is the one mark that has to be found rather than noticed. */
+  --ring: var(--primary);
+  --destructive: oklch(0.55 0.2 25);
+  --accent-command: oklch(0.55 0.13 75);
+  --accent-mention: oklch(0.55 0.16 245);
+  --accent-thinking: oklch(0.55 0.05 264);
+  --surface-selected: oklch(0.9 0.012 250);
+  /* Matched to `--surface-card` above, and clipped the same way before it: this
+     is what the card *becomes* under transparency, so the two have to composite
+     to one colour or a card changes hue when the window goes fullscreen. */
+  --veil-card: oklch(0.99 0.004 250 / 60%);
+  /* Mixed off `--foreground` rather than named, which is `--surface-selected`'s
+     own idiom three lines up and gets the hue for free. These carried the ramp's
+     alphas over a *light* grey-blue ink, and the pair quietly halved all three —
+     10% of L 0.52 moves a near-white page barely half as far as 10% of black. The
+     alphas here are the ones that land back on what the light ramp was tuned to
+     (1.09 / 1.26 / 1.26 against its 1.09 / 1.25 / 1.25). Worth restoring rather
+     than accepting, since `--veil-strong` is the picker's arrow-key highlight and
+     `--veil-selected` says which session row is current — both are marks that have
+     to be found rather than noticed. */
+  --veil-raised: color-mix(in oklab, var(--foreground) 4.5%, transparent);
+  --veil-strong: color-mix(in oklab, var(--foreground) 11.5%, transparent);
+  --veil-selected: color-mix(in oklab, var(--foreground) 11.5%, transparent);
+
+  [aria-label="Settings"] [role="tab"][aria-selected="true"] {
+    background-color: color-mix(in oklab, var(--sidebar-accent) 80%, transparent);
+  }
+
+  /* The outline button, by the attribute that names it. It was `.bg-clip-padding`,
+     which is a Tailwind utility about padding-box clipping and means nothing about
+     a background — it only happens to sit on this one variant today, so the rule
+     would follow that class anywhere it went next and stop working the moment the
+     variant stopped carrying it. */
+  [data-variant="outline"] {
+    background-color: transparent;
+  }
+
+  /* Outline alone. `[data-variant="ghost"]:hover` was here too and had to go: it
+     is unlayered, so it beat every `hover:bg-*` utility in the app, and the three
+     sidebar buttons are ghosts that now have to hover as the session rows beneath
+     them do. Cost, stated: a ghost button elsewhere in Lab hovers `bg-muted` like
+     it does in every other theme rather than taking the page colour. */
+  [data-variant="outline"]:hover {
+    background-color: color-mix(in oklab, var(--background) 80%, transparent);
+  }
+
+  .bg-secondary:hover {
+    background-color: color-mix(in oklch, var(--secondary), var(--foreground) 2%);
+  }
+
+  .bg-secondary[aria-expanded="true"] {
+    background-color: var(--secondary);
+  }
+
+  .user-bubble {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: none;
+
+    .text-accent-command,
+    .text-accent-mention,
+    .text-accent-issue {
+      color: inherit;
+    }
+  }
+}
+
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
    using the palette's own token names throughout rather than colours picked to
    look close.

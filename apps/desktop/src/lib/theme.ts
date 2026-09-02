@@ -9,7 +9,12 @@
 /// `--composer`, which has to stay an opaque fill, and a grey composer on a tinted
 /// page is what a second axis buys.
 
-export type ThemeName = "default" | "catppuccin" | "gruvbox" | "one-dark-pro" | "cobalt2";
+export type ThemeName =
+  | "default"
+  | "catppuccin"
+  | "gruvbox"
+  | "one-dark-pro"
+  | "cobalt2";
 export type ThemeMode = "light" | "dark" | "system";
 
 /// Resolved mode — what actually lands on `data-mode`. `system` never does.

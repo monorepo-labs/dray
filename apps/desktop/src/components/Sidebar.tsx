@@ -757,19 +757,21 @@ export default function Sidebar({
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
           icons land on the same 12px inset as the toggle above.
 
-          All three sit at `/70` rather than at full strength, and `ghost`'s own
-          `hover:text-foreground` brings them back under the cursor — the same
-          bargain the sidebar toggle makes with `opacity-80`. These are ways *in*
-          to the list below them, and the list draws its own rows at `/80`, so at
-          full strength the chrome was the heaviest text in the pane and the
-          sessions read as secondary to the buttons above them. Most visible on a
-          light page, where `--foreground` is a near-black against near-white. */}
+          All three are drawn as session rows: `/80` text and `--sidebar-accent`
+          at half strength under the cursor, which is exactly what an unselected
+          row in the list below carries. They were `/70` with `ghost`'s own
+          `hover:bg-muted` and `hover:text-foreground`, which made them a second
+          kind of control in a pane that is otherwise one list — the fill was a
+          different colour from the row directly beneath them and the label
+          brightened where a row's does not. The dark hover is named too, since
+          `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
+          `hover:` and `tailwind-merge` cannot fold the two together. */}
       <div className="flex flex-col gap-px px-2">
         <Button
           variant="ghost"
           size="sm"
           onClick={onNewSession}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70"
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
         >
           <Plus />
           New Task
@@ -789,7 +791,7 @@ export default function Sidebar({
           size="sm"
           onClick={onOpenIssues}
           data-active={issuesOpen || undefined}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
         >
           <CircleDot />
           Issues
@@ -837,7 +839,7 @@ export default function Sidebar({
             variant="ghost"
             size="sm"
             onClick={() => setSearching(true)}
-            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/70"
+            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
           >
             <Search />
             Search
