@@ -496,7 +496,7 @@ error: string | null,
  */
 cancelled: boolean, };
 
-export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type ErrorSource = "harness" | "parser" | "process";
 
@@ -842,7 +842,17 @@ provider: string,
  * a tray that offers to attach a screenshot to it fails at the send with a
  * sentence the reader cannot act on.
  */
-acceptsImages: boolean, };
+acceptsImages: boolean, 
+/**
+ * Drawn under the picker's "More models" submenu rather than at the top
+ * level, and skipped by Shift+Tab.
+ *
+ * The chord cycles the list in order, which only works while the list is
+ * short — so this is what keeps it short as pinned and older models are
+ * added. A reader who picks one from the submenu keeps it: the flag
+ * decides where a row is *drawn*, never what may be run.
+ */
+secondary: boolean, };
 
 /**
  * What an index entry records for a session's model.
@@ -1250,6 +1260,10 @@ worktreeRemoved: boolean, title: string,
 model: ModelId, 
 /**
  * `None` for models that take no effort flag.
+ *
+ * In memory this is the true level, [`Effort::Ultra`] included. **On disk
+ * it never is** — see [`encode_effort`], which is the only place the two
+ * differ, and [`decode_effort`], which puts it back.
  */
 effort: Effort | null, 
 /**
@@ -1343,6 +1357,10 @@ worktreeRemoved: boolean, title: string,
 model: ModelId, 
 /**
  * `None` for models that take no effort flag.
+ *
+ * In memory this is the true level, [`Effort::Ultra`] included. **On disk
+ * it never is** — see [`encode_effort`], which is the only place the two
+ * differ, and [`decode_effort`], which puts it back.
  */
 effort: Effort | null, 
 /**

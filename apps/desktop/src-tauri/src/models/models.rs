@@ -17,6 +17,17 @@ pub enum Effort {
     High,
     Xhigh,
     Max,
+    /// Above [`Effort::Max`], and a real rung rather than a synonym for it —
+    /// Codex describes `max` as "maximum reasoning depth for the hardest
+    /// problems" and `ultra` as "maximum reasoning **with automatic task
+    /// delegation**", and offers both on the same model.
+    ///
+    /// Offered only where a model reports it: Sol and Terra do, Luna stops at
+    /// `max`, and the older generations stop at `xhigh`. Claude Code's list
+    /// stops at `max` too — its `ultracode` is a session boolean pairing xhigh
+    /// with workflow orchestration, not a level, so it does not belong here
+    /// (DRA-140).
+    Ultra,
 }
 
 impl Effort {
@@ -28,6 +39,7 @@ impl Effort {
             Effort::High => "high",
             Effort::Xhigh => "xhigh",
             Effort::Max => "max",
+            Effort::Ultra => "ultra",
         }
     }
 
@@ -41,6 +53,7 @@ impl Effort {
             "high" => Some(Effort::High),
             "xhigh" => Some(Effort::Xhigh),
             "max" => Some(Effort::Max),
+            "ultra" => Some(Effort::Ultra),
             _ => None,
         }
     }
@@ -175,6 +188,15 @@ pub struct Model {
     /// sentence the reader cannot act on.
     #[serde(default)]
     pub accepts_images: bool,
+    /// Drawn under the picker's "More models" submenu rather than at the top
+    /// level, and skipped by Shift+Tab.
+    ///
+    /// The chord cycles the list in order, which only works while the list is
+    /// short — so this is what keeps it short as pinned and older models are
+    /// added. A reader who picks one from the submenu keeps it: the flag
+    /// decides where a row is *drawn*, never what may be run.
+    #[serde(default)]
+    pub secondary: bool,
 }
 
 impl Model {
@@ -194,21 +216,53 @@ impl Model {
             // One vendor each, so there is nothing for the picker to group by.
             provider: String::new(),
             accepts_images: true,
+            secondary: false,
+        }
+    }
+
+    /// Moves the row under the picker's "More models" submenu.
+    fn under_more(self) -> Self {
+        Self {
+            secondary: true,
+            ..self
         }
     }
 }
 
 /// The full model list the UI's picker is built from.
+///
+/// Two at the top level and the rest under "More models", which is what keeps
+/// Shift+Tab worth a chord — it cycles the top level alone, and two presses
+/// covers it. The split is by how often a row is reached for, not by how good
+/// the model is: Sonnet and Haiku are picked deliberately when they are picked
+/// at all, where the top two are what a session is flipped between mid-thought.
+///
+/// **`fable` and `claude-fable-5` are both here on purpose, and the pair is
+/// the whole reason this list has a second tier.** An alias follows the latest
+/// model — `fable` resolves to `claude-fable-5-1` today, and to whatever ships
+/// next without anything here changing — which is what the top level wants and
+/// what makes a dated id wrong there. But following the latest is exactly what
+/// a reader pinning a previous generation is asking *not* to do, and the CLI's
+/// own picker offers no such row: it says "for other/previous model names,
+/// specify with `--model`". So a pinned id is a row here or it is nowhere.
 pub fn claude_models() -> Vec<Model> {
     use Effort::*;
 
     let all = vec![Low, Medium, High, Xhigh, Max];
 
     vec![
-        Model::new("fable", "fable", "Fable 5", all.clone(), Some(High)),
+        Model::new("fable", "fable", "Fable 5.1", all.clone(), Some(High)),
         Model::new("opus", "opus", "Opus 5", all.clone(), Some(High)),
-        Model::new("sonnet", "sonnet", "Sonnet 5", all, Some(High)),
-        Model::new("haiku", "haiku", "Haiku 4.5", Vec::new(), None),
+        Model::new(
+            "claude-fable-5",
+            "claude-fable-5",
+            "Fable 5",
+            all.clone(),
+            Some(High),
+        )
+        .under_more(),
+        Model::new("sonnet", "sonnet", "Sonnet 5", all, Some(High)).under_more(),
+        Model::new("haiku", "haiku", "Haiku 4.5", Vec::new(), None).under_more(),
     ]
 }
 
@@ -218,9 +272,8 @@ pub fn claude_models() -> Vec<Model> {
 /// the picker has to be built before a session exists, and there is no child to
 /// ask until one does. Worth revisiting once a spare connection is cheap.
 ///
-/// `ultra` is deliberately absent from every effort list — Codex offers it on
-/// the 5.6 models and Dray's [`Effort`] has no such level. Adding one is a
-/// change to a persisted enum, so it waits for a reason beyond completeness.
+/// `ultra` is offered per model rather than across the family, because Codex
+/// answers it that way: Sol and Terra report it, Luna does not.
 pub fn codex_models() -> Vec<Model> {
     use Effort::*;
 
@@ -233,20 +286,21 @@ pub fn codex_models() -> Vec<Model> {
     // reasons at every level and starts here itself; `resolve_effort` reads
     // this, so the flag follows without a second constant.
     let all = vec![Low, Medium, High, Xhigh, Max];
+    let with_ultra = vec![Low, Medium, High, Xhigh, Max, Ultra];
 
     vec![
         Model::new(
             "gpt56_sol",
             "gpt-5.6-sol",
             "5.6 Sol",
-            all.clone(),
+            with_ultra.clone(),
             Some(Medium),
         ),
         Model::new(
             "gpt56_terra",
             "gpt-5.6-terra",
             "5.6 Terra",
-            all.clone(),
+            with_ultra,
             Some(Medium),
         ),
         Model::new("gpt56_luna", "gpt-5.6-luna", "5.6 Luna", all, Some(Medium)),
@@ -423,6 +477,36 @@ mod tests {
             .all(|m| m.default_effort == Some(Effort::Medium)));
     }
 
+    /// `ultra` is per model, not per family — Codex reports it on Sol and Terra
+    /// and stops Luna at `max`. Offering it across the three would put a level
+    /// on the wire that the model refuses.
+    ///
+    /// It is also **not** a synonym for `max`: Codex describes `max` as maximum
+    /// reasoning depth and `ultra` as maximum reasoning *with automatic task
+    /// delegation*, and lists both on the same model.
+    #[test]
+    fn only_the_codex_models_that_report_ultra_offer_it() {
+        let tops: Vec<(String, Option<Effort>)> = codex_models()
+            .into_iter()
+            .map(|m| (m.label, m.efforts.last().copied()))
+            .collect();
+
+        assert_eq!(
+            tops,
+            [
+                ("5.6 Sol".to_string(), Some(Effort::Ultra)),
+                ("5.6 Terra".to_string(), Some(Effort::Ultra)),
+                ("5.6 Luna".to_string(), Some(Effort::Max)),
+            ]
+        );
+
+        // Claude's list stops at max: its `ultracode` is a session boolean
+        // pairing xhigh with workflow orchestration, not a rung (DRA-140).
+        assert!(claude_models()
+            .iter()
+            .all(|m| !m.efforts.contains(&Effort::Ultra)));
+    }
+
     /// Verified against the CLI: `--effort` on Haiku is accepted and ignored,
     /// so this pins a UI/persistence rule, not a spawn failure.
     #[test]
@@ -441,16 +525,71 @@ mod tests {
         assert_eq!(resolve_effort(&opus, None), Some(Effort::High));
     }
 
-    /// The `arg` is what `--model` receives, so it must stay a bare alias — a
-    /// dated name would freeze sessions to a model that stops receiving
-    /// updates.
+    /// The `arg` is what `--model` receives, and a **top-level** one must stay
+    /// a bare alias — a dated name there would freeze the picker's everyday
+    /// models to a generation that stops receiving updates.
+    ///
+    /// The rule binds one direction only: "More models" holds both shapes, an
+    /// alias for a model that is merely reached for less often (`haiku`) and a
+    /// pinned id for a generation the reader is asking not to be moved off
+    /// (`claude-fable-5`). Only the top level is alias-or-nothing.
     #[test]
-    fn claude_args_are_bare_aliases() {
-        for model in claude_models() {
+    fn only_the_top_level_claude_models_are_bare_aliases() {
+        for model in claude_models().iter().filter(|m| !m.secondary) {
             assert!(
                 !model.arg.contains('-'),
-                "{} looks like a dated id; the CLI wants an alias",
+                "{} is a dated id at the top level; that tier wants an alias",
                 model.arg
+            );
+        }
+
+        assert!(
+            claude_models()
+                .iter()
+                .any(|m| m.secondary && m.arg.contains('-')),
+            "nothing is pinned, so this test is asserting against an empty tier"
+        );
+    }
+
+    /// Shift+Tab cycles the top level in order, so its length is what decides
+    /// whether the chord beats opening the menu at all. Two is the budget.
+    #[test]
+    fn the_claude_shortcut_cycles_two_models() {
+        let cycled: Vec<String> = claude_models()
+            .into_iter()
+            .filter(|m| !m.secondary)
+            .map(|m| m.label)
+            .collect();
+
+        assert_eq!(cycled, ["Fable 5.1", "Opus 5"]);
+    }
+
+    /// The submenu is drawn in list order, so the order is the list's.
+    #[test]
+    fn more_models_runs_newest_family_first() {
+        let more: Vec<String> = claude_models()
+            .into_iter()
+            .filter(|m| m.secondary)
+            .map(|m| m.label)
+            .collect();
+
+        assert_eq!(more, ["Fable 5", "Sonnet 5", "Haiku 4.5"]);
+    }
+
+    /// The flag decides where a row is drawn and nothing else. A model reached
+    /// through the submenu has to spawn exactly like one reached at the top
+    /// level, or "More models" is a menu of models that cannot be run.
+    #[test]
+    fn a_model_under_more_still_runs() {
+        let more: Vec<Model> = claude_models().into_iter().filter(|m| m.secondary).collect();
+        assert!(!more.is_empty());
+
+        for model in more {
+            assert!(runs_on(&model.id, Harness::ClaudeCode));
+            assert!(find_model(&model.id).is_some());
+            assert_eq!(
+                id_for_arg(&model.arg, Harness::ClaudeCode),
+                Some(model.id.clone())
             );
         }
     }
@@ -598,9 +737,11 @@ mod wire_tests {
             Effort::High,
             Effort::Xhigh,
             Effort::Max,
+            Effort::Ultra,
         ] {
             let json = serde_json::to_string(&e).unwrap();
             assert_eq!(json, format!("\"{}\"", e.as_arg()));
+            assert_eq!(Effort::from_arg(e.as_arg()), Some(e), "{} lost its inverse", e.as_arg());
         }
     }
 

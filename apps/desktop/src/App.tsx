@@ -45,6 +45,7 @@ import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
+import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
@@ -869,17 +870,27 @@ function App() {
   //
   // Cycles rather than opening the picker, which is what makes it worth a
   // chord at all: a menu that then wants arrows and Enter is three keys to do
-  // what the trigger does in one click. Sane only because the lists are short —
-  // four models on Claude Code, three on Codex — so a wrong landing is one more
-  // press away from right, and this stops being the shape the day a list grows
-  // past a handful. Leaves each model's own remembered effort alone, same as
-  // picking it from the menu.
+  // what the trigger does in one click. Sane only because the cycle is short —
+  // two models on Claude Code, three on Codex — so a wrong landing is one more
+  // press away from right. Leaves each model's own remembered effort alone,
+  // same as picking it from the menu.
+  //
+  // `cycledModels` is the picker's own top-level list, and sharing it is what
+  // keeps the chord honest: it must never land on a model the menu doesn't
+  // draw. That is bounded by `secondary` on the written lists and by the
+  // reader's stars on pi's discovered one — where cycling the full list
+  // walked every model every logged-in provider serves.
+  //
+  // A session already on a model outside the list enters the cycle at its
+  // start, the same convention `nextEffort` takes for a level it doesn't
+  // cycle.
   useHotkey(
     "Tab",
     () => {
-      if (models.length < 2) return;
-      const index = models.findIndex((m) => m.id === modelId);
-      const next = models[(index + 1) % models.length];
+      const cycle = cycledModels(models, harness, modelId);
+      if (cycle.length < 2) return;
+      const index = cycle.findIndex((m) => m.id === modelId);
+      const next = cycle[(index + 1) % cycle.length];
       handleModelChange(next.id, null);
     },
     { meta: false, shift: true },

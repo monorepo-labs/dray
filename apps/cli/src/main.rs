@@ -78,7 +78,7 @@ struct New {
     #[arg(long)]
     model: Option<String>,
 
-    /// low, medium, high, xhigh or max. Defaults to the calling session's
+    /// low, medium, high, xhigh, max or ultra. Defaults to the calling session's
     /// effort, then the model's own.
     #[arg(long)]
     effort: Option<String>,

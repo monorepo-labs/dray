@@ -63,8 +63,32 @@ pub struct SessionIndexItem {
     #[serde(default)]
     pub model: ModelId,
     /// `None` for models that take no effort flag.
+    ///
+    /// In memory this is the true level, [`Effort::Ultra`] included. **On disk
+    /// it never is** — see [`encode_effort`], which is the only place the two
+    /// differ, and [`decode_effort`], which puts it back.
     #[serde(default)]
     pub effort: Option<Effort>,
+    /// The real level, spelled as the wire spells it, where [`Self::effort`] on
+    /// disk is a stand-in an older build can read. `None` in memory except
+    /// where it holds a spelling this build cannot.
+    ///
+    /// **A `String` and never an `Effort`, which is the whole point of the
+    /// field.** Typed as the enum, the next rung a newer build writes here
+    /// would fail this build's line and take the index down with it — the
+    /// exact failure the pair exists to prevent, reproduced one level up. A
+    /// string can hold a level nobody here has heard of, so it is carried back
+    /// out untouched rather than parsed.
+    ///
+    /// Written rather than folded into `unknown` because a field this build
+    /// mints has to have a name it agrees with itself about; carried *through*
+    /// an older build by `unknown`'s flatten, which is what makes the round
+    /// trip lossless. `skip_serializing_if`, so the ordinary entry is byte
+    /// identical to what shipped. `ts(skip)` because it is a storage detail —
+    /// every reader above the file boundary reads `effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub effort_above: Option<String>,
     /// Defaulted so entries written before this field read as the CLI's own
     /// default rather than failing the whole index.
     #[serde(default)]
@@ -296,7 +320,10 @@ pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {
         return Ok(Vec::new());
     }
 
-    let items = serde_json::from_str::<Vec<SessionIndexItem>>(&contents)?;
+    let mut items = serde_json::from_str::<Vec<SessionIndexItem>>(&contents)?;
+    // The one place the on-disk spelling of effort becomes the real one; every
+    // reader above this reads `effort` and nothing else.
+    items.iter_mut().for_each(decode_effort);
 
     Ok(items)
 }
@@ -378,6 +405,8 @@ impl SessionIndexItem {
             title: title_from_prompt(first_prompt),
             model,
             effort,
+            // Never set in memory; `encode_effort` mints it on the way to disk.
+            effort_above: None,
             permission_mode,
             status: SessionStatus::default(),
             issues: Vec::new(),
@@ -432,6 +461,8 @@ impl SessionIndexItem {
             title: fork_title(&self.title),
             model: self.model.clone(),
             effort: self.effort,
+            // Never set in memory; `encode_effort` mints it on the way to disk.
+            effort_above: None,
             permission_mode: self.permission_mode,
             status: SessionStatus::default(),
             // Inherited: a fork continues the same conversation, so it is
@@ -1045,11 +1076,85 @@ pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<
     write_session_index(&sessions).await
 }
 
+/// A level no shipped build can spell, written as one every build can.
+///
+/// An older Dray sharing `~/.dray` deserializes `effort` as its own closed
+/// `Effort`, and serde fails a line on an unknown *variant* where it tolerates
+/// an unknown field. The index is one JSON array, so that failed line is the
+/// whole file: a single session on `ultra` would read as **no sessions at all**
+/// in a release build running beside this one. Proven, not assumed.
+///
+/// So `ultra` goes down as `max` — a real level, one rung below, which that
+/// build can run — with the truth beside it under a name it has never heard of.
+/// Its `unknown` flatten carries that field through untouched, so the round
+/// trip is lossless as long as nothing rewrites `effort` itself.
+///
+/// This is the same bargain `Harness::Other` makes, and the same ordering rule:
+/// protection has to ship *before* the value it protects, never after. It
+/// cannot help builds already out there, which is exactly why the stand-in has
+/// to be a level they already know rather than a new spelling of "unknown".
+fn encode_effort(item: &SessionIndexItem) -> SessionIndexItem {
+    let mut out = item.clone();
+
+    if out.effort == Some(Effort::Ultra) {
+        out.effort = Some(Effort::Max);
+        out.effort_above = Some(Effort::Ultra.as_arg().to_string());
+    } else if !carries_unreadable_level(&out) {
+        // Never written beside a level that is not the stand-in, or the pair
+        // below cannot tell a real `max` from an encoded `ultra`. Dropped here
+        // rather than in `decode_effort` for the level a reader moved *down*
+        // to: that entry keeps the stand-in and loses the forward field, which
+        // is what the two functions have to agree on.
+        out.effort_above = None;
+    }
+
+    out
+}
+
+/// Whether this entry holds a level written by a build newer than this one.
+///
+/// Such an entry is passed through whole — stand-in and forward field both —
+/// rather than repaired or dropped. This build genuinely cannot say what the
+/// level is, so the honest thing is to run the stand-in beside it and leave the
+/// record for a build that can. Same shape as `SessionIndexItem.unknown`: what
+/// cannot be read is preserved, never erased.
+fn carries_unreadable_level(item: &SessionIndexItem) -> bool {
+    item.effort == Some(Effort::Max)
+        && matches!(&item.effort_above, Some(level) if Effort::from_arg(level).is_none())
+}
+
+/// The inverse, and it is **conditional on the stand-in still being there**.
+///
+/// An older build that rewrites this entry writes whatever level its own
+/// composer holds while leaving `effort_above` alone in its `unknown` map — so
+/// a pair reading `high` + `ultra` means somebody moved the effort down, and
+/// honouring the forward field there would silently put the session back on a
+/// level the reader just left.
+fn decode_effort(item: &mut SessionIndexItem) {
+    // A level this build cannot spell is left exactly as it arrived: `effort`
+    // stays the stand-in, which is runnable, and the forward field stays put so
+    // the next write hands it back rather than erasing what a newer build knew.
+    if carries_unreadable_level(item) {
+        return;
+    }
+
+    if item.effort == Some(Effort::Max) {
+        if let Some(above) = item.effort_above.as_deref().and_then(Effort::from_arg) {
+            item.effort = Some(above);
+        }
+    }
+
+    // Cleared so the in-memory item has exactly one place its effort lives.
+    // Everything above this line — the frontend included — reads `effort`.
+    item.effort_above = None;
+}
+
 /// Caller must hold `INDEX_LOCK`: this rewrites the whole file, so a concurrent
 /// writer would drop the other's entry.
 async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {
     let path = get_sessions_dir().await?.join("index.json");
-    let contents = serde_json::to_string(sessions)?;
+    let encoded: Vec<SessionIndexItem> = sessions.iter().map(encode_effort).collect();
+    let contents = serde_json::to_string(&encoded)?;
     let tmp = path.with_extension("json.tmp");
 
     fs::write(&tmp, contents)
@@ -1505,6 +1610,150 @@ mod tests {
             assert!(item.model.is_unset());
             assert_eq!(serde_json::to_value(&item.model).unwrap(), Value::from(""));
         }
+    }
+
+    /// A closed `Effort` with no `Ultra`, which is every shipped build's. The
+    /// point of the pair below is what *this* type can read.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum OlderBuildEffort {
+        Low,
+        Medium,
+        High,
+        Xhigh,
+        Max,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct OlderBuildItem {
+        #[serde(default)]
+        effort: Option<OlderBuildEffort>,
+        #[serde(flatten)]
+        unknown: std::collections::HashMap<String, Value>,
+    }
+
+    fn item_on(effort: Option<Effort>) -> SessionIndexItem {
+        let mut item: SessionIndexItem = serde_json::from_value(serde_json::json!({
+            "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+            "branch": null, "worktreeName": null, "title": "t", "model": "gpt56_sol",
+            "created": "c", "modified": "m", "archived": false, "pinned": false,
+        }))
+        .unwrap();
+        item.effort = effort;
+        item
+    }
+
+    /// The whole reason `ultra` is not written as itself. Serde tolerates an
+    /// unknown *field* and fails a line on an unknown *variant*, and the index
+    /// is one array — so one session on `ultra` would read as **no sessions**
+    /// in a release build sharing `~/.dray` with this one.
+    #[test]
+    fn an_older_build_reads_every_session_beside_an_ultra_one() {
+        let written =
+            serde_json::to_string(&[encode_effort(&item_on(Some(Effort::Ultra)))]).unwrap();
+
+        let read: Vec<OlderBuildItem> =
+            serde_json::from_str(&written).expect("an older build must still read the index");
+
+        assert_eq!(read.len(), 1);
+        // A real level it can run, one rung below what was asked for.
+        assert!(matches!(read[0].effort, Some(OlderBuildEffort::Max)));
+        // And the truth rides along in the map that carries it back untouched.
+        assert_eq!(read[0].unknown.get("effortAbove"), Some(&Value::from("ultra")));
+
+        // Nothing anywhere in the file spells the variant it cannot parse.
+        assert!(!written.contains("\"effort\":\"ultra\""));
+    }
+
+    /// The same protection turned on itself. `effort_above` is a `String`
+    /// precisely so a rung invented after this build can sit in it: typed as
+    /// `Effort` it would fail this build's line and take the whole index with
+    /// it, which is the failure the pair exists to prevent.
+    ///
+    /// So a future level is *carried*, not repaired and not dropped — this
+    /// build runs the stand-in beside it and hands the record back intact, the
+    /// way `unknown` treats a field it has never heard of.
+    #[test]
+    fn a_level_from_a_newer_build_is_carried_rather_than_read_or_lost() {
+        let from_the_future = serde_json::json!({
+            "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+            "branch": null, "worktreeName": null, "title": "t", "model": "gpt56_sol",
+            "created": "c", "modified": "m", "archived": false, "pinned": false,
+            "effort": "max", "effortAbove": "hyper",
+        });
+
+        let mut item: SessionIndexItem = serde_json::from_value(from_the_future)
+            .expect("a rung this build cannot spell must not fail the line");
+        decode_effort(&mut item);
+
+        // Runnable, and honestly one this build understands.
+        assert_eq!(item.effort, Some(Effort::Max));
+        // Still here, so the next write gives it back.
+        assert_eq!(item.effort_above.as_deref(), Some("hyper"));
+
+        let rewritten = serde_json::to_value(encode_effort(&item)).unwrap();
+        assert_eq!(rewritten["effort"], Value::from("max"));
+        assert_eq!(rewritten["effortAbove"], Value::from("hyper"));
+    }
+
+    /// Carrying it must not outlive the stand-in it hangs off. Moving the
+    /// effort down is the reader saying they want that level, and an unreadable
+    /// forward field is no more entitled to survive that than a readable one.
+    #[test]
+    fn a_carried_level_is_dropped_once_the_stand_in_moves() {
+        let mut item = item_on(Some(Effort::Max));
+        item.effort_above = Some("hyper".to_string());
+        item.effort = Some(Effort::Low);
+
+        let rewritten = serde_json::to_value(encode_effort(&item)).unwrap();
+
+        assert_eq!(rewritten["effort"], Value::from("low"));
+        assert_eq!(rewritten.get("effortAbove"), None);
+    }
+
+    #[test]
+    fn ultra_survives_the_round_trip_and_every_other_level_is_untouched() {
+        for level in [
+            None,
+            Some(Effort::Low),
+            Some(Effort::Xhigh),
+            Some(Effort::Max),
+            Some(Effort::Ultra),
+        ] {
+            let written = serde_json::to_string(&[encode_effort(&item_on(level))]).unwrap();
+            let mut read: Vec<SessionIndexItem> = serde_json::from_str(&written).unwrap();
+            read.iter_mut().for_each(decode_effort);
+
+            assert_eq!(read[0].effort, level, "{level:?} did not survive");
+            // One place the level lives in memory, so nothing downstream has to
+            // know the encoding exists.
+            assert_eq!(read[0].effort_above, None);
+        }
+
+        // A level that is not the stand-in must never carry the forward field,
+        // or a real `max` becomes indistinguishable from an encoded `ultra`.
+        let plain = serde_json::to_string(&encode_effort(&item_on(Some(Effort::Max)))).unwrap();
+        assert!(!plain.contains("effortAbove"));
+    }
+
+    /// An older build rewrites the whole file through its own struct, so it
+    /// writes its composer's level into `effort` while `effortAbove` rides
+    /// along in `unknown` untouched. Honouring the forward field there would
+    /// put the session back on the level the reader just moved off.
+    #[test]
+    fn a_stale_forward_field_loses_to_the_level_beside_it() {
+        let mut moved_down: SessionIndexItem = serde_json::from_value(serde_json::json!({
+            "sessionId": "a", "harness": "claude_code", "cwd": "/p", "projectPath": "/p",
+            "branch": null, "worktreeName": null, "title": "t", "model": "gpt56_sol",
+            "created": "c", "modified": "m", "archived": false, "pinned": false,
+            "effort": "high", "effortAbove": "ultra",
+        }))
+        .unwrap();
+
+        decode_effort(&mut moved_down);
+
+        assert_eq!(moved_down.effort, Some(Effort::High));
+        assert_eq!(moved_down.effort_above, None);
     }
 
     #[test]
