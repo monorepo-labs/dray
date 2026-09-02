@@ -657,8 +657,15 @@ function App() {
   // sidebar is collapsed and there is nothing on screen to follow — project
   // list included, since that is what orders the groups it steps through.
   const ordered = useMemo(
-    () => sortSessions(searchedSessions, projects),
-    [searchedSessions, projects],
+    () =>
+      sortSessions(
+        searchedSessions,
+        projects,
+        // The same reading the sidebar groups by, and withheld on the same list
+        // — the walk has to step the runs the eye is looking at.
+        showArchived ? undefined : { statusBySession, asking: askingSessions },
+      ),
+    [searchedSessions, projects, showArchived, statusBySession, askingSessions],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
