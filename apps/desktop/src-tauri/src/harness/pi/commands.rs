@@ -104,7 +104,8 @@ pub async fn forget() {
 /// to where it runs, so a probe spawned anywhere else answers for the wrong
 /// project.
 async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
-    let mut child = Command::new(crate::binpath::pi().await)
+    let bin = crate::binpath::pi().await;
+    let mut child = Command::new(&bin)
         .args([
             "--mode",
             "rpc",
@@ -114,7 +115,7 @@ async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
             "--no-session",
         ])
         .current_dir(cwd)
-        .env("PATH", crate::harness::agent_path())
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

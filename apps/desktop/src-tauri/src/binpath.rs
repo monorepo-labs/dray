@@ -223,10 +223,15 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
 /// we actually have. A binary that cannot be run at all answers `false`, which
 /// puts it behind the next candidate rather than failing the resolution.
 async fn speaks_app_server(bin: &Path) -> bool {
-    // The candidate's own dir goes on `PATH` for the same reason the child's
-    // does: an npm codex is a `node` script, and this probe runs before
-    // anything is cached for `resolved_bin_dirs` to hand back.
-    let extra = bin.parent().map(Path::to_path_buf).into_iter().collect();
+    // The candidate's own dir and a `node` go on `PATH` for the same reason
+    // the child's do: an npm codex is a `node` script, and this probe runs
+    // before anything is cached for `resolved_bin_dirs` to hand back.
+    let extra = bin
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .chain(node_dir().cloned())
+        .collect();
     let Ok(output) = Command::new(bin)
         .arg("--help")
         .env("PATH", child_path(extra))

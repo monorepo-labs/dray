@@ -29,9 +29,32 @@ use serde::{Deserialize, Serialize};
 /// The directory each resolved CLI was found in rides along too, and a `node`
 /// found the same way: an npm-installed CLI is a `node` script, and under a
 /// version manager `node` sits in a per-version `bin` the fixed list cannot
-/// name.
-pub fn agent_path() -> String {
-    crate::binpath::child_path(crate::binpath::resolved_bin_dirs())
+/// name. `bin`'s own dir leads, so a CLI runs on the `node` it was installed
+/// beside rather than another harness's — a Claude on nvm's node 18 must not
+/// pick the interpreter for a pi installed against fnm's node 22.
+pub fn agent_path(bin: &std::path::Path) -> String {
+    let mut dirs: Vec<std::path::PathBuf> = bin.parent().map(Into::into).into_iter().collect();
+    dirs.extend(crate::binpath::resolved_bin_dirs());
+    crate::binpath::child_path(dirs)
+}
+
+#[cfg(test)]
+mod path_tests {
+    /// The spawned binary's own dir is the first thing after the inherited
+    /// `PATH`, ahead of every other harness's cached dir — so its `env node`
+    /// lands on the node it was installed beside.
+    #[test]
+    fn the_spawned_binary_dir_leads_the_additions() {
+        let bin = std::path::Path::new("/home/u/.fnm/node-versions/v22/installation/bin/pi");
+        let inherited: Vec<std::path::PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+
+        let path = super::agent_path(bin);
+        let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+
+        assert_eq!(&dirs[..inherited.len()], &inherited[..]);
+        assert_eq!(dirs[inherited.len()], bin.parent().unwrap());
+    }
 }
 
 #[cfg(test)]

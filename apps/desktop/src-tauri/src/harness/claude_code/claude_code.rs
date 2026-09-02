@@ -124,7 +124,8 @@ pub async fn init(
 
     // Resolved rather than spawned by bare name: a bundled `.app` launched from
     // Finder inherits launchd's `PATH`, which holds no `claude`.
-    let mut command = Command::new(crate::binpath::claude().await);
+    let bin = crate::binpath::claude().await;
+    let mut command = Command::new(&bin);
 
     // Which app the agent's own `dray` calls reach. Set because dev and release
     // builds listen on different sockets and the CLI's default names the
@@ -140,7 +141,7 @@ pub async fn init(
         // How the CLI knows which session is calling it, which is what links a
         // spawned session to its parent and what the depth cap reads.
         .env("DRAY_SESSION_ID", session_id)
-        .env("PATH", crate::harness::agent_path())
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

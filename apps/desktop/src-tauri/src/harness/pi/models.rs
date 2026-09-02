@@ -82,7 +82,8 @@ pub async fn forget() {
 
 /// Spawns a throwaway pi, asks it, kills it.
 async fn probe() -> Result<Vec<Model>> {
-    let mut child = Command::new(crate::binpath::pi().await)
+    let bin = crate::binpath::pi().await;
+    let mut child = Command::new(&bin)
         .args([
             "--mode",
             "rpc",
@@ -91,7 +92,7 @@ async fn probe() -> Result<Vec<Model>> {
             // session list fills with empty runs Dray started.
             "--no-session",
         ])
-        .env("PATH", crate::harness::agent_path())
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

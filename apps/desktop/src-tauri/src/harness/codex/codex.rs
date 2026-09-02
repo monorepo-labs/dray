@@ -126,7 +126,8 @@ pub async fn init(
         next_seq_by_session_id(session_id).await?
     };
 
-    let mut command = Command::new(crate::binpath::codex().await);
+    let bin = crate::binpath::codex().await;
+    let mut command = Command::new(&bin);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -136,7 +137,7 @@ pub async fn init(
         .arg("app-server")
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
-        .env("PATH", crate::harness::agent_path())
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

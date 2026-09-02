@@ -147,7 +147,8 @@ pub async fn init(
     args.push("--append-system-prompt".into());
     args.push(APPEND_SYSTEM_PROMPT.to_string());
 
-    let mut command = Command::new(crate::binpath::pi().await);
+    let bin = crate::binpath::pi().await;
+    let mut command = Command::new(&bin);
 
     // Which app the agent's own `dray` calls reach. Dev and release builds
     // listen on different sockets and the CLI's default names the release one.
@@ -159,7 +160,7 @@ pub async fn init(
         .args(args)
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
-        .env("PATH", crate::harness::agent_path())
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
