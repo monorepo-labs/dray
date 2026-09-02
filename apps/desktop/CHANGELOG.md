@@ -5,7 +5,22 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.7
+
+### Changed
+
+- **Light mode is tinted, and it is Default's own palette now.** Light was
+  the derived ramp at no hue; it runs cool blue throughout — tinted greys,
+  a blue primary, and veils mixed off the foreground so they take the hue
+  without naming a colour.
+
 ## 0.12.6
+
+### Added
+
+- **Check for Updates from About.** The menu bar's check reported into the
+  sidebar, so a collapsed sidebar left the answer nowhere to land. The
+  About tab carries the same check and every state of it.
 
 ### Fixed
 
