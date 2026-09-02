@@ -294,6 +294,27 @@ pub fn known_dirs() -> Vec<PathBuf> {
     ]
 }
 
+/// The directory each resolved CLI sits in, for the child's `PATH`.
+///
+/// An npm-installed CLI is a `#!/usr/bin/env node` script, and under a version
+/// manager `node` lives beside it in a per-version `bin` that [`known_dirs`]
+/// cannot name. Resolving the script and spawning it under launchd's `PATH`
+/// then fails with `env: node: No such file or directory` — so whatever
+/// directory a resolver landed in goes back to the child. Only cached answers
+/// are read, and every spawn site resolves its own binary before building the
+/// `PATH`, so the one it needs is always there.
+// ponytail: proto's npm globals sit in tools/node/globals/bin with node one
+// dir over; add ~/.proto/shims here if that ever bites.
+pub fn resolved_bin_dirs() -> Vec<PathBuf> {
+    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+        .into_iter()
+        .flatten()
+        .chain(GH_PATH.get().into_iter().flatten())
+        .filter(|path| path.is_absolute())
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect()
+}
+
 /// The directories `claude` actually installs to, checked directly so the
 /// common bundle launch never pays for a shell spawn. Not exhaustive by design
 /// — [`login_shell_which`] is the general answer, this is the fast path.

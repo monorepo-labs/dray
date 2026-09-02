@@ -26,11 +26,22 @@ use std::path::PathBuf;
 /// two name the same binary.
 ///
 /// Shared by both harnesses because the trap is the bundle's, not the CLI's.
+///
+/// The directory each resolved CLI was found in rides along too: an
+/// npm-installed one is a `node` script, and under a version manager `node`
+/// sits in that same per-version `bin` and nowhere the fixed list names.
 pub fn agent_path() -> String {
     let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(&inherited).collect();
+    let mut extra = crate::binpath::known_dirs();
+    extra.extend(crate::binpath::resolved_bin_dirs());
+    with_dirs(&inherited, extra)
+}
 
-    for dir in crate::binpath::known_dirs() {
+/// `inherited` with each of `extra` appended once, in order.
+fn with_dirs(inherited: &std::ffi::OsStr, extra: Vec<PathBuf>) -> String {
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(inherited).collect();
+
+    for dir in extra {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
@@ -39,6 +50,28 @@ pub fn agent_path() -> String {
     std::env::join_paths(dirs)
         .map(|joined| joined.to_string_lossy().into_owned())
         .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::with_dirs;
+    use std::path::PathBuf;
+
+    /// launchd's `PATH` plus a CLI resolved out of a version manager's bin:
+    /// that bin must be on the child's `PATH`, or the script's `env node`
+    /// finds nothing. Appended after the inherited dirs, and once.
+    #[test]
+    fn a_resolved_bin_dir_is_put_back_after_the_inherited_path() {
+        let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        let nvm_bin = PathBuf::from("/home/u/.nvm/versions/node/v25.2.1/bin");
+
+        let path = with_dirs(launchd, vec![PathBuf::from("/bin"), nvm_bin.clone(), nvm_bin]);
+
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/home/u/.nvm/versions/node/v25.2.1/bin"
+        );
+    }
 }
 
 #[cfg(test)]
