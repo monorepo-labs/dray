@@ -11,7 +11,6 @@
 
 export type ThemeName =
   | "default"
-  | "lab"
   | "catppuccin"
   | "gruvbox"
   | "one-dark-pro"
@@ -59,11 +58,6 @@ export const THEMES: Theme[] = [
   // retired name (`neutral`, `shadcn`) lands on — renaming it would strand every
   // stored pick on a palette that no longer answers to what is written down.
   { id: "default", label: "Dray", flatInFullscreen: true },
-  // A copy of Default, as literals rather than the derived ramp, so light mode can
-  // be tuned without moving every other theme. Ours, so no credit; temporary, so
-  // when a change here is worth keeping it goes into `[data-mode="light"]` and both
-  // this entry and its block in App.css go.
-  { id: "lab", label: "Lab", flatInFullscreen: true },
   {
     id: "catppuccin",
     label: "Catppuccin",

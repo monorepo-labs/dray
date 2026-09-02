@@ -105,7 +105,7 @@ describe("modeFor", () => {
 });
 
 // Palettes written here rather than ported, so nothing upstream to credit.
-const OURS: ThemeName[] = ["default", "lab"];
+const OURS: ThemeName[] = ["default"];
 
 describe("THEMES", () => {
   it("leads with the default", () => {

@@ -280,7 +280,7 @@ function OpenFilesRow() {
             // than drawn from a guess, the same bargain the analytics switch
             // makes — either guess is wrong for somebody.
             disabled={apps === null || unavailable !== null}
-            className="min-w-36 justify-between font-normal"
+            className="justify-between font-normal"
           >
             <span className="flex min-w-0 items-center gap-1.5">
               {pick && <AppIcon app={pick} className="size-4" />}
@@ -294,8 +294,17 @@ function OpenFilesRow() {
         </DropdownMenuTrigger>
 
         {/* Aligned to the end because the control sits at the dialog's right
-            edge, where a start-aligned menu opens past it. */}
-        <DropdownMenuContent align="end" className="min-w-44">
+            edge, where a start-aligned menu opens past it.
+
+            Sized to the longest app name, floored at the trigger's own width.
+            The default is the other way round — `w-(--radix-…-trigger-width)`
+            pins the menu *to* the trigger — which is right for a control that
+            fills its row and wrong for one that has shrunk to a single app
+            name, where it made the menu narrower than its own items. */}
+        <DropdownMenuContent
+          align="end"
+          className="w-auto min-w-(--radix-dropdown-menu-trigger-width)"
+        >
           {choices.map((app, i) => (
             <Fragment key={app.path}>
               {/* An inset dotted rule between the editors and Finder,
