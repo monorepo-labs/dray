@@ -159,6 +159,9 @@ mod pi_resolution_tests {
     #[ignore]
     async fn where_pi_resolves_to() {
         println!("pi -> {}", super::pi().await.display());
+        // The mise branch alone, since any earlier hit hides it above.
+        let mise = dirs::home_dir().unwrap().join(".local/share/mise/installs");
+        println!("mise pi -> {:?}", super::find_versioned(&mise, 2, &["bin", "", "pi"], "pi"));
     }
 }
 
@@ -272,6 +275,20 @@ pub fn known_dirs() -> Vec<PathBuf> {
         home.join(".claude/local"),
         home.join(".bun/bin"),
         home.join(".npm-global/bin"),
+        // Managers whose shims run on their own, found by absolute path. asdf's
+        // and mise's do not — one is a script calling `asdf`, the other refuses
+        // a tool pinned in no config — so those are globbed by install below.
+        home.join(".volta/bin"),
+        home.join("Library/pnpm"),
+        home.join(".local/share/pnpm"),
+        home.join(".yarn/bin"),
+        home.join(".n/bin"),
+        // Nix keeps binaries in the store; these profile links are how they
+        // reach a PATH. The second is home-manager's per-user profile.
+        home.join(".nix-profile/bin"),
+        PathBuf::from("/etc/profiles/per-user")
+            .join(home.file_name().unwrap_or_default())
+            .join("bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ]
@@ -292,14 +309,63 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
         return Some(found);
     }
 
-    // nvm keeps one bin directory per installed Node version, so the path
-    // depends on which version is current — glob the versions rather than
-    // guessing one.
-    let versions = std::fs::read_dir(home.join(".nvm/versions/node")).ok()?;
-    versions
-        .flatten()
-        .map(|entry| entry.path().join("bin").join(bin))
-        .find(|candidate| is_executable(candidate))
+    // Version managers keep one directory per installed version, so the path
+    // depends on which is current — glob the versions rather than guess one.
+    // Each row: the root, how many directory levels sit between it and a
+    // version, and where the binary lives relative to that version.
+    let versioned: [(PathBuf, usize, &[&str]); 7] = [
+        (home.join(".nvm/versions/node"), 1, &["bin"]),
+        (home.join(".nodenv/versions"), 1, &["bin"]),
+        (
+            home.join("Library/Application Support/fnm/node-versions"),
+            1,
+            &["installation/bin"],
+        ),
+        (home.join(".local/share/fnm/node-versions"), 1, &["installation/bin"]),
+        // installs/<tool>/<version>/bin — `<tool>` is `nodejs` for an `npm -g`
+        // under an asdf node, or the plugin's own name.
+        (home.join(".asdf/installs"), 2, &["bin"]),
+        // tools/<tool>/<version>/bin; an `npm -g` under a proto node lands in
+        // tools/node/globals/bin, which the same walk reaches.
+        (home.join(".proto/tools"), 2, &["bin"]),
+        // Same shape, but mise unpacks a release as it ships, so the binary
+        // sits wherever the archive put it: `bin`, the version root, or one
+        // level in under the tool's name (`installs/pi/latest/pi/pi`). Globbed
+        // across every tool rather than `installs/<bin>`, since a CLI lands
+        // under `node` (npm -g), its registry name (`claude`, `claude-code`,
+        // `codex`) or `npm-<package>` depending on how it was asked for.
+        (home.join(".local/share/mise/installs"), 2, &["bin", "", bin]),
+    ];
+    versioned
+        .iter()
+        .find_map(|(root, depth, layouts)| find_versioned(root, *depth, layouts, bin))
+}
+
+/// Looks for `bin` under every directory `depth` levels below `root`, trying
+/// each layout as a path relative to it. A missing `root` is ordinary rather
+/// than an error — most machines have at most one of these managers.
+///
+/// Walked in reverse lexical order so `latest` (mise's symlink) outranks any
+/// numbered directory.
+// ponytail: lexical, so 0.9 beats 0.10 — a semver sort if that ever bites.
+fn find_versioned(root: &Path, depth: usize, layouts: &[&str], bin: &str) -> Option<PathBuf> {
+    let mut dirs = vec![root.to_path_buf()];
+    for _ in 0..depth {
+        dirs = dirs
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+    }
+    dirs.sort();
+    dirs.into_iter().rev().find_map(|version| {
+        layouts
+            .iter()
+            .map(|layout| version.join(layout).join(bin))
+            .find(|candidate| is_executable(candidate))
+    })
 }
 
 /// Asks the user's login shell where `bin` is, which is the only way to see a
@@ -367,6 +433,36 @@ mod tests {
     #[tokio::test]
     async fn a_missing_binary_resolves_to_none() {
         assert!(resolve("dray-definitely-not-a-real-binary").await.is_none());
+    }
+
+    /// mise's nesting is the layout that went missing: `installs/<tool>/<v>/`
+    /// with the binary one level further in under the tool's own name.
+    #[test]
+    fn finds_a_binary_nested_under_a_version_dir() {
+        let root = std::env::temp_dir().join("dray-binpath-versioned-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let place = |rel: &str| {
+            let bin = root.join(rel);
+            std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            std::fs::write(&bin, "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            bin
+        };
+        let _numbered = place("pi/0.84.4/pi/pi");
+        let latest = place("pi/latest/pi/pi");
+        let under_node = place("node/22.0.0/bin/claude");
+
+        let layouts: &[&str] = &["bin", "", "pi"];
+        assert_eq!(find_versioned(&root, 2, layouts, "pi"), Some(latest));
+        assert_eq!(find_versioned(&root, 2, &["bin"], "claude"), Some(under_node));
+        assert_eq!(find_versioned(&root, 2, &["bin"], "pi"), None);
+        assert_eq!(find_versioned(&root.join("nope"), 2, layouts, "pi"), None);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
