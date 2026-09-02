@@ -1267,17 +1267,6 @@ model: ModelId,
  */
 effort: Effort | null, 
 /**
- * The real level where [`Self::effort`] on disk is a stand-in an older
- * build can spell. Always `None` in memory.
- *
- * Written rather than folded into `unknown` because a field this build
- * mints has to have a name it agrees with itself about; carried *through*
- * an older build by `unknown`'s flatten, which is what makes the round
- * trip lossless. `skip_serializing_if`, so the ordinary entry is byte
- * identical to what shipped.
- */
-effortAbove?: Effort | null, 
-/**
  * Defaulted so entries written before this field read as the CLI's own
  * default rather than failing the whole index.
  */
@@ -1374,17 +1363,6 @@ model: ModelId,
  * differ, and [`decode_effort`], which puts it back.
  */
 effort: Effort | null, 
-/**
- * The real level where [`Self::effort`] on disk is a stand-in an older
- * build can spell. Always `None` in memory.
- *
- * Written rather than folded into `unknown` because a field this build
- * mints has to have a name it agrees with itself about; carried *through*
- * an older build by `unknown`'s flatten, which is what makes the round
- * trip lossless. `skip_serializing_if`, so the ordinary entry is byte
- * identical to what shipped.
- */
-effortAbove?: Effort | null, 
 /**
  * Defaulted so entries written before this field read as the CLI's own
  * default rather than failing the whole index.
