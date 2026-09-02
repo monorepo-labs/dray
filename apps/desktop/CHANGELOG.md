@@ -5,6 +5,43 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.5
+
+### Added
+
+- **A More models submenu, and Ultra on Codex.** The model menu keeps the
+  models worth a chord at its top level and folds the rest under "More
+  models"; Shift+Tab cycles exactly what the top level draws. Claude Code
+  cycles Fable 5.1 and Opus 5, with Fable 5, Sonnet and Haiku below —
+  where a pinned previous generation is the only route to a model no CLI
+  lists. Effort gains Ultra above Max, offered per model, since that is
+  how Codex reports it.
+- **The sidebar leads with what is waiting on you.** Each project splits
+  into needs-attention, then completed, then the rest, so a session
+  blocked on a question no longer sits wherever recency put it. A nest
+  takes the strongest state anything in it holds, and a project under
+  three rows is left whole.
+- **Start a task from a project heading.** Hovering a heading reveals a
+  plus; clicking it opens the empty composer with that project picked.
+  ⌘⇧P steps the project picker where it is drawn.
+
+### Fixed
+
+- **Agent CLIs installed through a version manager are found.** A bundled
+  app inherits launchd's PATH, so only the known-directories list can find
+  a CLI, and it knew nvm alone — a mise- or asdf-managed install went
+  undetected. Every child also gets a `node` it can actually run, which is
+  what an npm-installed CLI needs to start at all.
+- **A new session's first prompt draws straight away.** It used to wait on
+  the worktree, the spawn and the harness ack — one to two seconds on
+  Codex and pi — while every later prompt appeared at once.
+- **The spinner stops wobbling over glass.** Unpromoted, the rotating box
+  was snapped to whole device pixels every frame, so a small arc orbited
+  by a subpixel wherever it sat over the window's vibrancy.
+- **Switching agent no longer flickers the model menu.** One list carried
+  the previous harness's answer until the next landed, drawing one agent's
+  models under the other's name.
+
 ## 0.12.4
 
 ### Fixed
