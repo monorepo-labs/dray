@@ -9,6 +9,12 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
 import type { Project } from "@/types/events";
 
@@ -42,23 +48,39 @@ export default function ProjectSelector({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground"
-        >
-          {/* Same slot and same size as the branch picker's glyph beside it —
-              the row reads as one set of controls or as three unrelated ones.
-              Filled, since lucide draws a folder as an outline and at 14px the
-              open shape reads as a shard rather than a folder. */}
-          <Folder className="size-3.5 shrink-0 fill-current" />
-          <span className="truncate">
-            {value ? basename(value) : "Attach project"}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground"
+            >
+              {/* Same slot and same size as the branch picker's glyph beside it —
+                  the row reads as one set of controls or as three unrelated ones.
+                  Filled, since lucide draws a folder as an outline and at 14px the
+                  open shape reads as a shard rather than a folder. */}
+              <Folder className="size-3.5 shrink-0 fill-current" />
+              <span className="truncate">
+                {value ? basename(value) : "Attach project"}
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        {/* The chord steps to the next project rather than opening this menu,
+            so it is only worth saying where there is a next one. */}
+        {projects.length > 1 && (
+          <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+            Next project
+            <KbdGroup>
+              <Kbd>⌘</Kbd>
+              <Kbd>Shift</Kbd>
+              <Kbd>P</Kbd>
+            </KbdGroup>
+          </TooltipContent>
+        )}
+      </Tooltip>
 
       <DropdownMenuContent align="start" className="min-w-52">
         <DropdownMenuRadioGroup value={value ?? ""} onValueChange={onSelect}>

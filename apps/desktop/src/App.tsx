@@ -797,6 +797,20 @@ function App() {
   const toggleSidebar = () => setCollapsed((prev) => !prev);
   useHotkey("b", toggleSidebar);
   useHotkey("n", () => goToSession(handleNewSession));
+  // Steps the composer's project picker, and only while that picker is on
+  // screen: it is drawn for a new task alone, and `enabled` unregisters rather
+  // than no-opping, so a session's composer doesn't have ⌘⇧P eaten from it.
+  // Wraps, since one key with a clamp dead-ends on the last project with no way
+  // back. Nothing picked yet finds no index and lands on the first, which is
+  // also the answer for a project detached out from under the pick.
+  useHotkey(
+    "p",
+    () => {
+      const next = projects[(projects.findIndex((p) => p.path === projectPath) + 1) % projects.length];
+      if (next) handleSelectProject(next.path);
+    },
+    { shift: true, enabled: !selectedSessionId && !issuesOpen && projects.length > 1 },
+  );
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
   useHotkey("ArrowUp", () => goToSession(() => stepSession(-1)), { shift: true });
@@ -953,6 +967,12 @@ function App() {
             goToSession(() => void handleSelectSessionIndexItem(sessionId))
           }
           onNewSession={() => goToSession(handleNewSession)}
+          onNewSessionInProject={(path) =>
+            goToSession(() => {
+              handleSelectProject(path);
+              handleNewSession();
+            })
+          }
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
           onDetach={detachSession}

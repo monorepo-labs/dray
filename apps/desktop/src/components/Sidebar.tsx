@@ -107,6 +107,10 @@ type SidebarProps = {
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
+  /// Starts a new task with the composer's project picker already on this
+  /// project — the only thing a project heading can offer, since the picker is
+  /// hidden once a session exists.
+  onNewSessionInProject: (projectPath: string) => void;
   updateStatus: UpdateStatus | null;
   // Any session mid-turn, not just the open one — installing relaunches the
   // whole app.
@@ -635,6 +639,7 @@ export default function Sidebar({
   projectFilter,
   onDetach,
   onProjectFilterChange,
+  onNewSessionInProject,
   updateStatus,
   updateBlocked,
   updateManual,
@@ -927,9 +932,17 @@ export default function Sidebar({
                 )}
 
                 {heading !== null && (
-                  <div className="flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70">
-                    {heading}
-                  </div>
+                  // A project heading is a way in to that project: clicking it
+                  // opens the empty composer already pointed there. Pinned is
+                  // not — it spans projects, so there is nothing to point at.
+                  <HeadingRow
+                    onClick={
+                      group.kind === "project"
+                        ? () => onNewSessionInProject(group.projectPath)
+                        : undefined
+                    }
+                    label={heading}
+                  />
                 )}
 
                 {group.rows.map(({ item, depth, guides, opens }) => (
@@ -1045,6 +1058,42 @@ const DOT_TRACK_W = DOT_PITCH * 5 - DOT_GAP;
 // Quiet alone was not enough — the tail can outlast a second deliberate swipe,
 // which is what made every other swipe do nothing.
 const SWIPE_PX = 36;
+/// A group heading, and where the group is a project, the button that starts a
+/// task in it. The plus only appears under the cursor: the row is a label first
+/// and every heading carrying one at rest would draw more chrome than the
+/// sessions beneath it.
+function HeadingRow({
+  onClick,
+  label,
+}: {
+  onClick?: () => void;
+  label: string;
+}) {
+  // `pr-0.5` is the session rows' own right inset, so the plus lands under their
+  // timestamps rather than short of them.
+  const shared =
+    "flex min-h-6 items-center truncate pr-0.5 pl-2 text-ui text-muted-foreground/70";
+
+  if (!onClick) return <div className={shared}>{label}</div>;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`New task in ${label}`}
+      // Hover stops short of `--foreground`: at full strength the heading became
+      // the brightest text in the pane, louder than the sessions it labels.
+      className={cn(
+        shared,
+        "group/heading w-full cursor-pointer text-left transition-colors duration-150 hover:text-foreground/75",
+      )}
+    >
+      <span className="truncate">{label}</span>
+      <Plus className="ml-auto size-3.5 shrink-0 opacity-0 transition-opacity duration-150 group-hover/heading:opacity-100" />
+    </button>
+  );
+}
+
 const SWIPE_END_MS = 120;
 const SWIPE_TAIL = 2;
 
