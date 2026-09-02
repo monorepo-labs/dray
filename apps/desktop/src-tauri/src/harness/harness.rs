@@ -13,7 +13,6 @@ pub mod codex;
 pub mod pi;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// The child's `PATH`: the inherited one with the user-bin directories put
 /// back.
@@ -26,19 +25,52 @@ use std::path::PathBuf;
 /// two name the same binary.
 ///
 /// Shared by both harnesses because the trap is the bundle's, not the CLI's.
-pub fn agent_path() -> String {
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(&inherited).collect();
+///
+/// The directory each resolved CLI was found in rides along too, and a `node`
+/// found the same way: an npm-installed CLI is a `node` script, and under a
+/// version manager `node` sits in a per-version `bin` the fixed list cannot
+/// name. `bin`'s own dir leads, so a CLI runs on the `node` it was installed
+/// beside rather than another harness's — a Claude on nvm's node 18 must not
+/// pick the interpreter for a pi installed against fnm's node 22.
+pub fn agent_path(bin: &std::path::Path) -> String {
+    // A bare-name fallback's parent is `""`, and an empty `PATH` segment is
+    // the working directory — a same-named file in the project would run.
+    let mut dirs: Vec<std::path::PathBuf> = bin
+        .is_absolute()
+        .then(|| bin.parent().map(Into::into))
+        .flatten()
+        .into_iter()
+        .collect();
+    dirs.extend(crate::binpath::resolved_bin_dirs());
+    crate::binpath::child_path(dirs)
+}
 
-    for dir in crate::binpath::known_dirs() {
-        if !dirs.contains(&dir) {
-            dirs.push(dir);
-        }
+#[cfg(test)]
+mod path_tests {
+    /// The spawned binary's own dir is the first thing after the inherited
+    /// `PATH`, ahead of every other harness's cached dir — so its `env node`
+    /// lands on the node it was installed beside.
+    #[test]
+    fn the_spawned_binary_dir_leads_the_additions() {
+        let bin = std::path::Path::new("/home/u/.fnm/node-versions/v22/installation/bin/pi");
+        let inherited: Vec<std::path::PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+
+        let path = super::agent_path(bin);
+        let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+
+        assert_eq!(&dirs[..inherited.len()], &inherited[..]);
+        assert_eq!(dirs[inherited.len()], bin.parent().unwrap());
     }
 
-    std::env::join_paths(dirs)
-        .map(|joined| joined.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
+    /// A bare-name fallback must add nothing: its parent is `""`, which as a
+    /// `PATH` segment is the working directory.
+    #[test]
+    fn a_bare_name_adds_no_empty_segment() {
+        let path = super::agent_path(std::path::Path::new("pi"));
+
+        assert!(!path.split(':').any(str::is_empty), "{path}");
+    }
 }
 
 #[cfg(test)]

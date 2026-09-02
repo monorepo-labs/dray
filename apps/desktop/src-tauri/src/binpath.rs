@@ -159,6 +159,9 @@ mod pi_resolution_tests {
     #[ignore]
     async fn where_pi_resolves_to() {
         println!("pi -> {}", super::pi().await.display());
+        // The mise branch alone, since any earlier hit hides it above.
+        let mise = dirs::home_dir().unwrap().join(".local/share/mise/installs");
+        println!("mise pi -> {:?}", super::find_versioned(&mise, 2, &["bin", "", "pi"], "pi"));
     }
 }
 
@@ -220,8 +223,18 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
 /// we actually have. A binary that cannot be run at all answers `false`, which
 /// puts it behind the next candidate rather than failing the resolution.
 async fn speaks_app_server(bin: &Path) -> bool {
+    // The candidate's own dir and a `node` go on `PATH` for the same reason
+    // the child's do: an npm codex is a `node` script, and this probe runs
+    // before anything is cached for `resolved_bin_dirs` to hand back.
+    let extra = bin
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .chain(node_dir().cloned())
+        .collect();
     let Ok(output) = Command::new(bin)
         .arg("--help")
+        .env("PATH", child_path(extra))
         .output()
         .await
     else {
@@ -272,9 +285,88 @@ pub fn known_dirs() -> Vec<PathBuf> {
         home.join(".claude/local"),
         home.join(".bun/bin"),
         home.join(".npm-global/bin"),
+        // Managers whose shims run on their own, found by absolute path. asdf's
+        // and mise's do not — one is a script calling `asdf`, the other refuses
+        // a tool pinned in no config — so those are globbed by install below.
+        home.join(".volta/bin"),
+        home.join("Library/pnpm"),
+        home.join(".local/share/pnpm"),
+        home.join(".yarn/bin"),
+        home.join(".n/bin"),
+        // Nix keeps binaries in the store; these profile links are how they
+        // reach a PATH. The second is home-manager's per-user profile.
+        home.join(".nix-profile/bin"),
+        PathBuf::from("/etc/profiles/per-user")
+            .join(home.file_name().unwrap_or_default())
+            .join("bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
     ]
+}
+
+/// The directory each resolved CLI sits in, for the child's `PATH`.
+///
+/// An npm-installed CLI is a `#!/usr/bin/env node` script, and under a version
+/// manager `node` lives beside it in a per-version `bin` that [`known_dirs`]
+/// cannot name. Resolving the script and spawning it under launchd's `PATH`
+/// then fails with `env: node: No such file or directory` — so whatever
+/// directory a resolver landed in goes back to the child. Only cached answers
+/// are read, and every spawn site resolves its own binary before building the
+/// `PATH`, so the one it needs is always there.
+///
+/// A `node` found by the same walk goes with them, since it is not always a
+/// sibling: mise's npm backend puts the CLI under `installs/npm-<pkg>` and
+/// node under `installs/node`, proto puts globals one dir over from its node.
+pub fn resolved_bin_dirs() -> Vec<PathBuf> {
+    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+        .into_iter()
+        .flatten()
+        .chain(GH_PATH.get().into_iter().flatten())
+        .filter(|path| path.is_absolute())
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .chain(node_dir().cloned())
+        .collect()
+}
+
+static NODE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// The `bin` holding a `node`, looked for exactly as the CLIs are but with no
+/// shell probe — a `node` only the shell knows about is one the child would
+/// see anyway if the shell's `PATH` were inherited, and it is not.
+fn node_dir() -> Option<&'static PathBuf> {
+    NODE_DIR
+        .get_or_init(|| {
+            search_path("node")
+                .or_else(|| search_known_dirs("node"))
+                .and_then(|node| node.parent().map(Path::to_path_buf))
+        })
+        .as_ref()
+}
+
+/// The `PATH` for a child this app spawns: the inherited one, then `extra`,
+/// then [`known_dirs`] — each once. `extra` ahead of the fixed list, since a
+/// CLI resolved out of a version manager wants *its* sibling `node`, not
+/// whichever shim `~/.volta/bin` or `~/.n/bin` happens to hold.
+pub fn child_path(extra: Vec<PathBuf>) -> String {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = extra;
+    dirs.extend(known_dirs());
+    with_dirs(&inherited, dirs)
+}
+
+/// `inherited` with each of `extra` appended once, in order.
+fn with_dirs(inherited: &std::ffi::OsStr, extra: Vec<PathBuf>) -> String {
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(inherited).collect();
+
+    for dir in extra {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+
+    std::env::join_paths(dirs)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
 }
 
 /// The directories `claude` actually installs to, checked directly so the
@@ -292,14 +384,63 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
         return Some(found);
     }
 
-    // nvm keeps one bin directory per installed Node version, so the path
-    // depends on which version is current — glob the versions rather than
-    // guessing one.
-    let versions = std::fs::read_dir(home.join(".nvm/versions/node")).ok()?;
-    versions
-        .flatten()
-        .map(|entry| entry.path().join("bin").join(bin))
-        .find(|candidate| is_executable(candidate))
+    // Version managers keep one directory per installed version, so the path
+    // depends on which is current — glob the versions rather than guess one.
+    // Each row: the root, how many directory levels sit between it and a
+    // version, and where the binary lives relative to that version.
+    let versioned: [(PathBuf, usize, &[&str]); 7] = [
+        (home.join(".nvm/versions/node"), 1, &["bin"]),
+        (home.join(".nodenv/versions"), 1, &["bin"]),
+        (
+            home.join("Library/Application Support/fnm/node-versions"),
+            1,
+            &["installation/bin"],
+        ),
+        (home.join(".local/share/fnm/node-versions"), 1, &["installation/bin"]),
+        // installs/<tool>/<version>/bin — `<tool>` is `nodejs` for an `npm -g`
+        // under an asdf node, or the plugin's own name.
+        (home.join(".asdf/installs"), 2, &["bin"]),
+        // tools/<tool>/<version>/bin; an `npm -g` under a proto node lands in
+        // tools/node/globals/bin, which the same walk reaches.
+        (home.join(".proto/tools"), 2, &["bin"]),
+        // Same shape, but mise unpacks a release as it ships, so the binary
+        // sits wherever the archive put it: `bin`, the version root, or one
+        // level in under the tool's name (`installs/pi/latest/pi/pi`). Globbed
+        // across every tool rather than `installs/<bin>`, since a CLI lands
+        // under `node` (npm -g), its registry name (`claude`, `claude-code`,
+        // `codex`) or `npm-<package>` depending on how it was asked for.
+        (home.join(".local/share/mise/installs"), 2, &["bin", "", bin]),
+    ];
+    versioned
+        .iter()
+        .find_map(|(root, depth, layouts)| find_versioned(root, *depth, layouts, bin))
+}
+
+/// Looks for `bin` under every directory `depth` levels below `root`, trying
+/// each layout as a path relative to it. A missing `root` is ordinary rather
+/// than an error — most machines have at most one of these managers.
+///
+/// Walked in reverse lexical order so `latest` (mise's symlink) outranks any
+/// numbered directory.
+// ponytail: lexical, so 0.9 beats 0.10 — a semver sort if that ever bites.
+fn find_versioned(root: &Path, depth: usize, layouts: &[&str], bin: &str) -> Option<PathBuf> {
+    let mut dirs = vec![root.to_path_buf()];
+    for _ in 0..depth {
+        dirs = dirs
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+    }
+    dirs.sort();
+    dirs.into_iter().rev().find_map(|version| {
+        layouts
+            .iter()
+            .map(|layout| version.join(layout).join(bin))
+            .find(|candidate| is_executable(candidate))
+    })
 }
 
 /// Asks the user's login shell where `bin` is, which is the only way to see a
@@ -367,6 +508,83 @@ mod tests {
     #[tokio::test]
     async fn a_missing_binary_resolves_to_none() {
         assert!(resolve("dray-definitely-not-a-real-binary").await.is_none());
+    }
+
+    /// mise's nesting is the layout that went missing: `installs/<tool>/<v>/`
+    /// with the binary one level further in under the tool's own name.
+    #[test]
+    fn finds_a_binary_nested_under_a_version_dir() {
+        let root = std::env::temp_dir().join("dray-binpath-versioned-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let place = |rel: &str| {
+            let bin = root.join(rel);
+            std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            std::fs::write(&bin, "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            bin
+        };
+        let _numbered = place("pi/0.84.4/pi/pi");
+        let latest = place("pi/latest/pi/pi");
+        let under_node = place("node/22.0.0/bin/claude");
+
+        let layouts: &[&str] = &["bin", "", "pi"];
+        assert_eq!(find_versioned(&root, 2, layouts, "pi"), Some(latest));
+        assert_eq!(find_versioned(&root, 2, &["bin"], "claude"), Some(under_node));
+        assert_eq!(find_versioned(&root, 2, &["bin"], "pi"), None);
+        assert_eq!(find_versioned(&root.join("nope"), 2, layouts, "pi"), None);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// launchd's `PATH` plus a CLI resolved out of a version manager's bin:
+    /// that bin must be on the child's `PATH` — or the script's `env node`
+    /// finds nothing — and ahead of the fixed list, or a `node` shim there
+    /// wins over the sibling the CLI was installed against. Each dir once.
+    #[test]
+    fn a_resolved_bin_dir_comes_after_inherited_and_before_known() {
+        let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        let nvm_bin = PathBuf::from("/home/u/.nvm/versions/node/v25.2.1/bin");
+        let volta = PathBuf::from("/home/u/.volta/bin");
+
+        let path = with_dirs(
+            launchd,
+            vec![PathBuf::from("/bin"), nvm_bin.clone(), nvm_bin, volta],
+        );
+
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/home/u/.nvm/versions/node/v25.2.1/bin:/home/u/.volta/bin"
+        );
+    }
+
+    /// An npm codex is a script whose interpreter sits beside it, and the probe
+    /// runs before any cache could put that dir on `PATH`. A fake interpreter
+    /// stands in for `node`; the probe passes only if the candidate's own dir
+    /// was handed to it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_app_server_probe_finds_the_interpreter_beside_the_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("dray-binpath-probe-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        script("dray-fake-node", "#!/bin/sh\necho 'codex app-server'\n");
+        let codex = script("codex", "#!/usr/bin/env dray-fake-node\n");
+
+        assert!(speaks_app_server(&codex).await);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
