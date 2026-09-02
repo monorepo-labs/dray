@@ -488,6 +488,49 @@
   --vibrancy-alpha: 70%;
 }
 
+/* Lab — Default's thirteen values written out as literals, so light mode can be
+   tuned a rung at a time without touching the ramp every other theme reads.
+
+   Default has no palette block: it *is* the ramp at hue 0 and chroma 0, so every
+   number here is what those `calc()`s already resolve to. Identical on screen until
+   something below is changed, which is the point — edit a rung and only this theme
+   moves. Whatever survives here goes back into `[data-mode="light"]` and this block
+   goes away. */
+[data-theme="lab"][data-mode="dark"] {
+  --background: oklch(0.145 0 0);
+  --surface-raised: oklch(0.19 0 0);
+  --surface-card: oklch(0.205 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.556 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --accent-command: oklch(0.82 0.13 90);
+  --accent-mention: oklch(0.82 0.13 230);
+  --accent-thinking: oklch(0.62 0.04 264);
+}
+
+/* The half worth playing with. `--surface-raised` sits *below* `--background` here
+   and `--surface-card` is pure white — the reordering the light ramp's own comments
+   argue for, kept so a change starts from what ships rather than from an inversion. */
+[data-theme="lab"][data-mode="light"] {
+  --background: oklch(0.965 0 0);
+  --surface-raised: oklch(0.94 0 0);
+  --surface-card: oklch(1 0 0);
+  --muted: oklch(0.92 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --foreground: oklch(0.22 0 0);
+  --primary: oklch(0.28 0 0);
+  --primary-foreground: oklch(0.99 0 0);
+  --ring: oklch(0.62 0 0);
+  --destructive: oklch(0.55 0.2 25);
+  --accent-command: oklch(0.55 0.13 75);
+  --accent-mention: oklch(0.55 0.16 245);
+  --accent-thinking: oklch(0.55 0.05 264);
+}
+
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
    using the palette's own token names throughout rather than colours picked to
    look close.

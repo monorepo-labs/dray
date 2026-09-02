@@ -9,7 +9,13 @@
 /// `--composer`, which has to stay an opaque fill, and a grey composer on a tinted
 /// page is what a second axis buys.
 
-export type ThemeName = "default" | "catppuccin" | "gruvbox" | "one-dark-pro" | "cobalt2";
+export type ThemeName =
+  | "default"
+  | "lab"
+  | "catppuccin"
+  | "gruvbox"
+  | "one-dark-pro"
+  | "cobalt2";
 export type ThemeMode = "light" | "dark" | "system";
 
 /// Resolved mode — what actually lands on `data-mode`. `system` never does.
@@ -53,6 +59,11 @@ export const THEMES: Theme[] = [
   // retired name (`neutral`, `shadcn`) lands on — renaming it would strand every
   // stored pick on a palette that no longer answers to what is written down.
   { id: "default", label: "Dray", flatInFullscreen: true },
+  // A copy of Default, as literals rather than the derived ramp, so light mode can
+  // be tuned without moving every other theme. Ours, so no credit; temporary, so
+  // when a change here is worth keeping it goes into `[data-mode="light"]` and both
+  // this entry and its block in App.css go.
+  { id: "lab", label: "Lab", flatInFullscreen: true },
   {
     id: "catppuccin",
     label: "Catppuccin",

@@ -7,6 +7,7 @@ import {
   hasLightMode,
   keepsGlassInFullscreen,
   modeFor,
+  type ThemeName,
 } from "./theme";
 
 // The pre-paint script in index.html reads `ade.theme` with a bare `getItem` and
@@ -103,6 +104,9 @@ describe("modeFor", () => {
   });
 });
 
+// Palettes written here rather than ported, so nothing upstream to credit.
+const OURS: ThemeName[] = ["default", "lab"];
+
 describe("THEMES", () => {
   it("leads with the default", () => {
     expect(THEMES[0].id).toBe(DEFAULT_THEME);
@@ -118,7 +122,7 @@ describe("THEMES", () => {
   // The credit is the licence being honoured, not a nicety: a ported palette
   // with no `credit` is one the README cannot name.
   it("credits every ported palette", () => {
-    for (const t of THEMES.filter((t) => t.id !== DEFAULT_THEME)) {
+    for (const t of THEMES.filter((t) => !OURS.includes(t.id))) {
       expect(t.credit?.name).toBeTruthy();
       expect(t.credit?.url).toMatch(/^https:\/\//);
     }
