@@ -33,7 +33,14 @@ use serde::{Deserialize, Serialize};
 /// beside rather than another harness's — a Claude on nvm's node 18 must not
 /// pick the interpreter for a pi installed against fnm's node 22.
 pub fn agent_path(bin: &std::path::Path) -> String {
-    let mut dirs: Vec<std::path::PathBuf> = bin.parent().map(Into::into).into_iter().collect();
+    // A bare-name fallback's parent is `""`, and an empty `PATH` segment is
+    // the working directory — a same-named file in the project would run.
+    let mut dirs: Vec<std::path::PathBuf> = bin
+        .is_absolute()
+        .then(|| bin.parent().map(Into::into))
+        .flatten()
+        .into_iter()
+        .collect();
     dirs.extend(crate::binpath::resolved_bin_dirs());
     crate::binpath::child_path(dirs)
 }
@@ -54,6 +61,15 @@ mod path_tests {
 
         assert_eq!(&dirs[..inherited.len()], &inherited[..]);
         assert_eq!(dirs[inherited.len()], bin.parent().unwrap());
+    }
+
+    /// A bare-name fallback must add nothing: its parent is `""`, which as a
+    /// `PATH` segment is the working directory.
+    #[test]
+    fn a_bare_name_adds_no_empty_segment() {
+        let path = super::agent_path(std::path::Path::new("pi"));
+
+        assert!(!path.split(':').any(str::is_empty), "{path}");
     }
 }
 
