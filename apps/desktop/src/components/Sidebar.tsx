@@ -238,11 +238,6 @@ export const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
 /// How many rows a project needs before it is split at all.
 export const STATE_SPLIT_MIN = 3;
 
-/// No run names itself. The state is already on every row in it — the yellow
-/// rail mark, the green one, the working indicator — so a heading is a second
-/// copy of what the rows say, and three of them turn a list of sessions into a
-/// list of headings. The break between runs is what says one ended.
-
 /// What the app has heard about every session this run.
 ///
 /// Optional throughout, and its absence is not a default so much as a different
@@ -341,8 +336,9 @@ function splitPinned(
 /// workspace-wide "Needs attention" run would put two repos' rows in one place
 /// and leave every project heading below it describing only what is left.
 ///
-/// Rows inside a group stay newest-first, and a list already narrowed to one
-/// project comes back in exactly the order it had before grouping existed.
+/// Rows inside a run stay newest-first, and a nest stays whole under its own
+/// root. Recency alone no longer orders a project, though — the runs do, so a
+/// session that has just finished sits above an idle one modified since.
 export function sessionGroups(
   items: SessionIndexItem[],
   projects: Project[] = [],
@@ -680,6 +676,22 @@ export default function Sidebar({
     [groups],
   );
 
+  // A run's identity is its project and its position among that project's runs,
+  // never the state it holds. An unsplit project's state is whatever its
+  // strongest row happens to be, so keying on that remounted every row in the
+  // project the moment one session finished — and a remount re-runs the active
+  // row's `scrollIntoView` and closes a context menu open over it, for a list
+  // that did not move at all.
+  const groupKeys = useMemo(() => {
+    const drawn = new Map<string, number>();
+    return groups.map((group) => {
+      if (group.kind === "pinned") return "pinned";
+      const nth = drawn.get(group.projectPath) ?? 0;
+      drawn.set(group.projectPath, nth + 1);
+      return `${group.projectPath} ${nth}`;
+    });
+  }, [groups]);
+
   // A session under a repo nobody attached still has a project, so the folder
   // name stands in rather than the heading being dropped — the row has to sit
   // under something.
@@ -891,13 +903,7 @@ export default function Sidebar({
                   : null;
 
             return (
-              <Fragment
-                key={
-                  group.kind === "pinned"
-                    ? "pinned"
-                    : `${group.projectPath} ${group.state}`
-                }
-              >
+              <Fragment key={groupKeys[index]}>
                 {/* The first run sits under the filter's own row, which already
                     carries the gap. A run that only changes state keeps a
                     smaller one, so the eye still reads the project above it as
