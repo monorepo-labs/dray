@@ -213,7 +213,59 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
 /// either leaves the render guessing which sort of group it is holding.
 export type SessionGroup =
   | { kind: "pinned"; rows: SessionListRow[] }
-  | { kind: "project"; projectPath: string; rows: SessionListRow[] };
+  | {
+      kind: "project";
+      projectPath: string;
+      state: SessionState;
+      rows: SessionListRow[];
+    };
+
+/// What a run of rows under a project is waiting on, strongest first.
+///
+/// Read off the same pair the sidebar rail and the dock badge already draw from
+/// — a session held behind a permission card or a question is `asking` even
+/// though the backend still reports it `in_progress`, and it is right to: the
+/// turn is open, it is only the agent that has stopped.
+/// A session mid-turn is deliberately not a state of its own. It is already
+/// saying so on its own row — the working indicator sits where the timestamp
+/// would be — and a run of its own moved a row twice for one piece of work,
+/// out on send and back on the turn ending.
+export type SessionState = "asking" | "completed" | "idle";
+
+/// Strongest first, which is also the order the runs are drawn in.
+export const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
+
+/// How many rows a project needs before it is split at all.
+export const STATE_SPLIT_MIN = 3;
+
+/// No run names itself. The state is already on every row in it — the yellow
+/// rail mark, the green one, the working indicator — so a heading is a second
+/// copy of what the rows say, and three of them turn a list of sessions into a
+/// list of headings. The break between runs is what says one ended.
+
+/// What the app has heard about every session this run.
+///
+/// Optional throughout, and its absence is not a default so much as a different
+/// question: the settled list asks "what did I finish", where these runs answer
+/// "what is happening now". So it passes none, every row comes back `idle`, and
+/// the grouping collapses to the one run per project it replaced.
+export type LiveSessions = {
+  statusBySession: Record<string, SessionStatus>;
+  asking: Set<string>;
+};
+
+/// Live status wins over the item's own field, which is only as fresh as the
+/// last list fetch — but that field is what carries a `completed` across a
+/// restart, where the live map is empty.
+export function sessionState(
+  item: SessionIndexItem,
+  live?: LiveSessions,
+): SessionState {
+  if (!live) return "idle";
+  if (live.asking.has(item.sessionId)) return "asking";
+  const status = live.statusBySession[item.sessionId] ?? item.status;
+  return status === "completed" ? "completed" : "idle";
+}
 
 /// The items that draw in the Pinned group, and everything else.
 ///
@@ -282,41 +334,112 @@ function splitPinned(
 /// sessions to draw, so it keeps first-appearance order after the attached
 /// ones.
 ///
+/// **Each project's run then splits again by what its sessions are waiting on**
+/// — needs attention, completed, idle — in that order, which is the
+/// order the reader can act on them in. Under the project rather than over it:
+/// the question "what is happening" is asked of one repo at a time, and a
+/// workspace-wide "Needs attention" run would put two repos' rows in one place
+/// and leave every project heading below it describing only what is left.
+///
 /// Rows inside a group stay newest-first, and a list already narrowed to one
 /// project comes back in exactly the order it had before grouping existed.
 export function sessionGroups(
   items: SessionIndexItem[],
   projects: Project[] = [],
+  live?: LiveSessions,
 ): SessionGroup[] {
   const [pinned, rest] = splitPinned(items);
 
-  type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
-  const groups: ProjectGroup[] = [];
-  const byPath = new Map<string, ProjectGroup>();
-  let current: ProjectGroup | undefined;
-
+  // Every subtree the walk emits opens with its own root, so a depth-0 row is
+  // where one nest ends and the next begins.
+  const nests: SessionListRow[][] = [];
   for (const row of sessionRows(rest)) {
-    // Every subtree the walk emits opens with its own root, so a depth-0 row is
-    // where one run ends and the next begins.
-    if (row.depth === 0 || !current) {
-      const path = row.item.projectPath;
-      current = byPath.get(path);
-      if (!current) {
-        current = { kind: "project", projectPath: path, rows: [] };
-        byPath.set(path, current);
-        groups.push(current);
-      }
-    }
-    current.rows.push(row);
+    if (row.depth === 0 || nests.length === 0) nests.push([]);
+    nests[nests.length - 1].push(row);
   }
 
-  // Unattached sorts to the end rather than to the front, and `sort` is stable,
-  // so those keep the order they were built in.
+  // A nest takes the strongest state anything in it holds, so a child blocked on
+  // a question carries its parent up with it. Ranking on the root alone would
+  // leave the run that says "these want you" silent about the only session in it
+  // that does.
+  const nestState = (nest: SessionListRow[]) =>
+    SESSION_STATES[
+      Math.min(
+        ...nest.map((row) => SESSION_STATES.indexOf(sessionState(row.item, live))),
+      )
+    ];
+
+  // First appearance, which is what an unattached project is placed by.
+  const byPath = new Map<string, SessionListRow[][]>();
+  for (const nest of nests) {
+    const path = nest[0].item.projectPath;
+    const held = byPath.get(path);
+    if (held) held.push(nest);
+    else byPath.set(path, [nest]);
+  }
+
+  type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
+  const groups: ProjectGroup[] = [];
+
+  for (const [projectPath, held] of byPath) {
+    const rows = held.reduce((n, nest) => n + nest.length, 0);
+
+    // A short project draws as one run. The split earns its break by making a
+    // long list quicker to scan, and there is nothing to scan in two rows — the
+    // reader's eye already holds the whole project, so a gap through it only
+    // says the app found the rows worth separating when it didn't.
+    if (rows < STATE_SPLIT_MIN) {
+      groups.push({
+        kind: "project",
+        projectPath,
+        state: nestState(held.flat()),
+        rows: held.flat(),
+      });
+      continue;
+    }
+
+    const byState = new Map<SessionState, ProjectGroup>();
+    const made: ProjectGroup[] = [];
+    for (const nest of held) {
+      const state = nestState(nest);
+      let group = byState.get(state);
+      if (!group) {
+        group = { kind: "project", projectPath, state, rows: [] };
+        byState.set(state, group);
+        made.push(group);
+      }
+      group.rows.push(...nest);
+    }
+
+    // A run of one row between two breaks reads as a heading rather than as a
+    // row. Where both marked runs are a single row they share one break: the
+    // pair says "these want you" either way, and the marks themselves — yellow
+    // against green — are what tell the two apart.
+    const asking = byState.get("asking");
+    const completed = byState.get("completed");
+    if (asking?.rows.length === 1 && completed?.rows.length === 1) {
+      asking.rows.push(...completed.rows);
+      made.splice(made.indexOf(completed), 1);
+    }
+
+    groups.push(...made);
+  }
+
+  const seenPath = new Map([...byPath.keys()].map((path, i) => [path, i]));
+
+  // Unattached sorts to the end rather than to the front, keeping the order it
+  // was built in — hence first appearance rather than one shared sentinel, which
+  // would let two unattached projects interleave through each other's runs.
   const rank = new Map(projects.map((p, i) => [p.path, i]));
   const place = (group: ProjectGroup) =>
-    rank.get(group.projectPath) ?? Number.MAX_SAFE_INTEGER;
+    rank.get(group.projectPath) ??
+    projects.length + (seenPath.get(group.projectPath) ?? 0);
 
-  groups.sort((a, b) => place(a) - place(b));
+  groups.sort(
+    (a, b) =>
+      place(a) - place(b) ||
+      SESSION_STATES.indexOf(a.state) - SESSION_STATES.indexOf(b.state),
+  );
 
   const pinnedRows = sessionRows(pinned);
   return pinnedRows.length
@@ -331,12 +454,16 @@ export function sessionGroups(
 /// the sidebar is collapsed and nothing on screen shows the order being walked.
 /// Grouped for the same reason: the shortcut has to step past a heading the way
 /// the eye does, so it takes the same project list the headings are ordered by —
-/// and it steps the pins first, because that is where the eye starts too.
+/// and it steps the pins first, because that is where the eye starts too. Live
+/// status rides along for the same reason: a session that just finished moves
+/// into its own run on screen, and a walk reading it where it used to be would
+/// step past the row the reader is looking at.
 export function sortSessions(
   items: SessionIndexItem[],
   projects: Project[] = [],
+  live?: LiveSessions,
 ): SessionIndexItem[] {
-  return sessionGroups(items, projects).flatMap((group) =>
+  return sessionGroups(items, projects, live).flatMap((group) =>
     group.rows.map((row) => row.item),
   );
 }
@@ -535,7 +662,19 @@ export default function Sidebar({
   // from — then gathered under the project it belongs to, in the project list's
   // own order, so the all-projects view reads as one list per repo and the
   // headings hold still while its sessions work.
-  const groups = useMemo(() => sessionGroups(items, projects), [items, projects]);
+  // The settled list is a history, not a worklist, so it asks for no live
+  // reading and comes back as one run per project — see [`LiveSessions`].
+  const live = useMemo(
+    () =>
+      showArchived
+        ? undefined
+        : { statusBySession, asking: askingSessions },
+    [showArchived, statusBySession, askingSessions],
+  );
+  const groups = useMemo(
+    () => sessionGroups(items, projects, live),
+    [items, projects, live],
+  );
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
     [groups],
@@ -735,33 +874,56 @@ export default function Sidebar({
             // a set the reader made themselves, which nothing else on screen
             // says. Word only, no icon and no count, like the project headings
             // it sits above.
+            // Only the first of a project's state runs names the project. The
+            // rest sit under it and repeating it on each would say the runs
+            // belonged to different repos.
+            const previous = groups[index - 1];
+            const opensProject =
+              group.kind === "project" &&
+              (previous?.kind !== "project" ||
+                previous.projectPath !== group.projectPath);
+
             const heading =
               group.kind === "pinned"
                 ? "Pinned"
-                : projectFilter === null
+                : opensProject && projectFilter === null
                   ? projectName(group.projectPath)
                   : null;
 
             return (
-              <Fragment key={group.kind === "pinned" ? "pinned" : group.projectPath}>
-                {heading !== null ? (
+              <Fragment
+                key={
+                  group.kind === "pinned"
+                    ? "pinned"
+                    : `${group.projectPath} ${group.state}`
+                }
+              >
+                {/* The first run sits under the filter's own row, which already
+                    carries the gap. A run that only changes state keeps a
+                    smaller one, so the eye still reads the project above it as
+                    one block. A run drawing no heading at all needs the break
+                    most: under a project filter the Pinned group is followed by
+                    that same project's remaining rows, and with nothing between
+                    them the whole list reads as sitting under Pinned. */}
+                {/* `shrink-0` is load-bearing: a bare height in a flex column
+                    shrinks to nothing the moment the list overflows, so the
+                    break between runs vanished on exactly the long sidebar it
+                    exists for. Every row beside it is protected by its own
+                    `min-h`. */}
+                {index > 0 && (
                   <div
+                    aria-hidden
                     className={cn(
-                      "flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70",
-                      // The first heading sits under the filter's own row, which
-                      // already carries the gap; the rest open a run and need it.
-                      index > 0 && "mt-3",
+                      "shrink-0",
+                      group.kind === "pinned" || opensProject ? "h-4" : "h-3",
                     )}
-                  >
+                  />
+                )}
+
+                {heading !== null && (
+                  <div className="flex min-h-6 items-center truncate pr-2 pl-2 text-ui text-muted-foreground/70">
                     {heading}
                   </div>
-                ) : (
-                  // A run drawing no heading of its own still needs the break
-                  // one would have carried. Under a project filter the Pinned
-                  // group is followed by that same project's remaining rows,
-                  // and with nothing between them the whole list reads as
-                  // sitting under the Pinned heading.
-                  index > 0 && <div aria-hidden className="h-3" />
                 )}
 
                 {group.rows.map(({ item, depth, guides, opens }) => (
@@ -1449,7 +1611,7 @@ function SessionRow({
               role="img"
               aria-label={asking ? "Waiting for you" : "Unread"}
               className={cn(
-                "h-3 w-0.5 rounded-[1px]",
+                "h-1.5 w-0.5 rounded-[1px]",
                 asking ? "bg-accent-command" : "bg-accent-add",
               )}
             />
