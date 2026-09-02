@@ -6,6 +6,9 @@ import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
+import { PiGlyph } from "@/components/PiGlyph";
+import { Testimonials } from "@/components/Testimonials";
+import { UsedBy } from "@/components/UsedBy";
 // import { Tweets } from "@/components/Tweets";
 import { DOWNLOAD, DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
@@ -50,11 +53,16 @@ export default function Home() {
           <span className="whitespace-nowrap">
             <ClaudeGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
             Claude Code
-          </span>{" "}
-          and{" "}
+          </span>
+          ,{" "}
           <span className="whitespace-nowrap">
             <OpenAIGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
             Codex
+          </span>{" "}
+          and{" "}
+          <span className="whitespace-nowrap">
+            <PiGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            pi
           </span>{" "}
           in one app.
         </h1>
@@ -100,10 +108,18 @@ export default function Home() {
         className="mb-12 block h-auto w-full rounded-lg border border-border sm:mb-16"
       />
 
+      {/* Straight after the capture, where a logo strip always sits — the
+          joke only works in the slot it is imitating. */}
+      <UsedBy className={`${COLUMN} mb-12 sm:mb-16`} />
+
       {/* What the app does, before the board shows what it looks like. A
           visitor who scrolls past four sections has read four features; one
           who scrolled past seven silent clips had read none. */}
       <Features className={COLUMN} />
+
+      {/* After the features, not before: what the app does has to land
+          before a stranger's reaction to it means anything. */}
+      <Testimonials className={`${COLUMN} mb-12 sm:mb-16`} />
 
       {/* Parked with the tweets: four sections say what four clips could
           not, and a board of leftovers under them read as the page running
