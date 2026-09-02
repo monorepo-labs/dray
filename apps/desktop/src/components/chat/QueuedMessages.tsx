@@ -1,8 +1,7 @@
 import ImageRow from "@/components/chat/ImageRow";
-import type { QueuedPrompt } from "@/hooks/useSessions";
+import { imagesOf, type QueuedPrompt } from "@/hooks/useSessions";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { stripSenderPrefix } from "@/lib/relay";
-import type { Attachment, ImageRef } from "@/types/events";
 
 /// Prompts typed into the running turn that the app is still holding.
 ///
@@ -75,14 +74,3 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
 
 /// The pictures among the attachments, in the shape the delivered bubble's row
 /// takes. A file draws nothing — see CLAUDE.md.
-///
-/// Through `url` and never `path`: the archived copy the asset protocol's scope
-/// allows is written at flush, so these still name where the user picked them
-/// from and `convertFileSrc` would resolve one to nothing.
-function imagesOf(attachments: Attachment[]): ImageRef[] {
-  return attachments.flatMap((attachment) =>
-    attachment.isImage && attachment.preview
-      ? [{ path: null, url: attachment.preview, mimeType: attachment.mimeType }]
-      : [],
-  );
-}

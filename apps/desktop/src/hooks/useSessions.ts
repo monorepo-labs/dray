@@ -16,9 +16,20 @@ import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
+
+/// Images for a prompt the backend has not archived yet, through `url` and never
+/// `path`: the copy the asset protocol's scope allows is written at flush, so
+/// the picked path would resolve to nothing.
+export function imagesOf(attachments: Attachment[]): ImageRef[] {
+  return attachments.flatMap((attachment) =>
+    attachment.isImage && attachment.preview
+      ? [{ path: null, url: attachment.preview, mimeType: attachment.mimeType }]
+      : [],
+  );
+}
 
 /// A held prompt and what it was sent with.
 ///
@@ -366,11 +377,47 @@ const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
 // `withEarlyEvents`, and for the same reason it is exact.
 const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
   const seen = new Set(into.events.map((e) => e.id));
-  const missing = from.filter((e) => !seen.has(e.id));
+  // A snapshot is read back from the log after the prompt landed, so it always
+  // carries the real prompt and the provisional one is retired here.
+  const missing = from.filter((e) => !seen.has(e.id) && !isProvisional(e));
   if (!missing.length) return into;
 
   return { ...into, events: [...into.events, ...missing].sort((a, b) => a.seq - b.seq) };
 };
+
+// The user's own prompt, drawn before the backend has answered for the session.
+// A new session's `send_msg` resolves only once the worktree is made, the child
+// spawned and the harness has taken the prompt — 1–2s on pi and Codex in a
+// worktree — and the real `user_message` is minted at the far end of that wait.
+// The id prefix is what retires it, on either path the real one can arrive by.
+const PROVISIONAL_PREFIX = "provisional:";
+const isProvisional = (e: AgentEvent) => e.id.startsWith(PROVISIONAL_PREFIX);
+
+const provisionalPrompt = (
+  sessionId: string,
+  harness: Harness,
+  text: string,
+  attachments: Attachment[],
+): AgentEvent => ({
+  id: `${PROVISIONAL_PREFIX}${sessionId}`,
+  sessionId,
+  harness,
+  seq: 0,
+  ts: new Date().toISOString(),
+  turnId: null,
+  subagent: null,
+  payload: {
+    type: "user_message",
+    text,
+    images: imagesOf(attachments),
+    issues: [],
+    baseline: null,
+    queued: false,
+    from: null,
+    cwd: null,
+  },
+  raw: null,
+});
 
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
@@ -439,7 +486,7 @@ const handleSendMsg = async (
   // title, the recorded branch — arrive with the snapshot and replace these.
   if (isNewSession) {
     const shell: SessionSnapshot = {
-      events: [],
+      events: [provisionalPrompt(sessionId, harness, message, attachments)],
       sessionId,
       harness,
       cwd,
@@ -1231,9 +1278,11 @@ useEffect(() => {
                 return prev;
             }
 
+            // The real prompt retires the provisional one drawn at send.
+            const settled = agentEvent.payload.type === "user_message";
             return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
-                ? { ...s, events: [...s.events, agentEvent] }
+                ? { ...s, events: [...(settled ? s.events.filter((e) => !isProvisional(e)) : s.events), agentEvent] }
                 : s,
             );
             });
