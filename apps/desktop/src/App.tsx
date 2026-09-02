@@ -172,6 +172,7 @@ function App() {
     status: updateStatus,
     manual: updateManual,
     install: installUpdate,
+    checkNow: checkForUpdates,
     channel: updateChannel,
     setChannel: setUpdateChannel,
   } = useUpdater();
@@ -1344,6 +1345,11 @@ function App() {
       }}
       initialTab={settingsTab}
       integrations={integrations}
+      updateStatus={updateStatus}
+      updateManual={updateManual}
+      updateBlocked={anyRunning}
+      onCheckUpdates={checkForUpdates}
+      onInstallUpdate={installUpdate}
       updateChannel={updateChannel}
       onUpdateChannelChange={setUpdateChannel}
     />
