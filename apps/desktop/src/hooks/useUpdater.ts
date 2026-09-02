@@ -66,6 +66,10 @@ export function useUpdater() {
   const channelRef = useRef(channel);
   channelRef.current = channel;
 
+  // The check itself is built inside the effect, so a caller outside reaches it
+  // through a ref rather than the effect being pulled apart to expose it.
+  const checkRef = useRef<(byHand?: boolean) => void>(() => {});
+
   useEffect(() => {
     const unlisten = listen<UpdateStatus>("update_status", (event) => {
       setStatus(event.payload);
@@ -104,6 +108,7 @@ export function useUpdater() {
         });
     };
 
+    checkRef.current = check;
     check();
     const timer = setInterval(() => check(), CHECK_INTERVAL_MS);
     const unlistenMenu = listen("check_update_requested", () => check(true));
@@ -133,10 +138,14 @@ export function useUpdater() {
     [],
   );
 
+  // Same path the menu item takes, so a check asked for in Settings and one
+  // asked for from the menu bar are one thing with one in-flight guard.
+  const checkNow = useCallback(() => checkRef.current(true), []);
+
   // Changing the channel re-arms the effect above, so the new manifest is
   // checked the moment the switch moves — or, when a check is mid-flight, the
   // moment it settles (its `finally` re-asks for the channel picked now). The
   // `ready` guard still holds: a bundle already downloaded is worth keeping
   // whichever channel the reader lands on.
-  return { status, manual, install, channel, setChannel };
+  return { status, manual, install, checkNow, channel, setChannel };
 }

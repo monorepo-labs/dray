@@ -20,11 +20,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useTheme } from "@/hooks/useTheme";
+import type { ManualCheck } from "@/hooks/useUpdater";
 import {
   cachedApps,
   fileOpenerChoices,
@@ -37,7 +40,12 @@ import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import type { ExternalApp, SettingsView, UpdateChannel } from "@/types/events";
+import type {
+  ExternalApp,
+  SettingsView,
+  UpdateChannel,
+  UpdateStatus,
+} from "@/types/events";
 
 /// Where to send someone who wants to say something. Direct message rather than an
 /// issue tracker: most feedback is a sentence, and a form is more than a sentence is
@@ -56,6 +64,11 @@ export default function SettingsDialog({
   onOpenChange,
   initialTab = "appearance",
   integrations,
+  updateStatus,
+  updateManual,
+  updateBlocked,
+  onCheckUpdates,
+  onInstallUpdate,
   updateChannel,
   onUpdateChannelChange,
 }: {
@@ -67,6 +80,14 @@ export default function SettingsDialog({
   initialTab?: SettingsTab;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
+  /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
+  /// the same fields, and a second copy of the hook would run its own check.
+  updateStatus: UpdateStatus | null;
+  updateManual: ManualCheck;
+  /// A turn is in flight somewhere, so installing would kill a child mid-turn.
+  updateBlocked: boolean;
+  onCheckUpdates: () => void;
+  onInstallUpdate: () => void;
   /// Owned by `useUpdater`, for the reason its own doc comment gives: a second
   /// `useLocalStorage` here would write a value the checking effect never sees.
   updateChannel: UpdateChannel;
@@ -122,6 +143,13 @@ export default function SettingsDialog({
             about: (
               <>
                 <Section>
+                  <UpdatesRow
+                    status={updateStatus}
+                    manual={updateManual}
+                    blocked={updateBlocked}
+                    onCheck={onCheckUpdates}
+                    onInstall={onInstallUpdate}
+                  />
                   <BetaUpdatesRow
                     channel={updateChannel}
                     onChange={onUpdateChannelChange}
@@ -521,6 +549,89 @@ function BetaUpdatesRow({
         >
           {channel === "beta" ? "Turn off" : "Turn on"}
         </Button>
+      )}
+    </SettingRow>
+  );
+}
+
+/// Check for updates, and install one that has already downloaded.
+///
+/// The same answer the menu item gives, in a place a collapsed sidebar cannot
+/// take away — `UpdateRow` lives inside `<aside>`, so "Check for Updates…" had
+/// nowhere to report to while the sidebar was shut.
+///
+/// **One button, and its label is the whole state.** Checking, up to date,
+/// downloading and ready are four answers to one question, so a sentence under
+/// the row would say a second time what the label already says — and the label
+/// is where the reader is looking, having just pressed it. The verdicts retire
+/// themselves after a few seconds, so the button settles back to the offer.
+///
+/// It draws whatever the updater is doing rather than only what this button
+/// started: a background check that already found something leaves the row
+/// offering the restart, which is the more useful of the two answers. A blocked
+/// install takes `UpdateRow`'s treatment exactly — `aria-disabled` and a
+/// tooltip, never `disabled`, which fires no pointer events to open one.
+function UpdatesRow({
+  status,
+  manual,
+  blocked,
+  onCheck,
+  onInstall,
+}: {
+  status: UpdateStatus | null;
+  manual: ManualCheck;
+  blocked: boolean;
+  onCheck: () => void;
+  onInstall: () => void;
+}) {
+  const id = useId();
+  const ready = status?.state === "ready";
+  const downloading = status?.state === "downloading";
+
+  const label = ready
+    ? `Restart to update (v${status.version})`
+    : downloading
+      ? `Downloading${status.percent === null ? "…" : ` ${status.percent}%`}`
+      : manual === "checking"
+        ? "Checking…"
+        : manual === "up_to_date"
+          ? "Up to date"
+          : manual === "failed"
+            ? "Couldn't check"
+            : "Check for updates";
+
+  const button = (
+    <Button
+      id={id}
+      variant="outline"
+      size="sm"
+      // Only the install has a reason worth a tooltip, so only it gives up
+      // `disabled` for the aria form. A download in flight is its own answer,
+      // and the hook's in-flight guard would refuse a second check anyway.
+      aria-disabled={ready && blocked}
+      disabled={!ready && (manual === "checking" || downloading)}
+      onClick={() => {
+        if (!ready) return onCheck();
+        if (!blocked) onInstall();
+      }}
+      className="aria-disabled:cursor-default aria-disabled:opacity-50"
+    >
+      {manual === "checking" && !ready && <Spinner className="size-3.5" />}
+      {label}
+    </Button>
+  );
+
+  return (
+    <SettingRow id={id} label="Updates">
+      {ready && blocked ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent side="top">
+            Waiting for the running task to finish.
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        button
       )}
     </SettingRow>
   );
