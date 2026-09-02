@@ -86,3 +86,7 @@ transcribe-cpp = { version = "0.2", default-features = false, features = [
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 transcribe-cpp = { version = "0.2", default-features = false }
+
+[dev-dependencies]
+# Paused-clock tests for the engine's idle unload; a real ten-minute sleep is untestable.
+tokio = { version = "1", features = ["test-util"] }

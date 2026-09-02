@@ -17,12 +17,21 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use tokio::sync::Mutex;
 use transcribe_cpp::{Model, ModelOptions, RunOptions, Session};
 
-/// A loaded model, kept between dictations.
+/// How long a loaded model outlives its last use.
+///
+/// Weights are hundreds of megabytes, and a reader who dictated once should
+/// not carry them all day — but one dictating a sentence at a time must not
+/// pay a load per press. Ten minutes is the gap between "still talking" and
+/// "moved on".
+pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
+
+/// A loaded model, kept between dictations and dropped after [`IDLE_UNLOAD`].
 ///
 /// Loading is seconds and hundreds of megabytes, so a session dropped after
 /// every recording would put that cost on every press. The id rides along
@@ -31,7 +40,7 @@ use transcribe_cpp::{Model, ModelOptions, RunOptions, Session};
 ///
 /// Cloneable, so [`Engine::warm`] can be spawned off a command that only
 /// borrows the managed state.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Engine {
     loaded: Arc<Mutex<Option<Loaded>>>,
     /// Bumped by every [`Engine::unload`], so a warm that started before one
@@ -45,6 +54,20 @@ pub struct Engine {
     /// is running — a switch or delete cannot be made to wait for weights it
     /// is about to throw away.
     loading: Arc<Mutex<()>>,
+    /// Bumped by every use. An idle sleeper captures it and unloads only if
+    /// it is unchanged when it wakes, so a use inside the window defers the
+    /// unload with nothing to cancel.
+    uses: Arc<AtomicU64>,
+    /// Times the idle clock ran out. What the test reads, since no weights
+    /// load in CI and the slot is empty either way.
+    idle_unloads: Arc<AtomicU64>,
+    idle_after: Duration,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::with_idle(IDLE_UNLOAD)
+    }
 }
 
 struct Loaded {
@@ -53,6 +76,59 @@ struct Loaded {
 }
 
 impl Engine {
+    /// An engine that drops its model `idle_after` its last use. Tests shorten it.
+    pub fn with_idle(idle_after: Duration) -> Self {
+        Self {
+            loaded: Default::default(),
+            generation: Default::default(),
+            loading: Default::default(),
+            uses: Default::default(),
+            idle_unloads: Default::default(),
+            idle_after,
+        }
+    }
+
+    /// Restarts the idle clock and schedules the unload it ends in.
+    ///
+    /// One sleeper per use rather than one re-armed timer: a stale sleeper
+    /// wakes, sees the count moved on and exits, which is cheaper than any
+    /// handle worth cancelling.
+    fn touch(&self) {
+        let epoch = self.uses.fetch_add(1, Ordering::SeqCst) + 1;
+        let engine = self.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(engine.idle_after).await;
+            engine.idle_unload(epoch).await;
+        });
+    }
+
+    /// Drops the model if nothing has used the engine since `epoch`.
+    ///
+    /// The check and the clear happen under `loaded`, the lock every use takes
+    /// after its `touch` — so a press landing at the ten-minute mark either
+    /// moves the count before this reads it, or finds the slot already empty
+    /// and loads. Checked first then cleared, the press could slip between.
+    ///
+    /// Not [`Engine::unload`]: that bumps `generation`, which is right for a
+    /// reader switching models and wrong here. A transcribe that took its
+    /// token a moment before the bump would refuse to load and bail with "the
+    /// model changed", where an empty slot under a live token just reloads.
+    async fn idle_unload(&self, epoch: u64) {
+        // `loading` first, in `ensure_loaded`'s order. A load outrunning the
+        // clock would otherwise see this clear an empty slot and exit, then
+        // install with no sleeper left to drop it.
+        let _loading = self.loading.lock().await;
+        let mut guard = self.loaded.lock().await;
+
+        if self.uses.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+
+        self.idle_unloads.fetch_add(1, Ordering::SeqCst);
+        *guard = None;
+    }
+
     /// Transcribes 16kHz mono audio, loading the model first if it is not
     /// already the one in hand.
     ///
@@ -67,6 +143,7 @@ impl Engine {
             return Ok(String::new());
         }
 
+        self.touch();
         self.ensure_loaded(self.token(), model_id, path).await?;
 
         let mut guard = self.loaded.lock().await;
@@ -121,12 +198,13 @@ impl Engine {
     /// Loads the model now, so a dictation started this second doesn't pay for
     /// it when it ends.
     ///
-    /// The first load is seconds where every later one is free, which is felt
-    /// as the *first* dictation being slow and the rest instant. Called when
-    /// recording starts: the reader is talking for that whole window, so the
-    /// load lands before they press stop. Failures are silent — the real
-    /// transcribe loads again and reports for itself.
+    /// Called when recording starts: the reader is talking for that whole
+    /// window, so the load usually lands before they press stop. The first
+    /// dictation after [`IDLE_UNLOAD`] of quiet is the one that may wait.
+    /// Failures are silent — the real transcribe loads again and reports for
+    /// itself.
     pub async fn warm(&self, token: u64, model_id: String, path: PathBuf) {
+        self.touch();
         if let Err(e) = self.ensure_loaded(token, &model_id, &path).await {
             eprintln!("could not warm the transcription model: {e:#}");
         }
@@ -185,7 +263,8 @@ impl Engine {
     ///
     /// Called when the reader deletes or switches models, so the weights on
     /// disk and the ones in memory cannot disagree — and so a delete actually
-    /// frees the memory rather than only the file.
+    /// frees the memory rather than only the file. The idle clock does not
+    /// come through here — see [`Engine::idle_unload`] for why.
     pub async fn unload(&self) {
         // Before the lock, not after: a warm already waiting on it must see
         // the new generation and drop what it loaded rather than installing
@@ -267,6 +346,40 @@ mod tests {
         }
 
         assert!(engine.loaded.lock().await.is_none());
+    }
+
+    /// The idle rule. A use inside the window must push the deadline out, not
+    /// merely add a second one, and the idle path must leave the token alone
+    /// — a bump there is what would make a fresh transcribe bail.
+    #[tokio::test(start_paused = true)]
+    async fn a_use_inside_the_idle_window_defers_the_unload() {
+        let engine = Engine::with_idle(Duration::from_secs(100));
+        let fired = || engine.idle_unloads.load(Ordering::SeqCst);
+        let token = engine.token();
+
+        engine.touch();
+        // The sleeper reads the clock on its first poll, so it must run once
+        // before the clock moves or its deadline lands 60s late.
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        engine.touch();
+        // The sleeper reads the clock on its first poll, so it must run once
+        // before the clock moves or its deadline lands 60s late.
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        // Auto-advance only fires once every woken task has run, which is
+        // what lets the sleeper reach its unload before the assert.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert_eq!(fired(), 0, "first sleeper must see the second use");
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        // Auto-advance only fires once every woken task has run, which is
+        // what lets the sleeper reach its unload before the assert.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert_eq!(fired(), 1, "idle engine must unload");
+        assert_eq!(engine.token(), token, "idle unload must not move the token");
     }
 
     #[tokio::test]
