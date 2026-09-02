@@ -223,8 +223,13 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
 /// we actually have. A binary that cannot be run at all answers `false`, which
 /// puts it behind the next candidate rather than failing the resolution.
 async fn speaks_app_server(bin: &Path) -> bool {
+    // The candidate's own dir goes on `PATH` for the same reason the child's
+    // does: an npm codex is a `node` script, and this probe runs before
+    // anything is cached for `resolved_bin_dirs` to hand back.
+    let extra = bin.parent().map(Path::to_path_buf).into_iter().collect();
     let Ok(output) = Command::new(bin)
         .arg("--help")
+        .env("PATH", child_path(extra))
         .output()
         .await
     else {
@@ -303,8 +308,10 @@ pub fn known_dirs() -> Vec<PathBuf> {
 /// directory a resolver landed in goes back to the child. Only cached answers
 /// are read, and every spawn site resolves its own binary before building the
 /// `PATH`, so the one it needs is always there.
-// ponytail: proto's npm globals sit in tools/node/globals/bin with node one
-// dir over; add ~/.proto/shims here if that ever bites.
+///
+/// A `node` found by the same walk goes with them, since it is not always a
+/// sibling: mise's npm backend puts the CLI under `installs/npm-<pkg>` and
+/// node under `installs/node`, proto puts globals one dir over from its node.
 pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
         .into_iter()
@@ -312,7 +319,49 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
         .chain(GH_PATH.get().into_iter().flatten())
         .filter(|path| path.is_absolute())
         .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .chain(node_dir().cloned())
         .collect()
+}
+
+static NODE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// The `bin` holding a `node`, looked for exactly as the CLIs are but with no
+/// shell probe — a `node` only the shell knows about is one the child would
+/// see anyway if the shell's `PATH` were inherited, and it is not.
+fn node_dir() -> Option<&'static PathBuf> {
+    NODE_DIR
+        .get_or_init(|| {
+            search_path("node")
+                .or_else(|| search_known_dirs("node"))
+                .and_then(|node| node.parent().map(Path::to_path_buf))
+        })
+        .as_ref()
+}
+
+/// The `PATH` for a child this app spawns: the inherited one, then `extra`,
+/// then [`known_dirs`] — each once. `extra` ahead of the fixed list, since a
+/// CLI resolved out of a version manager wants *its* sibling `node`, not
+/// whichever shim `~/.volta/bin` or `~/.n/bin` happens to hold.
+pub fn child_path(extra: Vec<PathBuf>) -> String {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = extra;
+    dirs.extend(known_dirs());
+    with_dirs(&inherited, dirs)
+}
+
+/// `inherited` with each of `extra` appended once, in order.
+fn with_dirs(inherited: &std::ffi::OsStr, extra: Vec<PathBuf>) -> String {
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(inherited).collect();
+
+    for dir in extra {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+
+    std::env::join_paths(dirs)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| inherited.to_string_lossy().into_owned())
 }
 
 /// The directories `claude` actually installs to, checked directly so the
@@ -484,6 +533,53 @@ mod tests {
         assert_eq!(find_versioned(&root.join("nope"), 2, layouts, "pi"), None);
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// launchd's `PATH` plus a CLI resolved out of a version manager's bin:
+    /// that bin must be on the child's `PATH` — or the script's `env node`
+    /// finds nothing — and ahead of the fixed list, or a `node` shim there
+    /// wins over the sibling the CLI was installed against. Each dir once.
+    #[test]
+    fn a_resolved_bin_dir_comes_after_inherited_and_before_known() {
+        let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        let nvm_bin = PathBuf::from("/home/u/.nvm/versions/node/v25.2.1/bin");
+        let volta = PathBuf::from("/home/u/.volta/bin");
+
+        let path = with_dirs(
+            launchd,
+            vec![PathBuf::from("/bin"), nvm_bin.clone(), nvm_bin, volta],
+        );
+
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/home/u/.nvm/versions/node/v25.2.1/bin:/home/u/.volta/bin"
+        );
+    }
+
+    /// An npm codex is a script whose interpreter sits beside it, and the probe
+    /// runs before any cache could put that dir on `PATH`. A fake interpreter
+    /// stands in for `node`; the probe passes only if the candidate's own dir
+    /// was handed to it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_app_server_probe_finds_the_interpreter_beside_the_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("dray-binpath-probe-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        script("dray-fake-node", "#!/bin/sh\necho 'codex app-server'\n");
+        let codex = script("codex", "#!/usr/bin/env dray-fake-node\n");
+
+        assert!(speaks_app_server(&codex).await);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
