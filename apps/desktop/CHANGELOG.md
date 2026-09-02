@@ -5,6 +5,15 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.6
+
+### Fixed
+
+- **pi's edits draw a diff again.** pi spells a replaced region
+  `oldText`/`newText`, where the diff reader only knew
+  `old_string`/`new_string` — so every pi edit printed raw JSON instead of
+  the change it made.
+
 ## 0.12.5
 
 ### Added
