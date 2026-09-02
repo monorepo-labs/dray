@@ -115,6 +115,10 @@ impl Engine {
     /// token a moment before the bump would refuse to load and bail with "the
     /// model changed", where an empty slot under a live token just reloads.
     async fn idle_unload(&self, epoch: u64) {
+        // `loading` first, in `ensure_loaded`'s order. A load outrunning the
+        // clock would otherwise see this clear an empty slot and exit, then
+        // install with no sleeper left to drop it.
+        let _loading = self.loading.lock().await;
         let mut guard = self.loaded.lock().await;
 
         if self.uses.load(Ordering::SeqCst) != epoch {
