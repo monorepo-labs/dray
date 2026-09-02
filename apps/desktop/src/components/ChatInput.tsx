@@ -542,7 +542,7 @@ export default function ChatInput({
               disabled={stopping ? !onStop : !canSend}
               onClick={stopping ? onStop : undefined}
               title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
-              className="rounded-full"
+              className="rounded-full disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none disabled:opacity-100"
             >
               {/* Both icons are mounted and stacked in one grid cell, so the
                   swap is a transition rather than a remount — React would

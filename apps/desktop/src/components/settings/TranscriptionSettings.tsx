@@ -139,13 +139,13 @@ function ModelRow({
     >
       <div className="flex flex-col gap-0.5">
         <div className="flex items-center gap-2">
-          {selected && <Check className="size-4 shrink-0" aria-hidden />}
           <span className="text-ui font-medium">{model.name}</span>
           {recommended && (
             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
               Recommended
             </span>
           )}
+          {selected && <Check className="ml-auto size-4 shrink-0" aria-hidden />}
         </div>
         <p className="text-ui text-muted-foreground">{model.description}</p>
         <p className="flex flex-wrap items-center gap-x-1 text-ui text-muted-foreground">

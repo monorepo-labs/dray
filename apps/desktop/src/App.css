@@ -512,23 +512,61 @@
   --accent-thinking: oklch(0.62 0.04 264);
 }
 
-/* The half worth playing with. `--surface-raised` sits *below* `--background` here
-   and `--surface-card` is pure white — the reordering the light ramp's own comments
-   argue for, kept so a change starts from what ships rather than from an inversion. */
+/* Page stays the ramp's grey. Primary stays the send-button blue. User bubble
+   and selected session row take the same hue at a whisper of chroma — grey you
+   can tell is cool, not a second blue fill. */
 [data-theme="lab"][data-mode="light"] {
-  --background: oklch(0.965 0 0);
-  --surface-raised: oklch(0.94 0 0);
-  --surface-card: oklch(1 0 0);
-  --muted: oklch(0.92 0 0);
-  --muted-foreground: oklch(0.52 0 0);
-  --foreground: oklch(0.22 0 0);
-  --primary: oklch(0.28 0 0);
+  --background: oklch(0.965 0.012 250);
+  --surface-raised: oklch(0.94 0.01 250);
+  --surface-card: oklch(1 0.01 250);
+  --muted: oklch(0.92 0.01 250);
+  --muted-foreground: oklch(0.52 0.01 250);
+  --foreground: oklch(0.22 0.01 250);
+  --primary: oklch(0.65 0.17 250);
   --primary-foreground: oklch(0.99 0 0);
-  --ring: oklch(0.62 0 0);
+  --ring: oklch(0.8 0.01 250);
   --destructive: oklch(0.55 0.2 25);
   --accent-command: oklch(0.55 0.13 75);
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
+  --surface-selected: oklch(0.9 0.012 250);
+  --veil-card: oklch(1 0.01 250 / 60%);
+  --veil-raised: oklch(0.35 0.01 250 / 4%);
+  --veil-strong: oklch(0.52 0.01 250 / 10%);
+  --veil-selected: oklch(0.32 0.012 250 / 10%);
+
+  [aria-label="Settings"] [role="tab"][aria-selected="true"] {
+    background-color: color-mix(in oklab, var(--sidebar-accent) 80%, transparent);
+  }
+
+  .bg-clip-padding {
+    background-color: transparent;
+  }
+
+  .bg-clip-padding:hover,
+  [data-variant="ghost"]:hover {
+    background-color: color-mix(in oklab, var(--background) 80%, transparent);
+  }
+
+  .bg-secondary:hover {
+    background-color: color-mix(in oklch, var(--secondary), var(--foreground) 2%);
+  }
+
+  .bg-secondary[aria-expanded="true"] {
+    background-color: var(--secondary);
+  }
+
+  .user-bubble {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: none;
+
+    .text-accent-command,
+    .text-accent-mention,
+    .text-accent-issue {
+      color: inherit;
+    }
+  }
 }
 
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,

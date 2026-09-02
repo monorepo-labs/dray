@@ -111,7 +111,7 @@ export default function UserMessage({
         // from the page. `--shadow-card`, not the composer's `--shadow-surface`:
         // this sits *in* the transcript rather than floating at the window's
         // edge, and the crisper one read as an edge cut under it.
-        <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)">
+        <div className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)">
           {/* `wrap-anywhere` because a pasted path or URL has no whitespace to
               wrap at, and the bubble's `max-w` caps the box and not what is
               drawn in it — so the glyphs run out over the transcript's own
