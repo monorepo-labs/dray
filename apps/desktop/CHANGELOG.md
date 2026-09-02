@@ -5,6 +5,18 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.12.8
+
+### Changed
+
+- **Dictation loads its model on the press, and lets it go.** The engine was
+  warmed at launch and held for the session — most of a gigabyte resident
+  whether or not you ever dictated. It now loads when you start recording
+  and unloads after ten idle minutes.
+- **Settled sessions no longer split out Pinned.** A pin keeps a session in
+  reach while the work is live; a history has no use for the group, so it
+  and the Pin action are gone from the settled view.
+
 ## 0.12.7
 
 ### Changed
