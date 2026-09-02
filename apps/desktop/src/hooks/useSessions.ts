@@ -98,12 +98,21 @@ export function useSessions() {
     // Which side of the archived split the sidebar is showing. Not persisted:
     // archived is the exception view, so every launch starts on the active list.
     const [showArchived, setShowArchived] = useState(false);
-    const [models, setModels] = useState<Model[]>([]);
-    // Which harness `models` was read for. The list lands a beat after the
-    // harness moves, so it can still be the *other* harness's — and a pick
-    // repaired against that list is replaced by whatever led it, which is how a
-    // remembered pi model came back as one the reader never starred.
-    const [modelsHarness, setModelsHarness] = useState<Harness | null>(null);
+    // One entry per harness, never one list plus a note saying whose it is.
+    //
+    // A single list held the *previous* harness's answer until the next landed,
+    // which drew Claude's models under pi's mark for the second pi's read
+    // spawns a child for. Blanking it instead just moved the flaw: every switch
+    // then emptied the menu for the frame an `invoke` takes, so the two
+    // harnesses whose lists are tables started flickering too.
+    //
+    // Keyed, both go away. A harness already visited answers from here on the
+    // same frame the toggle moves, and only a first visit to one whose list is
+    // a genuine read has nothing to draw — which is the one case where a
+    // waiting row is the truth rather than a stutter.
+    const [modelsByHarness, setModelsByHarness] = useState<
+      Partial<Record<Harness, Model[]>>
+    >({});
     // pi's list is a read, not a table, so it can be in flight. `0` is the
     // resting value and every refresh bumps it, which is what re-arms the
     // effect below without a second copy of the read beside it.
@@ -172,6 +181,11 @@ export function useSessions() {
     const [asksBySession, setAsksBySession] = useState<Record<string, string[]>>({});
     const [error, setError] = useState<string | null>(null);
 
+// Empty is the agreed "not read yet" answer — `usableModel` leaves the pick
+// standing on it and the picker draws its own waiting row — so an absent entry
+// needs nothing beside it to say so.
+const models = modelsByHarness[harness] ?? [];
+
 // What actually gets sent for the current model: its remembered pick, else its
 // own default, and null for a model that takes no effort flag at all.
 const model = models.find((m) => m.id === modelId) ?? null;
@@ -209,7 +223,17 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
 // reader had chosen otherwise.
 const setHarness = (next: Harness) => {
   setHarnessState(next);
-  setModelId(rememberedModel(prefs.modelByHarness, next));
+  // Repaired against the new harness's own list in this same commit, so the
+  // trigger never names a model for a frame before the fetch corrects it. An
+  // unvisited harness has no entry, and `usableModel` leaves the pick standing
+  // on an empty list — so that case is exactly what it was before the cache.
+  setModelId(
+    usableModel(
+      modelsByHarness[next] ?? [],
+      rememberedModel(prefs.modelByHarness, next),
+      next,
+    ),
+  );
   setPrefs({ harness: next });
 };
 
@@ -688,13 +712,15 @@ const handleNewSession = () => {
   // is stored too, so the two can disagree from the moment one is picked
   // without the other.
   //
-  // But only where that list is the preferred harness's own. Coming back from a
-  // session on another agent, `models` is still that agent's list, and
-  // repairing a pi pick against Claude's models threw it away for Claude's
-  // first model — which the pi fetch then threw away again for pi's first.
-  // An empty list is the "not landed yet" answer, and the fetch the harness
-  // change fires repairs the pick against the right list a beat later.
-  const ownList = modelsHarness === prefs.harness ? models : [];
+  // But only against the preferred harness's *own* list. Repairing a pi pick
+  // against Claude's models threw it away for Claude's first model, which the
+  // pi fetch then threw away again for pi's first. Keyed by harness, that
+  // cannot happen — and an absent entry reads as "not read yet", which leaves
+  // the pick standing for the fetch to repair a beat later.
+  //
+  // `prefs.harness` and not the one on screen: this restores a session, which
+  // carries its own agent.
+  const ownList = modelsByHarness[prefs.harness] ?? [];
   setModelId(
     usableModel(ownList, rememberedModel(prefs.modelByHarness, prefs.harness), prefs.harness),
   );
@@ -1142,8 +1168,9 @@ useEffect(() => {
       // reader switching harness twice would otherwise have the first answer
       // land on the second harness's picker.
       if (cancelled) return;
-      setModels(list);
-      setModelsHarness(harness);
+      // Filed under the harness it was read for, so it is still here — and
+      // still right — when the reader comes back to that agent.
+      setModelsByHarness((prev) => ({ ...prev, [harness]: list }));
       // A model belongs to exactly one harness, so switching harness leaves the
       // pick naming something the new one cannot run. Repaired here, where the
       // real list has just landed, rather than guessed at when the toggle moved.

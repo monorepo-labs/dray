@@ -1,3 +1,4 @@
+import { readLocalStorage } from "@/hooks/useLocalStorage";
 import type { Harness, Model, ModelId } from "@/types/events";
 
 /// Where the reader's shortlist lives.
@@ -39,6 +40,46 @@ export function shortlist(
 ): Model[] {
   const stars = new Set(starred);
   return models.filter((m) => stars.has(m.id) || m.id === current);
+}
+
+/// The rows the picker draws at its top level, which is **also exactly what
+/// Shift+Tab cycles**. One function because they are one list: the chord and
+/// the menu disagreeing means a press lands on a model the menu never offered,
+/// which is what it did on pi — the menu drew the reader's shortlist while the
+/// chord walked every model every logged-in provider serves.
+///
+/// The two harnesses answer the same question differently and both are here:
+/// pi bounds an unbounded discovered list by what the reader starred, where
+/// Claude Code and Codex bound a written one by `secondary`.
+export function topLevel(
+  models: Model[],
+  starred: ModelId[],
+  harness: Harness,
+  current: ModelId,
+): Model[] {
+  return usesShortlist(harness)
+    ? shortlist(models, starred, current)
+    : models.filter((m) => !m.secondary);
+}
+
+/// What the picker folds into "More models". Empty for a shortlisted harness,
+/// whose own overflow is the library dialog rather than a submenu.
+export function underMore(models: Model[], harness: Harness): Model[] {
+  return usesShortlist(harness) ? [] : models.filter((m) => m.secondary);
+}
+
+/// [`topLevel`] for a caller with no `starred` state of its own.
+///
+/// The stars are read at the moment of the press rather than held, which is
+/// the point: a second `useLocalStorage` copy in `App` would drift from the
+/// picker's the first time the library dialog wrote one, and a chord reading a
+/// stale shortlist is the bug this exists to fix, not a different one.
+export function cycledModels(
+  models: Model[],
+  harness: Harness,
+  current: ModelId,
+): Model[] {
+  return topLevel(models, readLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []), harness, current);
 }
 
 /// The models grouped under their provider, in the order the list arrived in.

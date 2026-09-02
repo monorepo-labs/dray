@@ -233,10 +233,14 @@ fn row_to_model(row: &Value, efforts: Vec<Effort>) -> Option<Model> {
         // `input: ["text"]`, and the composer's tray has to know before it
         // offers to send one.
         accepts_images: accepts_images(row),
+        // pi's picker draws the reader's shortlist rather than the whole list,
+        // so it already has its own answer to "which few of these do I want in
+        // front of me" and a second tier here would be a second one.
+        secondary: false,
     })
 }
 
-/// Dray's five, out of the levels pi answered for one model.
+/// Dray's own ladder, out of the levels pi answered for one model.
 ///
 /// `off` and `minimal` are dropped rather than added to [`Effort`]: `off` is
 /// what an empty list already means here, and pi folds `minimal` onto `low`
@@ -258,6 +262,7 @@ fn efforts_from_levels(levels: &Value) -> Vec<Effort> {
             "high" => Some(Effort::High),
             "xhigh" => Some(Effort::Xhigh),
             "max" => Some(Effort::Max),
+            "ultra" => Some(Effort::Ultra),
             _ => None,
         })
         .collect()
@@ -421,15 +426,15 @@ mod tests {
 
     /// `["off"]` is what a non-reasoning model answers, and it reaches the
     /// picker as no levels — which is already what an empty list means here.
-    /// `minimal` folds onto `low` inside pi, so carrying it would be a sixth
-    /// rung Dray cannot send.
+    /// `minimal` folds onto `low` inside pi, so carrying it would be a rung
+    /// Dray cannot send.
     #[test]
-    fn the_ladder_keeps_drays_five_and_nothing_else() {
+    fn the_ladder_keeps_drays_own_and_nothing_else() {
         let none = serde_json::json!({"levels": ["off"]});
         assert!(efforts_from_levels(&none).is_empty());
 
         let full = serde_json::json!({
-            "levels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+            "levels": ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
         });
         assert_eq!(
             efforts_from_levels(&full),
@@ -438,7 +443,8 @@ mod tests {
                 Effort::Medium,
                 Effort::High,
                 Effort::Xhigh,
-                Effort::Max
+                Effort::Max,
+                Effort::Ultra
             ]
         );
 

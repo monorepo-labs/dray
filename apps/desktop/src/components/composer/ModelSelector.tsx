@@ -6,8 +6,9 @@ import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
-  shortlist,
   STARRED_MODELS_KEY,
+  topLevel,
+  underMore,
   usesShortlist,
 } from "@/lib/starredModels";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ const EFFORT_LABELS: Record<Effort, string> = {
   medium: "Medium",
   high: "High",
   xhigh: "Extra High",
+  ultra: "Ultra",
   max: "Max",
 };
 
@@ -109,12 +111,13 @@ export default function ModelSelector({
   const [starred, setStarred] = useLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
 
   const shortlisted = usesShortlist(harness);
-  // The whole list for a harness whose models Dray names itself; the reader's
-  // own shortlist for pi, whose list is discovered and unbounded.
+  // Shared with Shift+Tab, which cycles exactly what this draws — a chord
+  // landing on a model the menu never offered is the bug the sharing prevents.
   const listed = useMemo(
-    () => (shortlisted ? shortlist(models, starred, modelId) : models),
-    [shortlisted, models, starred, modelId],
+    () => topLevel(models, starred, harness, modelId),
+    [models, starred, harness, modelId],
   );
+  const more = useMemo(() => underMore(models, harness), [models, harness]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
   const activeAgent = AGENTS.findIndex((a) => a.id === harness);
@@ -321,6 +324,32 @@ export default function ModelSelector({
               </div>
             ))
           : listed.map(modelRow)}
+
+        {/* The agent control keeps this menu open on purpose, so a switch to an
+            agent whose list is a *read* rather than a table lands here with
+            nothing to draw. A row saying so holds the menu's shape and names
+            the wait; collapsing to nothing and springing back is the glitch
+            this replaces. Not a `DropdownMenuItem` — there is nothing to
+            select, and one would take arrow focus. */}
+        {listed.length === 0 && (
+          <p className="px-2 py-1.5 text-ui text-muted-foreground">
+            {loadingModels ? "Loading models…" : "No models"}
+          </p>
+        )}
+
+        {/* A submenu rather than a second block under a heading, because the
+            rows below are not a category the reader is choosing *between* —
+            they are the ones they will not open this menu for. Folding them
+            away is what keeps Shift+Tab's cycle two presses long, and the
+            cycle skips exactly what lives here. */}
+        {more.length > 0 && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-ui text-muted-foreground">
+              More models
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>{more.map(modelRow)}</DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
 
         {/* No rule above it. The row is already a different shape to the models
             over it — muted, and the one thing in the menu carrying a glyph — so
