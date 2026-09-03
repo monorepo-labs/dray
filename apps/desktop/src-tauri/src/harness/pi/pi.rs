@@ -820,6 +820,18 @@ mod tests {
         );
     }
 
+    /// The prompt names nothing pi lacks.
+    ///
+    /// It is kept in step with Claude's by hand, and Claude's names two things
+    /// pi has no answer for: an agent told to reach for `AskUserQuestion` waits
+    /// on a tool that never arrives.
+    #[test]
+    fn the_prompt_names_nothing_pi_lacks() {
+        assert!(!APPEND_SYSTEM_PROMPT.contains("AskUserQuestion"));
+        assert!(!APPEND_SYSTEM_PROMPT.contains("Agent tool"));
+        assert!(APPEND_SYSTEM_PROMPT.contains("~/.agents/skills/dray"));
+    }
+
     /// The read loop names no dialog method of its own.
     ///
     /// Which methods block and which are announcements is stated once, in
