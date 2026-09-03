@@ -1163,6 +1163,18 @@
       linear-gradient(to bottom, var(--backdrop-top), var(--backdrop-bottom));
   }
 
+  /* No bar at all. For a short strip of chips that scrolls sideways: a
+     horizontal bar under them eats interior height and reads as chrome on a
+     row that is already one control tall. Both properties are needed — the
+     standard one, and the pseudo the base layer sizes above. */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   .scrollbar-overlay {
     scrollbar-gutter: stable;
     scrollbar-width: thin;

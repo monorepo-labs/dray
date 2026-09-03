@@ -14,6 +14,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   closeDoc,
   isDirty,
@@ -26,8 +32,14 @@ import {
   type Doc,
   type DocMode,
 } from "@/hooks/useDocs";
+import { useHotkey } from "@/hooks/useHotkey";
 import { splitPath } from "@/lib/changes";
-import { FIRST_SECTIONS, SECTION_STEP, splitMarkdownSections } from "@/lib/markdown";
+import {
+  FIRST_SECTIONS,
+  SECTION_STEP,
+  splitMarkdownSections,
+} from "@/lib/markdown";
+import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// A markdown file from the transcript, rendered and editable.
@@ -44,13 +56,38 @@ import { cn } from "@/lib/utils";
 /// to say what `useDocs` says here.
 ///
 /// No empty state: the tab is only drawn while something is open.
-export default function DocsPanel() {
+export default function DocsPanel({
+  active,
+}: {
+  /// False while the panel is closed, another tab is showing, or the reader is
+  /// on the changes view. Only the chord reads it — the panel stays mounted
+  /// either way — and `useHotkey` claims every chord it matches, so a binding
+  /// left registered would take ⌘⇧← from the changes sub-tab row and from the
+  /// composer, where it selects to the start of the line.
+  active: boolean;
+}) {
   const { docs, activePath } = useDocs();
   // Named by path rather than held as the doc, so the dialog cannot go on
   // asking about a file that has since been closed from somewhere else.
   const [confirming, setConfirming] = useState<string | null>(null);
 
-  const active = docs.find((doc) => doc.path === activePath) ?? null;
+  const current = docs.find((doc) => doc.path === activePath) ?? null;
+
+  // ⌘⇧← / ⌘⇧→ step the chips, the same shape ⌘⇧↑/↓ steps the session list and
+  // the changes sub-tab row steps its own. Clamped rather than wrapped, for
+  // that row's reason: wrapping makes ← from the first chip the long way round
+  // to the last.
+  //
+  // Held back while the open doc is being edited: the body is then a textarea,
+  // where ⌘⇧← is select-to-line-start and the reader is far likelier to mean
+  // that than to mean the chip beside it.
+  const step = (delta: number) => {
+    const next = docs[docs.findIndex((doc) => doc.path === activePath) + delta];
+    if (next) selectDoc(next.path);
+  };
+  const stepping = active && current?.mode === "view";
+  useHotkey("ArrowLeft", () => step(-1), { shift: true, enabled: stepping });
+  useHotkey("ArrowRight", () => step(1), { shift: true, enabled: stepping });
 
   const close = (doc: Doc) => {
     // Stated here as well as on the button, which is disabled for it: the
@@ -66,7 +103,7 @@ export default function DocsPanel() {
       {/* One row, not two. With a single file open, a strip of chips and a
           separate filename header say the same thing twice. */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {docs.map((doc) => (
             <Chip
               key={doc.path}
@@ -74,6 +111,11 @@ export default function DocsPanel() {
               active={doc.path === activePath}
               onSelect={() => selectDoc(doc.path)}
               onClose={() => close(doc)}
+              // Only where the chord would actually fire: one chip is a row
+              // with nothing to step to, and an edit-mode doc has the chord
+              // held back, so drawing the cap there names a key that does
+              // nothing.
+              chord={stepping && docs.length > 1}
             />
           ))}
         </div>
@@ -81,7 +123,7 @@ export default function DocsPanel() {
         {/* Only while there is something to write. A Save that is always drawn
             and mostly disabled explains nothing about why it cannot be
             pressed. */}
-        {active && isDirty(active) && (
+        {current && isDirty(current) && (
           <Button
             size="sm"
             variant="outline"
@@ -89,28 +131,28 @@ export default function DocsPanel() {
             // is the state, and dimming it too makes the one live thing in the
             // row the hardest part of it to read.
             className="shrink-0 disabled:opacity-100"
-            disabled={active.body.status === "ready" && active.body.saving}
-            onClick={() => saveDoc(active.path)}
+            disabled={current.body.status === "ready" && current.body.saving}
+            onClick={() => saveDoc(current.path)}
           >
-            {active.body.status === "ready" && active.body.saving && (
+            {current.body.status === "ready" && current.body.saving && (
               <Loader2 className="animate-spin" />
             )}
             Save
           </Button>
         )}
 
-        {active && (
+        {current && (
           <ModeToggle
-            value={active.mode}
-            onChange={(mode) => setDocMode(active.path, mode)}
+            value={current.mode}
+            onChange={(mode) => setDocMode(current.path, mode)}
           />
         )}
       </div>
 
-      {active && <Strip doc={active} />}
+      {current && <Strip doc={current} />}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {active && <Body doc={active} />}
+        {current && <Body doc={current} />}
       </div>
 
       <CloseConfirm
@@ -128,11 +170,13 @@ export default function DocsPanel() {
 function Chip({
   doc,
   active,
+  chord,
   onSelect,
   onClose,
 }: {
   doc: Doc;
   active: boolean;
+  chord: boolean;
   onSelect: () => void;
   onClose: () => void;
 }) {
@@ -140,48 +184,70 @@ function Chip({
   const saving = doc.body.status === "ready" && doc.body.saving;
 
   return (
-    // The two buttons sit side by side inside the chip rather than nested, so
-    // each is its own tab stop and neither is a control inside a control.
-    <div
-      // `title` carries the full path, which is the one thing this row is
-      // truncating — and the only place a doc opened from another project's
-      // transcript says where it came from.
-      title={doc.path}
-      className={cn(
-        "flex shrink-0 items-center gap-1 rounded-md pl-1.5 pr-1 text-ui",
-        active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex min-w-0 items-center gap-1.5 py-1"
-      >
-        <FileIcon path={doc.path} className="size-3.5" />
-        <span className="max-w-40 truncate">{name}</span>
-      </button>
+    // A real tooltip rather than `title`, so the path and the chord that steps
+    // between chips are drawn as one thing. The path is here because it is what
+    // the chip truncates — and the only place a doc opened from another
+    // project's transcript says where it came from — so unlike the changes
+    // sub-tab row, the keycap is not the whole content.
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* The two buttons sit side by side inside the chip rather than nested,
+            so each is its own tab stop and neither is a control inside a
+            control. */}
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-1 rounded-md pl-1.5 pr-1 text-ui",
+            active
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <button
+            type="button"
+            onClick={onSelect}
+            className="flex min-w-0 items-center gap-1.5 py-1"
+          >
+            <FileIcon path={doc.path} className="size-3.5" />
+            <span className="max-w-40 truncate">{name}</span>
+          </button>
 
-      {isDirty(doc) && (
-        <span aria-label="Unsaved" className="size-1.5 shrink-0 rounded-full bg-current" />
-      )}
+          {isDirty(doc) && (
+            <span
+              aria-label="Unsaved"
+              className="size-1.5 shrink-0 rounded-full bg-current"
+            />
+          )}
 
-      {/* Held back while a save is out, because closing cannot call it off.
+          {/* Held back while a save is out, because closing cannot call it off.
           The write is already with the OS, so "Discard edits" would name
           something this app can no longer do — and the file would land with
           the very text the reader was told had been thrown away. A save is a
           keystroke's worth of wait; the button comes back on its own. */}
-      <button
-        type="button"
-        onClick={onClose}
-        disabled={saving}
-        aria-label={`Close ${name}`}
-        className="shrink-0 rounded-sm p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
-      >
-        <X className="size-3" strokeWidth={1.5} />
-      </button>
-    </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            aria-label={`Close ${name}`}
+            className="shrink-0 rounded-sm p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+          >
+            <X className="size-3" strokeWidth={1.5} />
+          </button>
+        </div>
+      </TooltipTrigger>
+
+      <TooltipContent side="bottom" className="flex items-center gap-2">
+        <span className="max-w-80 truncate">{doc.path}</span>
+        {chord && (
+          <KbdGroup>
+            <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+            {/* Spelled out beside arrow keys, the sidebar's rule: ⇧ is an
+                arrow, so the glyph reads as a third one. */}
+            <Kbd>Shift</Kbd>
+            <Kbd>←→</Kbd>
+          </KbdGroup>
+        )}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -259,7 +325,11 @@ function Strip({ doc }: { doc: Doc }) {
           <span className="min-w-0 flex-1 text-muted-foreground">
             This file changed on disk since you opened it.
           </span>
-          <Button size="sm" variant="outline" onClick={() => reloadDoc(doc.path)}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => reloadDoc(doc.path)}
+          >
             Reload
           </Button>
           <Button
@@ -278,10 +348,16 @@ function Strip({ doc }: { doc: Doc }) {
 
 function Body({ doc }: { doc: Doc }) {
   if (doc.body.status === "loading") {
-    return <p className="px-3 py-2 text-ui text-muted-foreground">Reading the file…</p>;
+    return (
+      <p className="px-3 py-2 text-ui text-muted-foreground">
+        Reading the file…
+      </p>
+    );
   }
   if (doc.body.status === "error") {
-    return <p className="px-3 py-2 text-ui text-destructive">{doc.body.message}</p>;
+    return (
+      <p className="px-3 py-2 text-ui text-destructive">{doc.body.message}</p>
+    );
   }
 
   if (doc.mode === "view") {
@@ -358,7 +434,10 @@ function CloseConfirm({
   onClose: () => void;
 }) {
   return (
-    <AlertDialog open={path !== null} onOpenChange={(next) => !next && onClose()}>
+    <AlertDialog
+      open={path !== null}
+      onOpenChange={(next) => !next && onClose()}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Close without saving?</AlertDialogTitle>
@@ -366,8 +445,8 @@ function CloseConfirm({
             <span className="font-medium text-foreground">
               {path && splitPath(path).name}
             </span>{" "}
-            has unsaved edits. Closing it here discards them. The file on disk is
-            untouched.
+            has unsaved edits. Closing it here discards them. The file on disk
+            is untouched.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

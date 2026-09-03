@@ -1132,7 +1132,7 @@ function App() {
               <PrPanel branch={prBranch} {...pullRequests} />
             </TabBody>
             <TabBody active={hasDocsTab && activeTab === "docs"}>
-              <DocsPanel />
+              <DocsPanel active={panelShown && activeTab === "docs" && viewTab === "chat"} />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
               <IssuePanel

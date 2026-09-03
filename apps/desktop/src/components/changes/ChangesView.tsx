@@ -197,7 +197,7 @@ export default function ChangesView({
             a list under them rather than a panel body: the button's own `px-2`
             lands its label at 12px, level with the filenames below it. */}
         <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border px-1">
-          {SUB_TABS.map(({ value, label }, i) => (
+          {SUB_TABS.map(({ value, label }) => (
             <Tooltip key={value}>
               <TooltipTrigger asChild>
                 <button
@@ -217,15 +217,21 @@ export default function ChangesView({
                 </button>
               </TooltipTrigger>
               {/* Keycaps alone, like the view row above: the name is already on
-                  the button, and the arrow is which side of the row it sits on.
-                  A tab with a neighbour on each side is reached from either, so
-                  it says both in one cap rather than growing a second — one
-                  `KbdGroup` whatever the row's length. */}
+                  the button, and one chord steps the row.
+
+                  The same cap on every tab, deliberately. Narrowing it to the
+                  reachable direction per tab made a row of three say three
+                  different things about one binding, so a reader hovering two
+                  tabs had to work out they were the same shortcut. It names the
+                  chord, not the trip from the tab under the cursor. */}
               <TooltipContent side="bottom" className="px-1.5">
                 <KbdGroup>
                   <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                  <Kbd>⇧</Kbd>
-                  <Kbd>{i === 0 ? "←" : i === SUB_TABS.length - 1 ? "→" : "←→"}</Kbd>
+                  {/* Spelled out, the sidebar's rule: ⇧ is an arrow, and this
+                      cap ends in arrow keys, so the glyph reads as a third one.
+                      */}
+                  <Kbd>Shift</Kbd>
+                  <Kbd>←→</Kbd>
                 </KbdGroup>
               </TooltipContent>
             </Tooltip>
