@@ -48,7 +48,10 @@ function start() {
     const { sessionId, tabs } = e.payload;
     // A tab arriving is what the pending new tab was waiting for, whoever
     // opened it — the URL bar, a link in the chat, a popup.
-    if (tabs.length > (tabsBySession.get(sessionId)?.length ?? 0)) pending.delete(sessionId);
+    if (tabs.length > (tabsBySession.get(sessionId)?.length ?? 0)) {
+      pending.delete(sessionId);
+      openErrors.delete(sessionId);
+    }
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
     notify();
@@ -113,8 +116,24 @@ export function useBrowserTabs(sessionId: string | null): BrowserTab[] {
   );
 }
 
+/// Why the last open in a session failed, or `null`. Held here rather than
+/// in the pane, so every route that opens — the URL bar, a local server
+/// row, a link in the chat — reports through one place, and the next open
+/// or a dismissed new tab clears it.
+const openErrors = new Map<string, string>();
+
+export function useOpenError(sessionId: string): string | null {
+  return useSyncExternalStore(subscribe, () => openErrors.get(sessionId) ?? null);
+}
+
 export function openInBrowser(sessionId: string, url: string, newTab = false) {
-  return invoke("browser_open", { sessionId, url, newTab });
+  openErrors.delete(sessionId);
+  notify();
+  return invoke("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
+    openErrors.set(sessionId, String(e));
+    notify();
+    throw e;
+  });
 }
 
 export function activateTab(sessionId: string, id: number) {
@@ -203,7 +222,10 @@ export function usePendingTab(sessionId: string): boolean {
 
 export function setPendingTab(sessionId: string, on: boolean) {
   if (on) pending.add(sessionId);
-  else pending.delete(sessionId);
+  else {
+    pending.delete(sessionId);
+    openErrors.delete(sessionId);
+  }
   notify();
 }
 

@@ -634,6 +634,7 @@ wrap_life_span_handler! {
                 return;
             }
             automation::forget(id);
+            disarm_picker(id);
             let session = self.session.clone();
             let remaining = {
                 let mut tabs = TABS.lock().unwrap();
@@ -715,13 +716,15 @@ wrap_display_handler! {
             let Some(id) = browser.map(|b| b.identifier()) else { return 1 };
             // Any page can log the prefix; only a tab whose picker this app
             // started is listened to, once, and only a payload of the shape
-            // `PICK_JS` writes. A binding through the render process would be
-            // the trusted channel; this is the gate until there is one.
+            // `PICK_JS` writes — `null` for a cancel. Parsed before the gate
+            // is spent, so a malformed line costs nothing. A binding through
+            // the render process would be the trusted channel; this is the
+            // gate until there is one.
+            let Ok(element) = serde_json::from_str::<Option<PickedElement>>(rest) else { return 1 };
             if !PICKING.lock().unwrap().get_or_insert_with(HashSet::new).remove(&id) {
                 return 1;
             }
             let Some(session) = session_of(id) else { return 1 };
-            let element = serde_json::from_str::<PickedElement>(rest).ok();
             if let Some(app) = APP.get() {
                 let _ = app.emit("browser_pick", PickEvent { session_id: session, element });
             }
@@ -732,8 +735,22 @@ wrap_display_handler! {
 
 const PICK_PREFIX: &str = "__dray_pick__";
 
-/// Tabs whose picker is running. An entry is spent by the first pick line.
+/// Tabs whose picker is running. An entry is spent by the first pick line,
+/// and dropped by a navigation or a close, since the script that would
+/// write one is gone with the document.
 static PICKING: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
+
+/// Disarms a tab's picker and tells the pane, so its button does not stay
+/// pressed for a picker that no longer exists.
+fn disarm_picker(id: i32) {
+    let was = PICKING.lock().unwrap().as_mut().map(|s| s.remove(&id)).unwrap_or(false);
+    if !was {
+        return;
+    }
+    if let (Some(app), Some(session)) = (APP.get(), session_of(id)) {
+        let _ = app.emit("browser_pick", PickEvent { session_id: session, element: None });
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -855,6 +872,9 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
+            if is_loading != 0 {
+                disarm_picker(id);
+            }
             update_tab(id, |t| {
                 t.loading = is_loading != 0;
                 t.can_go_back = can_go_back != 0;

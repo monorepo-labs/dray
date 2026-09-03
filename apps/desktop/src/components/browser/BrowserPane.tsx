@@ -30,6 +30,7 @@ import {
   openInBrowser,
   pickElement,
   setPendingTab,
+  useOpenError,
   setViewport,
   useBrowserTabs,
   usePendingTab,
@@ -205,7 +206,7 @@ function Chrome({
   onCollapse?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const [openError, setOpenError] = useState<string | null>(null);
+  const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
   const url = current?.url ?? "";
@@ -218,8 +219,7 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    setOpenError(null);
-    openInBrowser(sessionId, target, newTab).catch((e: unknown) => setOpenError(String(e)));
+    void openInBrowser(sessionId, target, newTab).catch(() => undefined);
   };
 
   const newTab = () => {
@@ -608,7 +608,7 @@ function EmptyState({ sessionId }: { sessionId: string }) {
     };
   }, [sessionId]);
 
-  const open = (url: string) => void openInBrowser(sessionId, url, true).catch(console.error);
+  const open = (url: string) => void openInBrowser(sessionId, url, true).catch(() => undefined);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.
