@@ -39,9 +39,10 @@ export type ManualCheck =
 /// and a reader who pressed the button in Settings must not have to find the
 /// sidebar behind the dialog to learn what happened.
 ///
-/// The two sentences name different cures on purpose: nothing was swapped in
-/// the first, so the button beside it is the answer; the second is an update
-/// that landed and did not come up, where only opening it again finishes.
+/// The two sentences name different cures on purpose: the first is a swap that
+/// did not complete, so the button beside it is the answer; the second is an
+/// update that landed and did not come up, where only opening it again
+/// finishes. Neither promises what the tree looks like — see `InstallError`.
 export function updateFailure(manual: ManualCheck): string | null {
   if (manual === "install_failed") return "Couldn't install the update.";
   if (manual === "relaunch_failed")
