@@ -5,6 +5,22 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.13.1
+
+### Changed
+
+- **The space switcher takes the project filter's shape** — a name over a
+  dot track, click to step to the next — so the two controls that scope the
+  session list work the same way. Their order is yours to set, with ▲▼ in
+  Settings.
+
+### Fixed
+
+- **Memory: the working orb and the shimmer get their own compositing
+  layers.** Both repaint every frame, and painted into the page they
+  repainted the whole document at animation rate whenever a session was
+  mid-turn — which fed a WebKit leak of around a gigabyte an hour of use.
+
 ## 0.13.0
 
 ### Added
