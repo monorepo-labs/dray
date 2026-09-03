@@ -20,7 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChatCwdContext } from "@/hooks/useChatCwd";
+import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, QueuedPrompt, StreamingBlock, Working } from "@/hooks/useSessions";
 import { IS_MAC } from "@/lib/platform";
@@ -530,9 +530,9 @@ export default function Chat({
     // open the chat column fills the pane and the rail would sit on top of the
     // text, so it goes; open one of them, or run wider, and the gutter is there.
     //
-    // The cwd rides a context because the only thing that reads it is a
-    // `@mention` several components down — see `useChatCwd`.
-    <ChatCwdContext value={session.cwd}>
+    // The session rides a context because the things that read it are leaves — a
+    // `@mention` and a file link, several components down. See `useChatSession`.
+    <ChatSessionContext value={{ cwd: session.cwd, sessionId: session.sessionId }}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -670,6 +670,6 @@ export default function Chat({
           />
         )}
       </div>
-    </ChatCwdContext>
+    </ChatSessionContext>
   );
 }

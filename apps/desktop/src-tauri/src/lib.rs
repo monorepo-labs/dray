@@ -279,7 +279,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
             .await
             .map_err(|e| e.to_string())?,
         Harness::Pi => harness::pi::commands::list_commands(cwd).await,
-        Harness::Codex | Harness::Other(_) => Vec::new(),
+        Harness::Codex => harness::codex::commands::list_commands(cwd).await,
+        Harness::Other(_) => Vec::new(),
     })
 }
 
@@ -342,6 +343,20 @@ async fn add_project(path: &str) -> Result<Vec<Project>, String> {
 #[tauri::command]
 async fn remove_project(path: &str) -> Result<Vec<Project>, String> {
     projects::remove_project(path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, String> {
+    projects::set_project_space(path, space)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, String> {
+    projects::retag_space(from, to)
         .await
         .map_err(|e| e.to_string())
 }
@@ -743,6 +758,8 @@ pub fn run() {
             add_project,
             remove_project,
             set_last_selected_project,
+            set_project_space,
+            retag_space,
             list_branches,
             checkout_branch,
             changes_since,
@@ -787,6 +804,7 @@ pub fn run() {
             quit::dismiss_quit,
             docs::read_doc,
             docs::save_doc,
+            docs::watch_docs,
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,

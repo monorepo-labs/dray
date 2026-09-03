@@ -26,8 +26,16 @@ const buttonVariants = cva(
         // as a lighter rectangle. Only on the filled variants: `ghost` and
         // `outline` are chrome, and a shadow under them lifts something that is
         // meant to sit flat.
+        // `--button-primary`, not `--primary`: the two are the same everywhere
+        // but Default's light palette, where primary is a real blue that reads
+        // as the app's mark on Send and as noise under every other filled
+        // button. Send overrides this back to `bg-primary` itself.
+        // /90, not /80: the hover fades the fill toward the page, and at 80 the
+        // step is a fifth of the way there — the button reads as going away
+        // under the cursor rather than answering it. Both modes, since both
+        // move about the same distance.
         default:
-          "bg-primary text-primary-foreground shadow-(--shadow-button) hover:bg-primary/80",
+          "bg-button-primary text-button-primary-foreground shadow-(--shadow-button) hover:bg-button-primary/90",
         outline:
           "bg-clip-padding border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         // `--shadow-surface`, not the `default` variant's `--shadow-button`: this

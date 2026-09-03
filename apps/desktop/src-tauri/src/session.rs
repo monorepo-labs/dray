@@ -1907,6 +1907,19 @@ async fn deliver_prompt(
     let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
 
+    // Ahead of the event for a second reason, and this one is about failure
+    // rather than content. Codex resolves a leading `/skill` by asking its own
+    // child, which can go unanswered — and everything below this line is
+    // irreversible: the event is emitted, held in memory and appended to a log
+    // that only grows. Failing after it leaves a bubble with no turn behind it,
+    // and the retry the error invites draws the reader's sentence twice.
+    let codex = match transport {
+        Transport::Rpc(thread) => {
+            Some((thread, crate::harness::codex::turn_input(thread, &text).await?))
+        }
+        _ => None,
+    };
+
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
         issues: issues.to_vec(),
@@ -1950,8 +1963,9 @@ async fn deliver_prompt(
     // Codex takes a prompt as a request that opens a turn, so the write is the
     // send rather than a line the child picks up on its own schedule. Images
     // ride a different shape there and are not wired yet; the text still goes.
-    if let Transport::Rpc(thread) = transport {
-        return crate::harness::codex::start_turn(thread, &text).await;
+    // Its input was built above, where a failure could still be a no-op.
+    if let Some((thread, input)) = codex {
+        return crate::harness::codex::start_turn(thread, input).await;
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own

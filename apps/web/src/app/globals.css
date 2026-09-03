@@ -15,6 +15,11 @@
   --color-command: oklch(0.82 0.13 90);
   --color-mention: oklch(0.82 0.13 230);
 
+  /* The testimonial marquee. Half the track is one copy of the list, so
+     -50% lands the second copy exactly where the first began and the loop
+     has no seam. */
+  --animate-marquee: marquee 60s linear infinite;
+
   --radius: 0.625rem;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -33,9 +38,21 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  /* The track still holds two copies, so stopping it leaves a full list on
+     screen and the row scrolls by hand like any overflow. */
+  .animate-marquee {
+    animation: none;
   }
 }
 

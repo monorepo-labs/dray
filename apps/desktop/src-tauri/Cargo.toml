@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.12.8"
+version = "0.13.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -37,6 +37,10 @@ dray-proto = { path = "../../../crates/dray-proto" }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 fff-search = "0.10.3"
+# Watches the docs panel's open files. Already in the tree behind `fff-search`,
+# whose index keeps itself current the same way. Not to be confused with
+# `notify-rust` below, which posts desktop banners.
+notify = "9.0.0-rc.4"
 # Attached images travel to the CLI as base64 content blocks.
 base64 = "0.22"
 # Desktop notifications are posted directly rather than through

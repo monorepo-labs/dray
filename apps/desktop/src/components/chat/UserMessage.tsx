@@ -4,7 +4,7 @@ import { Image } from "lucide-react";
 import SessionAvatar from "@/components/SessionAvatar";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
-import { useChatCwd } from "@/hooks/useChatCwd";
+import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
@@ -70,7 +70,7 @@ export default function UserMessage({
   // conversation into a different tree, so a mention resolved against the
   // session's own cwd there would open the fork's copy of the file rather than
   // the one this message named.
-  const sessionCwd = useChatCwd();
+  const { cwd: sessionCwd } = useChatSession();
   const cwd = writtenIn ?? sessionCwd;
   const body = stripSenderPrefix(text, from);
   const segments = highlightSegments(body);

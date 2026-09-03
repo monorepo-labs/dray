@@ -74,7 +74,7 @@ export default function QuestionRequest({
     const target =
       form?.querySelector<HTMLInputElement>(
         "[data-slot=questionnaire-choice] input"
-      ) ?? form?.querySelector<HTMLInputElement>("[data-slot=questionnaire-input]");
+      ) ?? form?.querySelector<HTMLTextAreaElement>("[data-slot=questionnaire-input]");
 
     target?.focus();
   }, []);
@@ -166,9 +166,26 @@ export default function QuestionRequest({
                   handed a string it has no branch for. */}
               {question.freeText && (
                 <QuestionnaireInput
+                  // A typed answer is prose and can run to a sentence or two, so
+                  // the box grows down instead of scrolling one line sideways —
+                  // an answer the reader cannot see all of is one they cannot
+                  // check before sending. `field-sizing: content` does the
+                  // growing natively; the cap stops a pasted essay pushing Send
+                  // off the bottom of the transcript.
+                  render={<textarea rows={1} />}
                   aria-label="Another answer"
                   placeholder="Something else…"
-                  className="min-h-0 h-8"
+                  // `sm:min-h-10` as well as `min-h-10`: the component's own
+                  // base drops its touch-target floor to zero above `sm`, which
+                  // is every window this app runs in.
+                  className="field-sizing-content h-auto max-h-40 min-h-10 resize-none py-2 sm:min-h-10"
+                  onKeyDown={(event) => {
+                    // Enter answers the card — the questionnaire's own handler
+                    // sits on the form above and takes it whatever the target —
+                    // so a newline needs the other chord, and stopping the
+                    // bubble is the only way to leave it to the textarea.
+                    if (event.key === "Enter" && event.shiftKey) event.stopPropagation();
+                  }}
                 />
               )}
             </QuestionnaireChoices>
