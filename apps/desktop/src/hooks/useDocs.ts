@@ -96,12 +96,19 @@ type SessionDocs = { docs: Doc[]; activePath: string | null };
 /// costs no entry and the snapshot keeps one identity across its renders.
 const EMPTY: SessionDocs = { docs: [], activePath: null };
 
-/// Whose docs the panel is showing, written by `App` from its selection. A
-/// module variable rather than an argument on all nine exports: every caller is
-/// already the selected session — the transcript that opens a doc and the panel
-/// that edits one are both drawn for it — so an argument would be the same
-/// value threaded through the tree to say what selection already says.
-let sessionId: string | null = null;
+/// Every export here takes the session it acts on, and there is deliberately no
+/// module-level "current session" to fall back on.
+///
+/// One was tried, written from `App`'s selection, and it is a race however it is
+/// written: during render it publishes to a render React may abandon, and from
+/// an effect it lags the commit — so a click or a `doc_changed` landing in that
+/// window acts on the session just left, and where both hold the same file that
+/// is the wrong draft written to disk. An argument cannot lag anything, since it
+/// arrives with the render that drew the control.
+///
+/// The one caller not holding an id already is the transcript's file link, four
+/// components deep, and it reads `useChatSession` — which is the id of the
+/// transcript that drew the link, the only correct answer there anyway.
 
 /// Bumped every time a path is opened by a click, an already-open one included.
 /// What tells `App` to bring the pane forward — the count cannot, since
@@ -142,25 +149,6 @@ function state(sid: string): SessionDocs {
 function write(sid: string, next: Partial<SessionDocs>) {
   bySession.set(sid, { ...state(sid), ...next });
   emit();
-}
-
-/// Tells the *mutators* whose session they are acting on, from `App`'s own
-/// selection. Reads do not go through this — they take the id outright — so an
-/// effect is late enough: every mutator is called from an event handler or a
-/// listener, both of which run after the commit that set it.
-///
-/// It was written during render for one frame's worth of flicker, and that was
-/// the wrong trade. A module variable moved during render is published to
-/// whatever renders next, so a render React abandons or replays can leave the
-/// committed tree wired to a session it is not drawing.
-export function useDocsSession(id: string | null) {
-  useEffect(() => setDocsSession(id), [id]);
-}
-
-/// The plain half of the above, so the split between sessions can be exercised
-/// without a renderer.
-export function setDocsSession(id: string | null) {
-  sessionId = id;
 }
 
 type DocsSnapshot = SessionDocs & { opened: number };
@@ -207,8 +195,8 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
 /// store would put the docs feature's own rule somewhere it cannot be read from.
-export function openPath(path: string): void {
-  if (isMarkdownPath(path)) return openDoc(path);
+export function openPath(sid: string | null, path: string): void {
+  if (isMarkdownPath(path)) return openDoc(sid, path);
   void openFile(path);
 }
 
@@ -216,8 +204,7 @@ export function openPath(path: string): void {
 ///
 /// A path that is already open is only activated. It is not re-read, which
 /// would be a way for a second click on a chip's own file to throw away a draft.
-export function openDoc(path: string): void {
-  const sid = sessionId;
+export function openDoc(sid: string | null, path: string): void {
   // Nothing to open a doc *into*. The panel belongs to a session, and the one
   // route here with none selected is the issues page, which draws no panel.
   if (!sid) return;
@@ -248,8 +235,7 @@ export function openDoc(path: string): void {
 }
 
 /// Brings an already-open doc forward.
-export function selectDoc(path: string) {
-  const sid = sessionId;
+export function selectDoc(sid: string | null, path: string) {
   if (!sid) return;
   if (state(sid).activePath === path) return;
   write(sid, { activePath: path });
@@ -260,8 +246,7 @@ export function selectDoc(path: string) {
 /// Closing the active one has to leave `activePath` naming a doc that is still
 /// open, or `null` once the last one goes. A strip of chips pointing at nothing
 /// is what a stale `activePath` looks like on screen.
-export function closeDoc(path: string) {
-  const sid = sessionId;
+export function closeDoc(sid: string | null, path: string) {
   if (!sid) return;
   const { docs, activePath } = state(sid);
   const at = docs.findIndex((doc) => doc.path === path);
@@ -278,21 +263,19 @@ export function closeDoc(path: string) {
 }
 
 /// Switches one doc between reading and writing.
-export function setDocMode(path: string, mode: DocMode) {
-  if (sessionId) patch(sessionId, path, (doc) => (doc.mode === mode ? doc : { ...doc, mode }));
+export function setDocMode(sid: string | null, path: string, mode: DocMode) {
+  if (sid) patch(sid, path, (doc) => (doc.mode === mode ? doc : { ...doc, mode }));
 }
 
 /// Takes a keystroke. The draft is the only thing that moves — dirtiness is read
 /// back off it, and staleness is about the file rather than about the edit.
-export function setDocDraft(path: string, draft: string) {
-  if (sessionId)
-    patchReady(sessionId, path, (body) => (body.draft === draft ? body : { ...body, draft }));
+export function setDocDraft(sid: string | null, path: string, draft: string) {
+  if (sid) patchReady(sid, path, (body) => (body.draft === draft ? body : { ...body, draft }));
 }
 
 /// Re-reads the file and takes it, discarding the draft. What the stale strip's
 /// Reload offers.
-export function reloadDoc(path: string) {
-  const sid = sessionId;
+export function reloadDoc(sid: string | null, path: string) {
   if (!sid) return;
   const doc = find(sid, path);
   if (doc?.body.status !== "ready" || doc.body.saving) return;
@@ -328,10 +311,10 @@ export function reloadDoc(path: string) {
 /// screen. Where it has not, the compare-and-swap catches it, which is what
 /// covers a file that moved between the last read and the press.
 export async function saveDoc(
+  sid: string | null,
   path: string,
   { force = false }: { force?: boolean } = {},
 ): Promise<SaveOutcome | null> {
-  const sid = sessionId;
   if (!sid) return null;
   const doc = find(sid, path);
   if (doc?.body.status !== "ready" || doc.body.saving) return null;
@@ -365,22 +348,20 @@ export async function saveDoc(
 
 /// What ⌘S calls. A no-op where there is nothing to write, so the chord is free
 /// to be pressed out of habit.
-export function saveActiveDoc() {
-  const sid = sessionId;
+export function saveActiveDoc(sid: string | null) {
   if (!sid) return;
   const { activePath } = state(sid);
   if (!activePath) return;
   const doc = find(sid, activePath);
   if (!doc || !isDirty(doc)) return;
-  void saveDoc(activePath);
+  void saveDoc(sid, activePath);
 }
 
 /// Re-reads the doc on screen. What ⌘R and the tab row's button call.
-export function refreshActiveDoc() {
-  const sid = sessionId;
+export function refreshActiveDoc(sid: string | null) {
   if (!sid) return;
   const path = state(sid).activePath;
-  if (path) refreshDoc(path);
+  if (path) refreshDoc(sid, path);
 }
 
 /// Re-reads one open doc, per `withDiskText` — a clean one adopts the file, a
@@ -394,8 +375,7 @@ export function refreshActiveDoc() {
 /// A doc whose first read failed is retried outright. Refresh landing on the one
 /// state with a visible error and doing nothing would be a control that provably
 /// cannot help.
-export function refreshDoc(path: string) {
-  const sid = sessionId;
+export function refreshDoc(sid: string | null, path: string) {
   if (!sid) return;
   const doc = find(sid, path);
   if (!doc || doc.body.status === "loading") return;
@@ -469,6 +449,26 @@ function getVersion() {
 /// rewriting the file the reader is looking at should move the text on screen.
 /// A dirty one is flagged instead and keeps every keystroke, which is what puts
 /// the strip up over it with Discard and Overwrite to choose between.
+/// Every `watch_docs` call, in the order it was made.
+///
+/// The command replaces the whole watch set, so the last one to *arrive* is the
+/// one that stands — and two `invoke`s can land in either order. Arm, disarm and
+/// re-arm all go through here, so a stop cannot overtake the arming beside it
+/// and a stale set cannot win. StrictMode's mount/unmount/mount is the ordinary
+/// case, not a corner one.
+///
+/// A chain rather than a generation number checked in Rust: it is three lines on
+/// the side that already knows the order, and nothing has to be added to the
+/// wire for the backend to re-derive it. A failed call is swallowed so one
+/// cannot break the chain for the rest of the run — watching is best effort, and
+/// the panel keeps its Refresh button either way.
+let watching: Promise<unknown> = Promise.resolve();
+
+function watch(paths: string[]): Promise<unknown> {
+  watching = watching.then(() => invoke("watch_docs", { paths })).catch(() => {});
+  return watching;
+}
+
 export function useDocWatcher(sid: string | null) {
   const { docs } = useDocs(sid);
   // A joined key rather than the array itself, so a render that rebuilds the
@@ -478,18 +478,20 @@ export function useDocWatcher(sid: string | null) {
   const key = docs.map((doc) => doc.path).join("\n");
 
   useEffect(() => {
-    void invoke("watch_docs", { paths: docsFor(sid).docs.map((doc) => doc.path) });
+    void watch(docsFor(sid).docs.map((doc) => doc.path));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, sid]);
 
-  // Unmount alone, not on every re-arm: an empty set sent between two armed
-  // ones would race the arming beside it, and two `invoke`s can land in either
-  // order. The panel unmounts when no session is selected, and a watcher left
-  // running there emits into nothing for the rest of the run.
-  useEffect(() => () => void invoke("watch_docs", { paths: [] }), []);
+  // The panel unmounts when no session is selected, and a watcher left armed
+  // there emits into nothing for the rest of the run.
+  useEffect(() => () => void watch([]), []);
 
+  // Re-registered per session rather than held with `[]` deps and a ref: the
+  // watch set is this session's files, so an event arriving under a listener
+  // still closed over the last one would re-read a path that session may not
+  // even have open.
   useEffect(() => {
-    const un = listen<string>("doc_changed", (event) => refreshDoc(event.payload));
+    const un = listen<string>("doc_changed", (event) => refreshDoc(sid, event.payload));
     return () => void un.then((off) => off());
-  }, []);
+  }, [sid]);
 }

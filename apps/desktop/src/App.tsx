@@ -50,7 +50,7 @@ import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
-import { refreshActiveDoc, saveActiveDoc, useDocs, useDocsSession } from "@/hooks/useDocs";
+import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -512,10 +512,6 @@ function App() {
 
   const issueData = useSessionIssues(sessionIssues, panelShown && activeTabIsIssue);
 
-  // Docs belong to the session they were opened from, so the store is pointed
-  // at the selection before anything reads it.
-  useDocsSession(selectedSessionId);
-
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
   const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs(selectedSessionId);
@@ -604,7 +600,7 @@ function App() {
   const shownDoc =
     panelShown && activeTab === "docs" ? `${selectedSessionId}\n${activeDocPath}` : null;
   useEffect(() => {
-    if (shownDoc) refreshActiveDoc();
+    if (shownDoc) refreshActiveDoc(selectedSessionId);
   }, [shownDoc]);
 
   // From the sidebar's own per-repo read, not a fourth git call: once a pull
@@ -669,7 +665,7 @@ function App() {
           ? { onRefresh: issueData.refresh, loading: issueData.loading }
           : activeTab === "docs"
             ? {
-                onRefresh: refreshActiveDoc,
+                onRefresh: () => refreshActiveDoc(selectedSessionId),
                 loading: activeDoc?.body.status === "loading",
               }
             : null;
@@ -877,7 +873,9 @@ function App() {
   // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
   // `useHotkey` claims every chord it matches, and ⌘S is the browser's own save
   // — left bound everywhere it would eat the key from nothing at all.
-  useHotkey("s", saveActiveDoc, { enabled: panelShown && activeTab === "docs" });
+  useHotkey("s", () => saveActiveDoc(selectedSessionId), {
+    enabled: panelShown && activeTab === "docs",
+  });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks

@@ -90,7 +90,7 @@ export default function DocsPanel({
   // that than to mean the chip beside it.
   const step = (delta: number) => {
     const next = docs[docs.findIndex((doc) => doc.path === activePath) + delta];
-    if (next) selectDoc(next.path);
+    if (next) selectDoc(sessionId, next.path);
   };
   const stepping = active && current?.mode === "view";
   useHotkey("ArrowLeft", () => step(-1), { shift: true, enabled: stepping });
@@ -102,7 +102,7 @@ export default function DocsPanel({
     // with the OS makes that untrue.
     if (doc.body.status === "ready" && doc.body.saving) return;
     if (isDirty(doc)) return setConfirming(doc.path);
-    closeDoc(doc.path);
+    closeDoc(sessionId, doc.path);
   };
 
   return (
@@ -116,7 +116,7 @@ export default function DocsPanel({
               key={doc.path}
               doc={doc}
               active={doc.path === activePath}
-              onSelect={() => selectDoc(doc.path)}
+              onSelect={() => selectDoc(sessionId, doc.path)}
               onClose={() => close(doc)}
               // Only where the chord would actually fire: one chip is a row
               // with nothing to step to, and an edit-mode doc has the chord
@@ -139,7 +139,7 @@ export default function DocsPanel({
             // row the hardest part of it to read.
             className="shrink-0 disabled:opacity-100"
             disabled={current.body.status === "ready" && current.body.saving}
-            onClick={() => void saveDoc(current.path)}
+            onClick={() => void saveDoc(sessionId, current.path)}
           >
             {current.body.status === "ready" && current.body.saving && (
               <Loader2 className="animate-spin" />
@@ -151,21 +151,21 @@ export default function DocsPanel({
         {current && (
           <ModeToggle
             value={current.mode}
-            onChange={(mode) => setDocMode(current.path, mode)}
+            onChange={(mode) => setDocMode(sessionId, current.path, mode)}
           />
         )}
       </div>
 
-      {current && <Strip doc={current} />}
+      {current && <Strip sessionId={sessionId} doc={current} />}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {current && <Body doc={current} />}
+        {current && <Body sessionId={sessionId} doc={current} />}
       </div>
 
       <CloseConfirm
         path={confirming}
         onConfirm={() => {
-          if (confirming) closeDoc(confirming);
+          if (confirming) closeDoc(sessionId, confirming);
           setConfirming(null);
         }}
         onClose={() => setConfirming(null)}
@@ -338,7 +338,7 @@ function ModeToggle({
 /// fill: both lose something — one the reader's edits, the other whatever wrote
 /// the file underneath them — and red on one of a matched pair says the other is
 /// safe.
-function Strip({ doc }: { doc: Doc }) {
+function Strip({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
   if (doc.body.status !== "ready") return null;
   const { stale, saveError } = doc.body;
   if (!stale && !saveError) return null;
@@ -350,13 +350,13 @@ function Strip({ doc }: { doc: Doc }) {
           <span className="min-w-0 flex-1 text-muted-foreground">
             This file changed on disk since you opened it.
           </span>
-          <Button size="sm" variant="outline" onClick={() => reloadDoc(doc.path)}>
+          <Button size="sm" variant="outline" onClick={() => reloadDoc(sessionId, doc.path)}>
             Discard my edits
           </Button>
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void saveDoc(doc.path, { force: true })}
+            onClick={() => void saveDoc(sessionId, doc.path, { force: true })}
           >
             Overwrite
           </Button>
@@ -367,7 +367,7 @@ function Strip({ doc }: { doc: Doc }) {
   );
 }
 
-function Body({ doc }: { doc: Doc }) {
+function Body({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
   if (doc.body.status === "loading") {
     return (
       <p className="px-3 py-2 text-ui text-muted-foreground">
@@ -394,7 +394,7 @@ function Body({ doc }: { doc: Doc }) {
       // being hidden keeps this mounted either way.
       key={doc.path}
       value={doc.body.draft}
-      onChange={(e) => setDocDraft(doc.path, e.target.value)}
+      onChange={(e) => setDocDraft(sessionId, doc.path, e.target.value)}
       spellCheck={false}
       // Tab is deliberately left alone: stealing it takes the keyboard's way
       // out of this box, and markdown lists need no indent to be written.

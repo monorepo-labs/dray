@@ -9,7 +9,6 @@ import {
   docsFor,
   isDirty,
   openDoc,
-  setDocsSession,
   withDiskText,
   type Doc,
   type DocBody,
@@ -99,35 +98,29 @@ describe("docs belong to the session they were opened from", () => {
   const paths = (sid: string) => docsFor(sid).docs.map((doc) => doc.path);
 
   it("shows a session its own docs and nobody else's", () => {
-    setDocsSession("a");
-    openDoc("/a/README.md");
-    setDocsSession("b");
-    openDoc("/b/NOTES.md");
+    openDoc("a", "/a/README.md");
+    openDoc("b", "/b/NOTES.md");
 
     expect(paths("a")).toEqual(["/a/README.md"]);
     expect(paths("b")).toEqual(["/b/NOTES.md"]);
-    // Read by id, not by whichever session happens to be current, so this is
-    // the same question `useDocs` answers for two panels at once.
     expect(docsFor("a").activePath).toBe("/a/README.md");
     expect(docsFor("b").activePath).toBe("/b/NOTES.md");
   });
 
   // Two sessions can hold the same file, and closing it in one says nothing
-  // about the other.
+  // about the other. Interleaved deliberately: every mutator takes the session
+  // it acts on, so nothing here depends on the order they were called in.
   it("closes only for the session that asked", () => {
-    setDocsSession("c");
-    openDoc("/shared/DOC.md");
-    setDocsSession("d");
-    openDoc("/shared/DOC.md");
+    openDoc("c", "/shared/DOC.md");
+    openDoc("d", "/shared/DOC.md");
 
-    closeDoc("/shared/DOC.md");
+    closeDoc("d", "/shared/DOC.md");
     expect(paths("d")).toEqual([]);
     expect(paths("c")).toEqual(["/shared/DOC.md"]);
   });
 
-  it("opens nothing with no session selected", () => {
-    setDocsSession(null);
-    openDoc("/nowhere/README.md");
+  it("opens nothing with no session", () => {
+    openDoc(null, "/nowhere/README.md");
     expect(docsFor(null).docs).toEqual([]);
   });
 });
