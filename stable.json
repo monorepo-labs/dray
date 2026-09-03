@@ -1,23 +1,23 @@
 {
-  "version": "0.12.8",
-  "notes": "### Changed\n\n- **Dictation loads its model on the press, and lets it go.** The engine was\n  warmed at launch and held for the session — most of a gigabyte resident\n  whether or not you ever dictated. It now loads when you start recording\n  and unloads after ten idle minutes.\n- **Settled sessions no longer split out Pinned.** A pin keeps a session in\n  reach while the work is live; a history has no use for the group, so it\n  and the Pin action are gone from the settled view.",
-  "pub_date": "2026-09-02T15:47:14.702Z",
+  "version": "0.13.0",
+  "notes": "### Added\n\n- **Spaces scope the sidebar to a set of projects.** A space is a tag on a\n  project, so joining one needs nothing set up. Switching narrows the\n  sidebar, the project picker, the session chords and both notification\n  channels; the dock badge still counts everything, since it names no\n  session.\n- **The docs panel watches the files it has open.** A doc edited elsewhere\n  is picked up rather than sitting stale until Refresh — a clean one adopts\n  the new text, a doc you were editing keeps every keystroke and asks at the\n  save whether to discard, overwrite, or back out with the text intact.\n  ⌘⇧← and ⌘⇧→ step between docs.\n- **Codex gets a slash picker, filled from its skills.** Codex expands no\n  slash command, so a picked skill travels as its own input item instead of\n  as prompt text. A lookup that cannot be made fails the send rather than\n  going out as literal text.\n\n### Changed\n\n- **A question card's free-text answer is a box that grows.** A typed answer\n  runs to a sentence, where the old single-line input scrolled it sideways\n  out of view. Shift+Enter adds a newline.\n- **Settle is hidden while a turn is running**, since the write lands but\n  the agent keeps working.\n\n### Fixed\n\n- **Memory: transcripts you are no longer looking at are let go.** Every\n  transcript opened since launch stayed resident — around 650MB after a day.\n  They are now dropped on archive, on settle, and after ten minutes\n  unviewed, never the one on screen, one mid-turn, or one holding a card.",
+  "pub_date": "2026-09-03T13:01:29.426Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZCbEIxZkhpS2xrSzVPN3U0RHFOTk12dTMvWGJ4WStRTDdiOFdTUFUrQXVCbWxUS3ZERFRPYm5yeXZsY0VsaXptZk9WS0J3ZUk3N3pNNnIxZVFsckFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzY0MDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CmZtMS9TRFZqZ20zK2xsbWtDb0ZtdWNibGZFMXdCNTNyTlo1QXQybjdDMjZsVUQvTjVtYnUwMll5TW1rdnh0S0s5bUg2SGdyWEZoS1ZBeUYzL3c4ZUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.8/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWd1QXJLNFFMSDN5dGZoZTI5aGdTOC80REdwZmw0RUVjQ0NzYjRCU0EzL3VSQjgzeHEvd3ArZktYQ1BWUDN4U0l2a1hOT2Q4NG9jSE9BTnRQMktyR3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDQwNDgwCWZpbGU6RHJheS5hcHAudGFyLmd6CmZNUkZDN3F6d2FHVGQ3TzIvTXE4TmY0SnlZWHBnSzY3a21pSUFDYzFZcGxPTUV1Z2JZbE93Yk5EdkxIN0pyeUxQYTcveGdoN2lNRXFxQjNlcHE3K0R3PT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.13.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZCbEIxZkhpS2xrSzVPN3U0RHFOTk12dTMvWGJ4WStRTDdiOFdTUFUrQXVCbWxUS3ZERFRPYm5yeXZsY0VsaXptZk9WS0J3ZUk3N3pNNnIxZVFsckFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzY0MDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CmZtMS9TRFZqZ20zK2xsbWtDb0ZtdWNibGZFMXdCNTNyTlo1QXQybjdDMjZsVUQvTjVtYnUwMll5TW1rdnh0S0s5bUg2SGdyWEZoS1ZBeUYzL3c4ZUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.8/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWd1QXJLNFFMSDN5dGZoZTI5aGdTOC80REdwZmw0RUVjQ0NzYjRCU0EzL3VSQjgzeHEvd3ArZktYQ1BWUDN4U0l2a1hOT2Q4NG9jSE9BTnRQMktyR3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDQwNDgwCWZpbGU6RHJheS5hcHAudGFyLmd6CmZNUkZDN3F6d2FHVGQ3TzIvTXE4TmY0SnlZWHBnSzY3a21pSUFDYzFZcGxPTUV1Z2JZbE93Yk5EdkxIN0pyeUxQYTcveGdoN2lNRXFxQjNlcHE3K0R3PT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.13.0/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZCbEIxZkhpS2xrSzVPN3U0RHFOTk12dTMvWGJ4WStRTDdiOFdTUFUrQXVCbWxUS3ZERFRPYm5yeXZsY0VsaXptZk9WS0J3ZUk3N3pNNnIxZVFsckFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzY0MDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CmZtMS9TRFZqZ20zK2xsbWtDb0ZtdWNibGZFMXdCNTNyTlo1QXQybjdDMjZsVUQvTjVtYnUwMll5TW1rdnh0S0s5bUg2SGdyWEZoS1ZBeUYzL3c4ZUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.8/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWd1QXJLNFFMSDN5dGZoZTI5aGdTOC80REdwZmw0RUVjQ0NzYjRCU0EzL3VSQjgzeHEvd3ArZktYQ1BWUDN4U0l2a1hOT2Q4NG9jSE9BTnRQMktyR3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDQwNDgwCWZpbGU6RHJheS5hcHAudGFyLmd6CmZNUkZDN3F6d2FHVGQ3TzIvTXE4TmY0SnlZWHBnSzY3a21pSUFDYzFZcGxPTUV1Z2JZbE93Yk5EdkxIN0pyeUxQYTcveGdoN2lNRXFxQjNlcHE3K0R3PT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.13.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZCbEIxZkhpS2xrSzVPN3U0RHFOTk12dTMvWGJ4WStRTDdiOFdTUFUrQXVCbWxUS3ZERFRPYm5yeXZsY0VsaXptZk9WS0J3ZUk3N3pNNnIxZVFsckFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzY0MDI2CWZpbGU6RHJheS5hcHAudGFyLmd6CmZtMS9TRFZqZ20zK2xsbWtDb0ZtdWNibGZFMXdCNTNyTlo1QXQybjdDMjZsVUQvTjVtYnUwMll5TW1rdnh0S0s5bUg2SGdyWEZoS1ZBeUYzL3c4ZUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.12.8/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWd1QXJLNFFMSDN5dGZoZTI5aGdTOC80REdwZmw0RUVjQ0NzYjRCU0EzL3VSQjgzeHEvd3ArZktYQ1BWUDN4U0l2a1hOT2Q4NG9jSE9BTnRQMktyR3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDQwNDgwCWZpbGU6RHJheS5hcHAudGFyLmd6CmZNUkZDN3F6d2FHVGQ3TzIvTXE4TmY0SnlZWHBnSzY3a21pSUFDYzFZcGxPTUV1Z2JZbE93Yk5EdkxIN0pyeUxQYTcveGdoN2lNRXFxQjNlcHE3K0R3PT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.13.0/Dray_universal.app.tar.gz"
     }
   }
 }
