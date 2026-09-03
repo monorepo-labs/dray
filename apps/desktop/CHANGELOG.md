@@ -5,6 +5,40 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.13.0
+
+### Added
+
+- **Spaces scope the sidebar to a set of projects.** A space is a tag on a
+  project, so joining one needs nothing set up. Switching narrows the
+  sidebar, the project picker, the session chords and both notification
+  channels; the dock badge still counts everything, since it names no
+  session.
+- **The docs panel watches the files it has open.** A doc edited elsewhere
+  is picked up rather than sitting stale until Refresh — a clean one adopts
+  the new text, a doc you were editing keeps every keystroke and asks at the
+  save whether to discard, overwrite, or back out with the text intact.
+  ⌘⇧← and ⌘⇧→ step between docs.
+- **Codex gets a slash picker, filled from its skills.** Codex expands no
+  slash command, so a picked skill travels as its own input item instead of
+  as prompt text. A lookup that cannot be made fails the send rather than
+  going out as literal text.
+
+### Changed
+
+- **A question card's free-text answer is a box that grows.** A typed answer
+  runs to a sentence, where the old single-line input scrolled it sideways
+  out of view. Shift+Enter adds a newline.
+- **Settle is hidden while a turn is running**, since the write lands but
+  the agent keeps working.
+
+### Fixed
+
+- **Memory: transcripts you are no longer looking at are let go.** Every
+  transcript opened since launch stayed resident — around 650MB after a day.
+  They are now dropped on archive, on settle, and after ten minutes
+  unviewed, never the one on screen, one mid-turn, or one holding a card.
+
 ## 0.12.8
 
 ### Changed
