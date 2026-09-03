@@ -61,6 +61,28 @@ export function sessionInSpace(
   );
 }
 
+/// Whether a session may be *announced* under the active space, given whatever
+/// is known about where it ran.
+///
+/// Unknown fails **closed** while a space is up, and that asymmetry is the
+/// point: the session index holds one side of the archived split at a time and
+/// a new session's entry lands after its first events, so "no project found" is
+/// never "not filed elsewhere". A notice or banner names the session out loud,
+/// which is the thing a chosen space is asking not to see. Cost: a settled
+/// session in the *active* space stays quiet while the reader is on the live
+/// list.
+///
+/// Not the rule for what stays on *screen* — closing a transcript already drawn
+/// on a guess is worse than drawing it a moment longer.
+export function allowedInSpace(
+  projects: Project[],
+  space: string | null,
+  projectPath: string | null | undefined,
+): boolean {
+  if (space === null) return true;
+  return Boolean(projectPath) && sessionInSpace(projects, space, projectPath as string);
+}
+
 /// A path as the settings list draws it. The leading slash is the one segment
 /// every absolute path on this machine shares, so it separates nothing and only
 /// costs the rest of the path a character of width.

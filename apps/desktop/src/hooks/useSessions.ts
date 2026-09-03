@@ -17,7 +17,7 @@ import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
-import { activeSpace, sessionInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
+import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
@@ -1680,20 +1680,14 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     readLocalStorage<string | null>(SPACE_KEY, null),
     readLocalStorage<string[]>(SPACE_LIST_KEY, []),
   );
-  // A session the index cannot name is **refused** while a space is up, rather
-  // than let through. The index holds one side of the archived split at a time
-  // and a brand-new session's entry lands after its first events, so "not
-  // found" is not "not filed elsewhere" — and a banner that cannot be
-  // attributed is exactly what somebody who chose a space is asking not to see.
-  // Cost, stated: a settled session in the *active* space stays quiet while the
-  // reader is looking at the live list.
+  // Both lists, since the index holds one side of the archived split at a time.
+  // `allowedInSpace` is what refuses a session neither can name — see its own
+  // note for why that direction.
   const projectPath =
     item?.projectPath ??
     sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
     null;
-  if (space && !(projectPath && sessionInSpace(projectsRef.current, space, projectPath))) {
-    return false;
-  }
+  if (!allowedInSpace(projectsRef.current, space, projectPath)) return false;
 
   if (!isWindowFocused()) {
     // Same order as the card: the verb first, because *what is wanted* is the

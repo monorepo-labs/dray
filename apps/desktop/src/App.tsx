@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -76,6 +76,7 @@ import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
+  allowedInSpace,
   inSpace,
   sessionInSpace,
   spaceNames,
@@ -90,6 +91,7 @@ function App() {
   const {
     selectedSessionId,
     selectedSession,
+    sessions,
     streamingContentBlock,
     sessionIndexItems,
     statusBySession,
@@ -778,15 +780,24 @@ function App() {
   ///
   /// Notices go here rather than there: a card raised before the switch names a
   /// session the reader has just put away, and clicking it would open that
-  /// transcript. They are transient anyway, so dropping them costs a glance at
+  /// transcript. They are transient anyway, so dropping one costs a glance at
   /// something the sidebar still marks.
+  ///
+  /// Kept only where the session can be *shown* to belong here — `allowedInSpace`,
+  /// the same reading `announce` makes, since a card and a banner say the same
+  /// sentence. A settled session is in neither list the moment the reader is on
+  /// the live one, so matching on the index alone kept exactly the cards nobody
+  /// could account for.
   const changeSpace = (next: string | null) => {
     setStoredSpace(next);
     setProjectFilter(null);
 
     for (const notice of getNotices()) {
-      const item = sessionIndexItems.find((i) => i.sessionId === notice.sessionId);
-      if (item && !sessionInSpace(projects, next, item.projectPath)) {
+      const path =
+        sessionIndexItems.find((i) => i.sessionId === notice.sessionId)?.projectPath ??
+        sessions.find((s) => s.sessionId === notice.sessionId)?.projectPath ??
+        null;
+      if (!allowedInSpace(projects, next, path)) {
         dismissNotice(notice.sessionId, notice.kind);
       }
     }
@@ -834,7 +845,14 @@ function App() {
   /// A session whose project neither the index nor the loaded snapshot can name
   /// is left alone. That is "we cannot tell", not "it is elsewhere", and
   /// closing a transcript on a guess is worse than drawing one a moment longer.
-  useEffect(() => {
+  ///
+  /// **Layout, not effect**: an ordinary effect runs after the browser paints,
+  /// so the switch drew one frame of the transcript being switched away from.
+  /// A frame is nothing to a reader who chose to switch and everything to the
+  /// room watching them share the screen, which is the whole reason spaces
+  /// exist. The body is two array scans, which is what makes blocking paint on
+  /// it affordable.
+  useLayoutEffect(() => {
     if (projectPath && !spaceProjects.some((p) => p.path === projectPath)) {
       handleSelectProject(spaceProjects[0]?.path ?? null);
     }

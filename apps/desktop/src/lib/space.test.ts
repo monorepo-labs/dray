@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeSpace,
+  allowedInSpace,
   displayPath,
   inSpace,
   sessionInSpace,
@@ -59,6 +60,16 @@ describe("spaces", () => {
     // Nothing is hidden until a space is chosen, including a project the app
     // has never heard of.
     expect(sessionInSpace(projects, null, "/elsewhere")).toBe(true);
+  });
+
+  it("refuses to announce a session it cannot place, but only under a space", () => {
+    // The index carries one side of the archived split at a time, so an
+    // unknown project is not a project filed here.
+    expect(allowedInSpace(projects, "Work", null)).toBe(false);
+    expect(allowedInSpace(projects, "Work", "/me/blog")).toBe(false);
+    expect(allowedInSpace(projects, "Work", "/work/api")).toBe(true);
+    // Nothing is refused before a space is chosen, unknown included.
+    expect(allowedInSpace(projects, null, undefined)).toBe(true);
   });
 
   it("drops the leading slash and nothing else", () => {
