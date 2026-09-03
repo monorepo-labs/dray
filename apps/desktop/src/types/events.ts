@@ -611,10 +611,15 @@ name: string, isDefault: boolean, };
 
 /**
  * Which half of the install failed, and it is tagged because the two have
- * opposite cures: a failed swap left the app exactly as it was, so pressing
- * the button again is the answer, where a failed relaunch left the *new*
- * bundle on disk and only opening it finishes the job. Telling the reader to
- * quit and reopen for a swap that never happened sends them to do nothing.
+ * opposite cures: a swap that did not complete leaves nothing to open, so
+ * pressing the button again is the answer, where a failed *relaunch* left the
+ * new bundle on disk and only opening it finishes the job. Telling the reader
+ * to quit and reopen for a swap that never landed sends them to do nothing.
+ *
+ * "Did not complete" is deliberately weaker than "changed nothing": the
+ * plugin moves the old bundle to a temp backup before unpacking, and a final
+ * rename that fails returns `Err` without putting it back. Narrow, upstream,
+ * and not something to claim the opposite of in a comment.
  *
  * A tag rather than a sentence the frontend matches on, so rewording a message
  * cannot silently swap one cure for the other.

@@ -5,6 +5,18 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.13.2
+
+### Fixed
+
+- **Installing an update relaunches the app again.** Install swapped the
+  bundle and then quit for good — the relaunch ran on a path this app's own
+  exit handler got to first. It now launches the new bundle before the old
+  one exits, and a refusal is reported instead of leaving nothing running.
+- **A sidebar row's working orb no longer overlaps its title.** The slot
+  took its width from the hover buttons, which a pinned row mid-turn draws
+  none of.
+
 ## 0.13.1
 
 ### Changed
