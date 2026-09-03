@@ -48,10 +48,11 @@ use std::path::PathBuf;
 /// shapes cannot be confused on the wire: an old app handed the new one finds
 /// no `identifiers` and refuses, which is the loud failure wanted here.
 ///
-/// v5 added [`Request::Browser`]. An older app fails to parse the variant and
-/// answers "could not parse the request", which reads as a broken CLI rather
-/// than an app with no browser; the bump turns that into "update the Dray
-/// app", the one cure that applies.
+/// v5 added [`Request::Browser`]. An app older than v5 flattened the request
+/// into the envelope and parsed both at once, so a variant it cannot spell
+/// answers "could not parse the request" rather than "update the Dray app";
+/// from v5 on the app reads `v` alone first, so the next variant added gets
+/// the refusal that names the cure.
 pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
@@ -234,7 +235,7 @@ pub enum BrowserAction {
     },
     Is { what: Is, at: Locator },
     /// Whichever is set: a selector to appear, milliseconds, a URL fragment,
-    /// visible text, or a load state (`load`, `networkidle`).
+    /// visible text, or `load` for the page to finish loading.
     Wait {
         #[serde(default)]
         selector: Option<String>,
@@ -247,8 +248,9 @@ pub enum BrowserAction {
         #[serde(default)]
         load: Option<String>,
     },
-    /// PNG to `path`, or a file under `~/.dray/browser/shots`; `full` is the
-    /// whole document rather than the viewport.
+    /// PNG to `path`, which must sit under the session's checkout, or a file
+    /// under `~/.dray/browser/shots`; `full` is the whole document rather
+    /// than the viewport.
     Screenshot {
         #[serde(default)]
         path: Option<String>,

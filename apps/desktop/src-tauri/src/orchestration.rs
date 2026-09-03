@@ -191,17 +191,27 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
         .await
         .context("could not read the request")?;
 
-    let response = match serde_json::from_str::<Envelope>(&line) {
-        // Answered before the request is even looked at: an old CLI against a
-        // new app must be told to upgrade, not handed a guess at what it meant.
-        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(mismatch(envelope.v)),
-        Ok(envelope) => match dispatch(envelope.request, app).await {
+    // Answered before the request is even looked at: an old CLI against a
+    // new app must be told to upgrade, not handed a guess at what it meant —
+    // and a *new* CLI against an old app must be told the same, which is why
+    // `v` is read on its own first. `Envelope` flattens the request in, so a
+    // variant this build cannot spell fails the whole parse and the version
+    // would never be seen.
+    #[derive(serde::Deserialize)]
+    struct Version {
+        v: u32,
+    }
+    let response = match serde_json::from_str::<Version>(&line) {
+        Ok(Version { v }) if v != PROTOCOL_VERSION => Response::error(mismatch(v)),
+        _ => match serde_json::from_str::<Envelope>(&line) {
+            Ok(envelope) => match dispatch(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
             // string is what it reads back as tool output.
-            Err(e) => Response::error(format!("{e:#}")),
+                Err(e) => Response::error(format!("{e:#}")),
+            },
+            Err(e) => Response::error(format!("could not parse the request: {e}")),
         },
-        Err(e) => Response::error(format!("could not parse the request: {e}")),
     };
 
     write_half

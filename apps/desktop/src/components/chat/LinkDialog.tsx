@@ -1,4 +1,5 @@
 import { Copy, CornerDownLeft, ExternalLink } from "lucide-react";
+import { useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +24,7 @@ import { dismissLink, resolveLink, usePendingLink } from "@/lib/openLink";
 /// host is the reason to show it and the tail is where a link lies.
 export default function LinkDialog() {
   const url = usePendingLink();
+  const action = useRef<HTMLButtonElement>(null);
 
   const copy = async () => {
     if (url) await navigator.clipboard.writeText(url);
@@ -36,12 +38,12 @@ export default function LinkDialog() {
           row set the width and run out past the edge. */}
       <AlertDialogContent
         className="max-w-120"
-        // Radix focuses Cancel on open, so Return would dismiss. The answer
-        // wanted from a bare Return is the in-app one.
-        onKeyDown={(e) => {
-          if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.altKey) return;
+        // Radix focuses Cancel on open, so Return would dismiss. Focus lands
+        // on the in-app answer instead — and only focus, so Return on any
+        // other button still presses that button.
+        onOpenAutoFocus={(e) => {
           e.preventDefault();
-          resolveLink(false);
+          action.current?.focus();
         }}
       >
         <AlertDialogHeader>
@@ -73,7 +75,7 @@ export default function LinkDialog() {
             <ExternalLink />
             System browser
           </Button>
-          <AlertDialogAction onClick={() => resolveLink(false)}>
+          <AlertDialogAction ref={action} onClick={() => resolveLink(false)}>
             Open in Dray
             <CornerDownLeft data-icon="inline-end" className="opacity-70" />
           </AlertDialogAction>

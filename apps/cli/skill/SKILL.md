@@ -234,18 +234,20 @@ dray browser find text "Forgot password" click
 dray browser find label "Email" fill "me@example.com"
 dray browser get text                         # the page's text; or html, value, attr, title, url, count, box
 dray browser is visible ".toast"
-dray browser wait ".results"                  # or 1500, --url /done, --text "Saved", --load networkidle
-dray browser screenshot --full                # prints the PNG's path
+dray browser wait ".results"                  # or 1500, or --url /done, --text "Saved", --load load
+dray browser screenshot --full                # prints the PNG's path; a path of your own must be inside the checkout
 dray browser eval "document.title"
-dray browser console | errors                 # what the page logged since last asked
-dray browser set device "iPhone 15"           # or set viewport 375 667
-dray browser tab | tab new [url] | tab <id> | tab close | back | forward | reload | close
+dray browser console                          # what the page logged since last asked; `errors` for errors alone
+dray browser set device "iPhone 15"           # or: set viewport 375 667
+dray browser tab                              # list tabs; also: tab new [url], tab <id>, tab close [id]
+dray browser back                             # also: forward, reload, close
 ```
 
 `snapshot` is the way to see a page: one line per element with a `@e<n>` ref
 that the actions take. Refs are re-numbered on every snapshot, so take a fresh
 one after anything that changes the page. `-i` lists interactive elements only,
-`-c` adds headings, `-s <selector>` limits it to one region. Read a screenshot
+`-c` interactive elements and headings, `-s <selector>` limits it to one
+region. Only `http(s)` pages open here. Read a screenshot
 with your image tooling only when the layout itself is the question; the
 snapshot is cheaper and names what to act on.
 

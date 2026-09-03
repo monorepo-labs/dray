@@ -236,7 +236,7 @@ enum BrowserVerb {
         args: Vec<String>,
     },
     /// Wait for a selector or a number of milliseconds, or for --url, --text
-    /// or --load (load, networkidle).
+    /// or --load load.
     Wait {
         target: Option<String>,
         #[arg(long)]
@@ -246,7 +246,8 @@ enum BrowserVerb {
         #[arg(long)]
         load: Option<String>,
     },
-    /// Save a PNG of the page and print its path.
+    /// Save a PNG of the page and print its path. A path must be inside
+    /// the session's checkout.
     Screenshot {
         path: Option<String>,
         /// The whole document rather than the viewport.

@@ -194,18 +194,45 @@ fn tab_state(tab: i32) -> Option<(String, String, bool)> {
 /// start — a click's reply lands before the renderer has begun leaving the
 /// page — so this first watches for loading to *begin*, up to a short
 /// window, or "not loading" is answered before the previous page has even
-/// been left and the next command reads the old URL.
-async fn wait_loaded(tab: i32) {
+/// been left and the next command reads the old URL. Still loading at the
+/// deadline is an error, not a success with a half-loaded page behind it.
+async fn wait_loaded(tab: i32) -> Result<(), String> {
     let start = Instant::now();
     let mut seen_loading = false;
     while start.elapsed() < LOAD_TIMEOUT {
         match tab_state(tab) {
             Some((_, _, true)) => seen_loading = true,
-            Some(_) if seen_loading || start.elapsed() > Duration::from_millis(600) => return,
+            Some(_) if seen_loading || start.elapsed() > Duration::from_millis(600) => return Ok(()),
             Some(_) => {}
-            None => return,
+            None => return Ok(()),
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(format!("the page is still loading after {}s", LOAD_TIMEOUT.as_secs()))
+}
+
+/// `dray browser` opens web pages. `file://` would hand an agent every file
+/// the app can read, through `get text`; the other schemes are Chromium's
+/// own.
+fn web_url(url: &str) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower == "about:blank" {
+        return Ok(());
+    }
+    match lower.split_once(':') {
+        Some((scheme, _)) if scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) => {
+            Err(format!("only http and https pages can be opened from here, not {scheme}:"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A tab id the caller may act on: one of this session's.
+fn owned(session: &str, id: i32) -> Result<i32, String> {
+    if tabs_of(session).iter().any(|t| t.id == id) {
+        Ok(id)
+    } else {
+        Err(format!("no tab {id} in this session; `dray browser tab` lists them"))
     }
 }
 
@@ -246,16 +273,29 @@ async fn mouse(tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(),
 }
 
 /// The viewport centre of the element, scrolled into view first so a click
-/// lands on it rather than on whatever covers an off-screen point.
+/// lands on it rather than on whatever covers an off-screen point — and
+/// refused where something else *does* cover that point, since the click
+/// would land on the cover and report success.
 async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
     let point = with_element(
         tab,
         at,
-        "el.scrollIntoView({ block: 'center', inline: 'center' }); \
+        "if (!__visible(el)) return { hidden: true }; \
+         el.scrollIntoView({ block: 'center', inline: 'center' }); \
          const r = el.getBoundingClientRect(); \
-         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };",
+         const x = r.left + r.width / 2, y = r.top + r.height / 2; \
+         const hit = document.elementFromPoint(x, y); \
+         if (hit && !(el.contains(hit) || hit.contains(el))) \
+           return { covered: hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') }; \
+         return { x, y };",
     )
     .await?;
+    if point.get("hidden").is_some() {
+        return Err(format!("{} is not visible", describe_locator(at)));
+    }
+    if let Some(cover) = point.get("covered").and_then(Value::as_str) {
+        return Err(format!("{} is covered by <{cover}>", describe_locator(at)));
+    }
     Ok((point["x"].as_f64().unwrap_or(0.0), point["y"].as_f64().unwrap_or(0.0)))
 }
 
@@ -281,7 +321,19 @@ async fn focus(tab: i32, at: &Locator, clear: bool) -> Result<(), String> {
 }
 
 async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
-    let now = with_element(tab, at, "return !!el.checked;").await?;
+    // The same reading `is checked` takes, so an ARIA switch is toggled
+    // rather than reported already there.
+    let now = with_element(
+        tab,
+        at,
+        "if (!/^(checkbox|radio)$/.test(el.type || '') && !/^(checkbox|radio|switch|menuitemcheckbox)$/.test(el.getAttribute('role') || '')) \
+           return { notCheckable: true }; \
+         return !!el.checked || el.getAttribute('aria-checked') === 'true';",
+    )
+    .await?;
+    if now.get("notCheckable").is_some() {
+        return Err(format!("{} is not a checkbox", describe_locator(at)));
+    }
     if now == Value::Bool(on) {
         return Ok(());
     }
@@ -322,6 +374,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
     let clear = matches!(action, BrowserAction::Fill { .. });
     match action {
         BrowserAction::Open { url } => {
+            web_url(&url)?;
             let tab = match active_id(session) {
                 Some(tab) => {
                     browser_open(session.to_string(), url, false)?;
@@ -333,7 +386,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     new_tab(session, &before).await?
                 }
             };
-            wait_loaded(tab).await;
+            wait_loaded(tab).await?;
             Ok(page(tab))
         }
         BrowserAction::Back | BrowserAction::Forward | BrowserAction::Reload => {
@@ -344,7 +397,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 _ => "reload",
             };
             browser_nav(session.to_string(), verb.into())?;
-            wait_loaded(tab).await;
+            wait_loaded(tab).await?;
             Ok(page(tab))
         }
         BrowserAction::Close => {
@@ -369,21 +422,24 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((text, Value::Array(data)))
         }
         BrowserAction::TabNew { url } => {
+            let url = url.unwrap_or_else(|| "about:blank".into());
+            web_url(&url)?;
             let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            browser_open(session.to_string(), url.unwrap_or_else(|| "about:blank".into()), true)?;
+            browser_open(session.to_string(), url, true)?;
             let tab = new_tab(session, &before).await?;
-            wait_loaded(tab).await;
+            wait_loaded(tab).await?;
             let (text, mut data) = page(tab);
             data["id"] = json!(tab);
             Ok((format!("{tab} {text}"), data))
         }
         BrowserAction::TabSwitch { id } => {
+            let id = owned(session, id)?;
             browser_activate(session.to_string(), id)?;
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {
             let id = match id {
-                Some(id) => id,
+                Some(id) => owned(session, id)?,
                 None => active_tab(session)?,
             };
             browser_close(session.to_string(), id)?;
@@ -399,7 +455,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Click { at } => {
             let tab = active_tab(session)?;
             click(tab, &at, 1).await?;
-            wait_loaded(tab).await;
+            wait_loaded(tab).await?;
             ok(format!("clicked {}", describe_locator(&at)))
         }
         BrowserAction::DblClick { at } => {
@@ -428,7 +484,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let (down, up) = key_events(&key)?;
             cdp(tab, "Input.dispatchKeyEvent", down).await?;
             cdp(tab, "Input.dispatchKeyEvent", up).await?;
-            wait_loaded(tab).await;
+            wait_loaded(tab).await?;
             ok(format!("pressed {key}"))
         }
         BrowserAction::Check { at } => {
@@ -515,7 +571,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 Is::Enabled => "return !el.disabled && el.getAttribute('aria-disabled') !== 'true';",
                 Is::Checked => "return !!el.checked || el.getAttribute('aria-checked') === 'true';",
             };
-            let value = with_element(tab, &at, body).await.unwrap_or(Value::Bool(false));
+            // No match is `false`; a broken selector or a dead tab is an
+            // error, or a typo reads as page state.
+            let value = match with_element(tab, &at, body).await {
+                Ok(value) => value,
+                Err(e) if e.starts_with("nothing matches") => Value::Bool(false),
+                Err(e) => return Err(e),
+            };
             let yes = value == Value::Bool(true);
             Ok((yes.to_string(), json!({ "value": yes })))
         }
@@ -526,11 +588,11 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 return ok(format!("waited {ms}ms"));
             }
             if let Some(state) = load {
-                wait_loaded(tab).await;
-                if state == "networkidle" {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                if state != "load" {
+                    return Err(format!("wait --load takes `load`; nothing here measures {state}"));
                 }
-                return ok(format!("{state}: {}", page(tab).0));
+                wait_loaded(tab).await?;
+                return ok(format!("loaded: {}", page(tab).0));
             }
             let (probe, what) = if let Some(sel) = selector {
                 let at = serde_json::to_string(&Locator::Target { target: sel.clone() }).unwrap();
@@ -565,7 +627,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 .decode(data)
                 .map_err(|e| format!("bad image data: {e}"))?;
             let path = match path {
-                Some(p) => PathBuf::from(p),
+                Some(p) => screenshot_path(session, &p).await?,
                 None => {
                     let dir = browser_dir().join("shots");
                     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -634,6 +696,35 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("{label} {w}×{h}"))
         }
     }
+}
+
+/// A caller's screenshot path, admitted only under the session's own
+/// checkout. `dray` runs with no consent card and this write truncates, so
+/// an open path would let a page-steered agent overwrite any file the app
+/// can; the parent is canonicalized so a symlink cannot point back out.
+async fn screenshot_path(session: &str, given: &str) -> Result<PathBuf, String> {
+    let cwd = crate::store::get_session_index_item(session)
+        .await
+        .ok()
+        .flatten()
+        .map(|item| PathBuf::from(item.cwd))
+        .ok_or("this session has no checkout to write under")?;
+    let cwd = std::fs::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    let full = if Path::new(given).is_absolute() { PathBuf::from(given) } else { cwd.join(given) };
+    let name = full.file_name().ok_or("the path names no file")?.to_owned();
+    let parent = full.parent().ok_or("the path names no directory")?;
+    let parent = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    if !parent.starts_with(&cwd) {
+        return Err(format!(
+            "screenshots go under the session's checkout ({}); with no path, under ~/.dray/browser/shots",
+            cwd.display()
+        ));
+    }
+    let path = parent.join(name);
+    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Err(format!("{} is a symlink", path.display()));
+    }
+    Ok(path)
 }
 
 #[derive(Clone, Serialize)]
@@ -771,7 +862,7 @@ const HELPERS_JS: &str = r#"
   const __find = (loc) => {
     switch (loc.by) {
       case 'target': {
-        const sel = loc.target.startsWith('@') ? '[data-dray-ref="' + loc.target.slice(1) + '"]' : loc.target;
+        const sel = loc.target.startsWith('@') ? '[data-dray-ref="' + CSS.escape(loc.target.slice(1)) + '"]' : loc.target;
         return [...document.querySelectorAll(sel)];
       }
       case 'nth': {
@@ -798,7 +889,10 @@ const HELPERS_JS: &str = r#"
       case 'placeholder': return __attrMatch('placeholder', loc.placeholder, loc.exact);
       case 'alt': return __attrMatch('alt', loc.alt, loc.exact);
       case 'title': return __attrMatch('title', loc.title, loc.exact);
-      case 'test_id': return [...document.querySelectorAll('[data-testid="' + loc.id + '"], [data-test-id="' + loc.id + '"]')];
+      case 'test_id': {
+        const id = CSS.escape(loc.id);
+        return [...document.querySelectorAll('[data-testid="' + id + '"], [data-test-id="' + id + '"]')];
+      }
     }
     return [];
   };
