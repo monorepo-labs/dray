@@ -1061,6 +1061,7 @@ dependencies = [
  "fff-search",
  "futures-util",
  "libc",
+ "notify",
  "notify-rust",
  "reqwest 0.12.28",
  "rubato",

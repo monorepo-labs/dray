@@ -1,5 +1,6 @@
 import type { ReactNode, SyntheticEvent } from "react";
 
+import { useChatSession } from "@/hooks/useChatSession";
 import { openPath } from "@/hooks/useDocs";
 import { cn } from "@/lib/utils";
 
@@ -38,11 +39,17 @@ export default function FileLink({
   className?: string;
   children?: ReactNode;
 }) {
+  // Whose transcript drew this link, and so whose panel a doc opened here
+  // belongs in. Read from context rather than passed down: three components in
+  // between would carry an id they never look at, and the transcript that drew
+  // the link is the right answer even where it is not the selected session.
+  const { sessionId } = useChatSession();
+
   const open = (e: SyntheticEvent) => {
     e.stopPropagation();
     // Markdown opens in the Docs panel and everything else in the reader's
     // editor. A file this app can already render is not one to leave Dray for.
-    openPath(path);
+    openPath(sessionId, path);
   };
 
   return (

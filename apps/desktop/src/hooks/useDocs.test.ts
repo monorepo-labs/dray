@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isDirty, withDiskText, type Doc, type DocBody } from "./useDocs";
+// The store reads files through Tauri, which does not exist in this
+// environment. Only the read is faked — every rule under test is the store's.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: () => Promise.resolve("# hi") }));
+
+import {
+  closeDoc,
+  docsFor,
+  isDirty,
+  openDoc,
+  withDiskText,
+  type Doc,
+  type DocBody,
+} from "./useDocs";
 
 const ready = (base: string, draft = base, rest: Partial<DocBody> = {}) =>
   ({
@@ -60,6 +72,13 @@ describe("withDiskText", () => {
     expect(withDiskText(before, "old")).toBe(before);
   });
 
+  // `stale` means "disk differs from base", so a file put back to what the draft
+  // was made from is not stale any more. Left standing the flag is unclearable —
+  // nothing else lowers it and `saveDoc` refuses to send while it is up.
+  it("lowers a standing flag where the file comes back to base", () => {
+    expect(withDiskText(ready("old", "mine", { stale: true }), "old").stale).toBe(false);
+  });
+
   // A doc already flagged and then reloaded elsewhere must not clear its own
   // warning by adopting: the draft is still unsaved.
   it("keeps a standing flag while the draft is still dirty", () => {
@@ -70,5 +89,38 @@ describe("withDiskText", () => {
     const next = withDiskText(ready("old", "old", { stale: true }), "theirs");
     expect(next.stale).toBe(false);
     expect(next.draft).toBe("theirs");
+  });
+});
+
+// The bug this pins: the store was one list for the whole app, so a file opened
+// from one session's transcript sat in every other session's panel.
+describe("docs belong to the session they were opened from", () => {
+  const paths = (sid: string) => docsFor(sid).docs.map((doc) => doc.path);
+
+  it("shows a session its own docs and nobody else's", () => {
+    openDoc("a", "/a/README.md");
+    openDoc("b", "/b/NOTES.md");
+
+    expect(paths("a")).toEqual(["/a/README.md"]);
+    expect(paths("b")).toEqual(["/b/NOTES.md"]);
+    expect(docsFor("a").activePath).toBe("/a/README.md");
+    expect(docsFor("b").activePath).toBe("/b/NOTES.md");
+  });
+
+  // Two sessions can hold the same file, and closing it in one says nothing
+  // about the other. Interleaved deliberately: every mutator takes the session
+  // it acts on, so nothing here depends on the order they were called in.
+  it("closes only for the session that asked", () => {
+    openDoc("c", "/shared/DOC.md");
+    openDoc("d", "/shared/DOC.md");
+
+    closeDoc("d", "/shared/DOC.md");
+    expect(paths("d")).toEqual([]);
+    expect(paths("c")).toEqual(["/shared/DOC.md"]);
+  });
+
+  it("opens nothing with no session", () => {
+    openDoc(null, "/nowhere/README.md");
+    expect(docsFor(null).docs).toEqual([]);
   });
 });

@@ -787,6 +787,7 @@ pub fn run() {
             quit::dismiss_quit,
             docs::read_doc,
             docs::save_doc,
+            docs::watch_docs,
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,

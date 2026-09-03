@@ -514,7 +514,7 @@ function App() {
 
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
-  const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs();
+  const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs(selectedSessionId);
   const hasDocsTab = docs.length > 0;
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
@@ -587,6 +587,22 @@ function App() {
     prMarks.refresh();
   }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
 
+  // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
+  // only ever holds the *selected* session's files: anything written while the
+  // reader was somewhere else was written unwatched. A turn ending needs no
+  // rule of its own — the agent's write is exactly what the watcher sees.
+  //
+  // One value rather than three conditions: opening the tab, stepping to another
+  // chip and switching session all put a different file in front of the reader,
+  // and each wants the same read. A dirty draft is flagged rather than replaced,
+  // so this cannot eat an edit, and a doc whose first read is still out is
+  // skipped, which is what stops opening the tab reading the same file twice.
+  const shownDoc =
+    panelShown && activeTab === "docs" ? `${selectedSessionId}\n${activeDocPath}` : null;
+  useEffect(() => {
+    if (shownDoc) refreshActiveDoc(selectedSessionId);
+  }, [shownDoc]);
+
   // From the sidebar's own per-repo read, not a fourth git call: once a pull
   // request exists the panel is where it is acted on, and a Create PR button
   // beside it would open a duplicate.
@@ -649,7 +665,7 @@ function App() {
           ? { onRefresh: issueData.refresh, loading: issueData.loading }
           : activeTab === "docs"
             ? {
-                onRefresh: refreshActiveDoc,
+                onRefresh: () => refreshActiveDoc(selectedSessionId),
                 loading: activeDoc?.body.status === "loading",
               }
             : null;
@@ -857,7 +873,9 @@ function App() {
   // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
   // `useHotkey` claims every chord it matches, and ⌘S is the browser's own save
   // — left bound everywhere it would eat the key from nothing at all.
-  useHotkey("s", saveActiveDoc, { enabled: panelShown && activeTab === "docs" });
+  useHotkey("s", () => saveActiveDoc(selectedSessionId), {
+    enabled: panelShown && activeTab === "docs",
+  });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks
@@ -1132,7 +1150,10 @@ function App() {
               <PrPanel branch={prBranch} {...pullRequests} />
             </TabBody>
             <TabBody active={hasDocsTab && activeTab === "docs"}>
-              <DocsPanel />
+              <DocsPanel
+                sessionId={selectedSessionId}
+                active={panelShown && activeTab === "docs" && viewTab === "chat"}
+              />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
               <IssuePanel

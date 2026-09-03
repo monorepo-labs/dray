@@ -1,6 +1,7 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import { isMarkdownPath } from "@/lib/markdown";
 import { openFile } from "@/lib/openWith";
@@ -62,26 +63,53 @@ export function isDirty(doc: Doc): boolean {
 /// sends as `expect`, and moving it to the disk text would turn the backend's
 /// compare-and-swap into a silent overwrite of the write that caused this.
 export function withDiskText(body: Ready, disk: string): Ready {
-  if (disk === body.base) return body;
+  // `stale` *means* "disk differs from base", so a file put back to what the
+  // draft was made from is no longer stale — the flag has to come down as
+  // readily as it went up. Left standing it is unclearable: nothing else lowers
+  // it, and `saveDoc` refuses to send while it is set, so the reader is locked
+  // out of saving a file nothing is wrong with.
+  if (disk === body.base) return body.stale ? { ...body, stale: false } : body;
   if (body.draft === body.base) {
     return { ...body, base: disk, draft: disk, stale: false };
   }
   return { ...body, stale: true };
 }
 
-/// Open docs, in the order they were opened.
+/// Open docs, per session, in the order they were opened.
 ///
-/// Keyed by absolute path and held for the whole app rather than per session,
-/// for two reasons. A file on disk is one thing, so two sessions each holding
-/// their own draft of it would be a race with nothing on screen to see it
-/// happen. And an open doc has to survive a session switch — the same bargain
-/// the panel's hide-don't-unmount makes, since the reader's place in a file is
-/// as much context as their scroll position in a diff.
+/// Keyed by session because a doc is opened from a transcript, and a transcript
+/// belongs to one session — a chip strip held for the whole app put a file
+/// opened in one session on screen in every other one, with nothing but its
+/// path to say where it came from. The panel hides rather than unmounts either
+/// way, so a session's own docs still survive being switched away from and
+/// back.
 ///
-/// The cost is that a doc opened from one project's transcript stays on screen
-/// while another session is selected. Its full path is on the chip's `title`.
-let docs: Doc[] = [];
-let activePath: string | null = null;
+/// Two sessions can therefore hold their own draft of one file. That is not a
+/// silent race: `saveDoc` sends the text its draft was made from as `expect`
+/// and the backend re-reads before writing, so the second save answers `stale`
+/// and draws the strip rather than overwriting the first.
+const bySession = new Map<string, SessionDocs>();
+
+type SessionDocs = { docs: Doc[]; activePath: string | null };
+
+/// Shared by every session that has opened nothing, so an untouched session
+/// costs no entry and the snapshot keeps one identity across its renders.
+const EMPTY: SessionDocs = { docs: [], activePath: null };
+
+/// Every export here takes the session it acts on, and there is deliberately no
+/// module-level "current session" to fall back on.
+///
+/// One was tried, written from `App`'s selection, and it is a race however it is
+/// written: during render it publishes to a render React may abandon, and from
+/// an effect it lags the commit — so a click or a `doc_changed` landing in that
+/// window acts on the session just left, and where both hold the same file that
+/// is the wrong draft written to disk. An argument cannot lag anything, since it
+/// arrives with the render that drew the control.
+///
+/// The one caller not holding an id already is the transcript's file link, four
+/// components deep, and it reads `useChatSession` — which is the id of the
+/// transcript that drew the link, the only correct answer there anyway.
+
 /// Bumped every time a path is opened by a click, an already-open one included.
 /// What tells `App` to bring the pane forward — the count cannot, since
 /// reopening an open file leaves it unchanged.
@@ -96,50 +124,64 @@ const listeners = new Set<() => void>();
 ///
 /// Per path rather than one counter for the store, unlike `usePrMarks`: a
 /// single number would make opening a second file discard the first file's
-/// read, and one draft's edits have nothing to say about another's.
+/// read, and one draft's edits have nothing to say about another's. Per
+/// *session* as well, since two sessions holding one file hold two drafts, and
+/// closing it in one must not cancel the other's read.
 const seqByPath = new Map<string, number>();
 
-function issue(path: string): number {
-  const next = (seqByPath.get(path) ?? 0) + 1;
-  seqByPath.set(path, next);
+function issue(sid: string, path: string): number {
+  const key = `${sid}\n${path}`;
+  const next = (seqByPath.get(key) ?? 0) + 1;
+  seqByPath.set(key, next);
   return next;
 }
 
-function current(path: string, seq: number): boolean {
-  return seqByPath.get(path) === seq;
+function current(sid: string, path: string, seq: number): boolean {
+  return seqByPath.get(`${sid}\n${path}`) === seq;
 }
 
-type DocsSnapshot = { docs: Doc[]; activePath: string | null; opened: number };
+function state(sid: string): SessionDocs {
+  return bySession.get(sid) ?? EMPTY;
+}
 
-/// What `useSyncExternalStore` reads. Rebuilt in `emit` rather than on read,
-/// because the getter *is* the change signal — an object built fresh each call
-/// is a new identity every render, which React reads as an endless stream of
-/// changes and re-renders forever.
-let snapshot: DocsSnapshot = { docs, activePath, opened };
+/// Merges over what the session holds, so a caller moving one field cannot drop
+/// another by forgetting to name it.
+function write(sid: string, next: Partial<SessionDocs>) {
+  bySession.set(sid, { ...state(sid), ...next });
+  emit();
+}
+
+type DocsSnapshot = SessionDocs & { opened: number };
+
+/// Bumped on every change. `useSyncExternalStore` subscribes to *this* rather
+/// than to a built snapshot object, so the view each caller reads is derived
+/// from the session id it passed in — no shared "current session" for a read to
+/// be wrong about.
+let version = 0;
 
 function emit() {
-  snapshot = { docs, activePath, opened };
+  version += 1;
   for (const listener of listeners) listener();
 }
 
-function find(path: string): Doc | undefined {
-  return docs.find((doc) => doc.path === path);
+function find(sid: string, path: string): Doc | undefined {
+  return state(sid).docs.find((doc) => doc.path === path);
 }
 
 /// Replaces one doc in place, leaving the rest and their identities alone.
 /// A no-op where the path is gone, which is what most of the async guards below
 /// come down to.
-function patch(path: string, next: (doc: Doc) => Doc) {
+function patch(sid: string, path: string, next: (doc: Doc) => Doc) {
+  const { docs } = state(sid);
   const at = docs.findIndex((doc) => doc.path === path);
   if (at === -1) return;
-  docs = docs.map((doc, i) => (i === at ? next(doc) : doc));
-  emit();
+  write(sid, { docs: docs.map((doc, i) => (i === at ? next(doc) : doc)) });
 }
 
 /// Same, for the ready case alone — every rule below is about a doc whose text
 /// has already arrived.
-function patchReady(path: string, next: (body: Ready) => Ready) {
-  patch(path, (doc) =>
+function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
+  patch(sid, path, (doc) =>
     doc.body.status === "ready" ? { ...doc, body: next(doc.body) } : doc,
   );
 }
@@ -153,8 +195,8 @@ function patchReady(path: string, next: (body: Ready) => Ready) {
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
 /// store would put the docs feature's own rule somewhere it cannot be read from.
-export function openPath(path: string): void {
-  if (isMarkdownPath(path)) return openDoc(path);
+export function openPath(sid: string | null, path: string): void {
+  if (isMarkdownPath(path)) return openDoc(sid, path);
   void openFile(path);
 }
 
@@ -162,35 +204,41 @@ export function openPath(path: string): void {
 ///
 /// A path that is already open is only activated. It is not re-read, which
 /// would be a way for a second click on a chip's own file to throw away a draft.
-export function openDoc(path: string): void {
+export function openDoc(sid: string | null, path: string): void {
+  // Nothing to open a doc *into*. The panel belongs to a session, and the one
+  // route here with none selected is the issues page, which draws no panel.
+  if (!sid) return;
+
   opened += 1;
-  activePath = path;
+  const { docs } = state(sid);
 
-  if (find(path)) return emit();
+  if (find(sid, path)) return write(sid, { activePath: path });
 
-  docs = [...docs, { path, mode: "view", body: { status: "loading" } }];
-  emit();
+  write(sid, {
+    docs: [...docs, { path, mode: "view", body: { status: "loading" } }],
+    activePath: path,
+  });
 
-  const seq = issue(path);
+  const seq = issue(sid, path);
   invoke<string>("read_doc", { path })
     .then((text) => {
-      if (!current(path, seq)) return;
-      patch(path, (doc) => ({
+      if (!current(sid, path, seq)) return;
+      patch(sid, path, (doc) => ({
         ...doc,
         body: { status: "ready", base: text, draft: text, stale: false, saving: false, saveError: null },
       }));
     })
     .catch((err) => {
-      if (!current(path, seq)) return;
-      patch(path, (doc) => ({ ...doc, body: { status: "error", message: String(err) } }));
+      if (!current(sid, path, seq)) return;
+      patch(sid, path, (doc) => ({ ...doc, body: { status: "error", message: String(err) } }));
     });
 }
 
 /// Brings an already-open doc forward.
-export function selectDoc(path: string) {
-  if (activePath === path) return;
-  activePath = path;
-  emit();
+export function selectDoc(sid: string | null, path: string) {
+  if (!sid) return;
+  if (state(sid).activePath === path) return;
+  write(sid, { activePath: path });
 }
 
 /// Closes a doc, discarding whatever draft it held.
@@ -198,41 +246,45 @@ export function selectDoc(path: string) {
 /// Closing the active one has to leave `activePath` naming a doc that is still
 /// open, or `null` once the last one goes. A strip of chips pointing at nothing
 /// is what a stale `activePath` looks like on screen.
-export function closeDoc(path: string) {
+export function closeDoc(sid: string | null, path: string) {
+  if (!sid) return;
+  const { docs, activePath } = state(sid);
   const at = docs.findIndex((doc) => doc.path === path);
   if (at === -1) return;
   // A read or save still out for this path must not write into the store after
   // the reader has closed it.
-  issue(path);
-  docs = docs.filter((doc) => doc.path !== path);
-  if (activePath === path) {
-    activePath = docs[at]?.path ?? docs[at - 1]?.path ?? null;
-  }
-  emit();
+  issue(sid, path);
+  const left = docs.filter((doc) => doc.path !== path);
+  write(sid, {
+    docs: left,
+    activePath:
+      activePath === path ? (left[at]?.path ?? left[at - 1]?.path ?? null) : activePath,
+  });
 }
 
 /// Switches one doc between reading and writing.
-export function setDocMode(path: string, mode: DocMode) {
-  patch(path, (doc) => (doc.mode === mode ? doc : { ...doc, mode }));
+export function setDocMode(sid: string | null, path: string, mode: DocMode) {
+  if (sid) patch(sid, path, (doc) => (doc.mode === mode ? doc : { ...doc, mode }));
 }
 
 /// Takes a keystroke. The draft is the only thing that moves — dirtiness is read
 /// back off it, and staleness is about the file rather than about the edit.
-export function setDocDraft(path: string, draft: string) {
-  patchReady(path, (body) => (body.draft === draft ? body : { ...body, draft }));
+export function setDocDraft(sid: string | null, path: string, draft: string) {
+  if (sid) patchReady(sid, path, (body) => (body.draft === draft ? body : { ...body, draft }));
 }
 
 /// Re-reads the file and takes it, discarding the draft. What the stale strip's
 /// Reload offers.
-export function reloadDoc(path: string) {
-  const doc = find(path);
+export function reloadDoc(sid: string | null, path: string) {
+  if (!sid) return;
+  const doc = find(sid, path);
   if (doc?.body.status !== "ready" || doc.body.saving) return;
 
-  const seq = issue(path);
+  const seq = issue(sid, path);
   invoke<string>("read_doc", { path })
     .then((text) => {
-      if (!current(path, seq)) return;
-      patchReady(path, (body) => ({
+      if (!current(sid, path, seq)) return;
+      patchReady(sid, path, (body) => ({
         ...body,
         base: text,
         draft: text,
@@ -241,8 +293,8 @@ export function reloadDoc(path: string) {
       }));
     })
     .catch((err) => {
-      if (!current(path, seq)) return;
-      patchReady(path, (body) => ({ ...body, saveError: String(err) }));
+      if (!current(sid, path, seq)) return;
+      patchReady(sid, path, (body) => ({ ...body, saveError: String(err) }));
     });
 }
 
@@ -251,68 +303,89 @@ export function reloadDoc(path: string) {
 /// `expect` is the text this draft was made from, and the backend re-reads
 /// before writing — so a save that would lose somebody else's write answers
 /// `"stale"` and writes nothing. `force` sends `null` instead, which is the
-/// reader saying they have read the strip and want their own version anyway.
-export function saveDoc(path: string, { force = false }: { force?: boolean } = {}) {
-  const doc = find(path);
-  if (doc?.body.status !== "ready" || doc.body.saving) return;
+/// reader saying they have been shown the clash and want their own version
+/// anyway.
+///
+/// Where the watcher has already flagged the doc, nothing is sent at all: the
+/// backend could only answer `Stale`, and the strip saying so is already on
+/// screen. Where it has not, the compare-and-swap catches it, which is what
+/// covers a file that moved between the last read and the press.
+export async function saveDoc(
+  sid: string | null,
+  path: string,
+  { force = false }: { force?: boolean } = {},
+): Promise<SaveOutcome | null> {
+  if (!sid) return null;
+  const doc = find(sid, path);
+  if (doc?.body.status !== "ready" || doc.body.saving) return null;
+
+  if (doc.body.stale && !force) return "stale";
 
   // Captured now. The reader can type while the write is out, so adopting
   // whatever the draft holds when the promise resolves would mark an edit made
   // mid-save as already saved.
   const sent = doc.body.draft;
   const expect = force ? null : doc.body.base;
-  const seq = issue(path);
+  const seq = issue(sid, path);
 
-  patchReady(path, (body) => ({ ...body, saving: true, saveError: null }));
+  patchReady(sid, path, (body) => ({ ...body, saving: true, saveError: null }));
 
-  invoke<SaveOutcome>("save_doc", { path, text: sent, expect })
-    .then((outcome) => {
-      if (!current(path, seq)) return;
-      patchReady(path, (body) =>
-        outcome === "stale"
-          ? { ...body, saving: false, stale: true }
-          : { ...body, saving: false, base: sent, stale: false, saveError: null },
-      );
-    })
-    .catch((err) => {
-      if (!current(path, seq)) return;
-      patchReady(path, (body) => ({ ...body, saving: false, saveError: String(err) }));
-    });
+  try {
+    const outcome = await invoke<SaveOutcome>("save_doc", { path, text: sent, expect });
+    if (!current(sid, path, seq)) return null;
+    patchReady(sid, path, (body) =>
+      outcome === "stale"
+        ? { ...body, saving: false, stale: true }
+        : { ...body, saving: false, base: sent, stale: false, saveError: null },
+    );
+    return outcome;
+  } catch (err) {
+    if (!current(sid, path, seq)) return null;
+    patchReady(sid, path, (body) => ({ ...body, saving: false, saveError: String(err) }));
+    return null;
+  }
 }
 
 /// What ⌘S calls. A no-op where there is nothing to write, so the chord is free
 /// to be pressed out of habit.
-export function saveActiveDoc() {
+export function saveActiveDoc(sid: string | null) {
+  if (!sid) return;
+  const { activePath } = state(sid);
   if (!activePath) return;
-  const doc = find(activePath);
+  const doc = find(sid, activePath);
   if (!doc || !isDirty(doc)) return;
-  saveDoc(activePath);
+  void saveDoc(sid, activePath);
 }
 
-/// Re-reads the doc on screen, per `withDiskText` — a clean one adopts the file,
-/// a dirty one is flagged and keeps its draft.
+/// Re-reads the doc on screen. What ⌘R and the tab row's button call.
+export function refreshActiveDoc(sid: string | null) {
+  if (!sid) return;
+  const path = state(sid).activePath;
+  if (path) refreshDoc(sid, path);
+}
+
+/// Re-reads one open doc, per `withDiskText` — a clean one adopts the file, a
+/// dirty one is flagged and keeps its draft, which is what makes this safe to
+/// fire from a watcher while somebody is typing.
 ///
-/// A courtesy, and only for the active doc. The guarantee is the compare-and-
-/// swap at save time, which holds whether or not anything ever re-read; this
-/// exists so a reader watching an agent write the file they have open finds out
-/// before they press Save. Background docs are left alone, since a flag nobody
-/// is looking at buys nothing and every read is a round trip.
+/// The guarantee is the compare-and-swap at save time, which holds whether or
+/// not anything ever re-read; this is what lets a reader find out *before* they
+/// press Save rather than in a dialog after it.
 ///
-/// A doc whose first read failed is retried outright. ⌘R and the tab row's one
-/// button both land here, and a Refresh that did nothing on the one state with
-/// a visible error would be a control that provably cannot help.
-export function refreshActiveDoc() {
-  if (!activePath) return;
-  const path = activePath;
-  const doc = find(path);
+/// A doc whose first read failed is retried outright. Refresh landing on the one
+/// state with a visible error and doing nothing would be a control that provably
+/// cannot help.
+export function refreshDoc(sid: string | null, path: string) {
+  if (!sid) return;
+  const doc = find(sid, path);
   if (!doc || doc.body.status === "loading") return;
   if (doc.body.status === "ready" && doc.body.saving) return;
 
-  const seq = issue(path);
+  const seq = issue(sid, path);
   invoke<string>("read_doc", { path })
     .then((text) => {
-      if (!current(path, seq)) return;
-      patch(path, (it) =>
+      if (!current(sid, path, seq)) return;
+      patch(sid, path, (it) =>
         it.body.status === "ready"
           ? { ...it, body: withDiskText(it.body, text) }
           : {
@@ -329,8 +402,8 @@ export function refreshActiveDoc() {
       );
     })
     .catch((err) => {
-      if (!current(path, seq)) return;
-      patch(path, (it) =>
+      if (!current(sid, path, seq)) return;
+      patch(sid, path, (it) =>
         it.body.status === "ready"
           ? { ...it, body: { ...it.body, saveError: String(err) } }
           : { ...it, body: { status: "error", message: String(err) } },
@@ -345,11 +418,80 @@ function subscribe(listener: () => void) {
   };
 }
 
-function getSnapshot() {
-  return snapshot;
+/// One session's view of the store. Exported so the split between sessions can
+/// be tested without a renderer.
+export function docsFor(sid: string | null): DocsSnapshot {
+  return { ...(sid ? state(sid) : EMPTY), opened };
 }
 
-/// The open docs, and which one the panel is showing.
-export function useDocs(): DocsSnapshot {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+/// A session's open docs, and which one its panel is showing.
+///
+/// The subscription is to the version counter and the view is derived here, so
+/// two callers holding different sessions each read their own — where a single
+/// stored snapshot could only ever describe one of them.
+export function useDocs(sid: string | null): DocsSnapshot {
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  return docsFor(sid);
+}
+
+function getVersion() {
+  return version;
+}
+
+/// Keeps the open docs current with the files underneath them.
+///
+/// The watch set is re-armed whenever the open set changes — which a session
+/// switch is, so a session's docs stop being watched the moment its panel is off
+/// screen. An event landing after that finds nothing to patch and costs a
+/// no-op.
+///
+/// A clean doc adopts the new text silently, which is the whole point: an agent
+/// rewriting the file the reader is looking at should move the text on screen.
+/// A dirty one is flagged instead and keeps every keystroke, which is what puts
+/// the strip up over it with Discard and Overwrite to choose between.
+/// Every `watch_docs` call, in the order it was made.
+///
+/// The command replaces the whole watch set, so the last one to *arrive* is the
+/// one that stands — and two `invoke`s can land in either order. Arm, disarm and
+/// re-arm all go through here, so a stop cannot overtake the arming beside it
+/// and a stale set cannot win. StrictMode's mount/unmount/mount is the ordinary
+/// case, not a corner one.
+///
+/// A chain rather than a generation number checked in Rust: it is three lines on
+/// the side that already knows the order, and nothing has to be added to the
+/// wire for the backend to re-derive it. A failed call is swallowed so one
+/// cannot break the chain for the rest of the run — watching is best effort, and
+/// the panel keeps its Refresh button either way.
+let watching: Promise<unknown> = Promise.resolve();
+
+function watch(paths: string[]): Promise<unknown> {
+  watching = watching.then(() => invoke("watch_docs", { paths })).catch(() => {});
+  return watching;
+}
+
+export function useDocWatcher(sid: string | null) {
+  const { docs } = useDocs(sid);
+  // A joined key rather than the array itself, so a render that rebuilds the
+  // list without changing the set does not re-arm the watcher. Only ever a
+  // dependency — the paths sent are read off `docs`, never split back out of
+  // this, since a newline is legal in a path.
+  const key = docs.map((doc) => doc.path).join("\n");
+
+  useEffect(() => {
+    void watch(docsFor(sid).docs.map((doc) => doc.path));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, sid]);
+
+  // The panel unmounts when no session is selected, and a watcher left armed
+  // there emits into nothing for the rest of the run.
+  useEffect(() => () => void watch([]), []);
+
+  // Re-registered per session rather than held with `[]` deps and a ref: the
+  // watch set is this session's files, so an event arriving under a listener
+  // still closed over the last one would re-read a path that session may not
+  // even have open.
+  useEffect(() => {
+    const un = listen<string>("doc_changed", (event) => refreshDoc(sid, event.payload));
+    return () => void un.then((off) => off());
+  }, [sid]);
 }
