@@ -131,8 +131,14 @@ pub async fn list_commands(cwd: &str) -> Vec<SlashCommand> {
 /// difference is the whole bug this reintroduces if collapsed. A timed-out
 /// `skills/list` would otherwise send a row the reader picked out of the picker
 /// as four literal words — which is exactly the failure this file exists to fix,
-/// and it reports as an ordinary turn. Failing the send is louder and cheaper:
-/// the composer still holds the text, so retry is pressing send again.
+/// and it reports as an ordinary turn.
+///
+/// The error is worth having because it is a **no-op**, not because it is
+/// retryable: `deliver_prompt` calls this before it records anything, so a
+/// failure here leaves no event, no log line and no turn. The composer does
+/// clear the draft on send and does not put it back — true of every failed send,
+/// not just this one — so the reader retypes. That is a worse cure than it
+/// sounds and a better one than a session that answered the wrong prompt.
 pub async fn skill_item(client: &RpcClient, text: &str) -> Result<Option<Value>> {
     let Some(name) = text.strip_prefix('/').and_then(|rest| rest.split_whitespace().next()) else {
         return Ok(None);

@@ -575,7 +575,13 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
 ///
 /// A lookup that *failed* refuses the send rather than falling back to text —
 /// see [`commands::skill_item`], where the difference is the whole point.
-async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
+///
+/// Split from [`start_turn`] so the caller can run it **before** it records the
+/// reader's own message. It is the one part of a send that can fail after
+/// asking the child something, and `deliver_prompt` emits, holds and appends
+/// the `user_message` before it sends — so a failure past that point leaves a
+/// bubble in the transcript with no turn behind it, and a retry draws a second.
+pub async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
     let Some(skill) = commands::skill_item(&thread.client, text).await? else {
         return Ok(json!([{"type": "text", "text": text}]));
     };
@@ -595,10 +601,14 @@ async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
 /// answer names the turn. The answer is awaited so a refusal — an unsteerable
 /// turn, a thread that has gone — reaches the caller as an error instead of a
 /// prompt that vanished.
-pub async fn start_turn(thread: &Thread, text: &str) -> Result<()> {
+///
+/// Takes the input already built by [`turn_input`] rather than the raw text,
+/// so everything that can fail *before* the reader's message is recorded has
+/// already happened by the time this is called.
+pub async fn start_turn(thread: &Thread, input: Value) -> Result<()> {
     let mut params = json!({
         "threadId": thread.id,
-        "input": turn_input(thread, text).await?,
+        "input": input,
         "model": thread.settings.model,
         "approvalPolicy": thread.settings.approval_policy,
     });
