@@ -213,17 +213,17 @@ async fn wait_loaded(tab: i32) -> Result<(), String> {
 
 /// `dray browser` opens web pages. `file://` would hand an agent every file
 /// the app can read, through `get text`; the other schemes are Chromium's
-/// own.
+/// own. Judged on the *parsed* scheme, with the same WHATWG parser Chromium
+/// applies, since that parser strips tabs and newlines and a hand-rolled
+/// prefix check would pass `fi\tle://` as no scheme at all.
 fn web_url(url: &str) -> Result<(), String> {
-    let lower = url.trim().to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") || lower == "about:blank" {
+    if url.trim() == "about:blank" {
         return Ok(());
     }
-    match lower.split_once(':') {
-        Some((scheme, _)) if scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) => {
-            Err(format!("only http and https pages can be opened from here, not {scheme}:"))
-        }
-        _ => Ok(()),
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("{url:?} is not a URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        scheme => Err(format!("only http and https pages can be opened from here, not {scheme}:")),
     }
 }
 
@@ -285,8 +285,8 @@ async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
          const r = el.getBoundingClientRect(); \
          const x = r.left + r.width / 2, y = r.top + r.height / 2; \
          const hit = document.elementFromPoint(x, y); \
-         if (hit && !(el.contains(hit) || hit.contains(el))) \
-           return { covered: hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') }; \
+         if (!hit || !el.contains(hit)) \
+           return { covered: hit ? hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') : 'nothing' }; \
          return { x, y };",
     )
     .await?;
@@ -320,24 +320,31 @@ async fn focus(tab: i32, at: &Locator, clear: bool) -> Result<(), String> {
     with_element(tab, at, &body).await.map(|_| ())
 }
 
-async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
-    // The same reading `is checked` takes, so an ARIA switch is toggled
-    // rather than reported already there.
-    let now = with_element(
-        tab,
-        at,
-        "if (!/^(checkbox|radio)$/.test(el.type || '') && !/^(checkbox|radio|switch|menuitemcheckbox)$/.test(el.getAttribute('role') || '')) \
-           return { notCheckable: true }; \
-         return !!el.checked || el.getAttribute('aria-checked') === 'true';",
-    )
-    .await?;
+/// The same reading `is checked` takes, so an ARIA switch is toggled rather
+/// than reported already there.
+const CHECKED_JS: &str = "if (!/^(checkbox|radio)$/.test(el.type || '') && !/^(checkbox|radio|switch|menuitemcheckbox)$/.test(el.getAttribute('role') || '')) \
+       return { notCheckable: true }; \
+     return !!el.checked || el.getAttribute('aria-checked') === 'true';";
+
+async fn checked(tab: i32, at: &Locator) -> Result<bool, String> {
+    let now = with_element(tab, at, CHECKED_JS).await?;
     if now.get("notCheckable").is_some() {
         return Err(format!("{} is not a checkbox", describe_locator(at)));
     }
-    if now == Value::Bool(on) {
+    Ok(now == Value::Bool(true))
+}
+
+async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
+    if checked(tab, at).await? == on {
         return Ok(());
     }
-    click(tab, at, 1).await
+    click(tab, at, 1).await?;
+    // A radio cannot be unchecked by clicking, and a custom control may
+    // ignore the click; read it back rather than report the click as done.
+    if checked(tab, at).await? != on {
+        return Err(format!("{} did not change when clicked", describe_locator(at)));
+    }
+    Ok(())
 }
 
 /// The whole of `dray browser`: one action on the session's active tab.
@@ -638,7 +645,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     dir.join(format!("{}-{stamp}.png", &session[..8.min(session.len())]))
                 }
             };
-            std::fs::write(&path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            write_nofollow(&path, &bytes).map_err(|e| format!("could not write {}: {e}", path.display()))?;
             let shown = path.display().to_string();
             Ok((shown.clone(), json!({ "path": shown })))
         }
@@ -696,6 +703,23 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("{label} {w}×{h}"))
         }
     }
+}
+
+/// Truncating write that refuses a symlink at the leaf, so a link planted
+/// between `screenshot_path`'s check and this open cannot point the write
+/// elsewhere. The parent was canonicalized a moment earlier; a parent
+/// swapped in that window is the one race left, and it needs write access to
+/// the checkout, which is the agent's own.
+fn write_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    file.write_all(bytes)
 }
 
 /// A caller's screenshot path, admitted only under the session's own
