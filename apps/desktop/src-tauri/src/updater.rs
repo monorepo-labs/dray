@@ -67,6 +67,30 @@ pub enum UpdateStatus {
 #[derive(Default)]
 pub struct PendingUpdate(Mutex<Option<(Update, Vec<u8>)>>);
 
+/// Which half of the install failed, and it is tagged because the two have
+/// opposite cures: a failed swap left the app exactly as it was, so pressing
+/// the button again is the answer, where a failed relaunch left the *new*
+/// bundle on disk and only opening it finishes the job. Telling the reader to
+/// quit and reopen for a swap that never happened sends them to do nothing.
+///
+/// A tag rather than a sentence the frontend matches on, so rewording a message
+/// cannot silently swap one cure for the other.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum InstallError {
+    Install { message: String },
+    Relaunch { message: String },
+}
+
+impl InstallError {
+    fn install(message: impl Into<String>) -> Self {
+        Self::Install {
+            message: message.into(),
+        }
+    }
+}
+
 /// Checks the channel's manifest and, when something newer is there, downloads
 /// it in the background. Progress and readiness arrive as `update_status`
 /// events; the returned `Ok(())` only means the run finished.
@@ -155,7 +179,7 @@ pub async fn check_update(
 /// relaunch was never reached, the app simply quit, and there was nothing left
 /// running to say so. Nothing here may call `restart` again for that reason.
 #[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
+pub async fn install_update(app: AppHandle) -> Result<(), InstallError> {
     // Cloned rather than taken, so a failed install leaves the bundle in place
     // to be retried. Taking it would strand the row on a button that can only
     // ever error: the frontend stops checking once an update is ready, so
@@ -164,15 +188,17 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .state::<PendingUpdate>()
         .0
         .lock()
-        .map_err(|_| "pending update lock poisoned".to_string())?
+        .map_err(|_| InstallError::install("pending update lock poisoned"))?
         .clone();
 
     let Some((update, bytes)) = pending else {
-        return Err("no update has been downloaded".into());
+        return Err(InstallError::install("no update has been downloaded"));
     };
 
-    update.install(bytes).map_err(|e| e.to_string())?;
-    relaunch(&app)?;
+    update
+        .install(bytes)
+        .map_err(|e| InstallError::install(e.to_string()))?;
+    relaunch(&app).map_err(|message| InstallError::Relaunch { message })?;
     app.exit(0);
     Ok(())
 }
@@ -182,11 +208,19 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 /// straight after, which is the same overlap `restart` had.
 ///
 /// `open` rather than spawning the executable: it goes through Launch Services,
-/// so the new instance is registered, gets launchd's environment the way a
-/// Finder launch would, and — the reason it is here — a refusal comes back as a
-/// non-zero status with a sentence on it rather than as a process that is
-/// already gone. `-n` is required, since this app is still running and `open`
-/// would otherwise just activate it.
+/// so the new instance is registered, and — the reason it is here — a refusal
+/// comes back as a non-zero status with a sentence on it rather than as a
+/// process that is already gone. `-n` is required, since this app is still
+/// running and `open` would otherwise just activate it.
+///
+/// Environment carries across regardless: `open(1)` states that opened
+/// applications inherit it "just as if you had launched the application
+/// directly through its full path". `argv` does not, absent `--args`, and
+/// nothing here reads any.
+///
+/// Success only means Launch Services took the request. A new instance that
+/// starts and then dies looks the same from here, and telling them apart would
+/// want a handshake from the child.
 ///
 /// Falling through to the executable covers a dev build, which is a bare Mach-O
 /// with no bundle around it.
