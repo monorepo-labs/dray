@@ -2,7 +2,7 @@ import { Check, Download, RotateCw, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { ManualCheck } from "@/hooks/useUpdater";
+import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import type { UpdateStatus } from "@/types/events";
 
 type UpdateRowProps = {
@@ -10,8 +10,10 @@ type UpdateRowProps = {
   /// A turn is in flight somewhere. Installing swaps the bundle and relaunches,
   /// which kills the child mid-turn, so the button waits rather than warning.
   blocked: boolean;
-  /// Where a check the user asked for has got to. Only ever drawn when there is
-  /// no `status` — a real update outranks any verdict about not finding one.
+  /// Where something the user asked for has got to. The check verdicts are only
+  /// drawn when there is no `status` — a real update outranks any verdict about
+  /// not finding one — while the two install failures are drawn over the ready
+  /// button, which is the offer they are a failure of.
   manual: ManualCheck;
   onInstall: () => void;
 };
@@ -94,8 +96,19 @@ export default function UpdateRow({
     </Button>
   );
 
+  // Over the button, not instead of it: the downloaded update is still held, so
+  // pressing again is the cure for one of the two failures and harmless for the
+  // other.
+  const failure = updateFailure(manual);
+
   return (
     <Footer>
+      {failure && (
+        <Note>
+          <TriangleAlert className="size-4 shrink-0" />
+          {failure}
+        </Note>
+      )}
       {blocked ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>

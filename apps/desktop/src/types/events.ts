@@ -610,6 +610,18 @@ export type InputDevice = {
 name: string, isDefault: boolean, };
 
 /**
+ * Which half of the install failed, and it is tagged because the two have
+ * opposite cures: a failed swap left the app exactly as it was, so pressing
+ * the button again is the answer, where a failed relaunch left the *new*
+ * bundle on disk and only opening it finishes the job. Telling the reader to
+ * quit and reopen for a swap that never happened sends them to do nothing.
+ *
+ * A tag rather than a sentence the frontend matches on, so rewording a message
+ * cannot silently swap one cure for the other.
+ */
+export type InstallError = { "stage": "install", message: string, } | { "stage": "relaunch", message: string, };
+
+/**
  * What the settings dialog draws. `None` is a tracker nobody has connected.
  */
 export type IntegrationsView = { linear: TrackerAccount | null, };

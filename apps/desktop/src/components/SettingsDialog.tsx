@@ -27,7 +27,7 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useTheme } from "@/hooks/useTheme";
-import type { ManualCheck } from "@/hooks/useUpdater";
+import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import {
   cachedApps,
   fileOpenerChoices,
@@ -667,8 +667,10 @@ function UpdatesRow({
     </Button>
   );
 
+  // The same sentence the sidebar row draws, since this dialog covers it — a
+  // reader who pressed the button here would otherwise get no answer at all.
   return (
-    <SettingRow id={id} label="Updates">
+    <SettingRow id={id} label="Updates" description={updateFailure(manual)}>
       {ready && blocked ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>

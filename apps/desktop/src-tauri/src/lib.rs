@@ -838,6 +838,11 @@ pub fn run() {
                 // already down, and `ggml_abort`s. So every quit filed a crash
                 // report. `process::exit` skips every Rust destructor anyway,
                 // so skipping the C half too costs nothing we still rely on.
+                //
+                // It skips the rest of Tauri's own exit arm too, which is where
+                // `AppHandle::restart` relaunches from — so `restart` here is a
+                // quit that never comes back. That was DRA-160; the updater
+                // launches the new bundle itself before asking to exit.
                 unsafe { libc::_exit(0) }
             }
         });
