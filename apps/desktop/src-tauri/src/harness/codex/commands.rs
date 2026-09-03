@@ -7,7 +7,7 @@
 //! are real: `skills/list` answers them and `turn/start` takes one as an input
 //! item of its own.
 //!
-//! That last part is why this file has a companion in [`super::skill_input`] —
+//! That last part is why this file has a companion in [`super::turn_input`] —
 //! unlike Claude Code, where a slash command travels as ordinary prompt text and
 //! the CLI expands it, Codex expands nothing. `/caveman` sent as text is the
 //! literal four-slash-word to the model. The picker and the send path therefore
@@ -82,14 +82,10 @@ async fn list_skills(cwd: &str) -> Vec<Skill> {
         return hit.clone();
     }
 
-    let skills = match timeout(PROBE_TIMEOUT, probe(cwd)).await {
-        Ok(Ok(skills)) => skills,
-        Ok(Err(err)) => {
+    let skills = match probe(cwd).await {
+        Ok(skills) => skills,
+        Err(err) => {
             eprintln!("[codex commands] {err:#}");
-            return Vec::new();
-        }
-        Err(_) => {
-            eprintln!("[codex commands] timed out asking codex for its skills");
             return Vec::new();
         }
     };
@@ -127,17 +123,30 @@ pub async fn list_commands(cwd: &str) -> Vec<SlashCommand> {
 /// where the cache costs a whole extra app-server — and it cannot answer for
 /// the wrong project the way a stale cwd-keyed entry could.
 ///
-/// `None` leaves the prompt as ordinary text, which is the right answer both
-/// for prose that happens to start with a slash and for a skill that has since
-/// been removed.
-pub async fn skill_item(client: &RpcClient, text: &str) -> Option<Value> {
-    let name = text.strip_prefix('/')?.split_whitespace().next()?;
-    let answer = client.request("skills/list", json!({})).await.ok()?;
-    let skill = read_rows(&answer)
-        .into_iter()
-        .find(|skill| skill.name == name)?;
+/// `None` is an *answered* lookup that matched nothing, which is ordinary: prose
+/// opening with a slash, or a skill that has since been removed. Both are right
+/// to travel as text.
+///
+/// A lookup that could not be made is an error and not `None`, and the
+/// difference is the whole bug this reintroduces if collapsed. A timed-out
+/// `skills/list` would otherwise send a row the reader picked out of the picker
+/// as four literal words — which is exactly the failure this file exists to fix,
+/// and it reports as an ordinary turn. Failing the send is louder and cheaper:
+/// the composer still holds the text, so retry is pressing send again.
+pub async fn skill_item(client: &RpcClient, text: &str) -> Result<Option<Value>> {
+    let Some(name) = text.strip_prefix('/').and_then(|rest| rest.split_whitespace().next()) else {
+        return Ok(None);
+    };
 
-    Some(json!({"type": "skill", "name": skill.name, "path": skill.path}))
+    let answer = client
+        .request("skills/list", json!({}))
+        .await
+        .context("couldn't ask codex which skills it has")?;
+
+    Ok(read_rows(&answer)
+        .into_iter()
+        .find(|skill| skill.name == name)
+        .map(|skill| json!({"type": "skill", "name": skill.name, "path": skill.path})))
 }
 
 /// What is left of `text` once its leading `/name` is taken off.
@@ -149,11 +158,18 @@ pub fn without_command(text: &str) -> &str {
     }
 }
 
-/// Spawns a throwaway app-server in `cwd` purely to ask it, then drops it.
+/// Spawns a throwaway app-server in `cwd` purely to ask it, then takes it down.
 ///
 /// The directory is load-bearing: `skills/list` resolves project-scoped skills
 /// against the process's own cwd, verified live — a probe spawned anywhere else
 /// answers for the wrong project.
+///
+/// The timeout is *inside* here, and that is the difference between a kill and
+/// a hope. Dropping a `Child` with `kill_on_drop` sends the signal but reaps on
+/// the runtime's own schedule with no guarantee, and this child is not a lone
+/// process: a codex app-server starts every MCP server the reader has
+/// configured, so one left standing is a small tree of them. So every exit runs
+/// through `child.kill().await`, which signals *and* waits.
 async fn probe(cwd: &str) -> Result<Vec<Skill>> {
     let bin = crate::binpath::codex().await;
     let mut child = Command::new(&bin)
@@ -163,14 +179,28 @@ async fn probe(cwd: &str) -> Result<Vec<Skill>> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        // The read can end early — a timeout, an unreadable reply — and the
-        // child waits on a stdin that never closes, so dropping it has to reap.
+        // Belt to the kill's braces: it covers this whole future being dropped,
+        // which the explicit kill below cannot, since it never runs then.
         .kill_on_drop(true)
         .spawn()
         .context("couldn't start codex to ask for its skills")?;
 
+    // Taken before the ask, so nothing it does borrows the child and the kill
+    // below has one exit path to sit on.
     let stdin = child.stdin.take().context("failed to take stdin")?;
     let stdout = child.stdout.take().context("failed to take stdout")?;
+
+    let answer = timeout(PROBE_TIMEOUT, ask(stdin, stdout)).await;
+
+    // However the ask went. A probe that timed out is exactly the child least
+    // likely to notice its stdin has gone, so it is the one that most needs it.
+    let _ = child.kill().await;
+
+    answer.context("timed out asking codex for its skills")?
+}
+
+/// The handshake and the one question, over a child's pipes.
+async fn ask(stdin: tokio::process::ChildStdin, stdout: tokio::process::ChildStdout) -> Result<Vec<Skill>> {
     let client = RpcClient::new(stdin);
 
     tokio::spawn({

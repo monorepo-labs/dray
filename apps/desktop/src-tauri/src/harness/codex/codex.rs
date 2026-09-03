@@ -570,20 +570,23 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
 /// *opening* with a slash may be a skill, and a skill is its own input item
 /// here — Codex expands nothing on the way in, so `/caveman` sent as text is
 /// four literal words to the model where Claude Code's CLI would have expanded
-/// it. Anything the lookup does not recognise stays text, which is what keeps
+/// it. A name the lookup answers nothing for stays text, which is what keeps
 /// prose that happens to start with a slash intact.
-async fn turn_input(thread: &Thread, text: &str) -> Value {
-    let Some(skill) = commands::skill_item(&thread.client, text).await else {
-        return json!([{"type": "text", "text": text}]);
+///
+/// A lookup that *failed* refuses the send rather than falling back to text —
+/// see [`commands::skill_item`], where the difference is the whole point.
+async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
+    let Some(skill) = commands::skill_item(&thread.client, text).await? else {
+        return Ok(json!([{"type": "text", "text": text}]));
     };
 
     let rest = commands::without_command(text);
     if rest.is_empty() {
         // A skill with nothing beside it is accepted on its own, verified live.
-        return json!([skill]);
+        return Ok(json!([skill]));
     }
 
-    json!([skill, {"type": "text", "text": rest}])
+    Ok(json!([skill, {"type": "text", "text": rest}]))
 }
 
 /// Writes one prompt as a turn.
@@ -595,7 +598,7 @@ async fn turn_input(thread: &Thread, text: &str) -> Value {
 pub async fn start_turn(thread: &Thread, text: &str) -> Result<()> {
     let mut params = json!({
         "threadId": thread.id,
-        "input": turn_input(thread, text).await,
+        "input": turn_input(thread, text).await?,
         "model": thread.settings.model,
         "approvalPolicy": thread.settings.approval_policy,
     });
