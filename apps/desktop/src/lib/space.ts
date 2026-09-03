@@ -14,14 +14,39 @@ export const SPACE_KEY = "ade.space";
 /// project filed on another machine from reading as filed nowhere.
 export const SPACE_LIST_KEY = "ade.spaces";
 
-/// Every space there is. Sorted, since creation order would reorder the
-/// switcher under the reader every time a project moved.
+/// Every space there is, in the order the switcher walks them.
+///
+/// The declared list **is** the order — it is what the reader arranges — so it
+/// leads as written. A name carried only by a project's tag is one filed on
+/// another machine, with no place in this reader's arrangement yet, so those
+/// follow sorted: alphabetical is arbitrary but stable, where the order
+/// projects happen to be attached in would move the switcher under the reader
+/// every time one did.
 export function spaceNames(projects: Project[], declared: string[] = []): string[] {
   const tagged = projects
     .map((p) => p.space)
     .filter((s): s is string => Boolean(s));
 
-  return [...new Set([...declared, ...tagged])].sort((a, b) => a.localeCompare(b));
+  const undeclared = [...new Set(tagged)]
+    .filter((s) => !declared.includes(s))
+    .sort((a, b) => a.localeCompare(b));
+
+  return [...new Set([...declared, ...undeclared])];
+}
+
+/// The list with one name stepped `delta` places.
+///
+/// A step off either end is the list unchanged rather than a wrap: the buttons
+/// are disabled there, so a move that arrives anyway is a mistake to absorb and
+/// not a request to send the space to the other end.
+export function moveSpace(names: string[], name: string, delta: number): string[] {
+  const from = names.indexOf(name);
+  const to = from + delta;
+  if (from === -1 || to < 0 || to >= names.length) return names;
+
+  const next = [...names];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
 }
 
 /// The space actually in force. A stored name that has since been removed falls

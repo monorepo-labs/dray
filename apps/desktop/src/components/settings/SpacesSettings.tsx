@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,7 @@ export default function SpacesSettings({
   onCreateSpace,
   onRenameSpace,
   onRemoveSpace,
+  onMoveSpace,
 }: {
   projects: Project[];
   spaces: string[];
@@ -44,6 +45,9 @@ export default function SpacesSettings({
   onCreateSpace: (name: string) => void;
   onRenameSpace: (from: string, to: string) => void;
   onRemoveSpace: (name: string) => void;
+  /// Steps a space one place. Order is the sidebar switcher's, which walks the
+  /// list in the order it is drawn here.
+  onMoveSpace: (name: string, delta: number) => void;
 }) {
   // The space being named — `""` for a new one, an existing name for a rename.
   // One at a time and held here rather than per row, so opening a second closes
@@ -89,7 +93,8 @@ export default function SpacesSettings({
 
         <p className="text-ui text-muted-foreground">
           Switching space in the sidebar shows that set of projects alone.
-          Everything else keeps running, out of sight and quiet.
+          Everything else keeps running, out of sight and quiet. This order is
+          the one the switcher steps through.
         </p>
 
         {naming === "" && (
@@ -106,7 +111,7 @@ export default function SpacesSettings({
           <p className="text-ui text-muted-foreground">No spaces yet.</p>
         )}
 
-        {spaces.map((name) =>
+        {spaces.map((name, i) =>
           naming === name ? (
             <SpaceNameField
               key={name}
@@ -148,6 +153,36 @@ export default function SpacesSettings({
                 </div>
               ) : (
                 <div className="flex shrink-0 items-center gap-0.5">
+                  {/* Two buttons rather than a drag handle: a row this size is
+                      a small thing to catch hold of, dragging says nothing
+                      about where it will land until it lands, and a keyboard
+                      reaches these. Disabled at the ends, since the list is the
+                      order and there is nowhere past them to go — the pair also
+                      says which end you are at, which a drag never does.
+
+                      `mr-1` sets the move controls apart from the two that act
+                      on the space itself, so one group is not read as four
+                      buttons doing four unrelated things. */}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={i === 0}
+                    aria-label={`Move ${name} up`}
+                    onClick={() => onMoveSpace(name, -1)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronUp />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    disabled={i === spaces.length - 1}
+                    aria-label={`Move ${name} down`}
+                    onClick={() => onMoveSpace(name, 1)}
+                    className="mr-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronDown />
+                  </Button>
                   {/* Renaming is a button, not the name itself: a label that
                       turns into a field when clicked is a control nothing says
                       is one, and the row already carries one real button. */}
