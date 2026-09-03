@@ -279,7 +279,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
             .await
             .map_err(|e| e.to_string())?,
         Harness::Pi => harness::pi::commands::list_commands(cwd).await,
-        Harness::Codex | Harness::Other(_) => Vec::new(),
+        Harness::Codex => harness::codex::commands::list_commands(cwd).await,
+        Harness::Other(_) => Vec::new(),
     })
 }
 

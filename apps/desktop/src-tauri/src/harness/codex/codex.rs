@@ -30,6 +30,7 @@ use tokio::{
     sync::Mutex,
 };
 
+pub mod commands;
 pub mod mapper;
 pub mod parser;
 pub mod permissions;
@@ -563,6 +564,28 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
     Ok(())
 }
 
+/// The input items one prompt travels as.
+///
+/// Ordinary prose is one `text` item and that is the whole of it. A prompt
+/// *opening* with a slash may be a skill, and a skill is its own input item
+/// here — Codex expands nothing on the way in, so `/caveman` sent as text is
+/// four literal words to the model where Claude Code's CLI would have expanded
+/// it. Anything the lookup does not recognise stays text, which is what keeps
+/// prose that happens to start with a slash intact.
+async fn turn_input(thread: &Thread, text: &str) -> Value {
+    let Some(skill) = commands::skill_item(&thread.client, text).await else {
+        return json!([{"type": "text", "text": text}]);
+    };
+
+    let rest = commands::without_command(text);
+    if rest.is_empty() {
+        // A skill with nothing beside it is accepted on its own, verified live.
+        return json!([skill]);
+    }
+
+    json!([skill, {"type": "text", "text": rest}])
+}
+
 /// Writes one prompt as a turn.
 ///
 /// Where Claude's send is a line written and forgotten, this is a request whose
@@ -572,7 +595,7 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
 pub async fn start_turn(thread: &Thread, text: &str) -> Result<()> {
     let mut params = json!({
         "threadId": thread.id,
-        "input": [{"type": "text", "text": text}],
+        "input": turn_input(thread, text).await,
         "model": thread.settings.model,
         "approvalPolicy": thread.settings.approval_policy,
     });
