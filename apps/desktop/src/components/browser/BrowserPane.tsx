@@ -205,6 +205,7 @@ function Chrome({
   onCollapse?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
   const url = current?.url ?? "";
@@ -217,7 +218,8 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab).catch(console.error);
+    setOpenError(null);
+    openInBrowser(sessionId, target, newTab).catch((e: unknown) => setOpenError(String(e)));
   };
 
   const newTab = () => {
@@ -428,6 +430,9 @@ function Chrome({
           </Tooltip>
         )}
       </div>
+      {openError && (
+        <p className="bg-card px-3 pb-1.5 text-ui text-destructive">{openError}</p>
+      )}
     </div>
   );
 }

@@ -45,9 +45,13 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
     let mine = root.map(descendants).unwrap_or_default();
     let listeners = listening();
     let cwds = cwd_of(listeners.iter().map(|(pid, _, _)| *pid).collect());
+    // lsof reports resolved paths, so a checkout reached through a symlink
+    // never matched its own servers until the tree was resolved too.
+    let tree = tree.map(|t| std::fs::canonicalize(t).unwrap_or_else(|_| t.to_path_buf()));
     let in_tree = |pid: u32| {
-        tree.zip(cwds.get(&pid))
-            .map(|(tree, cwd)| cwd.starts_with(tree))
+        tree.as_deref()
+            .zip(cwds.get(&pid))
+            .map(|(tree, cwd)| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.clone()).starts_with(tree))
             .unwrap_or(false)
     };
     // Dray's own DevTools port lists otherwise: a dev build runs from the tree.

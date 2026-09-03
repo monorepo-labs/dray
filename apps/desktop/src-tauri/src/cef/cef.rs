@@ -24,7 +24,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -410,13 +410,10 @@ fn context_for(session: &str) -> Option<RequestContext> {
     Some(ctx)
 }
 
-/// Creates a browser for `session`. Its tab appears in `on_after_created`,
-/// which is where CEF hands the browser back. Main thread.
-fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
+/// A tab's view: a child of the main window, hidden until `apply_layout`
+/// decides it is the one on screen. Main thread.
+fn child_window_info() -> Result<WindowInfo, String> {
     let app = APP.get().ok_or("Chromium is not available in this build")?;
-    if !ensure_started() {
-        return Err("Chromium could not start".into());
-    }
     let window = app.get_webview_window("main").ok_or("no main window")?;
     let parent = window.ns_view().map_err(|e| e.to_string())?;
     let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
@@ -424,8 +421,17 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
         .map(|l| Rect { x: l.x as i32, y: l.y as i32, width: l.width as i32, height: l.height as i32 })
         .unwrap_or(Rect { x: 0, y: 0, width: 800, height: 600 });
     let mut info = WindowInfo::default().set_as_child(parent, &bounds);
-    // Hidden until `apply_layout` decides it is the one on screen.
     info.hidden = 1;
+    Ok(info)
+}
+
+/// Creates a browser for `session`. Its tab appears in `on_after_created`,
+/// which is where CEF hands the browser back. Main thread.
+fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
+    if !ensure_started() {
+        return Err("Chromium could not start".into());
+    }
+    let info = child_window_info()?;
     let mut client = DrayClient::new(session.to_string(), activate);
     let mut context = context_for(session);
     let ok = browser_host_create_browser(
@@ -535,7 +541,7 @@ wrap_life_span_handler! {
             let view = browser.host().map(|h| h.window_handle() as usize).unwrap_or(0);
             let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
             let devtools = automation::observe(&browser);
-            TABS.lock().unwrap().push(Tab {
+            let tab = Tab {
                 id,
                 session: self.session.clone(),
                 browser,
@@ -549,7 +555,18 @@ wrap_life_span_handler! {
                 can_go_forward: false,
                 error: None,
                 zoom: 0.0,
-            });
+            };
+            // CEF can hand over a replacement browser under an id it has not
+            // yet closed the old one for; a second entry would then go out
+            // with the first's `on_before_close`, taking the live tab with
+            // it. Replace in place, and `on_before_close` removes only the
+            // instance it holds.
+            let mut tabs = TABS.lock().unwrap();
+            match tabs.iter_mut().find(|t| t.id == id) {
+                Some(slot) => *slot = tab,
+                None => tabs.push(tab),
+            }
+            drop(tabs);
             if self.activate || active_id(&self.session).is_none() {
                 set_active(&self.session, Some(id));
             }
@@ -558,28 +575,33 @@ wrap_life_span_handler! {
         }
 
         /// A `target=_blank` link or `window.open`: a new tab in the same
-        /// session rather than the top-level window CEF would make.
+        /// session rather than the top-level window CEF would make. The
+        /// popup itself is left to CEF — its window info and client are
+        /// rewritten to ours and `0` returned — so `window.open` answers a
+        /// real window with an opener, which OAuth and payment flows post
+        /// back through. Making an unrelated tab here instead returned
+        /// `null` to the page.
         fn on_before_popup(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _popup_id: ::std::os::raw::c_int,
-            target_url: Option<&CefString>,
+            _target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
             _target_disposition: WindowOpenDisposition,
             _user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
-            _window_info: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>,
+            window_info: Option<&mut WindowInfo>,
+            client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            let url = target_url.map(CefString::to_string).unwrap_or_default();
-            if !url.is_empty() {
-                let _ = create_tab(&self.session, &url, true);
-            }
-            1
+            let (Some(window_info), Some(client)) = (window_info, client) else { return 1 };
+            let Ok(info) = child_window_info() else { return 1 };
+            *window_info = info;
+            *client = Some(DrayClient::new(self.session.clone(), true));
+            0
         }
 
         /// Handled here. Left to CEF, a close on a child view is delivered
@@ -601,7 +623,16 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
+            let Some(mut closing) = browser.cloned() else { return };
+            let id = closing.identifier();
+            // Only the instance on record leaves; a replaced browser closing
+            // late must not take its successor's entry. Compared with the
+            // lock released, since `is_same` is a call into CEF.
+            let stored = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.browser.clone());
+            let Some(stored) = stored else { return };
+            if stored.is_same(Some(&mut closing)) == 0 {
+                return;
+            }
             automation::forget(id);
             let session = self.session.clone();
             let remaining = {
@@ -655,14 +686,10 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
-            // Borrow the list rather than take it: the owned wrapper frees on
-            // drop, and this one is CEF's.
-            let first = icon_urls
-                .and_then(|list| {
-                    let ptr: *const sys::_cef_string_list_t = (&*list).into();
-                    CefStringList::from(ptr).into_iter().next()
-                })
-                .unwrap_or_default();
+            // A clone of the borrowed wrapper iterates and frees nothing on
+            // drop; rebuilding one from a const pointer makes the crate's
+            // `Borrowed` shape, which iterates as empty.
+            let first = icon_urls.and_then(|list| list.clone().into_iter().next()).unwrap_or_default();
             update_tab(id, |t| t.favicon = first);
         }
 
@@ -685,8 +712,16 @@ wrap_display_handler! {
                 }
                 return 0;
             };
-            let Some(session) = browser.map(|b| b.identifier()).and_then(session_of) else { return 1 };
-            let element = serde_json::from_str::<serde_json::Value>(rest).ok().filter(|v| v.is_object());
+            let Some(id) = browser.map(|b| b.identifier()) else { return 1 };
+            // Any page can log the prefix; only a tab whose picker this app
+            // started is listened to, once, and only a payload of the shape
+            // `PICK_JS` writes. A binding through the render process would be
+            // the trusted channel; this is the gate until there is one.
+            if !PICKING.lock().unwrap().get_or_insert_with(HashSet::new).remove(&id) {
+                return 1;
+            }
+            let Some(session) = session_of(id) else { return 1 };
+            let element = serde_json::from_str::<PickedElement>(rest).ok();
             if let Some(app) = APP.get() {
                 let _ = app.emit("browser_pick", PickEvent { session_id: session, element });
             }
@@ -697,12 +732,44 @@ wrap_display_handler! {
 
 const PICK_PREFIX: &str = "__dray_pick__";
 
+/// Tabs whose picker is running. An entry is spent by the first pick line.
+static PICKING: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PickEvent {
     session_id: String,
     /// `None` is a cancel.
-    element: Option<serde_json::Value>,
+    element: Option<PickedElement>,
+}
+
+/// What `PICK_JS` reports, typed so a page cannot hand the composer an
+/// arbitrary object. Mirrors `PickedElement` in browser.ts.
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct PickedElement {
+    url: String,
+    title: String,
+    selector: String,
+    tag: String,
+    text: String,
+    attrs: HashMap<String, String>,
+    rect: PickRect,
+    styles: PickStyles,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct PickRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct PickStyles {
+    color: String,
+    background: String,
+    font: String,
 }
 
 /// Injected into the page to pick an element: a highlight follows the
@@ -742,6 +809,9 @@ const PICK_JS: &str = r#"(() => {
     box.style.left = r.left + 'px'; box.style.top = r.top + 'px';
     box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
   };
+  // The press is swallowed on both edges and the pick made on the click,
+  // so the page never sees a click on the element that was picked.
+  const block = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
   const click = (ev) => {
     ev.preventDefault(); ev.stopPropagation();
     const el = at(ev);
@@ -765,13 +835,15 @@ const PICK_JS: &str = r#"(() => {
   const stop = () => {
     document.removeEventListener('mousemove', move, opts);
     document.removeEventListener('click', click, opts);
-    document.removeEventListener('mousedown', click, opts);
+    document.removeEventListener('mousedown', block, opts);
+    document.removeEventListener('mouseup', block, opts);
     document.removeEventListener('keydown', key, opts);
     box.remove();
     delete window.__drayPick;
   };
   document.addEventListener('mousemove', move, opts);
-  document.addEventListener('mousedown', click, opts);
+  document.addEventListener('mousedown', block, opts);
+  document.addEventListener('mouseup', block, opts);
   document.addEventListener('click', click, opts);
   document.addEventListener('keydown', key, opts);
   window.__drayPick = { stop };
@@ -937,20 +1009,23 @@ pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f6
     on_main(apply_layout)
 }
 
-/// Loads `url` in the session's active tab, or in a new one.
+/// Loads `url` in the session's active tab, or in a new one. A tab that
+/// cannot be made is the caller's error, not a log line: the pane leaves
+/// its pending tab standing otherwise, with nothing to say why.
 #[tauri::command]
 pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<(), String> {
+    let (tx, rx) = mpsc::channel();
     on_main(move || {
         if !new_tab {
             if let Some(frame) = active_id(&session_id).and_then(|id| browser_of(id)).and_then(|b| b.main_frame()) {
                 frame.load_url(Some(&CefString::from(url.as_str())));
+                let _ = tx.send(Ok(()));
                 return;
             }
         }
-        if let Err(e) = create_tab(&session_id, &url, true) {
-            eprintln!("cef: {e}");
-        }
-    })
+        let _ = tx.send(create_tab(&session_id, &url, true));
+    })?;
+    rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "Chromium did not answer".to_string())?
 }
 
 #[tauri::command]
@@ -1025,7 +1100,17 @@ pub fn browser_devtools(session_id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
     on_main(move || {
-        let Some(frame) = active_id(&session_id).and_then(browser_of).and_then(|b| b.main_frame()) else { return };
+        let Some(id) = active_id(&session_id) else { return };
+        let Some(frame) = browser_of(id).and_then(|b| b.main_frame()) else { return };
+        {
+            let mut picking = PICKING.lock().unwrap();
+            let set = picking.get_or_insert_with(HashSet::new);
+            if start {
+                set.insert(id);
+            } else {
+                set.remove(&id);
+            }
+        }
         let code = if start { PICK_JS } else { "window.__drayPick && window.__drayPick.stop()" };
         frame.execute_java_script(Some(&CefString::from(code)), None, 0);
     })
@@ -1035,14 +1120,14 @@ pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
 pub fn close_session(session_id: &str) {
     let session_id = session_id.to_string();
     let _ = on_main(move || {
-        let hosts: Vec<_> = TABS
+        let browsers: Vec<Browser> = TABS
             .lock()
             .unwrap()
             .iter()
             .filter(|t| t.session == session_id)
-            .filter_map(|t| t.browser.host())
+            .map(|t| t.browser.clone())
             .collect();
-        for host in hosts {
+        for host in browsers.iter().filter_map(|b| b.host()) {
             host.close_browser(1);
         }
     });
