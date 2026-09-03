@@ -22,7 +22,7 @@ import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
 import PrPanel from "@/components/PrPanel";
 import BrowserPane from "@/components/browser/BrowserPane";
-import { describePick, openInBrowser, setPickHandler, useBrowserTabs } from "@/lib/browser";
+import { clearOpenError, describePick, openInBrowser, setPickHandler, useBrowserTabs } from "@/lib/browser";
 import { setLinkOpener } from "@/lib/openLink";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
@@ -760,7 +760,11 @@ function App() {
           setPanelTab("browser");
           setPanelOpen(true);
         })
-        .catch(() => void openUrl(url).catch(console.error));
+        .catch(() => {
+          // Answered by the system browser, so the pane has nothing to say.
+          clearOpenError(selectedSessionId);
+          void openUrl(url).catch(console.error);
+        });
     });
     return () => setLinkOpener(null);
   }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen]);

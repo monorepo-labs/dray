@@ -126,6 +126,14 @@ export function useOpenError(sessionId: string): string | null {
   return useSyncExternalStore(subscribe, () => openErrors.get(sessionId) ?? null);
 }
 
+/// For a caller that answers a failed open some other way — the link
+/// opener falls back to the system browser — so the pane does not later
+/// report a failure that was already handled.
+export function clearOpenError(sessionId: string) {
+  openErrors.delete(sessionId);
+  notify();
+}
+
 export function openInBrowser(sessionId: string, url: string, newTab = false) {
   openErrors.delete(sessionId);
   notify();

@@ -741,7 +741,8 @@ const PICK_PREFIX: &str = "__dray_pick__";
 static PICKING: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 
 /// Disarms a tab's picker and tells the pane, so its button does not stay
-/// pressed for a picker that no longer exists.
+/// pressed for a picker that no longer exists. From `on_load_start` on the
+/// main frame and from `on_before_close`.
 fn disarm_picker(id: i32) {
     let was = PICKING.lock().unwrap().as_mut().map(|s| s.remove(&id)).unwrap_or(false);
     if !was {
@@ -872,9 +873,6 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
-            if is_loading != 0 {
-                disarm_picker(id);
-            }
             update_tab(id, |t| {
                 t.loading = is_loading != 0;
                 t.can_go_back = can_go_back != 0;
@@ -883,6 +881,19 @@ wrap_load_handler! {
                     t.error = None;
                 }
             });
+        }
+
+        /// The main frame leaving its document takes the picker's script
+        /// with it. Judged here and not on the loading state, which reports
+        /// the whole browser: an iframe loading would disarm a picker whose
+        /// document is still there.
+        fn on_load_start(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+            if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
+                return;
+            }
+            if let Some(id) = browser.map(|b| b.identifier()) {
+                disarm_picker(id);
+            }
         }
 
         /// Chromium draws its own error page; this only records the reason
