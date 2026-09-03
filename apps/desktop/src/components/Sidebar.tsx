@@ -1989,7 +1989,12 @@ function SessionRow({
             read at once; `visibility` would flip instantly while the button's
             inherited `transition-all` still crossfades, which is what read as an
             overlap. */}
-        <div className="relative flex shrink-0 items-center justify-end self-stretch pl-2">
+        {/* `min-w-5` because the slot's width comes from the buttons, and a row
+            that inherits its pin while mid-turn draws neither of them — leaving
+            a zero-width slot for the absolutely-drawn orb to hang out of, over
+            the title. 20px is the orb's own box, the widest thing that can be
+            shown with no button beside it. */}
+        <div className="relative flex min-w-5 shrink-0 items-center justify-end self-stretch pl-2">
           {/* `pointer-events-none` unconditionally: it's never a target, and a
               faded-but-present element still hit-tests — stacked on `right-0` it
               would otherwise swallow the cursor over the last button, which reads
