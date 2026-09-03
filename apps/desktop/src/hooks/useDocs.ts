@@ -63,7 +63,12 @@ export function isDirty(doc: Doc): boolean {
 /// sends as `expect`, and moving it to the disk text would turn the backend's
 /// compare-and-swap into a silent overwrite of the write that caused this.
 export function withDiskText(body: Ready, disk: string): Ready {
-  if (disk === body.base) return body;
+  // `stale` *means* "disk differs from base", so a file put back to what the
+  // draft was made from is no longer stale — the flag has to come down as
+  // readily as it went up. Left standing it is unclearable: nothing else lowers
+  // it, and `saveDoc` refuses to send while it is set, so the reader is locked
+  // out of saving a file nothing is wrong with.
+  if (disk === body.base) return body.stale ? { ...body, stale: false } : body;
   if (body.draft === body.base) {
     return { ...body, base: disk, draft: disk, stale: false };
   }
@@ -85,18 +90,11 @@ export function withDiskText(body: Ready, disk: string): Ready {
 /// and draws the strip rather than overwriting the first.
 const bySession = new Map<string, SessionDocs>();
 
-type SessionDocs = {
-  docs: Doc[];
-  activePath: string | null;
-  /// The doc whose save met a file that had moved, or `null`. Held here rather
-  /// than in the panel because ⌘S and the Save button are two routes into one
-  /// save, and a dialog owned by the button cannot be raised by the chord.
-  clash: string | null;
-};
+type SessionDocs = { docs: Doc[]; activePath: string | null };
 
 /// Shared by every session that has opened nothing, so an untouched session
 /// costs no entry and the snapshot keeps one identity across its renders.
-const EMPTY: SessionDocs = { docs: [], activePath: null, clash: null };
+const EMPTY: SessionDocs = { docs: [], activePath: null };
 
 /// Whose docs the panel is showing, written by `App` from its selection. A
 /// module variable rather than an argument on all nine exports: every caller is
@@ -146,32 +144,35 @@ function write(sid: string, next: Partial<SessionDocs>) {
   emit();
 }
 
-/// Points the store at a session's docs, from `App`'s own selection. `null`
-/// where nothing is selected, which draws no panel at all.
+/// Tells the *mutators* whose session they are acting on, from `App`'s own
+/// selection. Reads do not go through this — they take the id outright — so an
+/// effect is late enough: every mutator is called from an event handler or a
+/// listener, both of which run after the commit that set it.
 ///
-/// Written during render rather than from an effect, and that is the whole
-/// reason it is a hook. An effect runs *after* the commit, so the tab row and
-/// the panel would each draw one frame of the previous session's docs — a tab
-/// that appears and vanishes on every switch. No listener is notified: the
-/// render that follows is already happening, and notifying from inside one is
-/// what React forbids.
+/// It was written during render for one frame's worth of flicker, and that was
+/// the wrong trade. A module variable moved during render is published to
+/// whatever renders next, so a render React abandons or replays can leave the
+/// committed tree wired to a session it is not drawing.
 export function useDocsSession(id: string | null) {
-  if (sessionId !== id) {
-    sessionId = id;
-    snapshot = { ...(id ? state(id) : EMPTY), opened };
-  }
+  useEffect(() => setDocsSession(id), [id]);
+}
+
+/// The plain half of the above, so the split between sessions can be exercised
+/// without a renderer.
+export function setDocsSession(id: string | null) {
+  sessionId = id;
 }
 
 type DocsSnapshot = SessionDocs & { opened: number };
 
-/// What `useSyncExternalStore` reads. Rebuilt in `emit` rather than on read,
-/// because the getter *is* the change signal — an object built fresh each call
-/// is a new identity every render, which React reads as an endless stream of
-/// changes and re-renders forever.
-let snapshot: DocsSnapshot = { ...EMPTY, opened };
+/// Bumped on every change. `useSyncExternalStore` subscribes to *this* rather
+/// than to a built snapshot object, so the view each caller reads is derived
+/// from the session id it passed in — no shared "current session" for a read to
+/// be wrong about.
+let version = 0;
 
 function emit() {
-  snapshot = { ...(sessionId ? state(sessionId) : EMPTY), opened };
+  version += 1;
   for (const listener of listeners) listener();
 }
 
@@ -262,7 +263,7 @@ export function selectDoc(path: string) {
 export function closeDoc(path: string) {
   const sid = sessionId;
   if (!sid) return;
-  const { docs, activePath, clash } = state(sid);
+  const { docs, activePath } = state(sid);
   const at = docs.findIndex((doc) => doc.path === path);
   if (at === -1) return;
   // A read or save still out for this path must not write into the store after
@@ -273,8 +274,6 @@ export function closeDoc(path: string) {
     docs: left,
     activePath:
       activePath === path ? (left[at]?.path ?? left[at - 1]?.path ?? null) : activePath,
-    // A question about a file nobody has open any more answers itself.
-    clash: clash === path ? null : clash,
   });
 }
 
@@ -324,14 +323,10 @@ export function reloadDoc(path: string) {
 /// reader saying they have been shown the clash and want their own version
 /// anyway.
 ///
-/// A clash raises `clash` for the panel to draw, and both routes into a save —
-/// the button and ⌘S — go through here, so the dialog cannot be something only
-/// one of them can produce.
-///
 /// Where the watcher has already flagged the doc, nothing is sent at all: the
-/// backend could only answer `Stale`, and the round trip buys nothing. Where it
-/// has not, the compare-and-swap catches it, which is what covers a file that
-/// moved between the flag and the press.
+/// backend could only answer `Stale`, and the strip saying so is already on
+/// screen. Where it has not, the compare-and-swap catches it, which is what
+/// covers a file that moved between the last read and the press.
 export async function saveDoc(
   path: string,
   { force = false }: { force?: boolean } = {},
@@ -341,10 +336,7 @@ export async function saveDoc(
   const doc = find(sid, path);
   if (doc?.body.status !== "ready" || doc.body.saving) return null;
 
-  if (doc.body.stale && !force) {
-    write(sid, { clash: path });
-    return "stale";
-  }
+  if (doc.body.stale && !force) return "stale";
 
   // Captured now. The reader can type while the write is out, so adopting
   // whatever the draft holds when the promise resolves would mark an edit made
@@ -363,21 +355,12 @@ export async function saveDoc(
         ? { ...body, saving: false, stale: true }
         : { ...body, saving: false, base: sent, stale: false, saveError: null },
     );
-    if (outcome === "stale") write(sid, { clash: path });
     return outcome;
   } catch (err) {
     if (!current(sid, path, seq)) return null;
     patchReady(sid, path, (body) => ({ ...body, saving: false, saveError: String(err) }));
     return null;
   }
-}
-
-/// Takes the clash dialog back down. The reader is left in edit mode with every
-/// keystroke intact, which is the whole reason this is an answer and not just a
-/// way out of a dialog: it is where they go to copy their version out before
-/// choosing between the two that lose something.
-export function dismissClash() {
-  if (sessionId) write(sessionId, { clash: null });
 }
 
 /// What ⌘S calls. A no-op where there is nothing to write, so the chord is free
@@ -455,15 +438,24 @@ function subscribe(listener: () => void) {
   };
 }
 
-/// The current session's view of the store. Exported so the split between
-/// sessions can be tested without a renderer.
-export function docsSnapshot(): DocsSnapshot {
-  return snapshot;
+/// One session's view of the store. Exported so the split between sessions can
+/// be tested without a renderer.
+export function docsFor(sid: string | null): DocsSnapshot {
+  return { ...(sid ? state(sid) : EMPTY), opened };
 }
 
-/// The open docs, and which one the panel is showing.
-export function useDocs(): DocsSnapshot {
-  return useSyncExternalStore(subscribe, docsSnapshot, docsSnapshot);
+/// A session's open docs, and which one its panel is showing.
+///
+/// The subscription is to the version counter and the view is derived here, so
+/// two callers holding different sessions each read their own — where a single
+/// stored snapshot could only ever describe one of them.
+export function useDocs(sid: string | null): DocsSnapshot {
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  return docsFor(sid);
+}
+
+function getVersion() {
+  return version;
 }
 
 /// Keeps the open docs current with the files underneath them.
@@ -475,10 +467,10 @@ export function useDocs(): DocsSnapshot {
 ///
 /// A clean doc adopts the new text silently, which is the whole point: an agent
 /// rewriting the file the reader is looking at should move the text on screen.
-/// A dirty one is flagged instead and keeps every keystroke — the clash is put
-/// to the reader when they save, not while they are typing.
-export function useDocWatcher() {
-  const { docs } = useDocs();
+/// A dirty one is flagged instead and keeps every keystroke, which is what puts
+/// the strip up over it with Discard and Overwrite to choose between.
+export function useDocWatcher(sid: string | null) {
+  const { docs } = useDocs(sid);
   // A joined key rather than the array itself, so a render that rebuilds the
   // list without changing the set does not re-arm the watcher. Only ever a
   // dependency — the paths sent are read off `docs`, never split back out of
@@ -486,9 +478,15 @@ export function useDocWatcher() {
   const key = docs.map((doc) => doc.path).join("\n");
 
   useEffect(() => {
-    void invoke("watch_docs", { paths: docsSnapshot().docs.map((doc) => doc.path) });
+    void invoke("watch_docs", { paths: docsFor(sid).docs.map((doc) => doc.path) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, sid]);
+
+  // Unmount alone, not on every re-arm: an empty set sent between two armed
+  // ones would race the arming beside it, and two `invoke`s can land in either
+  // order. The panel unmounts when no session is selected, and a watcher left
+  // running there emits into nothing for the rest of the run.
+  useEffect(() => () => void invoke("watch_docs", { paths: [] }), []);
 
   useEffect(() => {
     const un = listen<string>("doc_changed", (event) => refreshDoc(event.payload));

@@ -20,6 +20,14 @@ type HotkeyOptions = {
   /// the key from whatever *is* on screen — ⌘⇧← is select-to-line-start in the
   /// composer.
   enabled?: boolean;
+  /// Give the chord up while a text field has focus, rather than claiming it.
+  ///
+  /// For a chord the platform already assigns inside text — ⌘⇧← is
+  /// select-to-line-start — where `enabled` cannot express the rule: the view
+  /// binding it is on screen, and so is the field. Checked at the keystroke,
+  /// where what has focus is knowable, and **before** `preventDefault`, since
+  /// claiming the chord is the whole of the harm.
+  skipInTextField?: boolean;
   /// Take **only** this platform's own accelerator, not either one.
   ///
   /// `meta` normally accepts Cmd or Ctrl without asking which platform it is
@@ -42,6 +50,7 @@ export function useHotkey(
     code,
     enabled = true,
     platformOnly = false,
+    skipInTextField = false,
   }: HotkeyOptions = {},
 ) {
   const handlerRef = useRef(handler);
@@ -72,6 +81,8 @@ export function useHotkey(
       // Exact, so ⌘⌥↑ can't also fire the plain ⌘ bindings.
       if (e.altKey !== alt) return;
 
+      if (skipInTextField && isTextField(e.target)) return;
+
       // Claim the chord before the webview's default — Cmd+B is bold in a
       // contenteditable and would otherwise fire both.
       e.preventDefault();
@@ -80,5 +91,17 @@ export function useHotkey(
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [key, meta, shift, alt, code, enabled, platformOnly]);
+  }, [key, meta, shift, alt, code, enabled, platformOnly, skipInTextField]);
+}
+
+/// Somewhere a caret can be, and therefore somewhere the platform's own text
+/// chords belong. `contentEditable` counts: the markdown a doc renders is not
+/// one today, but nothing here should have to be re-read if it becomes one.
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLInputElement ||
+    target.isContentEditable
+  );
 }

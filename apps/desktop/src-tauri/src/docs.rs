@@ -168,15 +168,40 @@ pub fn watch_docs(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
 /// sent would match nothing at all. The value is the path as the frontend spells
 /// it, which is the key its own store is under and the only spelling it can act
 /// on. A path that cannot be resolved is dropped rather than watched blind.
+///
+/// **Two spellings per doc, and both are needed where a symlink is involved.**
+/// Canonicalizing follows the link, so a doc reached through one resolves to its
+/// target and only the target's directory would be watched — while an atomic
+/// save renaming over the *lexical* path emits in the link's own directory,
+/// which nothing would then be listening to. So the link's parent is watched
+/// beside the target's, and both spellings map back to the one path the panel
+/// holds. Ordinarily the two are the same and this collapses to one of each.
 fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>) {
     let mut watched = HashMap::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for path in paths {
-        let Ok(real) = std::fs::canonicalize(&path) else { continue };
-        let Some(dir) = real.parent().map(|p| p.to_path_buf()) else { continue };
+    let mut watch_dir = |dir: PathBuf| {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
+    };
+
+    for path in paths {
+        let Ok(real) = std::fs::canonicalize(&path) else { continue };
+        let Some(dir) = real.parent().map(|p| p.to_path_buf()) else { continue };
+        watch_dir(dir);
+
+        // The lexical path with only its *directory* resolved, so a doc under a
+        // symlinked directory still gets a canonical spelling — the parent is
+        // what the OS reports events in, and the file name is unresolved on
+        // purpose.
+        let lexical = std::path::Path::new(&path);
+        if let Some(parent) = lexical.parent() {
+            if let (Ok(dir), Some(name)) = (std::fs::canonicalize(parent), lexical.file_name()) {
+                watch_dir(dir.clone());
+                watched.insert(dir.join(name), path.clone());
+            }
+        }
+
         watched.insert(real, path);
     }
     (watched, dirs)

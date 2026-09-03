@@ -169,8 +169,14 @@ export default function ChangesView({
     const next = SUB_TABS[SUB_TABS.findIndex((t) => t.value === subTab) + delta];
     if (next) setSubTabPick(next.value);
   };
-  useHotkey("ArrowLeft", () => stepSubTab(-1), { shift: true, enabled: active });
-  useHotkey("ArrowRight", () => stepSubTab(1), { shift: true, enabled: active });
+  //
+  // Given up while a text field has focus, which `enabled` cannot express: the
+  // right panel sits beside this view, so a doc open in edit mode over there is
+  // a textarea on screen at the same time as this row — and ⌘⇧← is
+  // select-to-line-start in it.
+  const chord = { shift: true, enabled: active, skipInTextField: true };
+  useHotkey("ArrowLeft", () => stepSubTab(-1), chord);
+  useHotkey("ArrowRight", () => stepSubTab(1), chord);
 
   // A directory that isn't a repository has nothing to diff. Said plainly
   // rather than drawn as an empty change list, which would read as a clean

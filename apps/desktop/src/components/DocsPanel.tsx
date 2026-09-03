@@ -14,13 +14,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -29,7 +22,6 @@ import {
 } from "@/components/ui/tooltip";
 import {
   closeDoc,
-  dismissClash,
   isDirty,
   reloadDoc,
   saveDoc,
@@ -66,8 +58,13 @@ import { cn } from "@/lib/utils";
 ///
 /// No empty state: the tab is only drawn while something is open.
 export default function DocsPanel({
+  sessionId,
   active,
 }: {
+  /// Whose docs to draw. Taken as a prop rather than read off the store's own
+  /// notion of a current session, so this panel and `App`'s tab row cannot
+  /// disagree about which session they are describing.
+  sessionId: string | null;
   /// False while the panel is closed, another tab is showing, or the reader is
   /// on the changes view. Only the chord reads it — the panel stays mounted
   /// either way — and `useHotkey` claims every chord it matches, so a binding
@@ -75,8 +72,8 @@ export default function DocsPanel({
   /// composer, where it selects to the start of the line.
   active: boolean;
 }) {
-  const { docs, activePath, clash } = useDocs();
-  useDocWatcher();
+  const { docs, activePath } = useDocs(sessionId);
+  useDocWatcher(sessionId);
   // Named by path rather than held as the doc, so the dialog cannot go on
   // asking about a file that has since been closed from somewhere else.
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -173,19 +170,6 @@ export default function DocsPanel({
         }}
         onClose={() => setConfirming(null)}
       />
-
-      <StaleSave
-        path={clash}
-        onDiscard={() => {
-          if (clash) reloadDoc(clash);
-          dismissClash();
-        }}
-        onOverwrite={() => {
-          if (clash) void saveDoc(clash, { force: true });
-          dismissClash();
-        }}
-        onClose={dismissClash}
-      />
     </div>
   );
 }
@@ -205,13 +189,14 @@ function Chip({
 }) {
   const { name } = splitPath(doc.path);
   const saving = doc.body.status === "ready" && doc.body.saving;
+  const stale = doc.body.status === "ready" && doc.body.stale;
 
   return (
-    // A real tooltip rather than `title`, so the path and the chord that steps
-    // between chips are drawn as one thing. The path is here because it is what
-    // the chip truncates — and the only place a doc opened from another
-    // project's transcript says where it came from — so unlike the changes
-    // sub-tab row, the keycap is not the whole content.
+    // Keycaps alone, like the changes sub-tab row: the filename is on the chip
+    // and the tooltip's whole job is to name the chord. The full path was drawn
+    // here and is gone — a tooltip that opens on every hover to repeat what the
+    // chip already says is one the reader learns to ignore, which costs the
+    // shortcut its only place to be discovered.
     <Tooltip>
       <TooltipTrigger asChild>
         {/* The two buttons sit side by side inside the chip rather than nested,
@@ -234,10 +219,18 @@ function Chip({
             <span className="max-w-40 truncate">{name}</span>
           </button>
 
+          {/* Amber where the file has also moved on disk, the same yellow the
+              sidebar's "waiting on you" rail mark takes — it says the same
+              thing, that this one has something the reader has to settle. The
+              dialog only comes at the save, so this is the whole of the warning
+              until then. */}
           {isDirty(doc) && (
             <span
-              aria-label="Unsaved"
-              className="size-1.5 shrink-0 rounded-full bg-current"
+              aria-label={stale ? "Unsaved, and changed on disk" : "Unsaved"}
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                stale ? "bg-accent-command" : "bg-current",
+              )}
             />
           )}
 
@@ -258,9 +251,11 @@ function Chip({
         </div>
       </TooltipTrigger>
 
-      <TooltipContent side="bottom" className="flex items-center gap-2">
-        <span className="max-w-80 truncate">{doc.path}</span>
-        {chord && (
+      {/* Nothing to say where the chord cannot fire, and an empty box under the
+          cursor is worse than no box — so the tooltip is withheld outright
+          rather than drawn holding nothing. */}
+      {chord && (
+        <TooltipContent side="bottom" className="px-1.5">
           <KbdGroup>
             <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
             {/* Spelled out beside arrow keys, the sidebar's rule: ⇧ is an
@@ -268,8 +263,8 @@ function Chip({
             <Kbd>Shift</Kbd>
             <Kbd>←→</Kbd>
           </KbdGroup>
-        )}
-      </TooltipContent>
+        </TooltipContent>
+      )}
     </Tooltip>
   );
 }
@@ -329,72 +324,46 @@ function ModeToggle({
   );
 }
 
-/// Why the last write failed.
+/// What the reader has to settle before the body means anything.
 ///
-/// Staleness used to be drawn here too, with Reload and Overwrite beside it.
-/// That row was a standing interruption once the watcher started raising the
-/// flag on its own: it appeared under the reader's hands mid-sentence and asked
-/// them to settle something they had not asked about yet. The clash is put to
-/// them at the save instead, where it is the answer to a question they just
-/// asked — leaving this for the one thing that is only ever news after a press.
+/// The watcher is what puts this up now. It used to appear only after a save had
+/// already bounced off the backend's compare-and-swap; the file moving is what
+/// raises it today, so the reader is told while they still have somewhere to go
+/// with it rather than at the press. A clean doc never gets here — it adopts the
+/// new text — so this row only ever stands over edits worth keeping.
+///
+/// "Discard my edits" rather than "Reload", because reloading is what the button
+/// *does* and losing the draft is what it *costs*, and the cost is the part
+/// worth reading before clicking. Neither it nor Overwrite takes the destructive
+/// fill: both lose something — one the reader's edits, the other whatever wrote
+/// the file underneath them — and red on one of a matched pair says the other is
+/// safe.
 function Strip({ doc }: { doc: Doc }) {
-  if (doc.body.status !== "ready" || !doc.body.saveError) return null;
+  if (doc.body.status !== "ready") return null;
+  const { stale, saveError } = doc.body;
+  if (!stale && !saveError) return null;
 
   return (
-    <p className="shrink-0 border-b border-border px-3 py-2 text-ui text-destructive">
-      {doc.body.saveError}
-    </p>
-  );
-}
-
-/// The clash, raised when Save meets a file that moved.
-///
-/// A plain dialog rather than an alert dialog, for the X: closing is a real
-/// third answer here, not the absence of one. The reader is left in edit mode
-/// with every keystroke intact, which is what makes copying their version out
-/// before choosing possible at all — so it is the only one of the three that
-/// loses nothing, and the escape from a dialog whose other two options each
-/// throw one side away.
-///
-/// Neither of those two takes the destructive fill. Both lose something — one
-/// the reader's edits, the other whatever wrote the file underneath them — and
-/// red on one of a matched pair says the other is safe.
-function StaleSave({
-  path,
-  onDiscard,
-  onOverwrite,
-  onClose,
-}: {
-  path: string | null;
-  onDiscard: () => void;
-  onOverwrite: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <Dialog open={path !== null} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>This file changed on disk</DialogTitle>
-          <DialogDescription>
-            <span className="font-medium text-foreground">
-              {path && splitPath(path).name}
-            </span>{" "}
-            was written by something else while you were editing it. Saving now
-            would replace that version with yours.
-          </DialogDescription>
-        </DialogHeader>
-        {/* The alert dialog's own footer shape, written out rather than a
-            `DialogFooter` added to the ui module for one caller. */}
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Button variant="outline" onClick={onDiscard}>
+    <div className="shrink-0 space-y-1.5 border-b border-border px-3 py-2 text-ui">
+      {stale && (
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 text-muted-foreground">
+            This file changed on disk since you opened it.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => reloadDoc(doc.path)}>
             Discard my edits
           </Button>
-          <Button variant="outline" onClick={onOverwrite}>
-            Overwrite the file
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void saveDoc(doc.path, { force: true })}
+          >
+            Overwrite
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      )}
+      {saveError && <p className="text-destructive">{saveError}</p>}
+    </div>
   );
 }
 

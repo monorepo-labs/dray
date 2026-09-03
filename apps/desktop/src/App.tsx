@@ -518,7 +518,7 @@ function App() {
 
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
-  const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs();
+  const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs(selectedSessionId);
   const hasDocsTab = docs.length > 0;
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
@@ -1152,7 +1152,10 @@ function App() {
               <PrPanel branch={prBranch} {...pullRequests} />
             </TabBody>
             <TabBody active={hasDocsTab && activeTab === "docs"}>
-              <DocsPanel active={panelShown && activeTab === "docs" && viewTab === "chat"} />
+              <DocsPanel
+                sessionId={selectedSessionId}
+                active={panelShown && activeTab === "docs" && viewTab === "chat"}
+              />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
               <IssuePanel

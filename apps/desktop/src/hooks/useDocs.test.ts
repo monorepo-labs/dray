@@ -6,10 +6,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: () => Promise.resolve("# hi") }
 
 import {
   closeDoc,
-  docsSnapshot,
+  docsFor,
   isDirty,
   openDoc,
-  useDocsSession,
+  setDocsSession,
   withDiskText,
   type Doc,
   type DocBody,
@@ -73,6 +73,13 @@ describe("withDiskText", () => {
     expect(withDiskText(before, "old")).toBe(before);
   });
 
+  // `stale` means "disk differs from base", so a file put back to what the draft
+  // was made from is not stale any more. Left standing the flag is unclearable —
+  // nothing else lowers it and `saveDoc` refuses to send while it is up.
+  it("lowers a standing flag where the file comes back to base", () => {
+    expect(withDiskText(ready("old", "mine", { stale: true }), "old").stale).toBe(false);
+  });
+
   // A doc already flagged and then reloaded elsewhere must not clear its own
   // warning by adopting: the draft is still unsaved.
   it("keeps a standing flag while the draft is still dirty", () => {
@@ -89,41 +96,38 @@ describe("withDiskText", () => {
 // The bug this pins: the store was one list for the whole app, so a file opened
 // from one session's transcript sat in every other session's panel.
 describe("docs belong to the session they were opened from", () => {
+  const paths = (sid: string) => docsFor(sid).docs.map((doc) => doc.path);
+
   it("shows a session its own docs and nobody else's", () => {
-    useDocsSession("a");
+    setDocsSession("a");
     openDoc("/a/README.md");
-    expect(docsSnapshot().docs.map((d) => d.path)).toEqual(["/a/README.md"]);
-
-    useDocsSession("b");
-    expect(docsSnapshot().docs).toEqual([]);
-    expect(docsSnapshot().activePath).toBe(null);
-
+    setDocsSession("b");
     openDoc("/b/NOTES.md");
-    expect(docsSnapshot().docs.map((d) => d.path)).toEqual(["/b/NOTES.md"]);
 
-    // Switching back finds the first session exactly as it was left.
-    useDocsSession("a");
-    expect(docsSnapshot().activePath).toBe("/a/README.md");
+    expect(paths("a")).toEqual(["/a/README.md"]);
+    expect(paths("b")).toEqual(["/b/NOTES.md"]);
+    // Read by id, not by whichever session happens to be current, so this is
+    // the same question `useDocs` answers for two panels at once.
+    expect(docsFor("a").activePath).toBe("/a/README.md");
+    expect(docsFor("b").activePath).toBe("/b/NOTES.md");
   });
 
   // Two sessions can hold the same file, and closing it in one says nothing
   // about the other.
   it("closes only for the session that asked", () => {
-    useDocsSession("c");
+    setDocsSession("c");
     openDoc("/shared/DOC.md");
-    useDocsSession("d");
+    setDocsSession("d");
     openDoc("/shared/DOC.md");
 
     closeDoc("/shared/DOC.md");
-    expect(docsSnapshot().docs).toEqual([]);
-
-    useDocsSession("c");
-    expect(docsSnapshot().docs.map((d) => d.path)).toEqual(["/shared/DOC.md"]);
+    expect(paths("d")).toEqual([]);
+    expect(paths("c")).toEqual(["/shared/DOC.md"]);
   });
 
   it("opens nothing with no session selected", () => {
-    useDocsSession(null);
+    setDocsSession(null);
     openDoc("/nowhere/README.md");
-    expect(docsSnapshot().docs).toEqual([]);
+    expect(docsFor(null).docs).toEqual([]);
   });
 });
