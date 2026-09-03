@@ -1166,6 +1166,12 @@ impl SessionManager {
     /// Deletes a session: kills its child if one is running, then drops the
     /// index entry and the log. Returns whether the index held it.
     ///
+    /// The agent process's pid, for finding what it started (a dev server is a
+    /// descendant). `None` while no child is running.
+    pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
+        self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
+    }
+
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {

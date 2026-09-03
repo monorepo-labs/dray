@@ -56,9 +56,14 @@ struct Tab {
     view: usize,
     url: String,
     title: String,
+    favicon: String,
     loading: bool,
     can_go_back: bool,
     can_go_forward: bool,
+    /// The main frame's last load failure, cleared when a new load starts.
+    error: Option<String>,
+    /// CEF's zoom level: 0 is 100%, each step is ×1.2.
+    zoom: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -77,10 +82,13 @@ pub struct TabInfo {
     pub id: i32,
     pub url: String,
     pub title: String,
+    pub favicon: String,
     pub loading: bool,
     pub active: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    pub error: Option<String>,
+    pub zoom: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -347,10 +355,13 @@ fn tabs_of(session: &str) -> Vec<TabInfo> {
             id: t.id,
             url: t.url.clone(),
             title: t.title.clone(),
+            favicon: t.favicon.clone(),
             loading: t.loading,
             active: active == Some(t.id),
             can_go_back: t.can_go_back,
             can_go_forward: t.can_go_forward,
+            error: t.error.clone(),
+            zoom: t.zoom,
         })
         .collect()
 }
@@ -506,9 +517,12 @@ wrap_life_span_handler! {
                 view,
                 url,
                 title: String::new(),
+                favicon: String::new(),
                 loading: true,
                 can_go_back: false,
                 can_go_forward: false,
+                error: None,
+                zoom: 0.0,
             });
             if self.activate || active_id(&self.session).is_none() {
                 set_active(&self.session, Some(id));
@@ -555,7 +569,7 @@ wrap_life_span_handler! {
                 .unwrap_or(0);
             if view != 0 {
                 let view: &NSView = unsafe { &*(view as *const NSView) };
-                unsafe { view.removeFromSuperview() };
+                view.removeFromSuperview();
             }
             1
         }
@@ -611,8 +625,124 @@ wrap_display_handler! {
             let title = title.map(CefString::to_string).unwrap_or_default();
             update_tab(id, |t| t.title = title);
         }
+
+        fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
+            let Some(id) = browser.map(|b| b.identifier()) else { return };
+            // Borrow the list rather than take it: the owned wrapper frees on
+            // drop, and this one is CEF's.
+            let first = icon_urls
+                .and_then(|list| {
+                    let ptr: *const sys::_cef_string_list_t = (&*list).into();
+                    CefStringList::from(ptr).into_iter().next()
+                })
+                .unwrap_or_default();
+            update_tab(id, |t| t.favicon = first);
+        }
+
+        /// The element picker reports through the console — the one channel
+        /// from page script back to here that needs no binding of its own.
+        /// Its lines are swallowed; everything else passes through.
+        fn on_console_message(
+            &self,
+            browser: Option<&mut Browser>,
+            _level: LogSeverity,
+            message: Option<&CefString>,
+            _source: Option<&CefString>,
+            _line: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let text = message.map(CefString::to_string).unwrap_or_default();
+            let Some(rest) = text.strip_prefix(PICK_PREFIX) else { return 0 };
+            let Some(session) = browser.map(|b| b.identifier()).and_then(session_of) else { return 1 };
+            let element = serde_json::from_str::<serde_json::Value>(rest).ok().filter(|v| v.is_object());
+            if let Some(app) = APP.get() {
+                let _ = app.emit("browser_pick", PickEvent { session_id: session, element });
+            }
+            1
+        }
     }
 }
+
+const PICK_PREFIX: &str = "__dray_pick__";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickEvent {
+    session_id: String,
+    /// `None` is a cancel.
+    element: Option<serde_json::Value>,
+}
+
+/// Injected into the page to pick an element: a highlight follows the
+/// pointer, a click reports the element under it and stops, Escape stops.
+/// Everything it needs to say goes out through `console.log` with
+/// `PICK_PREFIX`; see `on_console_message`. Re-running it replaces a live one.
+const PICK_JS: &str = r#"(() => {
+  if (window.__drayPick) window.__drayPick.stop();
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #f5c400;background:rgba(245,196,0,.12);border-radius:3px;transition:all 40ms;';
+  document.documentElement.appendChild(box);
+  const say = (v) => console.log('__dray_pick__' + (v ? JSON.stringify(v) : 'null'));
+  const selectorOf = (el) => {
+    const parts = [];
+    for (let e = el, i = 0; e && e.nodeType === 1 && i < 5; e = e.parentElement, i++) {
+      let s = e.tagName.toLowerCase();
+      if (e.id) { parts.unshift(s + '#' + CSS.escape(e.id)); break; }
+      const cls = [...e.classList].filter(c => !/^[a-z]+-\[|:/.test(c)).slice(0, 2);
+      if (cls.length) s += '.' + cls.map(CSS.escape).join('.');
+      const p = e.parentElement;
+      if (p) {
+        const same = [...p.children].filter(c => c.tagName === e.tagName);
+        if (same.length > 1) s += ':nth-of-type(' + (same.indexOf(e) + 1) + ')';
+      }
+      parts.unshift(s);
+    }
+    return parts.join(' > ');
+  };
+  const at = (ev) => {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    return el && el !== box ? el : null;
+  };
+  const move = (ev) => {
+    const el = at(ev);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    box.style.left = r.left + 'px'; box.style.top = r.top + 'px';
+    box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
+  };
+  const click = (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    const el = at(ev);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    say({
+      url: location.href,
+      title: document.title,
+      selector: selectorOf(el),
+      tag: el.tagName.toLowerCase(),
+      text: (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200),
+      attrs: Object.fromEntries(['id','class','role','aria-label','name','href','src','type','placeholder'].filter(a => el.getAttribute(a)).map(a => [a, el.getAttribute(a).slice(0, 120)])),
+      rect: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
+      styles: { color: cs.color, background: cs.backgroundColor, font: cs.fontSize + ' ' + cs.fontFamily.split(',')[0] },
+    });
+    stop();
+  };
+  const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); say(null); stop(); } };
+  const opts = { capture: true };
+  const stop = () => {
+    document.removeEventListener('mousemove', move, opts);
+    document.removeEventListener('click', click, opts);
+    document.removeEventListener('mousedown', click, opts);
+    document.removeEventListener('keydown', key, opts);
+    box.remove();
+    delete window.__drayPick;
+  };
+  document.addEventListener('mousemove', move, opts);
+  document.addEventListener('mousedown', click, opts);
+  document.addEventListener('click', click, opts);
+  document.addEventListener('keydown', key, opts);
+  window.__drayPick = { stop };
+})();"#;
 
 wrap_load_handler! {
     struct DrayLoad;
@@ -624,16 +754,68 @@ wrap_load_handler! {
                 t.loading = is_loading != 0;
                 t.can_go_back = can_go_back != 0;
                 t.can_go_forward = can_go_forward != 0;
+                if is_loading != 0 {
+                    t.error = None;
+                }
             });
+        }
+
+        /// Chromium draws its own error page; this only records the reason
+        /// for the tab strip. An aborted load is a navigation away, not an
+        /// error.
+        fn on_load_error(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            error_code: Errorcode,
+            error_text: Option<&CefString>,
+            _failed_url: Option<&CefString>,
+        ) {
+            if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
+                return;
+            }
+            if sys::cef_errorcode_t::from(error_code) == sys::cef_errorcode_t::ERR_ABORTED {
+                return;
+            }
+            let Some(id) = browser.map(|b| b.identifier()) else { return };
+            let text = error_text.map(CefString::to_string).unwrap_or_default();
+            update_tab(id, |t| t.error = Some(text));
         }
     }
 }
 
-/// ⌘-chords the page keeps: editing, find, reload, zoom. Every other ⌘-chord
-/// is the app's — ⌘1, ⌘B, ⌘E, ⌘N — and is handed back to the webview, since
-/// with Chromium's view focused a key never reaches the document `useHotkey`
-/// listens on.
-const PAGE_CHORDS: &[char] = &['c', 'v', 'x', 'a', 'z', 'f', 'r', 'l', '=', '-', '0'];
+/// Zoom on CEF's level scale, where 0 is 100% and a step is ×1.2. Written
+/// back onto the tab, since `zoom_level()` is the only reading and it lives
+/// on the host.
+fn zoom(browser: &Browser, action: &str) {
+    let Some(host) = browser.host() else { return };
+    let level = match action {
+        "in" => (host.zoom_level() + 1.0).min(7.0),
+        "out" => (host.zoom_level() - 1.0).max(-5.0),
+        _ => 0.0,
+    };
+    host.set_zoom_level(level);
+    update_tab(browser.identifier(), |t| t.zoom = level);
+}
+
+/// DevTools in its own window: the default `WindowInfo` is a top-level one.
+fn open_devtools(browser: &Browser) {
+    if let Some(host) = browser.host() {
+        host.show_dev_tools(
+            Some(&WindowInfo::default()),
+            None::<&mut Client>,
+            Some(&BrowserSettings::default()),
+            None,
+        );
+    }
+}
+
+/// ⌘-chords the page keeps: editing, find, reload. Zoom, hard reload and
+/// DevTools are the browser's and handled below, since CEF implements none
+/// of Chrome's accelerators itself. Every other ⌘-chord is the app's — ⌘1,
+/// ⌘B, ⌘E, ⌘N — and is handed back to the webview, since with Chromium's view
+/// focused a key never reaches the document `useHotkey` listens on.
+const PAGE_CHORDS: &[char] = &['c', 'v', 'x', 'a', 'z', 'f', 'r', 'l'];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -651,7 +833,7 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         fn on_pre_key_event(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
             _os_event: *mut u8,
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
@@ -669,6 +851,17 @@ wrap_keyboard_handler! {
             let ch = char::from_u32(event.unmodified_character as u32)
                 .unwrap_or('\0')
                 .to_ascii_lowercase();
+            if let Some(browser) = browser {
+                let plain = !shift && !alt && !ctrl;
+                match ch {
+                    '=' | '+' if plain => return { zoom(browser, "in"); 1 },
+                    '-' if plain => return { zoom(browser, "out"); 1 },
+                    '0' if plain => return { zoom(browser, "reset"); 1 },
+                    'r' if shift && !alt && !ctrl => return { browser.reload_ignore_cache(); 1 },
+                    'i' if alt && !shift && !ctrl => return { open_devtools(browser); 1 },
+                    _ => {}
+                }
+            }
             if !shift && !alt && !ctrl && PAGE_CHORDS.contains(&ch) {
                 return 0;
             }
@@ -769,8 +962,39 @@ pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
             "back" => browser.go_back(),
             "forward" => browser.go_forward(),
             "stop" => browser.stop_load(),
+            "hard_reload" => browser.reload_ignore_cache(),
             _ => browser.reload(),
         }
+    })
+}
+
+/// `in`, `out` or `reset`, on the active tab.
+#[tauri::command]
+pub fn browser_zoom(session_id: String, action: String) -> Result<(), String> {
+    on_main(move || {
+        if let Some(browser) = active_id(&session_id).and_then(browser_of) {
+            zoom(&browser, &action);
+        }
+    })
+}
+
+#[tauri::command]
+pub fn browser_devtools(session_id: String) -> Result<(), String> {
+    on_main(move || {
+        if let Some(browser) = active_id(&session_id).and_then(browser_of) {
+            open_devtools(&browser);
+        }
+    })
+}
+
+/// Starts or stops the element picker in the active tab. The pick itself
+/// arrives as a `browser_pick` event.
+#[tauri::command]
+pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
+    on_main(move || {
+        let Some(frame) = active_id(&session_id).and_then(browser_of).and_then(|b| b.main_frame()) else { return };
+        let code = if start { PICK_JS } else { "window.__drayPick && window.__drayPick.stop()" };
+        frame.execute_java_script(Some(&CefString::from(code)), None, 0);
     })
 }
 

@@ -21,7 +21,7 @@ import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
 import PrPanel from "@/components/PrPanel";
 import BrowserPane from "@/components/browser/BrowserPane";
-import { openInBrowser, useBrowserTabs } from "@/lib/browser";
+import { describePick, openInBrowser, setPickHandler, useBrowserTabs } from "@/lib/browser";
 import { setLinkOpener } from "@/lib/openLink";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
@@ -763,6 +763,20 @@ function App() {
     });
     return () => setLinkOpener(null);
   }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen]);
+
+  // An element picked in the page lands in that session's draft, and the
+  // composer is brought on screen to show it — off the full view and onto
+  // Chat, since the composer is hidden there.
+  useEffect(() => {
+    setPickHandler((sessionId, element) => {
+      if (!element) return;
+      appendToDraft(sessionId, describePick(element));
+      if (sessionId !== selectedSessionId) return;
+      if (viewTab === "browser") setViewTab("chat");
+      focusComposer();
+    });
+    return () => setPickHandler(null);
+  }, [selectedSessionId, viewTab, setViewTab]);
 
   // The first browser tab appearing — an agent opening a page — brings the
   // pane up on Browser, once. Not while the full view is up, where the same

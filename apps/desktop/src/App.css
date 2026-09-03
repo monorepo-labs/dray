@@ -1200,11 +1200,11 @@
 
   .browser-tab-active::before {
     left: -8px;
-    background: radial-gradient(circle at 0 0, transparent 8px, var(--muted) 8.5px);
+    background: radial-gradient(circle at 0 0, transparent 8px, var(--card) 8.5px);
   }
 
   .browser-tab-active::after {
     right: -8px;
-    background: radial-gradient(circle at 100% 0, transparent 8px, var(--muted) 8.5px);
+    background: radial-gradient(circle at 100% 0, transparent 8px, var(--card) 8.5px);
   }
 }

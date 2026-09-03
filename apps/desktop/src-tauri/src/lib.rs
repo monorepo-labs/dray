@@ -19,6 +19,7 @@ pub mod binpath;
 #[cfg(all(feature = "cef", target_os = "macos"))]
 #[path = "cef/cef.rs"]
 pub mod cef;
+mod local_servers;
 pub mod docs;
 #[path = "events/events.rs"]
 pub mod events;
@@ -750,6 +751,13 @@ pub fn run() {
             cef::browser_nav,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_layout,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_zoom,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_devtools,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_pick,
+            local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,
             list_slash_commands,
