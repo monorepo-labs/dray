@@ -47,7 +47,12 @@ use std::path::PathBuf;
 /// a key to be stored. The field is renamed rather than extended so the two
 /// shapes cannot be confused on the wire: an old app handed the new one finds
 /// no `identifiers` and refuses, which is the loud failure wanted here.
-pub const PROTOCOL_VERSION: u32 = 4;
+///
+/// v5 added [`Request::Browser`]. An older app fails to parse the variant and
+/// answers "could not parse the request", which reads as a broken CLI rather
+/// than an app with no browser; the bump turns that into "update the Dray
+/// app", the one cure that applies.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -93,6 +98,172 @@ pub enum Request {
     ListSessions(ListSessions),
     SendMessage(SendMessage),
     LinkIssues(LinkIssues),
+    Browser(BrowserRequest),
+}
+
+/// One step in a session's own browser — the tabs the app draws for it.
+///
+/// Every action lands on that session's active tab, so an agent can reach no
+/// other session's pages by construction: there is no target id to guess, the
+/// session is the address. The verbs follow agent-browser's, so an agent that
+/// knows one knows the other.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRequest {
+    pub session_id: String,
+    pub action: BrowserAction,
+}
+
+/// How an element is named. `Target` is what the line carries — `@e12` from
+/// the last snapshot, or a CSS selector; the rest are `find`'s locators,
+/// matched the way a person reads the page rather than the way it is built.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum Locator {
+    Target { target: String },
+    Role {
+        role: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        exact: bool,
+    },
+    Text {
+        text: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Label {
+        label: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Placeholder {
+        placeholder: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Alt {
+        alt: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Title {
+        title: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    TestId { id: String },
+    /// One of a selector's matches; `-1` is the last.
+    Nth { selector: String, index: i64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum Get {
+    Text,
+    Html,
+    Value,
+    Attr { name: String },
+    Title,
+    Url,
+    Count,
+    /// The bounding box, in viewport pixels.
+    Box,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Is {
+    Visible,
+    Enabled,
+    Checked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum BrowserAction {
+    Open { url: String },
+    Back,
+    Forward,
+    Reload,
+    /// Close the active tab.
+    Close,
+    Tabs,
+    TabNew {
+        #[serde(default)]
+        url: Option<String>,
+    },
+    TabSwitch { id: i32 },
+    TabClose {
+        #[serde(default)]
+        id: Option<i32>,
+    },
+    /// Interactive elements and headings, each with a ref for the actions.
+    Snapshot {
+        #[serde(default)]
+        interactive: bool,
+        #[serde(default)]
+        compact: bool,
+        #[serde(default)]
+        selector: Option<String>,
+    },
+    Click { at: Locator },
+    DblClick { at: Locator },
+    Focus { at: Locator },
+    Hover { at: Locator },
+    /// Keystrokes into an element, after whatever it holds.
+    Type { at: Locator, text: String },
+    /// Replace what an element holds.
+    Fill { at: Locator, text: String },
+    /// A key name (`Enter`, `Tab`, `Escape`, `ArrowDown`, `a`), with
+    /// `Meta+`/`Ctrl+`/`Shift+`/`Alt+` prefixes.
+    Press { key: String },
+    Check { at: Locator },
+    Uncheck { at: Locator },
+    /// Pick an option by value or label.
+    Select { at: Locator, value: String },
+    /// `up`, `down`, `left`, `right` by `amount` pixels.
+    Scroll { direction: String, amount: f64 },
+    ScrollIntoView { at: Locator },
+    Get {
+        #[serde(flatten)]
+        what: Get,
+        #[serde(default)]
+        at: Option<Locator>,
+    },
+    Is { what: Is, at: Locator },
+    /// Whichever is set: a selector to appear, milliseconds, a URL fragment,
+    /// visible text, or a load state (`load`, `networkidle`).
+    Wait {
+        #[serde(default)]
+        selector: Option<String>,
+        #[serde(default)]
+        ms: Option<u64>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        load: Option<String>,
+    },
+    /// PNG to `path`, or a file under `~/.dray/browser/shots`; `full` is the
+    /// whole document rather than the viewport.
+    Screenshot {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        full: bool,
+    },
+    /// Evaluate JavaScript in the page and answer its JSON value.
+    Eval { js: String },
+    /// What the page logged since last asked.
+    Console,
+    /// Errors alone, since last asked.
+    Errors,
+    SetViewport { width: u32, height: u32 },
+    /// A device preset by name, as the pane's device bar lists them.
+    SetDevice { name: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -239,6 +410,9 @@ pub enum Response {
     /// `queued` when the target had a turn in flight, so the prompt is held
     /// until it reaches a boundary rather than being dropped or interrupting.
     Sent { queued: bool },
+    /// What a browser action answers: `output` as text for the agent to
+    /// read, `data` the same answer for `--json`.
+    Browser { output: String, data: serde_json::Value },
     Error { message: String },
 }
 

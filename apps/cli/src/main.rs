@@ -10,9 +10,8 @@
 
 use clap::{Args, Parser, Subcommand};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, IssueInput, LinkIssues, ListSessions, Request, Response,
-    SendMessage,
-    SessionSummary,
+    encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary,
 };
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -56,6 +55,8 @@ enum Command {
     /// Tag a session with the issue its work is against.
     #[command(subcommand)]
     Issue(IssueCommand),
+    /// Drive this session's browser: open pages, read them, click and type.
+    Browser(BrowserCommand),
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Manage the Claude Code skill that documents this CLI.
@@ -156,6 +157,114 @@ struct IssueLinkArgs {
     url: Option<String>,
 }
 
+#[derive(Args)]
+struct BrowserCommand {
+    /// The session whose browser to drive. Defaults to the session running
+    /// this command.
+    #[arg(long, global = true)]
+    session: Option<String>,
+
+    /// Answer as JSON rather than text.
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    action: BrowserVerb,
+}
+
+/// Every verb lands on the session's active tab; `open` makes one if none.
+/// A TARGET is `@e12` from the last `snapshot`, or a CSS selector.
+#[derive(Subcommand)]
+enum BrowserVerb {
+    /// Load a URL in the active tab.
+    Open { url: String },
+    Back,
+    Forward,
+    Reload,
+    /// Close the active tab.
+    Close,
+    /// Tabs: `tab` lists, `tab new [url]`, `tab <id>`, `tab close [id]`.
+    Tab {
+        args: Vec<String>,
+    },
+    /// Interactive elements and headings, each with a @ref for the actions.
+    Snapshot {
+        /// Interactive elements only.
+        #[arg(short, long)]
+        interactive: bool,
+        /// Interactive elements and headings only.
+        #[arg(short, long)]
+        compact: bool,
+        /// Only inside this selector.
+        #[arg(short, long)]
+        selector: Option<String>,
+    },
+    Click { target: String },
+    Dblclick { target: String },
+    Focus { target: String },
+    Hover { target: String },
+    /// Keystrokes into an element, after whatever it holds.
+    Type { target: String, text: String },
+    /// Replace what an element holds.
+    Fill { target: String, text: String },
+    /// Press a key: Enter, Tab, Escape, ArrowDown, a, Meta+a …
+    Press { key: String },
+    Check { target: String },
+    Uncheck { target: String },
+    /// Pick an option by value or label.
+    Select { target: String, value: String },
+    /// Scroll up, down, left or right by pixels.
+    Scroll {
+        direction: String,
+        #[arg(default_value = "500", allow_negative_numbers = true)]
+        amount: f64,
+    },
+    Scrollintoview { target: String },
+    /// Read from the page: text, html, value, attr, title, url, count, box.
+    Get {
+        args: Vec<String>,
+    },
+    /// Ask about an element: visible, enabled, checked.
+    Is { what: String, target: String },
+    /// Find by role, text, label, placeholder, alt, title, testid, first,
+    /// last or nth, then act: `find role button click --name Submit`.
+    Find {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        exact: bool,
+        args: Vec<String>,
+    },
+    /// Wait for a selector or a number of milliseconds, or for --url, --text
+    /// or --load (load, networkidle).
+    Wait {
+        target: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        load: Option<String>,
+    },
+    /// Save a PNG of the page and print its path.
+    Screenshot {
+        path: Option<String>,
+        /// The whole document rather than the viewport.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Evaluate JavaScript in the page and print its value.
+    Eval { js: String },
+    /// What the page logged since last asked.
+    Console,
+    /// Errors the page logged since last asked.
+    Errors,
+    /// `set viewport <w> <h>` or `set device "<name>"`.
+    Set {
+        args: Vec<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum SkillCommand {
     /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
@@ -180,6 +289,7 @@ fn run() -> Result<(), String> {
         Command::Send(args) => send_message(args),
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
+        Command::Browser(args) => browser(args),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
     }
@@ -300,6 +410,165 @@ fn send_message(args: Send) -> Result<(), String> {
     }
 }
 
+fn browser(args: BrowserCommand) -> Result<(), String> {
+    let session_id = args.session.or_else(parent_session_id).ok_or(
+        "which session's browser? Pass --session <id>, or run this from inside a Dray session.",
+    )?;
+    let action = browser_action(args.action)?;
+    match send(Request::Browser(BrowserRequest { session_id, action }))? {
+        Response::Browser { output, data } => {
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());
+            } else {
+                println!("{output}");
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(&other)),
+    }
+}
+
+fn target(t: String) -> Locator {
+    Locator::Target { target: t }
+}
+
+/// The verbs whose grammar clap cannot carry — `tab`, `get`, `find`, `set`
+/// — parsed here, the rest passed straight through.
+fn browser_action(verb: BrowserVerb) -> Result<BrowserAction, String> {
+    Ok(match verb {
+        BrowserVerb::Open { url } => BrowserAction::Open { url },
+        BrowserVerb::Back => BrowserAction::Back,
+        BrowserVerb::Forward => BrowserAction::Forward,
+        BrowserVerb::Reload => BrowserAction::Reload,
+        BrowserVerb::Close => BrowserAction::Close,
+        BrowserVerb::Tab { args } => match args.first().map(String::as_str) {
+            None => BrowserAction::Tabs,
+            Some("new") => BrowserAction::TabNew { url: args.get(1).cloned() },
+            Some("close") => BrowserAction::TabClose { id: args.get(1).map(|s| parse_id(s)).transpose()? },
+            Some(id) => BrowserAction::TabSwitch { id: parse_id(id)? },
+        },
+        BrowserVerb::Snapshot { interactive, compact, selector } => {
+            BrowserAction::Snapshot { interactive, compact, selector }
+        }
+        BrowserVerb::Click { target: t } => BrowserAction::Click { at: target(t) },
+        BrowserVerb::Dblclick { target: t } => BrowserAction::DblClick { at: target(t) },
+        BrowserVerb::Focus { target: t } => BrowserAction::Focus { at: target(t) },
+        BrowserVerb::Hover { target: t } => BrowserAction::Hover { at: target(t) },
+        BrowserVerb::Type { target: t, text } => BrowserAction::Type { at: target(t), text },
+        BrowserVerb::Fill { target: t, text } => BrowserAction::Fill { at: target(t), text },
+        BrowserVerb::Press { key } => BrowserAction::Press { key },
+        BrowserVerb::Check { target: t } => BrowserAction::Check { at: target(t) },
+        BrowserVerb::Uncheck { target: t } => BrowserAction::Uncheck { at: target(t) },
+        BrowserVerb::Select { target: t, value } => BrowserAction::Select { at: target(t), value },
+        BrowserVerb::Scroll { direction, amount } => BrowserAction::Scroll { direction, amount },
+        BrowserVerb::Scrollintoview { target: t } => BrowserAction::ScrollIntoView { at: target(t) },
+        BrowserVerb::Get { args } => {
+            let usage = "get <text|html|value|attr|title|url|count|box> [target]";
+            let mut it = args.into_iter();
+            let what = it.next().ok_or(usage)?;
+            let what = match what.as_str() {
+                "text" => Get::Text,
+                "html" => Get::Html,
+                "value" => Get::Value,
+                "title" => Get::Title,
+                "url" => Get::Url,
+                "count" => Get::Count,
+                "box" => Get::Box,
+                "attr" => {
+                    let t = it.next().ok_or("get attr <target> <name>")?;
+                    let name = it.next().ok_or("get attr <target> <name>")?;
+                    return Ok(BrowserAction::Get { what: Get::Attr { name }, at: Some(target(t)) });
+                }
+                other => return Err(format!("get {other}? {usage}")),
+            };
+            BrowserAction::Get { what, at: it.next().map(target) }
+        }
+        BrowserVerb::Is { what, target: t } => {
+            let what = match what.as_str() {
+                "visible" => Is::Visible,
+                "enabled" => Is::Enabled,
+                "checked" => Is::Checked,
+                other => return Err(format!("is {other}? visible, enabled or checked")),
+            };
+            BrowserAction::Is { what, at: target(t) }
+        }
+        BrowserVerb::Find { name, exact, args } => find(name, exact, args)?,
+        BrowserVerb::Wait { target: t, url, text, load } => {
+            let ms = t.as_deref().and_then(|s| s.parse::<u64>().ok());
+            BrowserAction::Wait { selector: if ms.is_some() { None } else { t }, ms, url, text, load }
+        }
+        BrowserVerb::Screenshot { path, full } => BrowserAction::Screenshot { path, full },
+        BrowserVerb::Eval { js } => BrowserAction::Eval { js },
+        BrowserVerb::Console => BrowserAction::Console,
+        BrowserVerb::Errors => BrowserAction::Errors,
+        BrowserVerb::Set { args } => match args.first().map(String::as_str) {
+            Some("viewport") => {
+                let dim = |i: usize| -> Result<u32, String> {
+                    args.get(i)
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| "set viewport <width> <height>".to_string())
+                };
+                BrowserAction::SetViewport { width: dim(1)?, height: dim(2)? }
+            }
+            Some("device") => BrowserAction::SetDevice {
+                name: args.get(1).cloned().ok_or("set device <name>")?,
+            },
+            _ => return Err("set viewport <w> <h>, or set device <name>".into()),
+        },
+    })
+}
+
+fn parse_id(s: &str) -> Result<i32, String> {
+    s.parse().map_err(|_| format!("{s} is not a tab id; `dray browser tab` lists them"))
+}
+
+/// `find <by> <value> <action> [arg]`, with `first|last|nth` taking a
+/// selector: `find nth 2 .item click`, `find first .item text`.
+fn find(name: Option<String>, exact: bool, args: Vec<String>) -> Result<BrowserAction, String> {
+    let usage = "find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <action> [arg]";
+    let mut it = args.into_iter();
+    let by = it.next().ok_or(usage)?;
+    let value = it.next().ok_or(usage)?;
+    let at = match by.as_str() {
+        "role" => Locator::Role { role: value, name, exact },
+        "text" => Locator::Text { text: value, exact },
+        "label" => Locator::Label { label: value, exact },
+        "placeholder" => Locator::Placeholder { placeholder: value, exact },
+        "alt" => Locator::Alt { alt: value, exact },
+        "title" => Locator::Title { title: value, exact },
+        "testid" => Locator::TestId { id: value },
+        "first" => Locator::Nth { selector: value, index: 0 },
+        "last" => Locator::Nth { selector: value, index: -1 },
+        "nth" => {
+            let index = value.parse().map_err(|_| "find nth <index> <selector> <action>")?;
+            Locator::Nth { selector: it.next().ok_or(usage)?, index }
+        }
+        other => return Err(format!("find {other}? {usage}")),
+    };
+    let action = it.next().ok_or(usage)?;
+    let mut arg = |what: &str| it.next().ok_or_else(|| format!("find … {action} <{what}>"));
+    Ok(match action.as_str() {
+        "click" => BrowserAction::Click { at },
+        "dblclick" => BrowserAction::DblClick { at },
+        "focus" => BrowserAction::Focus { at },
+        "hover" => BrowserAction::Hover { at },
+        "check" => BrowserAction::Check { at },
+        "uncheck" => BrowserAction::Uncheck { at },
+        "type" => BrowserAction::Type { at, text: arg("text")? },
+        "fill" => BrowserAction::Fill { at, text: arg("text")? },
+        "select" => BrowserAction::Select { at, value: arg("value")? },
+        "text" => BrowserAction::Get { what: Get::Text, at: Some(at) },
+        "count" => BrowserAction::Get { what: Get::Count, at: Some(at) },
+        "visible" => BrowserAction::Is { what: Is::Visible, at },
+        other => {
+            return Err(format!(
+                "find … {other}? click, dblclick, focus, hover, check, uncheck, type, fill, select, text, count or visible"
+            ))
+        }
+    })
+}
+
 /// The app answered something this command never asks for, which means the two
 /// sides disagree about the protocol rather than that anything went wrong with
 /// the request.
@@ -309,6 +578,7 @@ fn unexpected(response: &Response) -> String {
         Response::Listed { .. } => "a list",
         Response::Sent { .. } => "a send",
         Response::Linked { .. } => "an issue link",
+        Response::Browser { .. } => "a browser action",
         Response::Error { .. } => "an error",
     };
     format!("the app answered {kind} to a different command — versions may disagree")

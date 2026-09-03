@@ -1,6 +1,6 @@
 ---
 name: dray
-description: Create, list and message Dray sessions from the command line. Use when the user asks to work on several things at once — a batch of issues, tickets, or tasks — and each deserves its own agent, its own branch, and its own place in the sidebar. Also for checking on sessions you started, and for sending a message or summary between sessions.
+description: Create, list and message Dray sessions, and drive this session's browser, from the command line. Use when the user asks to work on several things at once — a batch of issues, tickets, or tasks — and each deserves its own agent, its own branch, and its own place in the sidebar; for checking on sessions you started and messaging between them; and whenever a page needs looking at or acting on — a dev server, a deployed site, docs — through `dray browser`, never a headless browser or a browser MCP.
 ---
 
 # Dray sessions
@@ -21,6 +21,10 @@ session for each of these tickets".
 Do **not** use it to break one task into steps. Sessions are for work that is
 genuinely independent: separate branches, separate PRs. Steps of one job belong
 in one session, and subagents already handle parallelism inside a turn.
+
+The other reason is **a web page**: checking the dev server you just changed,
+reading a docs site, filling a form, taking a screenshot. `dray browser` is the
+browser this session already has open in the app — see *Driving the browser*.
 
 ## Creating a session
 
@@ -213,6 +217,42 @@ Write it as a message to a colleague, not as a note to yourself.
 Send when there is something the other session genuinely needs. A message costs
 it a whole turn, so "done" on its own is rarely worth one.
 
+## Driving the browser
+
+Every session has its own browser, drawn in the app beside the chat. `dray
+browser` drives it: the user watches the same tabs you act on, and no other
+session's pages are reachable from here. The verbs are agent-browser's.
+
+```bash
+dray browser open http://localhost:3000       # a page, in the active tab
+dray browser snapshot -i                      # what is on it, with @refs
+dray browser click @e4                        # a @ref or a CSS selector
+dray browser fill @e2 "hello"                 # fill clears first; type appends
+dray browser press Enter
+dray browser find role button click --name "Sign in"
+dray browser find text "Forgot password" click
+dray browser find label "Email" fill "me@example.com"
+dray browser get text                         # the page's text; or html, value, attr, title, url, count, box
+dray browser is visible ".toast"
+dray browser wait ".results"                  # or 1500, --url /done, --text "Saved", --load networkidle
+dray browser screenshot --full                # prints the PNG's path
+dray browser eval "document.title"
+dray browser console | errors                 # what the page logged since last asked
+dray browser set device "iPhone 15"           # or set viewport 375 667
+dray browser tab | tab new [url] | tab <id> | tab close | back | forward | reload | close
+```
+
+`snapshot` is the way to see a page: one line per element with a `@e<n>` ref
+that the actions take. Refs are re-numbered on every snapshot, so take a fresh
+one after anything that changes the page. `-i` lists interactive elements only,
+`-c` adds headings, `-s <selector>` limits it to one region. Read a screenshot
+with your image tooling only when the layout itself is the question; the
+snapshot is cheaper and names what to act on.
+
+`open` waits for the page to load; `click` and `press` wait for any navigation
+they cause. A local dev server is the usual page — start it in the background
+first, then open it. `--json` on any verb answers as JSON for scripting.
+
 ## Reporting back to the user
 
 Say briefly what is now running, in terms of the work — "three sessions, one per
@@ -277,6 +317,9 @@ the cure is safe.
   session and nothing else: no status change, no comment, no attachment. If the
   user wants the issue moved or commented on, do it through the tracker's own
   MCP server.
+- **The browser is the session's own.** `dray browser` reaches the tabs of the
+  session running it and nothing else; downloads, file pickers and native
+  dialogs are out of reach.
 - **No reading transcripts.** You can create, list and message. You cannot read
   what another session said — ask it to send you a summary instead.
 - **Two levels deep.** A session you create may create sessions of its own; those

@@ -218,6 +218,24 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
         Request::ListSessions(list) => list_sessions(list).await,
         Request::SendMessage(send) => send_message(send, app).await,
         Request::LinkIssues(link) => link_issues(link).await,
+        Request::Browser(browser) => browse(browser).await,
+    }
+}
+
+/// One `dray browser` step. The browser is macOS-only and behind a feature,
+/// so the refusal names that rather than reading as a broken CLI.
+async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
+    #[cfg(all(feature = "cef", target_os = "macos"))]
+    {
+        Ok(match crate::cef::automation::run(&request.session_id, request.action).await {
+            Ok((output, data)) => Response::Browser { output, data },
+            Err(message) => Response::error(message),
+        })
+    }
+    #[cfg(not(all(feature = "cef", target_os = "macos")))]
+    {
+        let _ = request;
+        Ok(Response::error("this build of Dray has no browser"))
     }
 }
 

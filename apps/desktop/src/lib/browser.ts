@@ -77,6 +77,12 @@ function start() {
       }),
     );
   });
+  // `dray browser set viewport|device`: the agent's size lands in the same
+  // store the device bar writes, so the bar shows what the agent set.
+  void listen<{ sessionId: string; preset: string; width: number; height: number }>("browser_viewport", (e) => {
+    const { sessionId, preset, width, height } = e.payload;
+    setViewport(sessionId, { preset, width, height });
+  });
   // Radix puts `pointer-events: none` on body while a modal is open. The
   // native view would sit over the dialog otherwise.
   new MutationObserver(() => {

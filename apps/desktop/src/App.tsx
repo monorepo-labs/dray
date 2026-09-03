@@ -14,6 +14,7 @@ import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
+import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
@@ -1429,6 +1430,7 @@ function App() {
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
     <QuitDialog />
+    <LinkDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
         collapses and would take ⌘, with it. */}
     <SettingsDialog

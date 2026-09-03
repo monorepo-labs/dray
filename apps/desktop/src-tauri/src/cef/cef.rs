@@ -31,6 +31,9 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
+#[path = "automation.rs"]
+pub mod automation;
+
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 const HELPER: &str = "Dray Helper.app/Contents/MacOS/Dray Helper";
 /// Fixed for now; a per-app free port and a per-session proxy come later.
@@ -52,6 +55,8 @@ struct Tab {
     id: i32,
     session: String,
     browser: Browser,
+    /// Keeps `dray browser`'s DevTools observer attached for the tab's life.
+    _devtools: Option<Registration>,
     /// The `NSView` CEF created, as a pointer. Main thread only.
     view: usize,
     url: String,
@@ -476,6 +481,25 @@ fn apply_layout() {
     }
 }
 
+/// Unhides a tab's view off-screen, so Chromium treats it as visible and
+/// delivers the input `dray browser` dispatches: a hidden `NSView` marks the
+/// widget hidden, and a hidden widget drops mouse and key events (measured:
+/// a page listener saw nothing). `apply_layout` puts it back.
+fn reveal(id: i32) {
+    let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.view).unwrap_or(0);
+    if view == 0 {
+        return;
+    }
+    let view: &NSView = unsafe { &*(view as *const NSView) };
+    if !view.isHidden() {
+        return;
+    }
+    let size = view.frame().size;
+    let size = if size.width < 1.0 || size.height < 1.0 { NSSize::new(800.0, 600.0) } else { size };
+    view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), size));
+    view.setHidden(false);
+}
+
 wrap_client! {
     struct DrayClient {
         session: String,
@@ -510,10 +534,12 @@ wrap_life_span_handler! {
             let id = browser.identifier();
             let view = browser.host().map(|h| h.window_handle() as usize).unwrap_or(0);
             let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
+            let devtools = automation::observe(&browser);
             TABS.lock().unwrap().push(Tab {
                 id,
                 session: self.session.clone(),
                 browser,
+                _devtools: devtools,
                 view,
                 url,
                 title: String::new(),
@@ -576,6 +602,7 @@ wrap_life_span_handler! {
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
+            automation::forget(id);
             let session = self.session.clone();
             let remaining = {
                 let mut tabs = TABS.lock().unwrap();
@@ -645,13 +672,19 @@ wrap_display_handler! {
         fn on_console_message(
             &self,
             browser: Option<&mut Browser>,
-            _level: LogSeverity,
+            level: LogSeverity,
             message: Option<&CefString>,
             _source: Option<&CefString>,
             _line: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let text = message.map(CefString::to_string).unwrap_or_default();
-            let Some(rest) = text.strip_prefix(PICK_PREFIX) else { return 0 };
+            let Some(rest) = text.strip_prefix(PICK_PREFIX) else {
+                if let Some(id) = browser.as_ref().map(|b| b.identifier()) {
+                    let error = sys::cef_log_severity_t::from(level) == sys::cef_log_severity_t::LOGSEVERITY_ERROR;
+                    automation::log(id, error, text);
+                }
+                return 0;
+            };
             let Some(session) = browser.map(|b| b.identifier()).and_then(session_of) else { return 1 };
             let element = serde_json::from_str::<serde_json::Value>(rest).ok().filter(|v| v.is_object());
             if let Some(app) = APP.get() {

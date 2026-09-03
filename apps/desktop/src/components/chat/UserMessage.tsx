@@ -8,6 +8,7 @@ import { useChatCwd } from "@/hooks/useChatCwd";
 import { absolutePath } from "@/lib/filePath";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
+import { openLink } from "@/lib/openLink";
 import { stripSenderPrefix } from "@/lib/relay";
 import { shortenPath } from "@/lib/tools";
 import { cn } from "@/lib/utils";
@@ -175,6 +176,19 @@ export default function UserMessage({
                     // underline through a prompt reads as a correction.
                     className={cn(SEGMENT_COLOR.issue, "cursor-pointer hover:underline")}
                     onClick={() => void openUrl(url)}
+                  >
+                    {segment.text}
+                  </button>
+                );
+              }
+
+              if (segment.kind === "url") {
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    className={cn(SEGMENT_COLOR.url, "cursor-pointer hover:decoration-foreground")}
+                    onClick={(e) => openLink(segment.text, e)}
                   >
                     {segment.text}
                   </button>

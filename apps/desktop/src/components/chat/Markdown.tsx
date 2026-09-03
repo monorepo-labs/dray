@@ -58,9 +58,8 @@ function codePlugin(pair: CodeThemePair) {
 // tabbed to either.
 const CONTROLS = { table: false, code: { copy: true, download: false } };
 
-// A link opens in the session's browser, not the system one: the confirm
-// dialog that stood here guarded a hand-off out of the app, and there is no
-// hand-off any more. ⌘-click still leaves the app — see `openLink`.
+// A link asks where to open — Dray's browser or the system one — through
+// the app-wide `LinkDialog`. ⌘-click skips the question and leaves the app.
 function Anchor({ href, children, ...rest }: React.ComponentProps<"a">) {
   return (
     <a
