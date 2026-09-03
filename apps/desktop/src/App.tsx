@@ -50,7 +50,7 @@ import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
-import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
+import { refreshActiveDoc, saveActiveDoc, useDocs, useDocsSession } from "@/hooks/useDocs";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -512,6 +512,10 @@ function App() {
 
   const issueData = useSessionIssues(sessionIssues, panelShown && activeTabIsIssue);
 
+  // Docs belong to the session they were opened from, so the store is pointed
+  // at the selection before anything reads it.
+  useDocsSession(selectedSessionId);
+
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
   const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs();
@@ -586,6 +590,22 @@ function App() {
     pullRequests.refresh();
     prMarks.refresh();
   }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
+
+  // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
+  // only ever holds the *selected* session's files: anything written while the
+  // reader was somewhere else was written unwatched. A turn ending needs no
+  // rule of its own — the agent's write is exactly what the watcher sees.
+  //
+  // One value rather than three conditions: opening the tab, stepping to another
+  // chip and switching session all put a different file in front of the reader,
+  // and each wants the same read. A dirty draft is flagged rather than replaced,
+  // so this cannot eat an edit, and a doc whose first read is still out is
+  // skipped, which is what stops opening the tab reading the same file twice.
+  const shownDoc =
+    panelShown && activeTab === "docs" ? `${selectedSessionId}\n${activeDocPath}` : null;
+  useEffect(() => {
+    if (shownDoc) refreshActiveDoc();
+  }, [shownDoc]);
 
   // From the sidebar's own per-repo read, not a fourth git call: once a pull
   // request exists the panel is where it is acted on, and a Create PR button

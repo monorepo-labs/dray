@@ -14,6 +14,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -22,6 +29,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   closeDoc,
+  dismissClash,
   isDirty,
   reloadDoc,
   saveDoc,
@@ -29,6 +37,7 @@ import {
   setDocDraft,
   setDocMode,
   useDocs,
+  useDocWatcher,
   type Doc,
   type DocMode,
 } from "@/hooks/useDocs";
@@ -66,7 +75,8 @@ export default function DocsPanel({
   /// composer, where it selects to the start of the line.
   active: boolean;
 }) {
-  const { docs, activePath } = useDocs();
+  const { docs, activePath, clash } = useDocs();
+  useDocWatcher();
   // Named by path rather than held as the doc, so the dialog cannot go on
   // asking about a file that has since been closed from somewhere else.
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -132,7 +142,7 @@ export default function DocsPanel({
             // row the hardest part of it to read.
             className="shrink-0 disabled:opacity-100"
             disabled={current.body.status === "ready" && current.body.saving}
-            onClick={() => saveDoc(current.path)}
+            onClick={() => void saveDoc(current.path)}
           >
             {current.body.status === "ready" && current.body.saving && (
               <Loader2 className="animate-spin" />
@@ -162,6 +172,19 @@ export default function DocsPanel({
           setConfirming(null);
         }}
         onClose={() => setConfirming(null)}
+      />
+
+      <StaleSave
+        path={clash}
+        onDiscard={() => {
+          if (clash) reloadDoc(clash);
+          dismissClash();
+        }}
+        onOverwrite={() => {
+          if (clash) void saveDoc(clash, { force: true });
+          dismissClash();
+        }}
+        onClose={dismissClash}
       />
     </div>
   );
@@ -306,43 +329,72 @@ function ModeToggle({
   );
 }
 
-/// What the reader has to settle before the body means anything.
+/// Why the last write failed.
 ///
-/// Neither Reload nor Overwrite takes the destructive fill, because both lose
-/// something: one drops the reader's edits, the other drops whatever wrote the
-/// file underneath them. Red belongs on the one irreversible thing in a
-/// dialog, and here there are two of them with nothing to choose between on
-/// colour alone.
+/// Staleness used to be drawn here too, with Reload and Overwrite beside it.
+/// That row was a standing interruption once the watcher started raising the
+/// flag on its own: it appeared under the reader's hands mid-sentence and asked
+/// them to settle something they had not asked about yet. The clash is put to
+/// them at the save instead, where it is the answer to a question they just
+/// asked — leaving this for the one thing that is only ever news after a press.
 function Strip({ doc }: { doc: Doc }) {
-  if (doc.body.status !== "ready") return null;
-  const { stale, saveError } = doc.body;
-  if (!stale && !saveError) return null;
+  if (doc.body.status !== "ready" || !doc.body.saveError) return null;
 
   return (
-    <div className="shrink-0 space-y-1.5 border-b border-border px-3 py-2 text-ui">
-      {stale && (
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 text-muted-foreground">
-            This file changed on disk since you opened it.
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => reloadDoc(doc.path)}
-          >
-            Reload
+    <p className="shrink-0 border-b border-border px-3 py-2 text-ui text-destructive">
+      {doc.body.saveError}
+    </p>
+  );
+}
+
+/// The clash, raised when Save meets a file that moved.
+///
+/// A plain dialog rather than an alert dialog, for the X: closing is a real
+/// third answer here, not the absence of one. The reader is left in edit mode
+/// with every keystroke intact, which is what makes copying their version out
+/// before choosing possible at all — so it is the only one of the three that
+/// loses nothing, and the escape from a dialog whose other two options each
+/// throw one side away.
+///
+/// Neither of those two takes the destructive fill. Both lose something — one
+/// the reader's edits, the other whatever wrote the file underneath them — and
+/// red on one of a matched pair says the other is safe.
+function StaleSave({
+  path,
+  onDiscard,
+  onOverwrite,
+  onClose,
+}: {
+  path: string | null;
+  onDiscard: () => void;
+  onOverwrite: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={path !== null} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>This file changed on disk</DialogTitle>
+          <DialogDescription>
+            <span className="font-medium text-foreground">
+              {path && splitPath(path).name}
+            </span>{" "}
+            was written by something else while you were editing it. Saving now
+            would replace that version with yours.
+          </DialogDescription>
+        </DialogHeader>
+        {/* The alert dialog's own footer shape, written out rather than a
+            `DialogFooter` added to the ui module for one caller. */}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button variant="outline" onClick={onDiscard}>
+            Discard my edits
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => saveDoc(doc.path, { force: true })}
-          >
-            Overwrite
+          <Button variant="outline" onClick={onOverwrite}>
+            Overwrite the file
           </Button>
         </div>
-      )}
-      {saveError && <p className="text-destructive">{saveError}</p>}
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
