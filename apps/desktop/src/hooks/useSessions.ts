@@ -1166,6 +1166,10 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   if (!showArchived) {
     setSessionIndexItems((prev) => [...prev, snapshot]);
   }
+  // Claimed like every other selection path, or an eviction tick landing
+  // before this renders sees both selection refs on the parent and drops the
+  // fork it is about to show.
+  selectionRequestRef.current = snapshot.sessionId;
   setSelectedSessionId(snapshot.sessionId);
   restoreSessionControls(snapshot);
 };
