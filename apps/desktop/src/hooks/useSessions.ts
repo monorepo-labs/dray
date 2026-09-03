@@ -1102,6 +1102,10 @@ const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
 // a cure: the entry is only cleared by that last step, so the settled bar is
 // still carrying the control that runs the rest, whichever end it stopped at.
 const reportWorktreeFailure = (sessionId: string, title: string, reason: string) => {
+  // The removal is started and not awaited, so this can land in a space the
+  // reader has since left — and `subject` is the session's own title.
+  if (!canAnnounce(sessionId)) return;
+
   pushNotice({
     sessionId,
     kind: "worktree-failed",
@@ -1667,27 +1671,40 @@ const markSessionRead = (sessionId: string) => {
 /// stack beside every other app's, so it has to name the session and the
 /// project or it says nothing; the in-app card is the only card on screen next
 /// to a sidebar already marking the row, so it needs the verb and nothing else.
-const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
-
-  // A session in another space keeps running; it just has no channel here.
-  // Both channels name the session out loud, and naming a personal one over a
-  // shared screen is the thing spaces exist to stop. Read at the event rather
-  // than held, since this listener is registered once and a captured copy would
-  // be the space the app launched in for the rest of the run.
+/// Whether a session may say anything at all right now — the space rule, asked
+/// once for every channel.
+///
+/// Exported from the hook because the cards raised outside `announce` are the
+/// ones most able to break it: both worktree notices land after an `await`, so
+/// the reader can be in another space by the time one arrives, and both carry
+/// the session's own **title**. Read at the call, since these listeners and
+/// handlers are registered once and a held copy would be the space the app
+/// launched in.
+///
+/// Both lists, since the index holds one side of the archived split at a time.
+/// `allowedInSpace` is what refuses a session neither can name — see its own
+/// note for why that direction.
+const canAnnounce = (sessionId: string): boolean => {
   const space = activeSpace(
     projectsRef.current,
     readLocalStorage<string | null>(SPACE_KEY, null),
     readLocalStorage<string[]>(SPACE_LIST_KEY, []),
   );
-  // Both lists, since the index holds one side of the archived split at a time.
-  // `allowedInSpace` is what refuses a session neither can name — see its own
-  // note for why that direction.
   const projectPath =
-    item?.projectPath ??
+    sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.projectPath ??
     sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
     null;
-  if (!allowedInSpace(projectsRef.current, space, projectPath)) return false;
+
+  return allowedInSpace(projectsRef.current, space, projectPath);
+};
+
+const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
+  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+
+  // A session in another space keeps running; it just has no channel here.
+  // Both channels name the session out loud, and naming a personal one over a
+  // shared screen is the thing spaces exist to stop.
+  if (!canAnnounce(sessionId)) return false;
 
   if (!isWindowFocused()) {
     // Same order as the card: the verb first, because *what is wanted* is the
@@ -1976,6 +1993,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

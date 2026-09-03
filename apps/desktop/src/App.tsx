@@ -128,6 +128,7 @@ function App() {
     handleRemoveProject,
     setProjectSpace,
     retagSpace,
+    canAnnounce,
     handleSelectBranch,
     pendingBranch,
     setPendingBranch,
@@ -385,6 +386,12 @@ function App() {
       setWorktreePrompt({ sessionId, worktreeName, disposition });
       return;
     }
+
+    // The disposition read above is an `await`, so this card can arrive in a
+    // space the reader has moved to since settling the session — and it names
+    // the session's own title. The dialog route above is deliberately not
+    // guarded: the reader pressed a button and is owed its answer.
+    if (!canAnnounce(sessionId)) return;
 
     pushNotice({
       sessionId,
