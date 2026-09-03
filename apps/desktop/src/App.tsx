@@ -56,7 +56,7 @@ import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { pushNotice } from "@/hooks/useNotices";
+import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
@@ -125,6 +125,7 @@ function App() {
     handleSelectProject,
     handleRemoveProject,
     setProjectSpace,
+    retagSpace,
     handleSelectBranch,
     pendingBranch,
     setPendingBranch,
@@ -771,44 +772,39 @@ function App() {
     go();
   };
 
-  /// Moves the whole window to another space.
+  /// Moves the whole window to another space. The screen catches up in the
+  /// effect below, which answers for every way membership can change and not
+  /// only for this one.
   ///
-  /// It takes the screen with it, which is the difference between a space and a
-  /// filter. The project filter under it names a project the new space may not
-  /// hold; the composer would start the next task in one the reader can no
-  /// longer see; and the transcript on screen is the loudest thing in the
-  /// window — leaving a personal one up is exactly what somebody switching
-  /// space in front of an audience is switching to avoid.
-  ///
-  /// Only where each of those actually falls outside. A space holding the
-  /// session and the project already on screen changes nothing but the list.
+  /// Notices go here rather than there: a card raised before the switch names a
+  /// session the reader has just put away, and clicking it would open that
+  /// transcript. They are transient anyway, so dropping them costs a glance at
+  /// something the sidebar still marks.
   const changeSpace = (next: string | null) => {
     setStoredSpace(next);
     setProjectFilter(null);
 
-    const held = inSpace(projects, next);
-    if (projectPath && !held.some((p) => p.path === projectPath) && held[0]) {
-      handleSelectProject(held[0].path);
-    }
-
-    const open = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
-    if (open && !sessionInSpace(projects, next, open.projectPath)) {
-      goToSession(handleNewSession);
+    for (const notice of getNotices()) {
+      const item = sessionIndexItems.find((i) => i.sessionId === notice.sessionId);
+      if (item && !sessionInSpace(projects, next, item.projectPath)) {
+        dismissNotice(notice.sessionId, notice.kind);
+      }
     }
   };
 
   const createSpace = (name: string) =>
     setDeclaredSpaces((prev) => (prev.includes(name) ? prev : [...prev, name]));
 
-  /// Renames a space wherever it is written down: the declared list, every
-  /// project carrying the tag, and the reader's own pick. Sequentially, since
-  /// each write rewrites the whole projects file and answers with the list as
-  /// it stood — a later call resolving first would put the earlier one back.
+  /// Renames a space wherever it is written down: every project carrying the
+  /// tag, the declared list, and the reader's own pick.
+  ///
+  /// The tags move first and in **one** call, and the local record follows only
+  /// once that lands. A loop of writes with the record updated up front left
+  /// half-renamed tags beside a list claiming the rename was done, which is a
+  /// disagreement nothing on screen could explain.
   const renameSpace = async (from: string, to: string) => {
+    if (!(await retagSpace(from, to))) return;
     setDeclaredSpaces((prev) => [...new Set(prev.map((s) => (s === from ? to : s)))]);
-    for (const project of projects.filter((p) => p.space === from)) {
-      await setProjectSpace(project.path, to);
-    }
     if (storedSpace === from) setStoredSpace(to);
   };
 
@@ -816,12 +812,45 @@ function App() {
   /// sessions are untouched — a space is a way of looking at them, so losing one
   /// costs the view and never the work.
   const removeSpace = async (name: string) => {
-    if (storedSpace === name) changeSpace(null);
+    if (!(await retagSpace(name, null))) return;
     setDeclaredSpaces((prev) => prev.filter((s) => s !== name));
-    for (const project of projects.filter((p) => p.space === name)) {
-      await setProjectSpace(project.path, null);
-    }
+    if (storedSpace === name) changeSpace(null);
   };
+
+  /// Keeps what is *on screen* inside the active space — the composer's project
+  /// and the open transcript, neither of which the sidebar's filtering reaches.
+  ///
+  /// An effect rather than three lines inside the switcher, because switching
+  /// is not the only way a session leaves the space it was in: filing a project
+  /// into another space or detaching it moves the same boundary, and a stale
+  /// notification opening a session moves the reader across it. Written as
+  /// "what is showing must be in the space" rather than as a list of the ways
+  /// it stops being, each of which was its own bug.
+  ///
+  /// The project is judged first and independently: a space holding nothing is
+  /// an ordinary state, and clearing the pick there is what stops the composer
+  /// starting a task in a project the reader can no longer see.
+  ///
+  /// A session whose project neither the index nor the loaded snapshot can name
+  /// is left alone. That is "we cannot tell", not "it is elsewhere", and
+  /// closing a transcript on a guess is worse than drawing one a moment longer.
+  useEffect(() => {
+    if (projectPath && !spaceProjects.some((p) => p.path === projectPath)) {
+      handleSelectProject(spaceProjects[0]?.path ?? null);
+    }
+
+    if (!selectedSessionId) return;
+    const openPath =
+      selectedSession?.projectPath ??
+      sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
+    if (openPath && !sessionInSpace(projects, space, openPath)) {
+      goToSession(handleNewSession);
+    }
+    // The membership question and its two answers. `handleSelectProject` and
+    // `handleNewSession` are rebuilt every render, so listing them would run
+    // this on every one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems]);
 
   /// The sidebar's own "New space", which is a request for the field rather
   /// than for a space — naming it is Settings' job, so this only opens the tab.

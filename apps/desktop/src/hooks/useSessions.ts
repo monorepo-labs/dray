@@ -307,8 +307,26 @@ const setProjectSpace = async (path: string, space: string | null) => {
   }
 };
 
-const handleSelectProject = (path: string) => {
+// Moves every project in one space to another, or out of any space with `null`.
+// One call, so a rename or a removal cannot half-happen: answers `false` where
+// nothing was written, which is what lets the caller keep its own record of
+// which spaces exist in step with the tags.
+const retagSpace = async (from: string, to: string | null) => {
+  try {
+    setProjects(await invoke<Project[]>("retag_space", { from, to }));
+    return true;
+  } catch (e) {
+    setError(String(e));
+    return false;
+  }
+};
+
+// `null` is no project at all, which a space holding none is — and it has to be
+// reachable, since a stale pick still sends: the picker draws "Attach project"
+// while `send_msg` runs happily in the project the reader just walked away from.
+const handleSelectProject = (path: string | null) => {
   setProjectPath(path);
+  if (path === null) return;
   // Fire and forget: losing the remembered pick costs one dropdown next launch.
   void invoke("set_last_selected_project", { path }).catch(() => {});
 };
@@ -1662,7 +1680,18 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     readLocalStorage<string | null>(SPACE_KEY, null),
     readLocalStorage<string[]>(SPACE_LIST_KEY, []),
   );
-  if (item && !sessionInSpace(projectsRef.current, space, item.projectPath)) {
+  // A session the index cannot name is **refused** while a space is up, rather
+  // than let through. The index holds one side of the archived split at a time
+  // and a brand-new session's entry lands after its first events, so "not
+  // found" is not "not filed elsewhere" — and a banner that cannot be
+  // attributed is exactly what somebody who chose a space is asking not to see.
+  // Cost, stated: a settled session in the *active* space stays quiet while the
+  // reader is looking at the live list.
+  const projectPath =
+    item?.projectPath ??
+    sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
+    null;
+  if (space && !(projectPath && sessionInSpace(projectsRef.current, space, projectPath))) {
     return false;
   }
 
@@ -1953,6 +1982,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }
