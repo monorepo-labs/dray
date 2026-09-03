@@ -33,7 +33,6 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -117,6 +116,9 @@ type SidebarProps = {
   /// only place the reader is thinking about spaces, so it is where making one
   /// has to be offered — it just isn't where the making happens.
   onNewSpace: () => void;
+  /// Whether that field is up, which is what the switcher's New space entry is
+  /// lit by while no space exists.
+  namingSpace: boolean;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -599,6 +601,13 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/// Every space there is, as the switcher walks them. "All" is an entry rather
+/// than a special case, so the click and the dots read one list and cannot
+/// disagree about what comes next.
+function spaceEntries(spaces: string[]): (string | null)[] {
+  return [null, ...spaces];
+}
+
 /// Which space the whole sidebar is scoped to.
 ///
 /// A switch narrows what is *drawn* and nothing else: every session in every
@@ -606,67 +615,112 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
 /// nothing until the reader comes back to it. That is the whole feature — the
 /// point is a screen somebody else can look at, not a second app.
 ///
+/// Shaped like the project filter below it: the name over a dot track, a click
+/// steps to the next one. Two controls scoping the same list should not be two
+/// different kinds of control, and the dots say how many spaces there are,
+/// which the chevron never did. No swipe — this sits in the titlebar strip, one
+/// line high, where the project filter has a whole band to aim at.
+///
 /// Switching only. Making a space and filing projects into it live in Settings,
 /// since both are things done once and neither belongs in the strip a reader
-/// passes through twenty times a day — so "New space" here opens that tab
-/// rather than growing a second way to do it.
+/// passes through twenty times a day.
+///
+/// Until the first space exists there is nothing to switch between, so the cycle
+/// carries one more entry — New space — which opens that tab's name field on
+/// landing. A ＋ standing in the strip for good is a permanent offer to somebody
+/// who may never want a space, where an entry is only ever met by a reader who
+/// stepped onto it. It drops out the moment a space exists, so ordinary
+/// switching can never land on it.
 function SpaceSwitcher({
   spaces,
   value,
+  naming,
   onChange,
   onNew,
 }: {
   spaces: string[];
   value: string | null;
+  /// Whether the name field is up. This is what lights the New space entry:
+  /// held here rather than as a click of its own, so cancelling the dialog puts
+  /// the switcher back on All Spaces with no state to unwind.
+  naming: boolean;
   onChange: (space: string | null) => void;
   onNew: () => void;
 }) {
+  const offersNew = spaces.length === 0;
+  // Two entries with nothing to name yet — the second's label is the only thing
+  // that makes it New space rather than a space.
+  const entries = offersNew ? [null, null] : spaceEntries(spaces);
+
+  // A space removed elsewhere leaves its name behind in the stored pick, and the
+  // dot track needs a real index. All is the fallback `activeSpace` already makes.
+  const found = entries.indexOf(value);
+  const activeIndex = offersNew ? (naming ? 1 : 0) : found === -1 ? 0 : found;
+
+  const label = (i: number) =>
+    offersNew && i === 1 ? "New space" : (entries[i] ?? "All Spaces");
+
+  // Wraps: a click has no direction and no dot to slide, so a dead end at the
+  // last space would just look broken. With nothing made yet there is only the
+  // one place to go, and the dialog covers the strip once it opens.
+  const cycle = () => {
+    if (offersNew) return onNew();
+    onChange(entries[(activeIndex + 1) % entries.length]);
+  };
+
   return (
-    <DropdownMenu>
-      {/* No tooltip, unlike the two icon buttons beside it: the trigger already
-          draws the answer in words, so one would only repeat the label. */}
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          // Named, not a glyph: which space you are in is the one fact this
-          // control exists to state, and an icon can only say that a control is
-          // here.
-          className="max-w-28 gap-1 px-1.5 text-ui text-muted-foreground opacity-80 transition-opacity hover:opacity-100"
-        >
-          <span className="truncate">{value ?? "All"}</span>
-          <ChevronDown className="size-3 shrink-0 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-
-      {/* Hugs its widest entry rather than holding a fixed width open beside
-          two short names. */}
-      <DropdownMenuContent align="end">
-        <DropdownMenuRadioGroup
-          // Radix radio values are strings, so every space rides on its own name
-          // and the empty one stands for all of them — a space cannot be named
-          // nothing, so the two can't collide.
-          value={value ?? ""}
-          onValueChange={(next) => onChange(next === "" ? null : next)}
-        >
-          <DropdownMenuRadioItem value="" className="text-ui">
-            All
-          </DropdownMenuRadioItem>
-          {spaces.map((name) => (
-            <DropdownMenuRadioItem key={name} value={name} className="text-ui">
-              <span className="truncate">{name}</span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-
-        {/* No rule above it: the menu is one short list of things to do with
-            spaces, and a line through it says the two halves are unrelated. */}
-        <DropdownMenuItem onSelect={onNew} className="text-ui">
-          <Plus className="size-3.5" />
-          New space
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    // No tooltip, unlike the two icon buttons beside it: this one draws its
+    // answer in words, so one would only repeat the label. Unselectable because
+    // the name is the target's face, not prose.
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={cycle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          cycle();
+        }
+      }}
+      className="group/spaces relative flex cursor-pointer items-center px-1.5 select-none focus-visible:outline-none"
+    >
+      {/* Every name in one grid cell, all but the current one hidden, so the
+          box is as wide as the **longest** name and never a pixel wider.
+          That is what makes stepping through smooth: a box that hugs the
+          current name resized on every switch, sliding the two icon buttons
+          beside it and jumping the dots out from under the word. A fixed width
+          fixed that and cost more — it left the name adrift in the middle of
+          the strip, since the widest name is usually far short of it. */}
+      <span className="grid max-w-28 text-ui">
+        {entries.map((_, i) => (
+          <span
+            key={i}
+            aria-hidden={i !== activeIndex}
+            className={cn(
+              "col-start-1 row-start-1 truncate text-center text-muted-foreground transition-colors group-hover/spaces:text-foreground",
+              i !== activeIndex && "invisible",
+            )}
+          >
+            {/* "All Spaces", not "All", to match the project filter's own
+                first entry — and it is the longest label a one-space app has,
+                which is what stops the box being narrower than the word beside
+                it. */}
+            {label(i)}
+          </span>
+        ))}
+      </span>
+      {/* Out of flow, and that is the whole of why: this sits in the titlebar
+          strip beside the session header, so a column with the dots in it left
+          the name riding high of the words next to it — by half a dot at rest
+          and by nothing the reader could account for. */}
+      <div className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2">
+        <DotTrack
+          count={entries.length}
+          activeIndex={activeIndex}
+          className="opacity-0 transition-opacity duration-150 group-hover/spaces:opacity-100"
+        />
+      </div>
+    </div>
   );
 }
 
@@ -729,6 +783,7 @@ export default function Sidebar({
   space,
   onSpaceChange,
   onNewSpace,
+  namingSpace,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -855,6 +910,7 @@ export default function Sidebar({
               <SpaceSwitcher
                 spaces={spaces}
                 value={space}
+                naming={namingSpace}
                 onChange={onSpaceChange}
                 onNew={onNewSpace}
               />
@@ -865,6 +921,7 @@ export default function Sidebar({
             <SpaceSwitcher
               spaces={spaces}
               value={space}
+              naming={namingSpace}
               onChange={onSpaceChange}
               onNew={onNewSpace}
             />
@@ -1174,6 +1231,68 @@ const DOT_PITCH = DOT + DOT_GAP;
 // Five slots. Odd, so there is a real middle for the active dot to sit in.
 const DOT_TRACK_W = DOT_PITCH * 5 - DOT_GAP;
 
+/// The map under a switcher's label: one dot per entry, **the active one always
+/// in the middle**, so the row slides under a fixed centre rather than a marker
+/// travelling along a fixed row. That is what keeps the indicator readable once
+/// there are more entries than dots that fit.
+///
+/// The track holds its width whatever the count, and the row always slides.
+/// Hugging the dots to centre the *group* while they fit was tried and is why
+/// this comment exists: with the group centred there is nothing left to move,
+/// so a switch became a colour change and the whole control stopped feeling
+/// like anything. The sliding row **is** the smoothness.
+///
+/// Shared by the two controls that scope the session list, since a reader
+/// meeting the same shape twice should not have to learn it twice.
+function DotTrack({
+  count,
+  activeIndex,
+  className,
+}: {
+  count: number;
+  activeIndex: number;
+  className?: string;
+}) {
+  // Reserved height, so revealing the track never shifts what is under it. One
+  // entry is the whole story already — a lone dot would offer a gesture that
+  // can't go anywhere.
+  return (
+    <div className="h-1.5">
+      {count > 1 && (
+        <div
+          className={cn("flex h-full items-center overflow-hidden", className)}
+          style={{
+            width: DOT_TRACK_W,
+            // Faded at both ends, so a dot leaving the track reads as sliding
+            // out rather than as being cut off.
+            maskImage:
+              "linear-gradient(to right, transparent, black 30%, black 70%, transparent)",
+          }}
+        >
+          <div
+            className="flex items-center transition-transform duration-200 ease-out"
+            style={{
+              gap: DOT_GAP,
+              // Puts the active dot's centre on the track's centre.
+              transform: `translateX(${DOT_TRACK_W / 2 - DOT / 2 - activeIndex * DOT_PITCH}px)`,
+            }}
+          >
+            {Array.from({ length: count }, (_, i) => (
+              <span
+                key={i}
+                className={cn(
+                  "size-1 shrink-0 rounded-full transition-colors",
+                  i === activeIndex ? "bg-foreground/80" : "bg-muted-foreground/30",
+                )}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // How far a swipe must travel before it counts as one. Momentum keeps firing
 // `wheel` long after the fingers lift, so a gesture ends on one of two signs
 // that the push is over: a stretch of quiet, or deltas decayed to the tail.
@@ -1355,44 +1474,11 @@ function ProjectFilter({
           {menuMode && <ChevronDown className="size-3 shrink-0 opacity-60" />}
         </span>
 
-        {/* Reserved height, so revealing the dots never shifts the list below.
-            One entry is the whole story already — a lone dot would offer a
-            gesture that can't go anywhere. */}
-        <div className="h-1.5">
-          {entries.length > 1 && (
-            <div
-              className="flex h-full items-center overflow-hidden opacity-0 transition-opacity duration-150 group-hover/projects:opacity-100"
-              style={{
-                width: DOT_TRACK_W,
-                // Faded at both ends, so a dot leaving the track reads as
-                // sliding out rather than as being cut off.
-                maskImage:
-                  "linear-gradient(to right, transparent, black 30%, black 70%, transparent)",
-              }}
-            >
-              <div
-                className="flex items-center transition-transform duration-200 ease-out"
-                style={{
-                  gap: DOT_GAP,
-                  // Puts the active dot's centre on the track's centre.
-                  transform: `translateX(${DOT_TRACK_W / 2 - DOT / 2 - activeIndex * DOT_PITCH}px)`,
-                }}
-              >
-                {entries.map((entry, i) => (
-                  <span
-                    key={entry.path ?? ""}
-                    className={cn(
-                      "size-1 shrink-0 rounded-full transition-colors",
-                      i === activeIndex
-                        ? "bg-foreground/80"
-                        : "bg-muted-foreground/30",
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        <DotTrack
+          count={entries.length}
+          activeIndex={activeIndex}
+          className="opacity-0 transition-opacity duration-150 group-hover/projects:opacity-100"
+        />
       </div>
     </div>
   );

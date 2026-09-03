@@ -5,6 +5,7 @@ import {
   allowedInSpace,
   displayPath,
   inSpace,
+  moveSpace,
   sessionInSpace,
   spaceNames,
 } from "@/lib/space";
@@ -25,15 +26,27 @@ const projects = [
 ];
 
 describe("spaces", () => {
-  it("lists tags and declared names as one set, sorted", () => {
+  it("lists tags and declared names as one set, declared order first", () => {
     expect(spaceNames(projects)).toEqual(["Personal", "Work"]);
     // A space just made holds nothing, and a name is not doubled by being both
-    // declared and carried.
+    // declared and carried. The reader's own arrangement leads; a tag they have
+    // never declared follows it.
     expect(spaceNames(projects, ["Work", "Side"])).toEqual([
-      "Personal",
-      "Side",
       "Work",
+      "Side",
+      "Personal",
     ]);
+  });
+
+  it("steps a space one place and refuses to fall off either end", () => {
+    const names = ["Work", "Side", "Personal"];
+    expect(moveSpace(names, "Side", -1)).toEqual(["Side", "Work", "Personal"]);
+    expect(moveSpace(names, "Side", 1)).toEqual(["Work", "Personal", "Side"]);
+    // The ends are where the buttons are disabled, so a move arriving anyway
+    // must not wrap the space around to the other end.
+    expect(moveSpace(names, "Work", -1)).toEqual(names);
+    expect(moveSpace(names, "Personal", 1)).toEqual(names);
+    expect(moveSpace(names, "Gone", 1)).toEqual(names);
   });
 
   it("falls back to every project when the stored space no longer exists", () => {

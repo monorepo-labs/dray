@@ -78,6 +78,7 @@ import {
   activeSpace,
   allowedInSpace,
   inSpace,
+  moveSpace,
   sessionInSpace,
   spaceNames,
   SPACE_KEY,
@@ -829,6 +830,16 @@ function App() {
   const createSpace = (name: string) =>
     setDeclaredSpaces((prev) => (prev.includes(name) ? prev : [...prev, name]));
 
+  /// Steps a space one place in the order the switcher walks.
+  ///
+  /// The **whole** list goes down, not the declared half of it: order is the
+  /// declared list, and a space carried only by a project's tag has no place in
+  /// it yet — so a name is declared here on the way past, which is the only way
+  /// it can have somewhere to be moved to. Membership is untouched either way,
+  /// since the tag on the project is what records that.
+  const moveSpaceBy = (name: string, delta: number) =>
+    setDeclaredSpaces(moveSpace(spaces, name, delta));
+
   /// Renames a space wherever it is written down: every project carrying the
   /// tag, the declared list, and the reader's own pick.
   ///
@@ -1139,6 +1150,9 @@ function App() {
           space={space}
           onSpaceChange={changeSpace}
           onNewSpace={openNewSpace}
+          // Only while the dialog is actually up: it is cleared on close, so a
+          // cancelled naming puts the switcher back on All Spaces by itself.
+          namingSpace={settingsOpen && namingSpace}
           projectFilter={projectFilter}
           onProjectFilterChange={setProjectFilter}
           statusBySession={statusBySession}
@@ -1548,6 +1562,7 @@ function App() {
       onCreateSpace={createSpace}
       onRenameSpace={renameSpace}
       onRemoveSpace={removeSpace}
+      onMoveSpace={moveSpaceBy}
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}

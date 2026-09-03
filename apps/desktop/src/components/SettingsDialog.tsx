@@ -73,6 +73,7 @@ export default function SettingsDialog({
   onCreateSpace,
   onRenameSpace,
   onRemoveSpace,
+  onMoveSpace,
   integrations,
   updateStatus,
   updateManual,
@@ -100,6 +101,7 @@ export default function SettingsDialog({
   onCreateSpace: (name: string) => void;
   onRenameSpace: (from: string, to: string) => void;
   onRemoveSpace: (name: string) => void;
+  onMoveSpace: (name: string, delta: number) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
@@ -150,6 +152,7 @@ export default function SettingsDialog({
                 onCreateSpace={onCreateSpace}
                 onRenameSpace={onRenameSpace}
                 onRemoveSpace={onRemoveSpace}
+                onMoveSpace={onMoveSpace}
               />
             ),
             transcription: (
