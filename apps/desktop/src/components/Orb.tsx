@@ -13,7 +13,14 @@ import { useTheme } from "@/hooks/useTheme";
 /// copied along with the element.
 ///
 /// `resolvedMode`, not `mode`: `system` is not a thing the orb can draw.
-export default function Orb(props: Omit<ThinkingOrbProps, "theme">) {
+///
+/// `will-change: transform` gives the canvas a compositing layer of its own.
+/// It redraws every animation frame, and a small canvas paints into its
+/// parent's layer — so each orb in a sidebar row was repainting the whole
+/// document's tile set at animation rate, which on WebKit fed a leak of
+/// retired backing stores at ~1GB per hour of use (DRA-159). On its own layer
+/// a frame repaints a 40×40 backing store and nothing else.
+export default function Orb({ style, ...props }: Omit<ThinkingOrbProps, "theme">) {
   const { resolvedMode } = useTheme();
-  return <ThinkingOrb theme={resolvedMode} {...props} />;
+  return <ThinkingOrb theme={resolvedMode} style={{ willChange: "transform", ...style }} {...props} />;
 }

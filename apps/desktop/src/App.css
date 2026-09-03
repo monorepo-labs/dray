@@ -1109,6 +1109,14 @@
      reads as the same text brightening rather than a tinted highlight. */
   .shimmer-text {
     animation: var(--animate-shimmer);
+    /* Own compositing layer, and `inline-block` is what lets it have one: a
+       `background-position` animation is not accelerated, so every frame is
+       a repaint, and painted into its parent it repainted the whole
+       document's tile set — which on WebKit fed a leak of retired backing
+       stores at ~1GB/hour of use (DRA-159). `will-change` is inert on a plain
+       inline span, since transforms do not apply to non-replaced inlines. */
+    display: inline-block;
+    will-change: transform;
     background-image: linear-gradient(
       90deg,
       var(--color-muted-foreground) 35%,
