@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, Globe } from "lucide-react";
+import { Copy, CornerDownLeft, ExternalLink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -74,8 +74,8 @@ export default function LinkDialog() {
             System browser
           </Button>
           <AlertDialogAction onClick={() => resolveLink(false)}>
-            <Globe />
             Open in Dray
+            <CornerDownLeft data-icon="inline-end" className="opacity-70" />
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
