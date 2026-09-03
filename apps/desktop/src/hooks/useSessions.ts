@@ -11,6 +11,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
+import { shouldEvict } from "@/lib/evict";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
@@ -968,6 +969,7 @@ const setSessionFlags = async (
           : s,
       ),
     );
+    if (updated.archived) evictSessions(sessionId);
     return true;
   } catch (e) {
     setError(String(e));
@@ -1036,6 +1038,7 @@ const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
   // A killed child leaves no `session_status`, so the sidebar would sit on
   // whatever it last saw — `in_progress` for a session that was mid-turn.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
+  evictSessions(sessionId);
 };
 
 // Takes back the "Deleted" the reader has already been shown.
@@ -1591,6 +1594,49 @@ showArchivedRef.current = showArchived;
 /// the read answers.
 const sessionsRef = useRef(sessions);
 sessionsRef.current = sessions;
+const asksBySessionRef = useRef(asksBySession);
+asksBySessionRef.current = asksBySession;
+
+// When each loaded transcript was last on screen. Stamped on arrival and on
+// leaving, so the idle clock starts the moment the reader looks away.
+const lastViewedRef = useRef(new Map<string, number>());
+useEffect(() => {
+  if (!selectedSessionId) return;
+  lastViewedRef.current.set(selectedSessionId, Date.now());
+  return () => {
+    lastViewedRef.current.set(selectedSessionId, Date.now());
+  };
+}, [selectedSessionId]);
+
+/// Drops idle transcripts from memory. Every transcript opened since launch
+/// stayed resident before this — hundreds of megabytes by the end of a day.
+/// The log on disk is complete, so an evicted session reloads through the
+/// ordinary select path; anything its child emits meanwhile is held by
+/// `earlyEvents` and merged on that reload. `force` names a session just
+/// archived or settled, which skips the clock but not the safety checks.
+const evictSessions = (force?: string) => {
+  const now = Date.now();
+  setSessions((prev) => {
+    const kept = prev.filter(
+      (s) =>
+        !shouldEvict({
+          selected: s.sessionId === selectedSessionIdRef.current,
+          status: statusBySessionRef.current[s.sessionId],
+          asking: (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0,
+          lastViewed: lastViewedRef.current.get(s.sessionId),
+          now,
+          force: s.sessionId === force,
+        }),
+    );
+    return kept.length === prev.length ? prev : kept;
+  });
+};
+const evictSessionsRef = useRef(evictSessions);
+evictSessionsRef.current = evictSessions;
+useEffect(() => {
+  const timer = setInterval(() => evictSessionsRef.current(), 60_000);
+  return () => clearInterval(timer);
+}, []);
 
 // `completed` means finished *and unread*. Reading is what retires it, so every
 // path to a read funnels through here: the status landing on the session already

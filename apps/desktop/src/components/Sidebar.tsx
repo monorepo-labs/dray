@@ -1863,22 +1863,27 @@ function SessionRow({
               </RowAction>
             )}
 
-            <RowAction
-              label={item.archived ? "Unsettle" : "Settle"}
-              active={item.archived}
-              onClick={(e) => {
-                // Fired on the click, not after the write lands: the burst is
-                // the button's own answer, and the row is gone from this list a
-                // frame later. The celebration sound stays with the write in
-                // `App`, where the flag is confirmed.
-                if (!item.archived) burstConfetti(e.currentTarget);
-                onSetFlags(item.sessionId, { archived: !item.archived });
-              }}
-            >
-              {/* Settle reads as "check this off"; unsettle isn't a second
-                  checkmark, it's undoing the first one. */}
-              {item.archived ? <Undo2 /> : <Check />}
-            </RowAction>
+            {/* No Settle while a turn is in flight: the write would land, but
+                the child keeps running and the row moves to the settled list
+                mid-work. Unsettle stays, since a settled row has no turn. */}
+            {(item.archived || status !== "in_progress") && (
+              <RowAction
+                label={item.archived ? "Unsettle" : "Settle"}
+                active={item.archived}
+                onClick={(e) => {
+                  // Fired on the click, not after the write lands: the burst is
+                  // the button's own answer, and the row is gone from this list a
+                  // frame later. The celebration sound stays with the write in
+                  // `App`, where the flag is confirmed.
+                  if (!item.archived) burstConfetti(e.currentTarget);
+                  onSetFlags(item.sessionId, { archived: !item.archived });
+                }}
+              >
+                {/* Settle reads as "check this off"; unsettle isn't a second
+                    checkmark, it's undoing the first one. */}
+                {item.archived ? <Undo2 /> : <Check />}
+              </RowAction>
+            )}
           </div>
         </div>
       </div>
