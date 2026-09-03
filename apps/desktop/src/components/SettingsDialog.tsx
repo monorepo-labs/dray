@@ -35,6 +35,7 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
@@ -42,6 +43,7 @@ import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type {
   ExternalApp,
+  Project,
   SettingsView,
   UpdateChannel,
   UpdateStatus,
@@ -63,6 +65,14 @@ export default function SettingsDialog({
   open,
   onOpenChange,
   initialTab = "appearance",
+  projects,
+  spaces,
+  startNamingSpace,
+  onSetProjectSpace,
+  onRemoveProject,
+  onCreateSpace,
+  onRenameSpace,
+  onRemoveSpace,
   integrations,
   updateStatus,
   updateManual,
@@ -78,6 +88,18 @@ export default function SettingsDialog({
   /// to Transcription when no model is downloaded, which is the whole reason
   /// this is a prop rather than internal state.
   initialTab?: SettingsTab;
+  /// Every attached project, not the active space's — this is where one is
+  /// filed into a space, so a narrowed list would hide the rows to move.
+  projects: Project[];
+  spaces: string[];
+  /// Opens the Spaces tab with its new-space field already up, which is where
+  /// the sidebar's own "New space" lands.
+  startNamingSpace?: boolean;
+  onSetProjectSpace: (path: string, space: string | null) => void;
+  onRemoveProject: (path: string) => void;
+  onCreateSpace: (name: string) => void;
+  onRenameSpace: (from: string, to: string) => void;
+  onRemoveSpace: (name: string) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
@@ -117,6 +139,18 @@ export default function SettingsDialog({
                 <ThemeRow />
                 <ModeRow />
               </Section>
+            ),
+            spaces: (
+              <SpacesSettings
+                projects={projects}
+                spaces={spaces}
+                startNaming={startNamingSpace}
+                onSetProjectSpace={onSetProjectSpace}
+                onRemoveProject={onRemoveProject}
+                onCreateSpace={onCreateSpace}
+                onRenameSpace={onRenameSpace}
+                onRemoveSpace={onRemoveSpace}
+              />
             ),
             transcription: (
               <TranscriptionSettings
@@ -809,12 +843,19 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 }
 
 /// Set *and* order, so a group added later is one entry plus one body.
-const SETTINGS_TABS = ["appearance", "transcription", "integrations", "about"] as const;
+const SETTINGS_TABS = [
+  "appearance",
+  "spaces",
+  "transcription",
+  "integrations",
+  "about",
+] as const;
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: "Appearance",
+  spaces: "Spaces",
   transcription: "Transcription",
   integrations: "Integrations",
   about: "About",

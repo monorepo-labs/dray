@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
+import { readLocalStorage } from "@/hooks/useLocalStorage";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -16,6 +17,7 @@ import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
+import { activeSpace, sessionInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
@@ -276,6 +278,30 @@ const handleAttachProject = async () => {
     // Returns the list already sorted, so the attached project is at the front.
     setProjects(await invoke<Project[]>("add_project", { path: picked }));
     setProjectPath(picked);
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Detaches a project. Sessions that ran in it keep their own recorded paths and
+// stay in the sidebar — this is the picker's list, not the work. The composer
+// moves to whatever is left, since a pick nothing lists can still be sent in.
+const handleRemoveProject = async (path: string) => {
+  try {
+    const left = await invoke<Project[]>("remove_project", { path });
+    setProjects(left);
+    if (projectPath === path) setProjectPath(left[0]?.path ?? null);
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Files a project under a space, or clears it with `null`. Settings is the only
+// caller: the sidebar's switcher moves the reader between spaces, never a
+// project between them.
+const setProjectSpace = async (path: string, space: string | null) => {
+  try {
+    setProjects(await invoke<Project[]>("set_project_space", { path, space }));
   } catch (e) {
     setError(String(e));
   }
@@ -1573,6 +1599,10 @@ selectedSessionIdRef.current = selectedSessionId;
 // the live statuses to answer "is the one on screen still unread".
 const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
+// A space is a tag on the project, so `announce` needs the live project list to
+// answer whether the session that just spoke is one the reader has put away.
+const projectsRef = useRef(projects);
+projectsRef.current = projects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
 const tasksBySessionRef = useRef(tasksBySession);
@@ -1620,9 +1650,23 @@ const markSessionRead = (sessionId: string) => {
 /// project or it says nothing; the in-app card is the only card on screen next
 /// to a sidebar already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  if (!isWindowFocused()) {
-    const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
 
+  // A session in another space keeps running; it just has no channel here.
+  // Both channels name the session out loud, and naming a personal one over a
+  // shared screen is the thing spaces exist to stop. Read at the event rather
+  // than held, since this listener is registered once and a captured copy would
+  // be the space the app launched in for the rest of the run.
+  const space = activeSpace(
+    projectsRef.current,
+    readLocalStorage<string | null>(SPACE_KEY, null),
+    readLocalStorage<string[]>(SPACE_LIST_KEY, []),
+  );
+  if (item && !sessionInSpace(projectsRef.current, space, item.projectPath)) {
+    return false;
+  }
+
+  if (!isWindowFocused()) {
     // Same order as the card: the verb first, because *what is wanted* is the
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to
@@ -1909,6 +1953,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }

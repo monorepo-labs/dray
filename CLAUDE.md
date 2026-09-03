@@ -257,6 +257,24 @@ The right panel's Changes tab stays and answers a different question: the panel 
 
 The backend keeps `commit_files` and `push_branch` anyway, registered and tested: **UI absent, capability parked**, because the hard part is *which* paths go in. If it comes back: `add -A -- <paths>` then `commit -m … -- <paths>`, both `GIT_LITERAL_PATHSPECS=1`. `add` is what makes an untracked file committable at all and what records a deletion. A pathspec on `commit` implies `--only`, so anything staged for an unchecked file stays staged — pinned by test. Porcelain, not the temp-index plumbing `snapshot_tree` uses: this is *meant* to move HEAD.
 
+## Spaces
+
+**Membership is a tag on the project and that is the whole record** — `Project.space` in [projects.rs](apps/desktop/src-tauri/src/projects.rs), no spaces file, no id, no ordering. `#[serde(default)]` is load-bearing: the projects file is rewritten whole, so an entry written before the field existed failing to parse is *every* project gone.
+
+**A space nobody has filled yet has nowhere to live in `projects.json`, so existence is a union.** A made space is declared in local storage (`SPACE_LIST_KEY`) and `spaceNames` reads the two together — the reader's list plus every name a project carries. A tag whose name was never declared still counts, or a project filed on another machine would read as filed nowhere. Rename writes both halves and the reader's own pick; remove takes the name out of the list and clears the tag from its projects, which is why it asks first. **Projects and sessions are untouched either way** — a space is a way of looking at them, so losing one costs the view and never the work.
+
+**Switching space narrows what is drawn and nothing else.** Every session in every space keeps running; one finishing elsewhere simply says nothing until the reader comes back. The rules are [space.ts](apps/desktop/src/lib/space.ts), pure and tested, and the narrowing lands in **one place** — `visibleSessions` in [App.tsx](apps/desktop/src/App.tsx), which is what the sidebar draws, what ⌘⇧↑/↓ walks and what the PR marks and the ready notice read — so a hidden session cannot come back through a side door.
+
+**Notifications answer to the space; the dock badge does not.** `announce` drops both channels for a session filed elsewhere, since both name the session out loud and a personal one named over a shared screen is what spaces exist to stop. The badge counts every session deliberately: it names nothing, and a number that lies about work waiting is worse than one that admits another space exists.
+
+**The active space is read at the event, never held.** `announce` runs from a listener registered once, so a captured copy would be the space the app launched in for the rest of the run — hence `SPACE_KEY` and `readLocalStorage`, the same bargain `cycledModels` makes with the starred list.
+
+**Switching takes the screen with it**: the project filter resets, the composer moves to a project the new space holds, and a transcript from outside it is closed. Each only where it actually falls outside — a space holding both changes nothing but the list.
+
+**The switcher sits in the sidebar's titlebar strip and is drawn whether or not a space exists** — it is the one place in the app that says spaces are a thing, and a control appearing only once you have found the setting can only be found by someone who did not need it. Its **New space** item opens Settings' Spaces tab with the field already up rather than growing a second way to make one.
+
+**That tab is two lists, and the split is what each is for**: the projects list files a project into a space it already has, and the spaces list is where one is made, renamed or removed. Creating from inside a project's picker put the one thing that changes every other row inside the row least likely to be opened. The projects list draws **every** project whatever space is up — narrowed by the active space it would hide exactly the rows somebody opens it to move.
+
 ## Issues
 
 **The surface says "issue", the implementation says Linear.** Vocabulary in [issues/issues.rs](apps/desktop/src-tauri/src/issues/issues.rs), wire in [linear.rs](apps/desktop/src-tauri/src/issues/linear.rs). A second tracker is a module plus a variant on `IssueTracker`, which is why `IssueRef` carries a tracker while there is only one. The connection is workspace-wide — no project ↔ team mapping. **Every user-facing string is collected in [COPY-ISSUES.md](apps/desktop/COPY-ISSUES.md)**; reword there and here together.

@@ -18,6 +18,12 @@ pub struct Project {
     /// Folder name as of attaching. Cached so a project whose directory was
     /// since renamed or removed still has a label.
     pub name: String,
+    /// Which space the project belongs to, or `None` for one nobody filed.
+    /// The tag is the whole record of a space — there is no spaces file — so a
+    /// space exists exactly while some project names it, and the last project
+    /// leaving takes it with them.
+    #[serde(default)]
+    pub space: Option<String>,
     /// Doubles as the sort key and the "which project was last open" answer:
     /// selecting a project *is* what makes it most recent, so a separate
     /// `last_selected` pointer would be a second place to keep the same fact.
@@ -93,6 +99,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>> {
         None => projects.push(Project {
             name: basename(&path),
             path,
+            space: None,
             last_selected: now,
         }),
     }
@@ -132,6 +139,25 @@ pub async fn set_last_selected_project(path: &str) -> Result<()> {
     write_projects(&projects).await
 }
 
+/// Files a project under a space, or clears it with `None`. A blank name is
+/// the same as clearing: an empty string would draw a nameless entry in the
+/// switcher that nothing could ever be moved out of.
+pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = read_projects().await?;
+
+    // By index, not `iter_mut().find()`: the borrow checker will not let the
+    // not-found arm hand the list back while a mutable borrow of it is alive.
+    let Some(i) = projects.iter().position(|p| p.path == path) else {
+        return Ok(projects);
+    };
+
+    projects[i].space = space.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    write_projects(&projects).await?;
+
+    Ok(projects)
+}
+
 /// Trailing path segment. Mirrors the frontend's `basename` so a project's
 /// cached label matches what the UI would derive from the path.
 fn basename(path: &str) -> String {
@@ -153,11 +179,13 @@ mod tests {
             Project {
                 path: "/a".into(),
                 name: "a".into(),
+                space: None,
                 last_selected: "2026-08-01T00:00:00Z".into(),
             },
             Project {
                 path: "/b".into(),
                 name: "b".into(),
+                space: None,
                 last_selected: "2026-08-08T00:00:00Z".into(),
             },
         ];
@@ -167,6 +195,18 @@ mod tests {
         // The picker takes its default from the front, so this ordering is the
         // whole of "reopen the project I was last in".
         assert_eq!(projects[0].path, "/b");
+    }
+
+    #[test]
+    fn a_project_written_before_spaces_existed_still_reads() {
+        // The file is rewritten whole, so one entry failing to parse is the
+        // whole index of projects gone.
+        let project: Project = serde_json::from_str(
+            r#"{"path":"/a","name":"a","lastSelected":"2026-08-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(project.space, None);
     }
 
     #[test]

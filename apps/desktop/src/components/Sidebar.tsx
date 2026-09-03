@@ -33,6 +33,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -103,7 +104,19 @@ type SidebarProps = {
   onDetach: (sessionId: string) => Promise<void>;
   showArchived: boolean;
   onToggleArchived: () => void;
+  /// Already narrowed to the active space by the caller, like `items` — so
+  /// everything below reads one list and the filter, the headings and the rows
+  /// cannot disagree about which projects exist.
   projects: Project[];
+  /// Every space there is, empty until the reader makes one.
+  spaces: string[];
+  /// `null` is every project, whatever space it is filed under.
+  space: string | null;
+  onSpaceChange: (space: string | null) => void;
+  /// Opens Settings on the Spaces tab with its field up. The switcher is the
+  /// only place the reader is thinking about spaces, so it is where making one
+  /// has to be offered — it just isn't where the making happens.
+  onNewSpace: () => void;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -586,6 +599,77 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/// Which space the whole sidebar is scoped to.
+///
+/// A switch narrows what is *drawn* and nothing else: every session in every
+/// space carries on running, and one that finishes elsewhere simply says
+/// nothing until the reader comes back to it. That is the whole feature — the
+/// point is a screen somebody else can look at, not a second app.
+///
+/// Switching only. Making a space and filing projects into it live in Settings,
+/// since both are things done once and neither belongs in the strip a reader
+/// passes through twenty times a day — so "New space" here opens that tab
+/// rather than growing a second way to do it.
+function SpaceSwitcher({
+  spaces,
+  value,
+  onChange,
+  onNew,
+}: {
+  spaces: string[];
+  value: string | null;
+  onChange: (space: string | null) => void;
+  onNew: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      {/* No tooltip, unlike the two icon buttons beside it: the trigger already
+          draws the answer in words, so one would only repeat the label. */}
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          // Named, not a glyph: which space you are in is the one fact this
+          // control exists to state, and an icon can only say that a control is
+          // here.
+          className="max-w-28 gap-1 px-1.5 text-ui text-muted-foreground opacity-80 transition-opacity hover:opacity-100"
+        >
+          <span className="truncate">{value ?? "All"}</span>
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+
+      {/* Hugs its widest entry rather than holding a fixed width open beside
+          two short names. */}
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup
+          // Radix radio values are strings, so every space rides on its own name
+          // and the empty one stands for all of them — a space cannot be named
+          // nothing, so the two can't collide.
+          value={value ?? ""}
+          onValueChange={(next) => onChange(next === "" ? null : next)}
+        >
+          <DropdownMenuRadioItem value="" className="text-ui">
+            All
+          </DropdownMenuRadioItem>
+          {spaces.map((name) => (
+            <DropdownMenuRadioItem key={name} value={name} className="text-ui">
+              <span className="truncate">{name}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+
+        {/* No rule above it: the menu is one short list of things to do with
+            spaces, and a line through it says the two halves are unrelated. */}
+        <DropdownMenuItem onSelect={onNew} className="text-ui">
+          <Plus className="size-3.5" />
+          New space
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /// What the dev badge says for a given branch.
 ///
 /// On `main` it stays bare: that is the common case, and naming the default
@@ -641,6 +725,10 @@ export default function Sidebar({
   showArchived,
   onToggleArchived,
   projects,
+  spaces,
+  space,
+  onSpaceChange,
+  onNewSpace,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -721,9 +809,13 @@ export default function Sidebar({
       ? showArchived
         ? "Nothing settled in this project."
         : "No tasks in this project."
-      : showArchived
-        ? "Nothing settled yet."
-        : "No tasks yet.";
+      : space
+        ? showArchived
+          ? `Nothing settled in ${space}.`
+          : `No tasks in ${space}.`
+        : showArchived
+          ? "Nothing settled yet."
+          : "No tasks yet.";
 
   // Collapsed is nothing at all, not a rail. The toggle moves to the app header
   // in that state, which is the one row present either way.
@@ -746,13 +838,36 @@ export default function Sidebar({
         {/* The toggle holds the strip's outer edge in both layouts and settings
             sit inboard of it, so the one control also drawn in the app header
             never changes which end of the row it is at. */}
+        {/* The switcher is innermost in both layouts, so the two icon buttons
+            keep the edge they have always had and the one control carrying a
+            word sits where there is room for it. Drawn whether or not a space
+            exists: it is the one place in the app that says spaces are a thing,
+            and a control that only appears once you have found the setting can
+            only be found by someone who did not need it. */}
         {fullscreen ? (
           <>
             <SidebarToggle onToggle={onToggleCollapsed} />
             <SettingsButton onOpen={onOpenSettings} />
+            {/* The icons take the free left edge in fullscreen; the switcher
+                keeps the right one, so it is in the same corner of the sidebar
+                in both layouts rather than moving with the traffic lights. */}
+            <div className="ml-auto">
+              <SpaceSwitcher
+                spaces={spaces}
+                value={space}
+                onChange={onSpaceChange}
+                onNew={onNewSpace}
+              />
+            </div>
           </>
         ) : (
           <>
+            <SpaceSwitcher
+              spaces={spaces}
+              value={space}
+              onChange={onSpaceChange}
+              onNew={onNewSpace}
+            />
             <SettingsButton onOpen={onOpenSettings} />
             <SidebarToggle onToggle={onToggleCollapsed} />
           </>
