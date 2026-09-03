@@ -1,6 +1,6 @@
 import Image from "next/image";
-import { AppleGlyph } from "@/components/AppleGlyph";
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
+import { DownloadButton } from "@/components/DownloadButton";
 // import { Board } from "@/components/Board";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
@@ -10,7 +10,7 @@ import { PiGlyph } from "@/components/PiGlyph";
 import { Testimonials } from "@/components/Testimonials";
 import { UsedBy } from "@/components/UsedBy";
 // import { Tweets } from "@/components/Tweets";
-import { DOWNLOAD, DOWNLOAD_SIZE } from "@/lib/links";
+import { DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
 
 /// Two widths, nested. The shell caps at 6xl and only the hero screenshot
@@ -72,13 +72,7 @@ export default function Home() {
         </p>
 
         <div className="mt-5 flex items-center gap-3">
-          <a
-            href={DOWNLOAD}
-            className="inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
-          >
-            <AppleGlyph className="size-4" />
-            Download for macOS
-          </a>
+          <DownloadButton />
           <span className="text-sm text-muted-foreground">{DOWNLOAD_SIZE}</span>
         </div>
 
