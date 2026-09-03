@@ -969,7 +969,7 @@ const setSessionFlags = async (
           : s,
       ),
     );
-    if (updated.archived) evictSessions(sessionId);
+    if (updated.archived) evictSessions({ sessionId });
     return true;
   } catch (e) {
     setError(String(e));
@@ -1038,7 +1038,7 @@ const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
   // A killed child leaves no `session_status`, so the sidebar would sit on
   // whatever it last saw — `in_progress` for a session that was mid-turn.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
-  evictSessions(sessionId);
+  evictSessions({ sessionId, status: "idle" });
 };
 
 // Takes back the "Deleted" the reader has already been shown.
@@ -1613,19 +1613,33 @@ useEffect(() => {
 /// The log on disk is complete, so an evicted session reloads through the
 /// ordinary select path; anything its child emits meanwhile is held by
 /// `earlyEvents` and merged on that reload. `force` names a session just
-/// archived or settled, which skips the clock but not the safety checks.
-const evictSessions = (force?: string) => {
+/// archived or settled, which skips the clock but not the safety checks;
+/// `status` beside it is the status that write just queued, since the ref
+/// still reads the old one until React commits.
+///
+/// "Selected" is judged against both refs. `selectionRequestRef` is claimed
+/// synchronously on a click and `handleSelectSessionIndexItem` returns early
+/// when the transcript is already loaded — so between that click and its
+/// render, the rendered ref still names the previous session and a tick here
+/// would drop the one just picked, leaving a selection with no snapshot and
+/// nothing to reload it.
+const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
   const now = Date.now();
   setSessions((prev) => {
     const kept = prev.filter(
       (s) =>
         !shouldEvict({
-          selected: s.sessionId === selectedSessionIdRef.current,
-          status: statusBySessionRef.current[s.sessionId],
+          selected:
+            s.sessionId === selectedSessionIdRef.current ||
+            s.sessionId === selectionRequestRef.current,
+          status:
+            s.sessionId === force?.sessionId && force.status
+              ? force.status
+              : statusBySessionRef.current[s.sessionId],
           asking: (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0,
           lastViewed: lastViewedRef.current.get(s.sessionId),
           now,
-          force: s.sessionId === force,
+          force: s.sessionId === force?.sessionId,
         }),
     );
     return kept.length === prev.length ? prev : kept;
