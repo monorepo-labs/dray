@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -56,7 +56,7 @@ import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { pushNotice } from "@/hooks/useNotices";
+import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
@@ -74,6 +74,15 @@ import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { playCelebration } from "@/lib/sound";
+import {
+  activeSpace,
+  allowedInSpace,
+  inSpace,
+  sessionInSpace,
+  spaceNames,
+  SPACE_KEY,
+  SPACE_LIST_KEY,
+} from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -82,6 +91,7 @@ function App() {
   const {
     selectedSessionId,
     selectedSession,
+    sessions,
     streamingContentBlock,
     sessionIndexItems,
     statusBySession,
@@ -115,6 +125,10 @@ function App() {
     setPermissionMode,
     handleAttachProject,
     handleSelectProject,
+    handleRemoveProject,
+    setProjectSpace,
+    retagSpace,
+    canAnnounce,
     handleSelectBranch,
     pendingBranch,
     setPendingBranch,
@@ -168,6 +182,27 @@ function App() {
     "ade.projectFilter",
     null,
   );
+  // The wider scope the filter sits inside: a space is a tag on a project, so
+  // this narrows the project list itself and everything reading it follows.
+  // Stored under the key `announce` reads, since notifications answer to the
+  // same scope and there is only one right answer to which space is up.
+  const [storedSpace, setStoredSpace] = useLocalStorage<string | null>(SPACE_KEY, null);
+  // Spaces the reader has made but not yet filled. Membership is the tag on the
+  // project, so this list only has to carry the ones no project names yet —
+  // `spaceNames` reads the two as one set.
+  const [declaredSpaces, setDeclaredSpaces] = useLocalStorage<string[]>(
+    SPACE_LIST_KEY,
+    [],
+  );
+  const spaces = useMemo(
+    () => spaceNames(projects, declaredSpaces),
+    [projects, declaredSpaces],
+  );
+  // Derived rather than corrected in place: a space that was removed takes its
+  // stored name with it, and rewriting that from a render would be a write
+  // nobody asked for.
+  const space = activeSpace(projects, storedSpace, declaredSpaces);
+  const spaceProjects = useMemo(() => inSpace(projects, space), [projects, space]);
   const {
     status: updateStatus,
     manual: updateManual,
@@ -267,6 +302,10 @@ function App() {
   // so a mic press that sent the reader to Transcription does not leave every
   // later ⌘, opening there too.
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  // Whether that open should land with the new-space field already up. Same
+  // reset as the tab, and for the same reason: it describes the way in, not the
+  // dialog.
+  const [namingSpace, setNamingSpace] = useState(false);
 
   // Dictation writes into the composer's draft through the module-level store,
   // not through a prop: the controls reach `ChatInput` as an opaque node, so
@@ -348,6 +387,12 @@ function App() {
       return;
     }
 
+    // The disposition read above is an `await`, so this card can arrive in a
+    // space the reader has moved to since settling the session — and it names
+    // the session's own title. The dialog route above is deliberately not
+    // guarded: the reader pressed a button and is owed its answer.
+    if (!canAnnounce(sessionId)) return;
+
     pushNotice({
       sessionId,
       kind: "worktree",
@@ -390,12 +435,18 @@ function App() {
   // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
   // read one array. `projectPath` on the item is the repo root, so a worktree
   // session stays under the project it forked from.
+  // The space is the outer scope and the filter the inner one, both applied
+  // here: this list is what the sidebar draws, what the chords walk and what
+  // the PR marks and the ready notice are read from, so narrowing it once is
+  // the whole of "another space is running, out of sight".
   const visibleSessions = useMemo(
     () =>
-      projectFilter
-        ? sessionIndexItems.filter((i) => i.projectPath === projectFilter)
-        : sessionIndexItems,
-    [sessionIndexItems, projectFilter],
+      sessionIndexItems.filter(
+        (i) =>
+          sessionInSpace(projects, space, i.projectPath) &&
+          (!projectFilter || i.projectPath === projectFilter),
+      ),
+    [sessionIndexItems, projects, space, projectFilter],
   );
 
   // The search narrows what is drawn, and only that — the sidebar's own row is
@@ -746,6 +797,110 @@ function App() {
     go();
   };
 
+  /// Moves the whole window to another space. The screen catches up in the
+  /// effect below, which answers for every way membership can change and not
+  /// only for this one.
+  ///
+  /// Notices go here rather than there: a card raised before the switch names a
+  /// session the reader has just put away, and clicking it would open that
+  /// transcript. They are transient anyway, so dropping one costs a glance at
+  /// something the sidebar still marks.
+  ///
+  /// Kept only where the session can be *shown* to belong here — `allowedInSpace`,
+  /// the same reading `announce` makes, since a card and a banner say the same
+  /// sentence. A settled session is in neither list the moment the reader is on
+  /// the live one, so matching on the index alone kept exactly the cards nobody
+  /// could account for.
+  const changeSpace = (next: string | null) => {
+    setStoredSpace(next);
+    setProjectFilter(null);
+
+    for (const notice of getNotices()) {
+      const path =
+        sessionIndexItems.find((i) => i.sessionId === notice.sessionId)?.projectPath ??
+        sessions.find((s) => s.sessionId === notice.sessionId)?.projectPath ??
+        null;
+      if (!allowedInSpace(projects, next, path)) {
+        dismissNotice(notice.sessionId, notice.kind);
+      }
+    }
+  };
+
+  const createSpace = (name: string) =>
+    setDeclaredSpaces((prev) => (prev.includes(name) ? prev : [...prev, name]));
+
+  /// Renames a space wherever it is written down: every project carrying the
+  /// tag, the declared list, and the reader's own pick.
+  ///
+  /// The tags move first and in **one** call, and the local record follows only
+  /// once that lands. A loop of writes with the record updated up front left
+  /// half-renamed tags beside a list claiming the rename was done, which is a
+  /// disagreement nothing on screen could explain.
+  const renameSpace = async (from: string, to: string) => {
+    if (!(await retagSpace(from, to))) return;
+    setDeclaredSpaces((prev) => [...new Set(prev.map((s) => (s === from ? to : s)))]);
+    if (storedSpace === from) setStoredSpace(to);
+  };
+
+  /// Removes a space and files its projects under none. The projects and their
+  /// sessions are untouched — a space is a way of looking at them, so losing one
+  /// costs the view and never the work.
+  const removeSpace = async (name: string) => {
+    if (!(await retagSpace(name, null))) return;
+    setDeclaredSpaces((prev) => prev.filter((s) => s !== name));
+    if (storedSpace === name) changeSpace(null);
+  };
+
+  /// Keeps what is *on screen* inside the active space — the composer's project
+  /// and the open transcript, neither of which the sidebar's filtering reaches.
+  ///
+  /// An effect rather than three lines inside the switcher, because switching
+  /// is not the only way a session leaves the space it was in: filing a project
+  /// into another space or detaching it moves the same boundary, and a stale
+  /// notification opening a session moves the reader across it. Written as
+  /// "what is showing must be in the space" rather than as a list of the ways
+  /// it stops being, each of which was its own bug.
+  ///
+  /// The project is judged first and independently: a space holding nothing is
+  /// an ordinary state, and clearing the pick there is what stops the composer
+  /// starting a task in a project the reader can no longer see.
+  ///
+  /// A session whose project neither the index nor the loaded snapshot can name
+  /// is left alone. That is "we cannot tell", not "it is elsewhere", and
+  /// closing a transcript on a guess is worse than drawing one a moment longer.
+  ///
+  /// **Layout, not effect**: an ordinary effect runs after the browser paints,
+  /// so the switch drew one frame of the transcript being switched away from.
+  /// A frame is nothing to a reader who chose to switch and everything to the
+  /// room watching them share the screen, which is the whole reason spaces
+  /// exist. The body is two array scans, which is what makes blocking paint on
+  /// it affordable.
+  useLayoutEffect(() => {
+    if (projectPath && !spaceProjects.some((p) => p.path === projectPath)) {
+      handleSelectProject(spaceProjects[0]?.path ?? null);
+    }
+
+    if (!selectedSessionId) return;
+    const openPath =
+      selectedSession?.projectPath ??
+      sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
+    if (openPath && !sessionInSpace(projects, space, openPath)) {
+      goToSession(handleNewSession);
+    }
+    // The membership question and its two answers. `handleSelectProject` and
+    // `handleNewSession` are rebuilt every render, so listing them would run
+    // this on every one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems]);
+
+  /// The sidebar's own "New space", which is a request for the field rather
+  /// than for a space — naming it is Settings' job, so this only opens the tab.
+  const openNewSpace = () => {
+    setSettingsTab("spaces");
+    setNamingSpace(true);
+    setSettingsOpen(true);
+  };
+
   /// Leaves the issues page for the empty composer, with the issue tagged in
   /// the draft.
   ///
@@ -824,10 +979,19 @@ function App() {
   useHotkey(
     "p",
     () => {
-      const next = projects[(projects.findIndex((p) => p.path === projectPath) + 1) % projects.length];
+      const next =
+        spaceProjects[
+          (spaceProjects.findIndex((p) => p.path === projectPath) + 1) % spaceProjects.length
+        ];
       if (next) handleSelectProject(next.path);
     },
-    { shift: true, enabled: !selectedSessionId && !issuesOpen && projects.length > 1 },
+    {
+      shift: true,
+      // The chord steps exactly what the picker draws, which under a space is
+      // that space's projects — a chord landing on one the menu never offered
+      // is a session started somewhere the reader cannot see.
+      enabled: !selectedSessionId && !issuesOpen && spaceProjects.length > 1,
+    },
   );
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
@@ -970,7 +1134,11 @@ function App() {
           items={searchedSessions}
           search={search}
           onSearchChange={setSearch}
-          projects={projects}
+          projects={spaceProjects}
+          spaces={spaces}
+          space={space}
+          onSpaceChange={changeSpace}
+          onNewSpace={openNewSpace}
           projectFilter={projectFilter}
           onProjectFilterChange={setProjectFilter}
           statusBySession={statusBySession}
@@ -1261,7 +1429,7 @@ function App() {
               loadingModels={loadingModels}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
-              projects={projects}
+              projects={spaceProjects}
               projectPath={projectPath}
               onSelectProject={handleSelectProject}
               onAttachProject={handleAttachProject}
@@ -1363,9 +1531,23 @@ function App() {
       open={settingsOpen}
       onOpenChange={(next) => {
         setSettingsOpen(next);
-        if (!next) setSettingsTab("appearance");
+        if (!next) {
+          setSettingsTab("appearance");
+          setNamingSpace(false);
+        }
       }}
       initialTab={settingsTab}
+      // Every project, not the active space's: this is where a project is filed
+      // into one, and a list narrowed by the space would hide exactly the rows
+      // somebody opens it to move.
+      projects={projects}
+      spaces={spaces}
+      startNamingSpace={namingSpace}
+      onSetProjectSpace={setProjectSpace}
+      onRemoveProject={handleRemoveProject}
+      onCreateSpace={createSpace}
+      onRenameSpace={renameSpace}
+      onRemoveSpace={removeSpace}
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}

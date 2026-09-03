@@ -1052,6 +1052,13 @@ path: string,
  */
 name: string, 
 /**
+ * Which space the project belongs to, or `None` for one nobody filed.
+ * The tag is the whole record of a space — there is no spaces file — so a
+ * space exists exactly while some project names it, and the last project
+ * leaving takes it with them.
+ */
+space: string | null, 
+/**
  * Doubles as the sort key and the "which project was last open" answer:
  * selecting a project *is* what makes it most recent, so a separate
  * `last_selected` pointer would be a second place to keep the same fact.

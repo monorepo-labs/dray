@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
+import { readLocalStorage } from "@/hooks/useLocalStorage";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -16,6 +17,7 @@ import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
+import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
@@ -281,8 +283,50 @@ const handleAttachProject = async () => {
   }
 };
 
-const handleSelectProject = (path: string) => {
+// Detaches a project. Sessions that ran in it keep their own recorded paths and
+// stay in the sidebar — this is the picker's list, not the work. The composer
+// moves to whatever is left, since a pick nothing lists can still be sent in.
+const handleRemoveProject = async (path: string) => {
+  try {
+    const left = await invoke<Project[]>("remove_project", { path });
+    setProjects(left);
+    if (projectPath === path) setProjectPath(left[0]?.path ?? null);
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Files a project under a space, or clears it with `null`. Settings is the only
+// caller: the sidebar's switcher moves the reader between spaces, never a
+// project between them.
+const setProjectSpace = async (path: string, space: string | null) => {
+  try {
+    setProjects(await invoke<Project[]>("set_project_space", { path, space }));
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Moves every project in one space to another, or out of any space with `null`.
+// One call, so a rename or a removal cannot half-happen: answers `false` where
+// nothing was written, which is what lets the caller keep its own record of
+// which spaces exist in step with the tags.
+const retagSpace = async (from: string, to: string | null) => {
+  try {
+    setProjects(await invoke<Project[]>("retag_space", { from, to }));
+    return true;
+  } catch (e) {
+    setError(String(e));
+    return false;
+  }
+};
+
+// `null` is no project at all, which a space holding none is — and it has to be
+// reachable, since a stale pick still sends: the picker draws "Attach project"
+// while `send_msg` runs happily in the project the reader just walked away from.
+const handleSelectProject = (path: string | null) => {
   setProjectPath(path);
+  if (path === null) return;
   // Fire and forget: losing the remembered pick costs one dropdown next launch.
   void invoke("set_last_selected_project", { path }).catch(() => {});
 };
@@ -1058,6 +1102,10 @@ const applyWorktreeRemoval = (sessionId: string, updated: SessionIndexItem) => {
 // a cure: the entry is only cleared by that last step, so the settled bar is
 // still carrying the control that runs the rest, whichever end it stopped at.
 const reportWorktreeFailure = (sessionId: string, title: string, reason: string) => {
+  // The removal is started and not awaited, so this can land in a space the
+  // reader has since left — and `subject` is the session's own title.
+  if (!canAnnounce(sessionId)) return;
+
   pushNotice({
     sessionId,
     kind: "worktree-failed",
@@ -1573,6 +1621,10 @@ selectedSessionIdRef.current = selectedSessionId;
 // the live statuses to answer "is the one on screen still unread".
 const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
+// A space is a tag on the project, so `announce` needs the live project list to
+// answer whether the session that just spoke is one the reader has put away.
+const projectsRef = useRef(projects);
+projectsRef.current = projects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
 const tasksBySessionRef = useRef(tasksBySession);
@@ -1619,10 +1671,42 @@ const markSessionRead = (sessionId: string) => {
 /// stack beside every other app's, so it has to name the session and the
 /// project or it says nothing; the in-app card is the only card on screen next
 /// to a sidebar already marking the row, so it needs the verb and nothing else.
-const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  if (!isWindowFocused()) {
-    const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+/// Whether a session may say anything at all right now — the space rule, asked
+/// once for every channel.
+///
+/// Exported from the hook because the cards raised outside `announce` are the
+/// ones most able to break it: both worktree notices land after an `await`, so
+/// the reader can be in another space by the time one arrives, and both carry
+/// the session's own **title**. Read at the call, since these listeners and
+/// handlers are registered once and a held copy would be the space the app
+/// launched in.
+///
+/// Both lists, since the index holds one side of the archived split at a time.
+/// `allowedInSpace` is what refuses a session neither can name — see its own
+/// note for why that direction.
+const canAnnounce = (sessionId: string): boolean => {
+  const space = activeSpace(
+    projectsRef.current,
+    readLocalStorage<string | null>(SPACE_KEY, null),
+    readLocalStorage<string[]>(SPACE_LIST_KEY, []),
+  );
+  const projectPath =
+    sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.projectPath ??
+    sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
+    null;
 
+  return allowedInSpace(projectsRef.current, space, projectPath);
+};
+
+const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
+  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+
+  // A session in another space keeps running; it just has no channel here.
+  // Both channels name the session out loud, and naming a personal one over a
+  // shared screen is the thing spaces exist to stop.
+  if (!canAnnounce(sessionId)) return false;
+
+  if (!isWindowFocused()) {
     // Same order as the card: the verb first, because *what is wanted* is the
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to
@@ -1909,6 +1993,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
 
 }
