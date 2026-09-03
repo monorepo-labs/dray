@@ -1,13 +1,13 @@
 import { memo, useMemo } from "react";
-import { Streamdown, type Components, type LinkSafetyConfig, type ThemeInput } from "streamdown";
+import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
-import LinkDialog from "@/components/chat/LinkDialog";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
 import { isFilePath } from "@/lib/filePath";
+import { openLink } from "@/lib/openLink";
 import {
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
@@ -58,13 +58,24 @@ function codePlugin(pair: CodeThemePair) {
 // tabbed to either.
 const CONTROLS = { table: false, code: { copy: true, download: false } };
 
-// Streamdown's own confirm is kept on — a link in agent output is worth a
-// second look — but its Open button calls `window.open`, which does nothing in
-// a Tauri webview, so the dialog is ours.
-const LINK_SAFETY: LinkSafetyConfig = {
-  enabled: true,
-  renderModal: (props) => <LinkDialog {...props} />,
-};
+// A link opens in the session's browser, not the system one: the confirm
+// dialog that stood here guarded a hand-off out of the app, and there is no
+// hand-off any more. ⌘-click still leaves the app — see `openLink`.
+function Anchor({ href, children, ...rest }: React.ComponentProps<"a">) {
+  return (
+    <a
+      {...rest}
+      href={href}
+      onClick={(e) => {
+        if (!href) return;
+        e.preventDefault();
+        openLink(href, e);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
 
 /// Streamdown is built on the same shadcn tokens as the rest of the app, so it
 /// inherits the palette; only typography scale is ours to set.
@@ -89,6 +100,7 @@ function MarkdownImpl({
   const overrides = useMemo(
     () => ({
       table: MarkdownTable,
+      a: Anchor,
       ...(linkFilePaths ? { span: FilePathSpan } : null),
       ...components,
     }),
@@ -103,7 +115,6 @@ function MarkdownImpl({
       components={overrides}
       controls={CONTROLS}
       rehypePlugins={linkFilePaths ? REHYPE_PLUGINS_WITH_FILE_PATHS : REHYPE_PLUGINS}
-      linkSafety={LINK_SAFETY}
       shikiTheme={shikiTheme}
       lineNumbers={false}
       className={cn(

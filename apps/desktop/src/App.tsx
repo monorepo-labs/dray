@@ -20,6 +20,10 @@ import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog
 import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
 import PrPanel from "@/components/PrPanel";
+import BrowserPane from "@/components/browser/BrowserPane";
+import { openInBrowser, useBrowserTabs } from "@/lib/browser";
+import { setLinkOpener } from "@/lib/openLink";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
@@ -228,6 +232,8 @@ function App() {
   /// request, its issue — with nothing on screen to say whose they were. The
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
+  ///
+  const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const panelShown = panelOpen && !issuesOpen;
 
   /// The picked issue as a link, which is the shape the panel reads.
@@ -363,7 +369,6 @@ function App() {
       subject: title,
     });
   };
-  const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const setViewTab = (tab: ViewTab) => {
     if (selectedSessionId) setViewTabs((prev) => ({ ...prev, [selectedSessionId]: tab }));
   };
@@ -517,6 +522,26 @@ function App() {
   const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs();
   const hasDocsTab = docs.length > 0;
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
+
+  const browserTabs = useBrowserTabs(selectedSessionId);
+  const hasBrowserTabs = browserTabs.length > 0;
+  // The main column's Browser view is the panel's browser expanded. Arriving
+  // on it closes the pane, every time and whatever tab the pane was on: the
+  // reader came for the full width. Nothing keeps it closed — ⌘E brings it
+  // back beside the page — and the next arrival closes it again.
+  const fullBrowserOpen = !issuesOpen && viewTab === "browser";
+  const lastViewTab = useRef(viewTab);
+  useEffect(() => {
+    const was = lastViewTab.current;
+    lastViewTab.current = viewTab;
+    if (viewTab === "browser" && was !== "browser") setPanelOpen(false);
+  }, [viewTab, setPanelOpen]);
+  const expandBrowser = () => setViewTab("browser");
+  const collapseBrowser = () => {
+    setViewTab("chat");
+    setPanelTab("browser");
+    setPanelOpen(true);
+  };
 
   const tabs = tabOrder({ pr: hasPrTab, docs: hasDocsTab, issue: hasIssueTab });
 
@@ -719,6 +744,39 @@ function App() {
     if (!selectedSessionId) setPanelOpen(false);
   }, [selectedSessionId]);
 
+  // A link in the transcript opens as a new tab in the session's browser and
+  // brings the pane up on it, unless the full view already has it. ⌘-click,
+  // or no session to hold one, goes to the system browser.
+  useEffect(() => {
+    setLinkOpener((url, { external }) => {
+      if (external || !selectedSessionId) {
+        void openUrl(url).catch(console.error);
+        return;
+      }
+      void openInBrowser(selectedSessionId, url, true)
+        .then(() => {
+          if (fullBrowserOpen) return;
+          setPanelTab("browser");
+          setPanelOpen(true);
+        })
+        .catch(() => void openUrl(url).catch(console.error));
+    });
+    return () => setLinkOpener(null);
+  }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen]);
+
+  // The first browser tab appearing — an agent opening a page — brings the
+  // pane up on Browser, once. Not while the full view is up, where the same
+  // page is already the whole column.
+  const lastHadTabs = useRef(hasBrowserTabs);
+  useEffect(() => {
+    const was = lastHadTabs.current;
+    lastHadTabs.current = hasBrowserTabs;
+    if (!was && hasBrowserTabs && !fullBrowserOpen) {
+      setPanelTab("browser");
+      setPanelOpen(true);
+    }
+  }, [hasBrowserTabs, fullBrowserOpen, setPanelTab, setPanelOpen]);
+
   // Every way of arriving at a session, so none of them can forget to leave the
   // issues page. The two sidebar buttons closed it and the chords beside them
   // did not, which made ⌘N and ⌘⇧↑/↓ look inert: they moved the selection under
@@ -864,6 +922,7 @@ function App() {
   // like nothing happening and then shows up as the wrong view on the way back.
   useHotkey("1", () => !issuesOpen && setViewTab("chat"));
   useHotkey("2", () => !issuesOpen && setViewTab("changes"));
+  useHotkey("3", () => !issuesOpen && setViewTab("browser"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
@@ -1099,7 +1158,6 @@ function App() {
             tab={activeTab}
             onTabChange={setPanelTab}
             counts={{
-              subagents: subagents.length,
               pr: prBadgeCount(pullRequests.prs),
               // Only above one: a tab reading "Issue 1" says what the tab
               // already says, and the count is news exactly when there is more
@@ -1117,6 +1175,16 @@ function App() {
           >
             <TabBody active={activeTab === "changes"}>
               <ChangesPanel cwd={selectedSession.cwd} baseline={baseline} {...changesData} />
+            </TabBody>
+            <TabBody active={activeTab === "browser"}>
+              <BrowserPane
+                sessionId={selectedSession.sessionId}
+                active={panelShown && activeTab === "browser"}
+                mode="panel"
+                fullOpen={fullBrowserOpen}
+                onExpand={expandBrowser}
+                onCollapse={collapseBrowser}
+              />
             </TabBody>
             <TabBody active={activeTab === "subagents"}>
               <SubagentPanel
@@ -1316,6 +1384,17 @@ function App() {
             cwd={selectedSession.cwd}
             active={viewTab === "changes"}
             revision={revision}
+          />
+        </TabBody>
+      )}
+
+      {selectedSession && (
+        <TabBody active={!issuesOpen && viewTab === "browser"}>
+          <BrowserPane
+            sessionId={selectedSession.sessionId}
+            active={fullBrowserOpen}
+            mode="full"
+            onCollapse={collapseBrowser}
           />
         </TabBody>
       )}

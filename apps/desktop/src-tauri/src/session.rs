@@ -1173,6 +1173,8 @@ impl SessionManager {
         if let Some(session) = running {
             session.kill().await?;
         }
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        crate::cef::close_session(session_id);
 
         // Best-effort for the same reason the attachments below are, and with
         // one cost worth naming: a removal that fails here orphans the tree

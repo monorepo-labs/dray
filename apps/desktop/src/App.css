@@ -1173,4 +1173,38 @@
     scrollbar-color: color-mix(in oklab, var(--color-muted-foreground) 35%, transparent)
       transparent;
   }
+
+  /* The browser's active tab flares out at its foot into the toolbar under
+     it, Chrome's shape. Two squares hang off the bottom corners outside the
+     tab, each painted in the tab's colour except for a quarter circle at its
+     outer top corner, which is the concave curve. A gradient rather than the
+     box-shadow trick, which paints past its own square and into the tab.
+
+     `--muted`, never `--color-muted`: the alias resolves at `:root`, where
+     `--muted` is the palette's opaque fill, while the glass override lives on
+     `body` — so through the alias the flares came out opaque beside a
+     translucent tab and drew as two solid squares in windowed mode. */
+  .browser-tab-active {
+    position: relative;
+  }
+
+  .browser-tab-active::before,
+  .browser-tab-active::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+  }
+
+  .browser-tab-active::before {
+    left: -8px;
+    background: radial-gradient(circle at 0 0, transparent 8px, var(--muted) 8.5px);
+  }
+
+  .browser-tab-active::after {
+    right: -8px;
+    background: radial-gradient(circle at 100% 0, transparent 8px, var(--muted) 8.5px);
+  }
 }

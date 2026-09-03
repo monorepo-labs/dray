@@ -43,19 +43,18 @@ export default function ChangesPanel({
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
         <span className="text-sidebar-foreground">Last turn</span>
 
-        {changes.files.length ? (
+        {changes.files.length > 0 && (
           <>
             <span className="text-muted-foreground">
               {changes.files.length} file{changes.files.length > 1 ? "s" : ""}
             </span>
             <Counts added={changes.added} removed={changes.removed} />
           </>
-        ) : (
-          <span className="text-muted-foreground">No changes yet</span>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {changes.files.length === 0 && <Empty>No changes yet</Empty>}
         {changes.files.map((file) => (
           <FileRow
             key={file.path}
@@ -70,11 +69,12 @@ export default function ChangesPanel({
   );
 }
 
+/// Centred in whatever space is left, matching the browser's empty stage.
 function Empty({ children, tone }: { children: React.ReactNode; tone?: "error" }) {
   return (
     <p
       className={cn(
-        "px-3 py-6 text-ui",
+        "flex flex-1 items-center justify-center p-8 text-center text-ui",
         tone === "error" ? "text-destructive" : "text-muted-foreground",
       )}
     >
