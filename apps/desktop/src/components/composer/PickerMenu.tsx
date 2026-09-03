@@ -236,9 +236,17 @@ export default function PickerMenu<T>({
           // `bare` drops the inset with the box it was insetting from: with no
           // border there is nothing for the rows to be held away from, and the
           // gap only reads as the list sitting oddly short of its own edge.
+          //
+          // The right inset is the exception, and it is `scrollbar-overlay`'s
+          // reserved gutter rather than padding — the sidebar's own answer to
+          // this, and here for the same reason. macOS draws an overlay
+          // scrollbar, which takes no layout space, so the thumb landed *on*
+          // the highlighted row's rounded end. `p-1`'s 4px was never enough to
+          // clear it either; `bare`, holding no inset at all, is only where it
+          // was impossible to miss.
           className={cn(
-            "overflow-x-hidden overflow-y-auto overscroll-contain",
-            bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1",
+            "scrollbar-overlay overflow-x-hidden overflow-y-auto overscroll-contain",
+            bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1 pr-0",
           )}
         >
           {groups.map((group, g) => (

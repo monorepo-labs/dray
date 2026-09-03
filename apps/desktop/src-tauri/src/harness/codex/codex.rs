@@ -30,6 +30,7 @@ use tokio::{
     sync::Mutex,
 };
 
+pub mod commands;
 pub mod mapper;
 pub mod parser;
 pub mod permissions;
@@ -563,16 +564,51 @@ async fn read_stderr(stderr: ChildStderr) -> Result<()> {
     Ok(())
 }
 
+/// The input items one prompt travels as.
+///
+/// Ordinary prose is one `text` item and that is the whole of it. A prompt
+/// *opening* with a slash may be a skill, and a skill is its own input item
+/// here — Codex expands nothing on the way in, so `/caveman` sent as text is
+/// four literal words to the model where Claude Code's CLI would have expanded
+/// it. A name the lookup answers nothing for stays text, which is what keeps
+/// prose that happens to start with a slash intact.
+///
+/// A lookup that *failed* refuses the send rather than falling back to text —
+/// see [`commands::skill_item`], where the difference is the whole point.
+///
+/// Split from [`start_turn`] so the caller can run it **before** it records the
+/// reader's own message. It is the one part of a send that can fail after
+/// asking the child something, and `deliver_prompt` emits, holds and appends
+/// the `user_message` before it sends — so a failure past that point leaves a
+/// bubble in the transcript with no turn behind it, and a retry draws a second.
+pub async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
+    let Some(skill) = commands::skill_item(&thread.client, text).await? else {
+        return Ok(json!([{"type": "text", "text": text}]));
+    };
+
+    let rest = commands::without_command(text);
+    if rest.is_empty() {
+        // A skill with nothing beside it is accepted on its own, verified live.
+        return Ok(json!([skill]));
+    }
+
+    Ok(json!([skill, {"type": "text", "text": rest}]))
+}
+
 /// Writes one prompt as a turn.
 ///
 /// Where Claude's send is a line written and forgotten, this is a request whose
 /// answer names the turn. The answer is awaited so a refusal — an unsteerable
 /// turn, a thread that has gone — reaches the caller as an error instead of a
 /// prompt that vanished.
-pub async fn start_turn(thread: &Thread, text: &str) -> Result<()> {
+///
+/// Takes the input already built by [`turn_input`] rather than the raw text,
+/// so everything that can fail *before* the reader's message is recorded has
+/// already happened by the time this is called.
+pub async fn start_turn(thread: &Thread, input: Value) -> Result<()> {
     let mut params = json!({
         "threadId": thread.id,
-        "input": [{"type": "text", "text": text}],
+        "input": input,
         "model": thread.settings.model,
         "approvalPolicy": thread.settings.approval_policy,
     });
