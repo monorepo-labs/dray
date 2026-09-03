@@ -142,12 +142,18 @@ pub async fn check_update(
     Ok(())
 }
 
-/// Swaps the bundle for the one already downloaded and relaunches.
+/// Swaps the bundle for the one already downloaded, launches it, and quits.
 ///
-/// Never returns on success — `restart` diverges — so the caller's `invoke`
-/// resolving at all means the install failed. Whether any session is mid-turn
-/// is the frontend's call: this is the point of no return, and the check
-/// belongs where the button is.
+/// Whether any session is mid-turn is the frontend's call: this is the point of
+/// no return, and the check belongs where the button is.
+///
+/// Launching *before* quitting is what makes a failure reportable. It is also
+/// the whole of DRA-160: this used to end in `AppHandle::restart`, which off the
+/// main thread only asks the event loop to exit and relaunches from inside
+/// Tauri's own `RunEvent::Exit` arm — *after* this app's handler has run, and
+/// that handler ends in `libc::_exit(0)` (see the run loop in `lib.rs`). So the
+/// relaunch was never reached, the app simply quit, and there was nothing left
+/// running to say so. Nothing here may call `restart` again for that reason.
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
     // Cloned rather than taken, so a failed install leaves the bundle in place
@@ -166,11 +172,90 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     };
 
     update.install(bytes).map_err(|e| e.to_string())?;
-    app.restart();
+    relaunch(&app)?;
+    app.exit(0);
+    Ok(())
+}
+
+/// Launches the bundle that was just installed, and answers whether the OS took
+/// it. Returns while the new instance is still coming up — the caller quits
+/// straight after, which is the same overlap `restart` had.
+///
+/// `open` rather than spawning the executable: it goes through Launch Services,
+/// so the new instance is registered, gets launchd's environment the way a
+/// Finder launch would, and — the reason it is here — a refusal comes back as a
+/// non-zero status with a sentence on it rather than as a process that is
+/// already gone. `-n` is required, since this app is still running and `open`
+/// would otherwise just activate it.
+///
+/// Falling through to the executable covers a dev build, which is a bare Mach-O
+/// with no bundle around it.
+fn relaunch(app: &AppHandle) -> Result<(), String> {
+    let exe = tauri::process::current_binary(&app.env())
+        .map_err(|e| format!("could not resolve this binary: {e}"))?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = bundle_of(&exe) {
+        let out = std::process::Command::new("open")
+            .arg("-n")
+            .arg(bundle)
+            .output()
+            .map_err(|e| format!("could not run `open`: {e}"))?;
+
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr);
+            let why = why.trim();
+            return Err(if why.is_empty() {
+                format!("`open` refused {}", bundle.display())
+            } else {
+                why.to_string()
+            });
+        }
+        return Ok(());
+    }
+
+    std::process::Command::new(&exe)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not launch {}: {e}", exe.display()))
+}
+
+/// The `.app` an executable sits in, or `None` for a bare binary.
+///
+/// `…/Dray.app/Contents/MacOS/dray` — the fourth ancestor. Counting it wrong
+/// costs no error, it just falls through to spawning the executable, so this is
+/// pinned rather than left to be read off the call site.
+#[cfg(target_os = "macos")]
+fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.ancestors()
+        .nth(3)
+        .filter(|p| p.extension().is_some_and(|e| e == "app"))
 }
 
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
     if let Err(e) = app.emit("update_status", &status) {
         eprintln!("[update status emit err] {e}");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::bundle_of;
+    use std::path::Path;
+
+    #[test]
+    fn finds_the_bundle_an_executable_sits_in() {
+        assert_eq!(
+            bundle_of(Path::new("/Applications/Dray.app/Contents/MacOS/dray")),
+            Some(Path::new("/Applications/Dray.app"))
+        );
+    }
+
+    #[test]
+    fn a_bare_binary_has_no_bundle() {
+        // What `pnpm tauri dev` runs, and what the `open` branch must not take.
+        assert_eq!(bundle_of(Path::new("/x/target/debug/dray")), None);
+        // Deep enough to have a fourth ancestor, but it is not a bundle.
+        assert_eq!(bundle_of(Path::new("/a/b/c/d/dray")), None);
     }
 }

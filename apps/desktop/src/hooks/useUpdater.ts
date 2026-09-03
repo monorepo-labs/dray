@@ -14,13 +14,23 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // doesn't settle in as a second permanent row.
 const VERDICT_MS = 4000;
 
-/// What a hand-triggered check is doing.
+/// What something the reader asked for is doing.
 ///
 /// The scheduled check has no such state and wants none — it stays silent
 /// unless it found something, because nobody asked it. The menu item is a
 /// question, so it is answered either way, including when the answer is that
 /// nothing happened.
-export type ManualCheck = "idle" | "checking" | "up_to_date" | "failed";
+///
+/// `install_failed` rides here rather than on a prop of its own, since the
+/// footer has one line to say things in either way. It is the one verdict that
+/// does not retire itself: the bundle is swapped and the app is still on the
+/// old one, so the sentence stays until the reader acts on it.
+export type ManualCheck =
+  | "idle"
+  | "checking"
+  | "up_to_date"
+  | "failed"
+  | "install_failed";
 
 /// Checks for an update on launch and on an interval, and holds what the
 /// backend reports back.
@@ -128,15 +138,17 @@ export function useUpdater() {
     return () => clearTimeout(timer);
   }, [manual]);
 
-  // Resolving at all means the install failed — the backend relaunches the app
-  // on success, so nothing downstream of this ever runs.
-  const install = useCallback(
-    () =>
-      invoke("install_update").catch((e) => {
-        console.error("[update install]", e);
-      }),
-    [],
-  );
+  // The backend launches the new bundle and *then* asks to exit, so a rejection
+  // here is a real answer: the swap happened and nothing came up to replace us.
+  // Resolving usually means the process is about to die, and the state written
+  // on that path is never painted.
+  const install = useCallback(() => {
+    setManual("idle");
+    return invoke("install_update").catch((e) => {
+      console.error("[update install]", e);
+      setManual("install_failed");
+    });
+  }, []);
 
   // Same path the menu item takes, so a check asked for in Settings and one
   // asked for from the menu bar are one thing with one in-flight guard.

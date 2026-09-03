@@ -10,8 +10,10 @@ type UpdateRowProps = {
   /// A turn is in flight somewhere. Installing swaps the bundle and relaunches,
   /// which kills the child mid-turn, so the button waits rather than warning.
   blocked: boolean;
-  /// Where a check the user asked for has got to. Only ever drawn when there is
-  /// no `status` — a real update outranks any verdict about not finding one.
+  /// Where something the user asked for has got to. The check verdicts are only
+  /// drawn when there is no `status` — a real update outranks any verdict about
+  /// not finding one — while `install_failed` is drawn over the ready button,
+  /// which is the offer it is a failure of.
   manual: ManualCheck;
   onInstall: () => void;
 };
@@ -94,8 +96,19 @@ export default function UpdateRow({
     </Button>
   );
 
+  // The bundle is already swapped by the time this can be true, so the cure is
+  // to open the app again rather than to press the button — which stays, since
+  // the downloaded update is still held and pressing it tries the same launch.
+  const failed = manual === "install_failed" && (
+    <Note>
+      <TriangleAlert className="size-4 shrink-0" />
+      Couldn't reopen Dray. Quit and open it again.
+    </Note>
+  );
+
   return (
     <Footer>
+      {failed}
       {blocked ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
