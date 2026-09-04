@@ -96,11 +96,39 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/src
             ~/.cargo/git/db
+            ~/.cache/cef
             apps/desktop/src-tauri/target
           key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
 
       - run: pnpm install --frozen-lockfile
+
+      # The browser's bindings compile against the CEF SDK: headers plus a
+      # C++ wrapper that `cef-dll-sys`'s build script builds with CMake and
+      # Ninja, downloading the SDK into CEF_PATH first (one per target). The
+      # framework inside that SDK is never copied anywhere — the app fetches
+      # its own after install, see chromium.rs — so the bundle carries only
+      # the helper apps built below.
+      - run: |
+          brew install ninja
+          echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"
+
+      # The helper apps are signed here, before the bundler runs, with the
+      # same identity it will use on the app around them. `bundle.macOS.files`
+      # copies and signs nothing, and codesign refuses an app whose nested
+      # bundles carry no signature. Their entitlements differ from the app's
+      # too — V8 in the renderer wants JIT — so a `--deep` sign would be the
+      # wrong shape even if the bundler offered one.
+      - uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - run: scripts/cef-helpers.sh src-tauri/target/cef-helpers
+        working-directory: apps/desktop
+        env:
+          PROFILE: release
+          TARGETS: aarch64-apple-darwin x86_64-apple-darwin
+          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -131,8 +159,9 @@ jobs:
           generateReleaseNotes: true
           # One bundle for both architectures. The action expands the universal
           # entry into per-arch keys in `latest.json`, so a client asking for
-          # `darwin-aarch64` finds it.
-          args: --target universal-apple-darwin
+          # `darwin-aarch64` finds it. `cef` turns the browser on, and the
+          # overlay config puts the helper apps in Contents/Frameworks.
+          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
@@ -144,6 +173,21 @@ jobs:
           APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName apps/desktop/src-tauri/tauri.conf.json).app"
           xcrun stapler validate "$APP"
           spctl --assess --verbose=2 --type exec "$APP"
+
+      # The browser's half of the same question. The helpers have to be
+      # there and signed with library validation off, or the downloaded
+      # framework is refused at load; and the framework itself must *not*
+      # be there, or the bundle just grew by 300MB and every update with it.
+      - name: Verify the browser helpers
+        run: |
+          APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName apps/desktop/src-tauri/tauri.conf.json).app"
+          test ! -e "$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
+          for h in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
+            HELPER="$APP/Contents/Frameworks/Dray Helper$h.app"
+            codesign --verify --strict "$HELPER"
+            codesign -d --entitlements - "$HELPER" 2>&1 | grep -q disable-library-validation
+          done
+          codesign -d --entitlements - "$APP" 2>&1 | grep -q disable-library-validation
 
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.

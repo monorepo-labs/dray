@@ -23,6 +23,7 @@ import {
   activateTab,
   claimPresenter,
   closeTab,
+  downloadChromium,
   listLocalServers,
   navigate,
   normalizeUrl,
@@ -33,6 +34,7 @@ import {
   useOpenError,
   setViewport,
   useBrowserTabs,
+  useChromium,
   usePendingTab,
   usePicking,
   useViewport,
@@ -41,7 +43,9 @@ import {
   type LocalServer,
   type Viewport,
 } from "@/lib/browser";
+import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import { cn } from "@/lib/utils";
+import type { ChromiumStatus } from "@/types/events";
 
 /// The element picker is built and parked: it works, but what it drops into
 /// the composer wants a screenshot beside it before it is worth a button.
@@ -592,6 +596,44 @@ function DeviceBar({
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
 function EmptyState({ sessionId }: { sessionId: string }) {
+  const chromium = useChromium();
+  // Nothing to open pages with yet: the download stands where the page would.
+  if (chromium && chromium.state !== "ready") {
+    return <ChromiumState status={chromium} />;
+  }
+  return <Servers sessionId={sessionId} />;
+}
+
+/// Chromium is fetched after install (see chromium.rs), and this is where the
+/// reader watches it land. Failed and removed both offer the download; the
+/// bar is only drawn while bytes are moving.
+function ChromiumState({ status }: { status: ChromiumStatus }) {
+  const percent = chromiumPercent(status);
+  return (
+    <div className="flex h-full items-center justify-center p-8 text-ui">
+      <div className="flex w-full max-w-sm flex-col gap-3">
+        <p className="text-muted-foreground">{describeChromium(status)}</p>
+        {status.state === "downloading" && (
+          <div className="h-1 overflow-hidden rounded-full bg-foreground/20">
+            <div
+              className="h-full bg-primary transition-[width] duration-300"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        )}
+        {!chromiumBusy(status) && (
+          <div>
+            <Button variant="outline" size="sm" onClick={() => void downloadChromium()}>
+              {status.state === "failed" ? "Retry" : "Download Chromium"}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Servers({ sessionId }: { sessionId: string }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
 
   useEffect(() => {

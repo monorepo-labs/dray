@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 
+import type { ChromiumStatus } from "@/types/events";
+
 /// The in-app browser's frontend half: tabs per session as the backend
 /// reports them, and the one rule about who presents the native view.
 ///
@@ -86,6 +88,22 @@ function start() {
     const { sessionId, preset, width, height } = e.payload;
     setViewport(sessionId, { preset, width, height });
   });
+  // Whether Chromium is on disk yet. The first read fails in a build without
+  // the browser, which leaves `null` and both surfaces silent. The listener
+  // is *awaited* before the snapshot is asked for, and the snapshot dropped
+  // if an event landed meanwhile: a download finishing inside the round trip
+  // is otherwise put back to "downloading" by the older answer, with nothing
+  // later to correct it.
+  void (async () => {
+    let events = 0;
+    await listen<ChromiumStatus>("chromium_status", (e) => {
+      events++;
+      setChromium(e.payload);
+    });
+    const seen = events;
+    const status = await invoke<ChromiumStatus>("chromium_status").catch(() => null);
+    if (status && events === seen) setChromium(status);
+  })();
   // Radix puts `pointer-events: none` on body while a modal is open. The
   // native view would sit over the dialog otherwise.
   new MutationObserver(() => {
@@ -235,6 +253,31 @@ export function setPendingTab(sessionId: string, on: boolean) {
     openErrors.delete(sessionId);
   }
   notify();
+}
+
+// --- Chromium itself ---------------------------------------------------------
+
+/// The framework is downloaded after install, not shipped; until it lands the
+/// browser has nothing to draw pages with. `null` is a build with no browser.
+let chromium: ChromiumStatus | null = null;
+
+function setChromium(next: ChromiumStatus) {
+  chromium = next;
+  notify();
+}
+
+export function useChromium(): ChromiumStatus | null {
+  start();
+  return useSyncExternalStore(subscribe, () => chromium);
+}
+
+/// Starts the download, or retries a failed one. The status event answers.
+export function downloadChromium() {
+  return invoke("chromium_download");
+}
+
+export function removeChromium() {
+  return invoke("chromium_remove");
 }
 
 // --- Local servers -----------------------------------------------------------

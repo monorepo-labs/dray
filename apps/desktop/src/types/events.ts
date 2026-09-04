@@ -432,6 +432,11 @@ binary: boolean, };
 export type CheckState = "success" | "failure" | "pending" | "skipped" | "cancelled" | "neutral";
 
 /**
+ * Where the download stands, for the settings row and the browser pane.
+ */
+export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", received: number, total: number, } | { "state": "extracting" } | { "state": "ready", version: string, sizeBytes: number, } | { "state": "failed", message: string, };
+
+/**
  * What kind of entry a timeline row is. A review carries a verdict where a
  * plain comment carries none, and that verdict is most of what the row says.
  */
