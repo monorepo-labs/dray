@@ -176,6 +176,7 @@ fn start() -> bool {
         eprintln!("cef: could not load {}", library.display());
         return false;
     }
+    crate::chromium::mark_loaded();
     let _ = api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
 
     let args = Args::new();

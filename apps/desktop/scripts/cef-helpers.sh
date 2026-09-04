@@ -14,8 +14,10 @@
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-OUT=$1
-[ -n "$OUT" ] || { echo "usage: $0 <out-dir>" >&2; exit 1; }
+[ -n "$1" ] || { echo "usage: $0 <out-dir>" >&2; exit 1; }
+# Absolute before the cd below, or a relative out-dir lands under src-tauri.
+mkdir -p "$1"
+OUT=$(cd "$1" && pwd)
 PROFILE=${PROFILE:-debug}
 FLAG=""
 [ "$PROFILE" = release ] && FLAG=--release

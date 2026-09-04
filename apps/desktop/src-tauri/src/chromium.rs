@@ -179,7 +179,11 @@ pub fn download_now(app: AppHandle) {
 /// the wait short rather than starting a second loop.
 async fn run(app: AppHandle) {
     if RUNNING.swap(true, Ordering::SeqCst) {
-        WAKE.notify_waiters();
+        // `notify_one`, not `notify_waiters`: Failed is published before the
+        // loop reaches `notified()`, and a Retry pressed in that gap would
+        // otherwise wake nobody and leave the reader sitting out the backoff.
+        // With no waiter the permit is stored and taken by the next wait.
+        WAKE.notify_one();
         return;
     }
     let backoff = [10, 30, 120, 600];
@@ -329,11 +333,24 @@ fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
-/// Takes the framework off disk. Tabs already open keep the copy the
-/// process loaded; new ones are refused until it is downloaded again.
+/// The framework is mapped into this process. Set by `cef::start`, never
+/// cleared: CEF cannot be shut down and started again in one process.
+static LOADED: AtomicBool = AtomicBool::new(false);
+
+pub fn mark_loaded() {
+    LOADED.store(true, Ordering::SeqCst);
+}
+
+/// Takes the framework off disk. Refused once CEF has loaded it: the
+/// browser process would carry on, but Chromium spawns fresh renderer and
+/// GPU helpers for the life of a tab, and each of those loads the framework
+/// from disk anew.
 pub async fn remove(app: &AppHandle) -> Result<()> {
     if RUNNING.load(Ordering::SeqCst) {
         bail!("Chromium is still downloading");
+    }
+    if LOADED.load(Ordering::SeqCst) {
+        bail!("Chromium is in use. Quit and reopen Dray, then remove it.");
     }
     match fs::remove_dir_all(version_dir()).await {
         Ok(()) => {}
