@@ -26,10 +26,7 @@
 //! every event before it reaches the queue, which is what an unconfigured
 //! checkout runs as.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::time::Duration;
 
 use tauri::{plugin::TauriPlugin, AppHandle, Runtime};
 use tauri_plugin_aptabase::{EventTracker, InitOptions};
@@ -46,28 +43,19 @@ const APP_KEY: Option<&str> = option_env!("APTABASE_KEY");
 /// and free when it is — the poll returns without a request on an empty queue.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Whether this run reports at all. Held here rather than left to the plugin
-/// because the plugin decides it once, at `build` time, from the key alone — an
-/// empty key disables tracking for the life of the process, which cannot answer
-/// a toggle someone flips while the app is running.
-///
-/// **Starts `false`, and that is the safe direction rather than the tidy one.**
-/// [`start`] is spawned, so there is a window at launch where consent has not
-/// been read yet; anything reaching [`track`] inside it would report for someone
-/// who may have opted out. Nothing does today — `start` owns the only call —
-/// but a second call site is exactly the change that would not think to check.
-static ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Opts this run in or out, effective immediately. Called by [`start`] with the
-/// persisted answer and by the settings command when the toggle moves.
-pub fn set_enabled(enabled: bool) {
-    ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// The effective answer for this run — what the settings dialog draws, and not
+/// Whether this run reports at all — what the settings dialog draws, and not
 /// the same as what is on disk whenever [`env_opt_out`] holds.
-pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+///
+/// Read from disk on every ask rather than held: the plugin decides its own
+/// enablement once, at `build` time, from the key alone, which cannot answer a
+/// toggle someone flips while the app is running — and a copy held here was
+/// one more thing to keep in step with the file. The read is one small file
+/// and nothing asks on a hot path.
+///
+/// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
+/// can turn reporting off; it cannot turn it on over a stored `false`.
+pub async fn enabled() -> bool {
+    !env_opt_out() && crate::settings::read().await.analytics_enabled
 }
 
 /// Whether the environment has forced reporting off for this run.
@@ -78,20 +66,10 @@ pub fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
 }
 
-/// Resolves consent from disk, then reports the launch.
-///
-/// Ordering is the point of folding the two together: [`track`] must not run
-/// before the persisted answer is in hand, or an opted-out install still sends
-/// the one event it opted out of. Awaited inside `setup`'s own spawn rather
-/// than blocking it — nothing on screen waits for this.
-///
-/// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
-/// can turn reporting off; it cannot turn it on over a stored `false`.
+/// Reports the launch, once consent has been read. Awaited inside `setup`'s
+/// own spawn rather than blocking it — nothing on screen waits for this.
 pub async fn start(app: &AppHandle) {
-    let opted_in_by_setting = crate::settings::read().await.analytics_enabled;
-
-    set_enabled(!env_opt_out() && opted_in_by_setting);
-    track(app, "app_started");
+    track(app, "app_started").await;
 }
 
 /// The plugin.
@@ -110,10 +88,14 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
 
 /// Enqueues one event, or drops it if this run opted out.
 ///
+/// Consent is read here, on every call, so a second call site cannot forget to
+/// ask — and cannot run ahead of the persisted answer, which would send an
+/// opted-out install the one event it opted out of.
+///
 /// Best-effort throughout, like the notification path next door: analytics that
 /// surfaced an error would be worse than analytics that went missing.
-pub fn track(app: &AppHandle, name: &str) {
-    if !enabled() {
+pub async fn track(app: &AppHandle, name: &str) {
+    if !enabled().await {
         return;
     }
 

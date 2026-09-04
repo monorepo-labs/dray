@@ -137,7 +137,7 @@ fn dev_framework() -> Option<PathBuf> {
 }
 
 fn browser_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".dray/browser")
+    std::env::home_dir().unwrap_or_default().join(".dray/browser")
 }
 
 /// Call once from Tauri's `setup`. Chromium itself is not started here: it

@@ -494,7 +494,7 @@ pub fn default_socket_path() -> Option<PathBuf> {
 /// rather than leaving them to guess which build spawned them.
 pub fn socket_path(dev: bool) -> Option<PathBuf> {
     let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
-    Some(dirs::home_dir()?.join(".dray").join(name))
+    Some(std::env::home_dir()?.join(".dray").join(name))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the

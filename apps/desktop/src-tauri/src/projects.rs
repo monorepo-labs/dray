@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use tokio::{fs, sync::Mutex};
 use ts_rs::TS;
 
-use crate::{events::now_rfc3339, store::get_home_app_dir};
+use crate::{
+    events::now_rfc3339,
+    store::{get_home_app_dir, read_json, write_atomic},
+    Fail,
+};
 
 /// A directory the user attached, and the root a session runs in. Distinct from
 /// [`crate::store::SessionIndexItem::project_path`], which records where a
@@ -45,20 +49,9 @@ async fn canonical(path: &str) -> Result<String> {
 /// Reads `projects.json`, most recently selected first — so the picker's order
 /// and its default are both just `projects[0]`. A missing or empty file means
 /// no projects yet, not an error — same convention as the session index.
-pub async fn read_projects() -> Result<Vec<Project>> {
-    let path = get_home_app_dir().await?.join("projects.json");
-
-    let contents = match fs::read_to_string(path).await {
-        Ok(v) => v,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).context("could not open projects file"),
-    };
-
-    if contents.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut projects: Vec<Project> = serde_json::from_str(&contents)?;
+#[tauri::command]
+pub async fn list_projects() -> Result<Vec<Project>, Fail> {
+    let mut projects: Vec<Project> = read_json(&projects_path().await?).await?;
     // Descending, so the newest selection sorts to the front. RFC 3339 stamps
     // compare correctly as strings at fixed width.
     projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
@@ -66,32 +59,25 @@ pub async fn read_projects() -> Result<Vec<Project>> {
     Ok(projects)
 }
 
+async fn projects_path() -> Result<std::path::PathBuf> {
+    Ok(get_home_app_dir().await?.join("projects.json"))
+}
+
 /// Caller must hold `PROJECTS_LOCK`: this rewrites the whole file, so a
 /// concurrent writer would drop the other's entry.
 async fn write_projects(projects: &[Project]) -> Result<()> {
-    let path = get_home_app_dir().await?.join("projects.json");
-    let contents = serde_json::to_string(projects)?;
-    let tmp = path.with_extension("json.tmp");
-
-    fs::write(&tmp, contents)
-        .await
-        .context("failed to write projects")?;
-
-    fs::rename(&tmp, &path)
-        .await
-        .context("failed to rename projects")?;
-
-    Ok(())
+    write_atomic(&projects_path().await?, serde_json::to_string(projects)?).await
 }
 
 /// Attaches a directory and selects it. Re-attaching a known project is a
 /// no-op apart from the selection, so the picker's "Attach" can double as
 /// "switch to one I already have" without growing duplicates.
-pub async fn add_project(path: &str) -> Result<Vec<Project>> {
+#[tauri::command]
+pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
     let path = canonical(path).await?;
 
     let _guard = PROJECTS_LOCK.lock().await;
-    let mut projects = read_projects().await?;
+    let mut projects = list_projects().await?;
     let now = now_rfc3339();
 
     match projects.iter_mut().find(|p| p.path == path) {
@@ -112,9 +98,10 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>> {
 
 /// Detaches a project. Sessions that ran in it are untouched — they keep their
 /// own recorded paths and stay in the sidebar.
-pub async fn remove_project(path: &str) -> Result<Vec<Project>> {
+#[tauri::command]
+pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
-    let mut projects = read_projects().await?;
+    let mut projects = list_projects().await?;
 
     projects.retain(|p| p.path != path);
     write_projects(&projects).await?;
@@ -125,9 +112,10 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>> {
 /// Stamps a project as the most recently selected, which also moves it to the
 /// front of the next read. Unknown paths are ignored rather than inserted —
 /// attaching is [`add_project`]'s job.
-pub async fn set_last_selected_project(path: &str) -> Result<()> {
+#[tauri::command]
+pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
-    let mut projects = read_projects().await?;
+    let mut projects = list_projects().await?;
 
     let Some(project) = projects.iter_mut().find(|p| p.path == path) else {
         return Ok(());
@@ -136,15 +124,16 @@ pub async fn set_last_selected_project(path: &str) -> Result<()> {
     project.last_selected = now_rfc3339();
     projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
 
-    write_projects(&projects).await
+    Ok(write_projects(&projects).await?)
 }
 
 /// Files a project under a space, or clears it with `None`. A blank name is
 /// the same as clearing: an empty string would draw a nameless entry in the
 /// switcher that nothing could ever be moved out of.
-pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>> {
+#[tauri::command]
+pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
-    let mut projects = read_projects().await?;
+    let mut projects = list_projects().await?;
 
     // By index, not `iter_mut().find()`: the borrow checker will not let the
     // not-found arm hand the list back while a mutable borrow of it is alive.
@@ -189,9 +178,10 @@ fn retag(projects: &mut [Project], from: &str, to: Option<String>) -> bool {
 /// of writes half of which failed would leave tags and that record describing
 /// different worlds. Here it is one read, one edit and one write under the
 /// lock, so it either all lands or none of it does.
-pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>> {
+#[tauri::command]
+pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
-    let mut projects = read_projects().await?;
+    let mut projects = list_projects().await?;
 
     // A space nobody had filled yet carries no tag, so changing nothing is the
     // ordinary path for renaming one — and a rewrite that moves no value is one

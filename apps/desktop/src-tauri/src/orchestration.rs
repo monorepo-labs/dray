@@ -49,10 +49,6 @@ pub const SESSION_CREATED: &str = "session_created";
 /// field free to disagree with the chain it describes.
 const MAX_DEPTH: usize = 2;
 
-/// Guards the walk against an index that somehow points at itself. Cheap
-/// insurance: a cycle here would hang the caller's turn rather than fail it.
-const MAX_WALK: usize = 64;
-
 /// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
 /// `dray.sock` otherwise.
 ///
@@ -463,7 +459,7 @@ async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {
-    let items = store::list_session_index_items_by_archived(false).await?;
+    let items = store::list_session_index_items(false).await?;
 
     let scope = if list.all {
         None
@@ -484,16 +480,20 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
     Ok(Response::Listed { sessions })
 }
 
-/// How many creates deep this session already sits. A session with no parent is
-/// depth 0, one created by an agent is depth 1.
+/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
+/// session with no parent is depth 0, one created by an agent is depth 1.
+///
+/// The walk stops at the cap rather than counting on: anything past it is
+/// refused whatever the number, and stopping is what keeps an index that
+/// somehow points at itself from hanging the caller's turn.
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();
 
     while let Some(id) = cursor {
         depth += 1;
-        if depth >= MAX_WALK {
-            bail!("the session's parent chain does not terminate");
+        if depth >= MAX_DEPTH {
+            break;
         }
         cursor = store::get_session_index_item(&id)
             .await?

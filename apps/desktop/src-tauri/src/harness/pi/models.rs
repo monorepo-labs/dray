@@ -11,16 +11,15 @@
 //! picker, and for the same reason — the picker has to exist before a session
 //! does, so there is no child to ask until one is made.
 
+use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::LazyLock;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 
 use super::rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
 
@@ -32,7 +31,9 @@ use super::rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
 /// to follow their logins.
 const FRESH_FOR: Duration = Duration::from_secs(120);
 
-static CACHE: Mutex<Option<(Instant, Arc<Vec<Model>>)>> = Mutex::const_new(None);
+/// One entry, keyed by nothing: the list depends on the reader's providers, not
+/// on a directory.
+static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::new(FRESH_FOR));
 
 /// Every model pi reports, newest answer or a cached one.
 ///
@@ -40,22 +41,10 @@ static CACHE: Mutex<Option<(Instant, Arc<Vec<Model>>)>> = Mutex::const_new(None)
 /// empty state, and a reader with no provider configured is in an ordinary
 /// state rather than a broken one.
 pub async fn list() -> Vec<Model> {
-    if let Some((at, cached)) = CACHE.lock().await.as_ref() {
-        if at.elapsed() < FRESH_FOR {
-            return cached.as_ref().clone();
-        }
-    }
-
-    let models = match probe().await {
-        Ok(models) => models,
-        Err(err) => {
-            eprintln!("[pi models] {err:#}");
-            return Vec::new();
-        }
-    };
-
-    *CACHE.lock().await = Some((Instant::now(), Arc::new(models.clone())));
-    models
+    CACHE.get_or_probe("", probe).await.unwrap_or_else(|err| {
+        eprintln!("[pi models] {err:#}");
+        Vec::new()
+    })
 }
 
 /// The model with this id, from whatever pi last reported.
@@ -76,8 +65,8 @@ pub async fn find(id: &ModelId) -> Option<Model> {
 ///
 /// For the refresh a reader asks for by hand — they have just logged a provider
 /// in, and waiting out the window would read as the list being wrong.
-pub async fn forget() {
-    *CACHE.lock().await = None;
+pub fn forget() {
+    CACHE.forget();
 }
 
 /// Spawns a throwaway pi, asks it, kills it.
@@ -284,21 +273,18 @@ fn accepts_images(row: &Value) -> bool {
 /// Grouping is the frontend's job for the other two harnesses' pickers, but the
 /// *split* is pi's own id format, so it is stated once here.
 pub fn by_provider(models: &[Model]) -> Vec<(String, Vec<Model>)> {
-    let mut order: Vec<String> = Vec::new();
-    let mut grouped: HashMap<String, Vec<Model>> = HashMap::new();
+    let mut groups: Vec<(String, Vec<Model>)> = Vec::new();
 
+    // A linear find: providers number a handful, and the list is what keeps
+    // pi's order.
     for model in models {
-        let key = model.provider.clone();
-        if !grouped.contains_key(&key) {
-            order.push(key.clone());
+        match groups.iter_mut().find(|(provider, _)| *provider == model.provider) {
+            Some((_, rows)) => rows.push(model.clone()),
+            None => groups.push((model.provider.clone(), vec![model.clone()])),
         }
-        grouped.entry(key).or_default().push(model.clone());
     }
 
-    order
-        .into_iter()
-        .filter_map(|k| grouped.remove(&k).map(|v| (k, v)))
-        .collect()
+    groups
 }
 
 #[cfg(test)]

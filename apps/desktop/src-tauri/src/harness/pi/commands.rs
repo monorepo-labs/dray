@@ -13,16 +13,14 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::LazyLock;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 
 use super::rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
-use crate::harness::claude_code::commands::SlashCommand;
+use crate::harness::{claude_code::commands::SlashCommand, ProbeCache};
 
 /// How long a cached answer stands.
 ///
@@ -34,8 +32,8 @@ const FRESH_FOR: Duration = Duration::from_secs(120);
 
 /// Keyed by directory: pi's commands include project-scoped ones, so a list
 /// read in one checkout says nothing about another.
-static CACHE: Mutex<Option<HashMap<String, (Instant, Arc<Vec<SlashCommand>>)>>> =
-    Mutex::const_new(None);
+static CACHE: LazyLock<ProbeCache<Vec<SlashCommand>>> =
+    LazyLock::new(|| ProbeCache::new(FRESH_FOR));
 
 /// One entry of `get_commands`.
 ///
@@ -68,34 +66,18 @@ struct CommandsData {
 /// by hand, so it staying shut is a smaller failure than an error over the
 /// composer.
 pub async fn list_commands(cwd: &str) -> Vec<SlashCommand> {
-    if let Some(map) = CACHE.lock().await.as_ref() {
-        if let Some((at, cached)) = map.get(cwd) {
-            if at.elapsed() < FRESH_FOR {
-                return cached.as_ref().clone();
-            }
-        }
-    }
-
-    let commands = match probe(cwd).await {
-        Ok(commands) => commands,
-        Err(err) => {
-            eprintln!("[pi commands] {err:#}");
-            return Vec::new();
-        }
-    };
-
     CACHE
-        .lock()
+        .get_or_probe(cwd, || probe(cwd))
         .await
-        .get_or_insert_with(HashMap::new)
-        .insert(cwd.to_string(), (Instant::now(), Arc::new(commands.clone())));
-
-    commands
+        .unwrap_or_else(|err| {
+            eprintln!("[pi commands] {err:#}");
+            Vec::new()
+        })
 }
 
 /// Drops every cached answer, so the next read asks pi again.
-pub async fn forget() {
-    *CACHE.lock().await = None;
+pub fn forget() {
+    CACHE.forget();
 }
 
 /// Spawns a throwaway pi in `cwd`, asks it, and asks it to leave.

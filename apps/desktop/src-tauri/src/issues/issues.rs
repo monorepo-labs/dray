@@ -377,20 +377,13 @@ async fn read_credentials() -> HashMap<String, String> {
         return HashMap::new();
     };
 
-    match tokio::fs::read_to_string(&path).await {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-            // A file that exists and cannot be parsed reads as no key, which
-            // presents as "not connected" and is curable by connecting again.
-            eprintln!("[credentials parse err] {e}");
-            HashMap::new()
-        }),
-        // Absent is the ordinary case, and says nothing worth logging.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-        Err(e) => {
-            eprintln!("[credentials read err] {e}");
-            HashMap::new()
-        }
-    }
+    // A file that exists and cannot be read or parsed reads as no key, which
+    // presents as "not connected" and is curable by connecting again. Absent
+    // is the ordinary case, and `read_json` says nothing about it.
+    crate::store::read_json(&path).await.unwrap_or_else(|e| {
+        eprintln!("[credentials read err] {e:#}");
+        HashMap::new()
+    })
 }
 
 /// The key for a tracker, or `None` for one nothing is stored under.

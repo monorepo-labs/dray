@@ -11,7 +11,7 @@
 //! `{"decision": …}` against the id it asked on.
 
 use crate::events::{PermissionBehavior, PermissionOption, PermissionOptionKind};
-use crate::harness::claude_code::permissions::{PendingRequest, ResolvedOption};
+use crate::harness::claude_code::permissions::{PendingRequest, Reply, ResolvedOption};
 use serde_json::Value;
 
 use super::parser::ApprovalRequest;
@@ -19,27 +19,16 @@ use super::parser::ApprovalRequest;
 /// Which of the two approval requests this is, which is all the card needs to
 /// name the call in a sentence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalKind {
-    Command,
-    FileChange,
+pub struct ApprovalKind {
+    /// The tool name the transcript already drew this call under, so the card
+    /// and the row agree about what is being asked for.
+    pub tool_name: &'static str,
+    pub display_name: &'static str,
 }
 
 impl ApprovalKind {
-    /// The tool name the transcript already drew this call under, so the card
-    /// and the row agree about what is being asked for.
-    pub fn tool_name(self) -> &'static str {
-        match self {
-            ApprovalKind::Command => "shell",
-            ApprovalKind::FileChange => "apply_patch",
-        }
-    }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            ApprovalKind::Command => "Shell",
-            ApprovalKind::FileChange => "Edit",
-        }
-    }
+    pub const COMMAND: Self = Self { tool_name: "shell", display_name: "Shell" };
+    pub const FILE_CHANGE: Self = Self { tool_name: "apply_patch", display_name: "Edit" };
 }
 
 /// Builds the held request and the buttons for it in one pass, so what the user
@@ -59,13 +48,12 @@ pub fn pending_for(
 
     let pending = PendingRequest {
         tool_use_id: request.item_id.clone(),
-        tool_name: kind.tool_name().to_string(),
+        tool_name: kind.tool_name.to_string(),
         // Codex rebuilds nothing from what we send back — the answer is the
         // decision alone — so there is no input to echo.
         input: Value::Null,
         options,
-        rpc_id: Some(rpc_id),
-        pi_dialog_method: None,
+        reply: Reply::Rpc(rpc_id),
     };
 
     (pending, offered)
@@ -219,7 +207,7 @@ mod tests {
             "cancel"
         ]));
 
-        let (pending, offered) = pending_for(&request, ApprovalKind::Command, 7);
+        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 7);
 
         let labels: Vec<&str> = offered.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
@@ -233,7 +221,7 @@ mod tests {
         assert!(offered
             .iter()
             .any(|o| o.behavior == PermissionBehavior::Deny));
-        assert_eq!(pending.rpc_id, Some(7));
+        assert_eq!(pending.reply, Reply::Rpc(7));
         assert_eq!(pending.tool_use_id, "exec-1");
     }
 
@@ -244,7 +232,7 @@ mod tests {
         let amendment = json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh"]}});
         let request = request_offering(json!(["accept", amendment.clone(), "decline"]));
 
-        let (pending, offered) = pending_for(&request, ApprovalKind::Command, 1);
+        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
         let always = offered
             .iter()
             .find(|o| o.kind == PermissionOptionKind::AlwaysRule)
@@ -267,7 +255,7 @@ mod tests {
             "decline"
         ]));
 
-        let (_, offered) = pending_for(&request, ApprovalKind::Command, 1);
+        let (_, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
         let labels: Vec<&str> = offered.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -285,7 +273,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (pending, _) = pending_for(&request, ApprovalKind::FileChange, 2);
+        let (pending, _) = pending_for(&request, ApprovalKind::FILE_CHANGE, 2);
         assert_eq!(pending.tool_name, "apply_patch");
     }
 }

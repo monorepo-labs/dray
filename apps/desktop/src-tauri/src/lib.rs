@@ -1,16 +1,21 @@
 use crate::{
     attachments::Attachment,
     events::ApprovalPolicy,
-    files::FileMatch,
-    git::BranchList,
     harness::claude_code::commands::SlashCommand,
     models::{Effort, Model, ModelId},
-    projects::Project,
     session::{Harness, QueuedMessage, SendOutcome, SessionManager},
-    store::{SessionIndexByProject, SessionIndexItem, SessionSnapshot, SessionStatus},
+    store::{SessionIndexItem, SessionSnapshot, SessionStatus},
 };
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+
+/// `anyhow::bail!` for a function returning [`Fail`]: `bail!` returns the bare
+/// `anyhow::Error`, which does not coerce, where `?` would have converted it.
+macro_rules! fail {
+    ($($t:tt)*) => {
+        return Err(anyhow::anyhow!($($t)*).into())
+    };
+}
 
 pub mod analytics;
 pub mod apps;
@@ -25,6 +30,7 @@ pub mod cef;
 pub mod chromium;
 mod local_servers;
 pub mod docs;
+pub mod download;
 #[path = "events/events.rs"]
 pub mod events;
 pub mod files;
@@ -47,6 +53,36 @@ pub mod title;
 #[path = "transcription/transcription.rs"]
 pub mod transcription;
 pub mod updater;
+
+/// A command's failure as the frontend sees it: the outermost message, as a
+/// string. `anyhow::Error` cannot cross the bridge itself, and the alternative
+/// was a wrapper per command mapping it to `String`. Converts both ways, so a
+/// function returning this still reads as `anyhow` to every caller in the crate.
+pub struct Fail(anyhow::Error);
+
+impl From<anyhow::Error> for Fail {
+    fn from(e: anyhow::Error) -> Self {
+        Self(e)
+    }
+}
+
+impl From<Fail> for anyhow::Error {
+    fn from(f: Fail) -> Self {
+        f.0
+    }
+}
+
+impl std::fmt::Debug for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl serde::Serialize for Fail {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0.to_string())
+    }
+}
 
 #[tauri::command]
 async fn send_msg(
@@ -228,7 +264,7 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
 /// in, and waiting out the freshness window would read as the list being wrong.
 #[tauri::command]
 async fn refresh_models() {
-    harness::pi::models::forget().await;
+    harness::pi::models::forget();
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
@@ -239,30 +275,28 @@ async fn refresh_models() {
 /// switch drawn from the file there would sit at `on` while nothing was being
 /// sent.
 #[tauri::command]
-fn get_settings() -> settings::SettingsView {
-    settings_view()
+async fn get_settings() -> settings::SettingsView {
+    settings_view().await
 }
 
-/// Persists the analytics opt-out and applies it to this run at once, so the
-/// switch does not need a restart to mean anything.
+/// Persists the analytics opt-out. Every send reads the file, so the switch
+/// needs no restart to mean anything.
 ///
 /// Read-modify-write rather than a fresh struct: with a second field here one
 /// day, building this from `enabled` alone would reset whatever the caller did
 /// not name.
 #[tauri::command]
-async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, String> {
+async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, Fail> {
     let mut next = settings::read().await;
     next.analytics_enabled = enabled;
+    settings::write(&next).await?;
 
-    settings::write(&next).await.map_err(|e| e.to_string())?;
-    analytics::set_enabled(enabled && !analytics::env_opt_out());
-
-    Ok(settings_view())
+    Ok(settings_view().await)
 }
 
-fn settings_view() -> settings::SettingsView {
+async fn settings_view() -> settings::SettingsView {
     settings::SettingsView {
-        analytics_enabled: analytics::enabled(),
+        analytics_enabled: analytics::enabled().await,
         analytics_locked: analytics::env_opt_out(),
     }
 }
@@ -292,143 +326,6 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
     })
 }
 
-/// Starts indexing a directory's files so the `@` picker opens on a warm index.
-/// Fire-and-forget: the walk runs on its own thread and this returns at once.
-#[tauri::command]
-async fn warm_file_index(cwd: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || files::warm(&cwd))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
-}
-
-/// Fuzzy file search for the `@` picker.
-///
-/// On `spawn_blocking` because the index is synchronous throughout — the search
-/// holds a `parking_lot` read guard across the whole scoring pass, which is not
-/// something that may be held across an await point.
-#[tauri::command]
-async fn search_files(cwd: String, query: String, limit: usize) -> Result<Vec<FileMatch>, String> {
-    tokio::task::spawn_blocking(move || files::search(&cwd, &query, limit))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn list_sessions_by_project() -> Result<Vec<SessionIndexByProject>, String> {
-    store::list_sessions_by_project()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// One side of the archived split. The sidebar's toggle is the only caller, and
-/// it never wants both at once, so the flag it holds is the argument.
-#[tauri::command]
-async fn list_session_index_items(archived: bool) -> Result<Vec<SessionIndexItem>, String> {
-    store::list_session_index_items_by_archived(archived)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_session_by_id(session_id: &str) -> Result<Option<SessionSnapshot>, String> {
-    store::get_session_by_id(session_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn list_projects() -> Result<Vec<Project>, String> {
-    projects::read_projects().await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn add_project(path: &str) -> Result<Vec<Project>, String> {
-    projects::add_project(path).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn remove_project(path: &str) -> Result<Vec<Project>, String> {
-    projects::remove_project(path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, String> {
-    projects::set_project_space(path, space)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, String> {
-    projects::retag_space(from, to)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_last_selected_project(path: &str) -> Result<(), String> {
-    projects::set_last_selected_project(path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn list_branches(cwd: &str) -> Result<BranchList, String> {
-    git::list_branches(cwd).await.map_err(|e| e.to_string())
-}
-
-/// Returns the branch list as it stands after the switch, so the picker
-/// re-renders from one round trip rather than following up with its own.
-#[tauri::command]
-async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<BranchList, String> {
-    git::checkout_branch(cwd, branch, stash)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    git::list_branches(cwd).await.map_err(|e| e.to_string())
-}
-
-/// What changed in `cwd` since `baseline` — the tree id carried on a
-/// `user_message`, so "since the last prompt" is the caller picking which one.
-///
-/// `head` is the frozen snapshot from the turn's own `turn_completed`, passed
-/// for a finished turn so the diff describes the turn rather than everything
-/// that has touched the checkout since. Absent — a live turn, or one that
-/// never closed — the working tree is snapshotted to answer, and that
-/// snapshot's id comes back on `head`. Pass it to [`file_change`] either way:
-/// the agent keeps writing while the panel is open, and a list and a diff
-/// taken from two different snapshots would disagree about what the file says.
-#[tauri::command]
-async fn changes_since(
-    cwd: &str,
-    baseline: &str,
-    head: Option<&str>,
-) -> Result<git::ChangeSet, String> {
-    git::changes_since(cwd, baseline, head)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Both sides of one file, fetched only when the reader opens that row. The
-/// file list is cheap and the contents are not, so a turn touching thirty files
-/// costs thirty rows and nothing else until something is expanded.
-#[tauri::command]
-async fn file_change(
-    cwd: &str,
-    base: &str,
-    head: &str,
-    path: &str,
-    old_path: Option<&str>,
-) -> Result<git::FileVersions, String> {
-    git::file_versions(cwd, base, head, path, old_path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// The committed side of the repo view's uncommitted list. Paired with a `None`
 /// head on [`changes_since`], which snapshots the working tree to answer — so
 /// the two together are "what have I changed but not committed".
@@ -442,25 +339,6 @@ async fn head_tree(cwd: String) -> Option<String> {
     git::head_tree(&cwd).await
 }
 
-/// A page of the current branch's history, newest first. `skip` is what the
-/// list's "load more" advances; the page size is the caller's, capped in `git`.
-#[tauri::command]
-async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<git::Commit>, String> {
-    git::log_commits(cwd, limit, skip)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// A page of the commits this branch made on its own, newest first — the same
-/// paging as [`log_commits`], against a range that stops at the fork point.
-/// Empty where no base can be named, which the list draws as its own sentence.
-#[tauri::command]
-async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<git::Commit>, String> {
-    git::log_branch_commits(cwd, limit, skip)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 async fn sync_status(cwd: String) -> git::SyncStatus {
     git::sync_status(&cwd).await
@@ -469,47 +347,6 @@ async fn sync_status(cwd: String) -> git::SyncStatus {
 #[tauri::command]
 async fn work_status(cwd: String) -> git::WorkStatus {
     git::work_status(&cwd).await
-}
-
-/// Commits the checked files alone. `paths` are this session's own change list,
-/// so a path the reader unchecked is one this never sees.
-#[tauri::command]
-async fn commit_files(
-    cwd: &str,
-    summary: &str,
-    description: Option<&str>,
-    paths: Vec<String>,
-) -> Result<(), String> {
-    git::commit_files(cwd, summary, description, &paths)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn push_branch(cwd: &str) -> Result<(), String> {
-    git::push_branch(cwd).await.map_err(|e| e.to_string())
-}
-
-/// Returns the entry as written so the sidebar re-renders from the stored value
-/// rather than its own guess at it. `None` for an unknown id.
-#[tauri::command]
-async fn set_session_flags(
-    session_id: &str,
-    archived: Option<bool>,
-    pinned: Option<bool>,
-) -> Result<Option<SessionIndexItem>, String> {
-    store::set_session_flags(session_id, archived, pinned)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Cuts a spawned session loose from its parent, so the sidebar stops nesting
-/// it. Returns the entry as written; `None` for an unknown id.
-#[tauri::command]
-async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, String> {
-    store::detach_session(session_id)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 /// What removing this session's worktree would cost, for the dialog that asks.
@@ -786,30 +623,30 @@ pub fn run() {
             get_settings,
             set_analytics_enabled,
             list_slash_commands,
-            warm_file_index,
-            search_files,
-            list_sessions_by_project,
-            list_session_index_items,
-            get_session_by_id,
-            list_projects,
-            add_project,
-            remove_project,
-            set_last_selected_project,
-            set_project_space,
-            retag_space,
-            list_branches,
-            checkout_branch,
-            changes_since,
-            file_change,
+            files::warm_file_index,
+            files::search_files,
+            store::list_sessions_by_project,
+            store::list_session_index_items,
+            store::get_session_by_id,
+            projects::list_projects,
+            projects::add_project,
+            projects::remove_project,
+            projects::set_last_selected_project,
+            projects::set_project_space,
+            projects::retag_space,
+            git::list_branches,
+            git::checkout_branch,
+            git::changes_since,
+            git::file_change,
             head_tree,
-            log_commits,
-            log_branch_commits,
+            git::log_commits,
+            git::log_branch_commits,
             sync_status,
             work_status,
-            commit_files,
-            push_branch,
-            set_session_flags,
-            detach_session,
+            git::commit_files,
+            git::push_branch,
+            store::set_session_flags,
+            store::detach_session,
             delete_session,
             fork_session,
             worktree_disposition,

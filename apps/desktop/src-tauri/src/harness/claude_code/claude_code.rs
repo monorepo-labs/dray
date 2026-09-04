@@ -1,8 +1,8 @@
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
-use crate::harness::{claude_code, Harness::ClaudeCode};
+use crate::harness::{claude_code, read_stderr, record_failure, Harness::ClaudeCode};
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker};
-use crate::store::{self, next_seq_by_session_id};
+use crate::store::next_seq_by_session_id;
 use anyhow::{Context, Result};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStderr, ChildStdin, ChildStdout, Command},
+    process::{ChildStdin, ChildStdout, Command},
     sync::Mutex,
 };
 pub mod parser;
@@ -209,7 +209,7 @@ pub async fn init(
     });
 
     tokio::spawn(async move {
-        if let Err(error) = read_stderr(stderr).await {
+        if let Err(error) = read_stderr(ClaudeCode, stderr).await {
             eprintln!("Failed to read Claude stderr: {error}");
         }
     });
@@ -275,7 +275,7 @@ async fn read_stdout(
         let claude_event = match parser::parse_line(&line) {
             Ok(ev) => ev,
             Err(err) => {
-                record_failure(session_id, "parse", &err.to_string(), &line).await;
+                record_failure(ClaudeCode, session_id, "parse", &err.to_string(), &line).await;
                 continue;
             }
         };
@@ -289,7 +289,7 @@ async fn read_stdout(
             request: parser::ControlRequest::Unsupported,
         } = &claude_event
         {
-            record_failure(session_id, "unsupported_request", "unanswerable", &line).await;
+            record_failure(ClaudeCode, session_id, "unsupported_request", "unanswerable", &line).await;
 
             let denial = permissions::auto_deny_response(
                 request_id,
@@ -305,14 +305,14 @@ async fn read_stdout(
         // has never seen. Recorded alongside outright failures because it is
         // the same coverage gap; the catch-all only stops it costing the line.
         if let ClaudeCodeEvent::System(parser::SystemEvent::Unrecognized) = &claude_event {
-            record_failure(session_id, "unknown_subtype", "unmodeled system subtype", &line).await;
+            record_failure(ClaudeCode, session_id, "unknown_subtype", "unmodeled system subtype", &line).await;
         }
 
         let agent_event = match mapper.map(claude_event) {
             Ok(Some(ev)) => ev,
             Ok(None) => continue,
             Err(err) => {
-                record_failure(session_id, "map", &err.to_string(), &line).await;
+                record_failure(ClaudeCode, session_id, "map", &err.to_string(), &line).await;
                 continue;
             }
         };
@@ -338,28 +338,6 @@ async fn read_stdout(
             eprintln!("[claude emit err] {err}");
         }
         status.lock().await.on_event(&drained.payload);
-    }
-
-    Ok(())
-}
-
-/// Logs an unreadable line and files it for investigation. Failing to *record*
-/// a failure is itself only logged: the read loop must survive anything.
-async fn record_failure(session_id: &str, stage: &str, detail: &str, raw: &str) {
-    eprintln!("[claude {stage} err] {detail}\n[{stage} err] raw line: {raw}");
-
-    if let Err(err) = store::record_parse_failure(session_id, stage, detail, raw).await {
-        eprintln!("[claude failure log err] {err}");
-    }
-}
-
-/// Copies the child's stderr to this process's, for logging only.
-async fn read_stderr(stderr: ChildStderr) -> Result<()> {
-    let reader = BufReader::new(stderr);
-    let mut lines = reader.lines();
-
-    while let Some(line) = lines.next_line().await? {
-        eprintln!("Claude stderr: {line}");
     }
 
     Ok(())

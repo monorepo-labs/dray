@@ -8,10 +8,8 @@
 //! So the framing differs from [`codex::rpc`](crate::harness::codex::rpc) and
 //! the *correlation* does not: outbound requests carrying an id, a pending map,
 //! and a demux that settles answers before anything else sees the line. That
-//! shared core is what CODEX-PLAN.md said would lift when a second correlated
-//! harness existed. It has not been lifted yet — three fields and forty lines,
-//! where the typing around them is entirely per-harness — but this is the
-//! second user, and a third is the point at which it should be.
+//! core lives in [`crate::harness::rpc`]; what is left here is pi's framing,
+//! its close gate and its stop window.
 //!
 //! **Records split on `\n` only.** `U+2028` and `U+2029` are legal inside JSON
 //! strings, so a reader treating them as line breaks corrupts any record
@@ -21,13 +19,14 @@
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::Duration;
+
+use super::parser::ResponseLine;
+use crate::harness::rpc::{spawn_writer, Outbound, Pending};
 
 /// How long a command may go unanswered before it is given up on.
 ///
@@ -81,7 +80,7 @@ pub enum Incoming {
 pub struct PiClient {
     tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicU64>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
+    pending: Pending<String, String>,
     /// Whether stdin has been closed, and the gate every write passes through.
     ///
     /// A `Mutex<bool>` rather than an atomic, because the flag and the queue
@@ -104,69 +103,31 @@ pub struct PiClient {
     stopping: Arc<AtomicBool>,
 }
 
-/// What the writer task accepts.
-///
-/// [`Outbound::Close`] exists because dropping the client cannot close stdin:
-/// every clone holds a sender, and the read loop holds one for the life of the
-/// session. So the only way to hand pi an EOF is to say so.
-enum Outbound {
-    Line(String),
-    Close,
-}
-
 impl PiClient {
     /// Takes the child's stdin and spawns the one task allowed to write to it.
-    ///
-    /// A queue rather than a lock, for the reason Codex's client documents: the
-    /// read loop writes too, and with a mutex it could block on a write whose
-    /// unblocking depends on a line it has not read yet.
-    pub fn new(mut stdin: ChildStdin) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
+    pub fn new(stdin: ChildStdin) -> Self {
+        Self::over(spawn_writer(stdin))
+    }
 
-        tokio::spawn(async move {
-            while let Some(message) = rx.recv().await {
-                let Outbound::Line(line) = message else {
-                    // Falling out of the loop drops `stdin`, which closes it —
-                    // the EOF pi ends on. See [`PiClient::close`].
-                    break;
-                };
-
-                if stdin.write_all(line.as_bytes()).await.is_err()
-                    || stdin.write_all(b"\n").await.is_err()
-                    || stdin.flush().await.is_err()
-                {
-                    // The child is gone. The read loop sees the same thing and
-                    // is what reports it.
-                    break;
-                }
-            }
-        });
-
+    fn over(tx: mpsc::UnboundedSender<Outbound>) -> Self {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(1)),
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         }
     }
 
     /// A client with nothing on the other end, for tests.
     ///
-    /// The writer task is spawned as usual and its receiver dropped, so a
-    /// `send` fails the way one to a closed pipe does. That is what a test of
-    /// the *shape* of a line wants: it builds the line and never needs it to
-    /// arrive.
+    /// The receiver is dropped, so a `send` fails the way one to a closed pipe
+    /// does. That is what a test of the *shape* of a line wants: it builds the
+    /// line and never needs it to arrive.
     #[cfg(test)]
     pub fn detached() -> Self {
         let (tx, _rx) = mpsc::unbounded_channel();
-        Self {
-            tx,
-            next_id: Arc::new(AtomicU64::new(1)),
-            closed: Arc::new(std::sync::Mutex::new(false)),
-            stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::over(tx)
     }
 
     /// Opens the window in which extension dialogs are refused on sight.
@@ -221,8 +182,7 @@ impl PiClient {
             }
         }
 
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id.clone(), tx);
+        let rx = self.pending.register(id.clone());
 
         // The slot goes back if the write never happened. Registering first is
         // what closes the race against an answer arriving before this line
@@ -230,24 +190,14 @@ impl PiClient {
         // attempt — and they are never collected, since the id that would clear
         // one was never sent.
         if let Err(err) = self.send(&line) {
-            self.pending.lock().await.remove(&id);
+            self.pending.forget(&id);
             return Err(err);
         }
 
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(value))) => Ok(value),
-            // pi names exactly what was wrong — `Model not found: nope/nope` —
-            // which is why `models.rs` leaves pi's ids unvalidated and lets this
-            // report them.
-            Ok(Ok(Err(message))) => bail!("{command} failed: {message}"),
-            Ok(Err(_)) => bail!("{command} was never answered — pi exited"),
-            // Giving up on the answer has to give up the slot too, or an
-            // unresponsive child leaks one entry per attempt.
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                bail!("{command} went unanswered for {}s", timeout.as_secs())
-            }
-        }
+        // pi names exactly what was wrong — `Model not found: nope/nope` —
+        // which is why `models.rs` leaves pi's ids unvalidated and lets the
+        // failure report them.
+        self.pending.wait(&id, rx, timeout, command, "pi").await
     }
 
     /// Writes a line built by the caller.
@@ -302,30 +252,29 @@ impl PiClient {
             return Incoming::Event(line.to_string());
         }
 
+        // The parser's own shape, rather than walked by hand a second time. A
+        // response it cannot read is filed as a stray, like one nobody waits on.
+        let Ok(response) = serde_json::from_value::<ResponseLine>(value) else {
+            return Incoming::Response { matched: false };
+        };
+
         // A response with no id answers a command sent without one. Dray always
         // sends an id, so there is nothing of ours it could be settling.
-        let Some(id) = value.get("id").and_then(Value::as_str) else {
+        let Some(id) = response.id else {
             return Incoming::Response { matched: false };
         };
 
-        let Some(waiter) = self.pending.lock().await.remove(id) else {
-            return Incoming::Response { matched: false };
-        };
-
-        let answer = if value.get("success").and_then(Value::as_bool) == Some(true) {
-            Ok(value.get("data").cloned().unwrap_or(Value::Null))
+        let answer = if response.success {
+            Ok(response.data)
         } else {
-            Err(value
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("pi refused the command and said nothing about why")
-                .to_string())
+            Err(response
+                .error
+                .unwrap_or_else(|| "pi refused the command and said nothing about why".to_string()))
         };
 
-        // The receiver is gone when the caller timed out. Nothing to report:
-        // it has already failed with a sentence naming the command.
-        let _ = waiter.send(answer);
-        Incoming::Response { matched: true }
+        Incoming::Response {
+            matched: self.pending.settle(&id, answer),
+        }
     }
 }
 
@@ -347,7 +296,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         }
     }
 
@@ -508,7 +457,7 @@ mod tests {
             .expect_err("nothing answered it");
 
         assert!(err.to_string().contains("get_state"));
-        assert!(client.pending.lock().await.is_empty());
+        assert!(client.pending.is_empty());
     }
 
     /// And so does a write that never happened. The slot is registered before
@@ -525,7 +474,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         };
 
         client
@@ -533,7 +482,7 @@ mod tests {
             .await
             .expect_err("the pipe is closed");
 
-        assert!(client.pending.lock().await.is_empty());
+        assert!(client.pending.is_empty());
     }
 
     /// Nothing is told its line was taken once stdin is closed.
@@ -551,7 +500,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         };
 
         client.send(&json!({"type": "before"})).expect("stdin is open");
@@ -582,7 +531,7 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(1)),
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         };
         let reader = client.clone();
 
