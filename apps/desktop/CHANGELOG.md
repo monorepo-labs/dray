@@ -5,6 +5,26 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.14.0-beta.1
+
+### Added
+
+- **Dray has a browser.** ⌘3 for the full view, or the Browser tab in the
+  right pane. Tabs with favicons, device sizes, zoom, hard reload and
+  DevTools on their chords, and a list of local servers that shows only
+  this checkout's — another worktree's dev server never appears. Each
+  session gets its own tabs and its own cookies.
+- **Chromium is not in the download.** The app fetches it a few seconds
+  after the first window opens, ~330MB, and Settings → Integrations shows
+  where it has got to. Keeping it out of the bundle keeps it out of every
+  update too.
+- **`dray browser` lets an agent drive that browser** — open pages, click,
+  type, read and screenshot, in its own session's tabs and nowhere else.
+  It needs a matching CLI: run `dray update`.
+- **A link in the chat asks where to open.** Dray's browser or the system
+  one, with ⌘-click skipping the question. URLs you type in your own
+  messages are clickable now too.
+
 ## 0.13.2
 
 ### Fixed
