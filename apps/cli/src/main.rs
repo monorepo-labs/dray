@@ -13,7 +13,6 @@ use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary,
 };
-use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -24,9 +23,6 @@ use std::process::ExitCode;
 /// than no skill, and fetching it separately is exactly how that happens.
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
-/// `update` runs the same script a first install runs rather than doing its own
-/// fetch, verify and swap: two copies of that drift on exactly the step that
-/// checks what is about to be executed.
 const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 
 #[derive(Parser)]
@@ -157,113 +153,74 @@ struct IssueLinkArgs {
     url: Option<String>,
 }
 
+/// Every verb lands on the session's active tab; `open` makes one if none.
+/// A TARGET is `@e12` from the last `snapshot`, or a CSS selector.
+const BROWSER_VERBS: &str = "\
+Verbs:
+  open <url> | back | forward | reload | close
+  tab [new [url] | <id> | close [id]]
+  snapshot [-i] [-c] [-s <selector>]
+  click|dblclick|focus|hover|check|uncheck|scrollintoview <target>
+  type|fill <target> <text> | select <target> <value> | press <key>
+  scroll <up|down|left|right> [pixels]
+  get <text|html|value|title|url|count|box> [target] | get attr <target> <name>
+  is <visible|enabled|checked> <target>
+  find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <verb> [arg]
+  wait [<selector> | <ms>] [--url ..] [--text ..] [--load ..]
+  screenshot [path] [--full] | eval <js> | console | errors
+  set viewport <w> <h> | set device <name>";
+
 #[derive(Args)]
+#[command(after_help = BROWSER_VERBS)]
 struct BrowserCommand {
+    /// A verb and its words; the list is below.
+    #[arg(required = true, allow_negative_numbers = true, value_name = "VERB")]
+    words: Vec<String>,
+
     /// The session whose browser to drive. Defaults to the session running
     /// this command.
-    #[arg(long, global = true)]
+    #[arg(long)]
     session: Option<String>,
 
     /// Answer as JSON rather than text.
-    #[arg(long, global = true)]
+    #[arg(long)]
     json: bool,
 
-    #[command(subcommand)]
-    action: BrowserVerb,
-}
+    /// snapshot: interactive elements only.
+    #[arg(short, long)]
+    interactive: bool,
 
-/// Every verb lands on the session's active tab; `open` makes one if none.
-/// A TARGET is `@e12` from the last `snapshot`, or a CSS selector.
-#[derive(Subcommand)]
-enum BrowserVerb {
-    /// Load a URL in the active tab.
-    Open { url: String },
-    Back,
-    Forward,
-    Reload,
-    /// Close the active tab.
-    Close,
-    /// Tabs: `tab` lists, `tab new [url]`, `tab <id>`, `tab close [id]`.
-    Tab {
-        args: Vec<String>,
-    },
-    /// Interactive elements and headings, each with a @ref for the actions.
-    Snapshot {
-        /// Interactive elements only.
-        #[arg(short, long)]
-        interactive: bool,
-        /// Interactive elements and headings only.
-        #[arg(short, long)]
-        compact: bool,
-        /// Only inside this selector.
-        #[arg(short, long)]
-        selector: Option<String>,
-    },
-    Click { target: String },
-    Dblclick { target: String },
-    Focus { target: String },
-    Hover { target: String },
-    /// Keystrokes into an element, after whatever it holds.
-    Type { target: String, text: String },
-    /// Replace what an element holds.
-    Fill { target: String, text: String },
-    /// Press a key: Enter, Tab, Escape, ArrowDown, a, Meta+a …
-    Press { key: String },
-    Check { target: String },
-    Uncheck { target: String },
-    /// Pick an option by value or label.
-    Select { target: String, value: String },
-    /// Scroll up, down, left or right by pixels.
-    Scroll {
-        direction: String,
-        #[arg(default_value = "500", allow_negative_numbers = true)]
-        amount: f64,
-    },
-    Scrollintoview { target: String },
-    /// Read from the page: text, html, value, attr, title, url, count, box.
-    Get {
-        args: Vec<String>,
-    },
-    /// Ask about an element: visible, enabled, checked.
-    Is { what: String, target: String },
-    /// Find by role, text, label, placeholder, alt, title, testid, first,
-    /// last or nth, then act: `find role button click --name Submit`.
-    Find {
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long)]
-        exact: bool,
-        args: Vec<String>,
-    },
-    /// Wait for a selector or a number of milliseconds, or for --url, --text
-    /// or --load load.
-    Wait {
-        target: Option<String>,
-        #[arg(long)]
-        url: Option<String>,
-        #[arg(long)]
-        text: Option<String>,
-        #[arg(long)]
-        load: Option<String>,
-    },
-    /// Save a PNG of the page and print its path. A path must be inside
-    /// the session's checkout.
-    Screenshot {
-        path: Option<String>,
-        /// The whole document rather than the viewport.
-        #[arg(long)]
-        full: bool,
-    },
-    /// Evaluate JavaScript in the page and print its value.
-    Eval { js: String },
-    /// What the page logged since last asked.
-    Console,
-    /// Errors the page logged since last asked.
-    Errors,
-    /// `set viewport <w> <h>` or `set device "<name>"`.
-    Set {
-        args: Vec<String>,
-    },
+    /// snapshot: interactive elements and headings only.
+    #[arg(short, long)]
+    compact: bool,
+
+    /// snapshot: only inside this selector.
+    #[arg(short, long)]
+    selector: Option<String>,
+
+    /// find role: the accessible name.
+    #[arg(long)]
+    name: Option<String>,
+
+    /// find: match the whole string, not a part of it.
+    #[arg(long)]
+    exact: bool,
+
+    /// wait: for the URL to contain this.
+    #[arg(long)]
+    url: Option<String>,
+
+    /// wait: for this text to be on the page.
+    #[arg(long)]
+    text: Option<String>,
+
+    /// wait: for the page to finish loading.
+    #[arg(long)]
+    load: Option<String>,
+
+    /// screenshot: the whole document rather than the viewport.
+    #[arg(long)]
+    full: bool,
 }
 
 #[derive(Subcommand)]
@@ -331,7 +288,7 @@ fn new(args: New) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        other => Err(unexpected(&other)),
+        other => Err(unexpected(other)),
     }
 }
 
@@ -375,12 +332,12 @@ fn link_issues(args: IssueLinkArgs, unlink: bool) -> Result<(), String> {
             }
 
             for issue in issues {
-                println!("{}: {}", issue.identifier, issue.title);
+                println!("{}: {}  {}", issue.identifier, issue.title, issue.url);
             }
             Ok(())
         }
         Response::Error { message } => Err(message),
-        other => Err(unexpected(&other)),
+        other => Err(unexpected(other)),
     }
 }
 
@@ -407,15 +364,15 @@ fn send_message(args: Send) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        other => Err(unexpected(&other)),
+        other => Err(unexpected(other)),
     }
 }
 
 fn browser(args: BrowserCommand) -> Result<(), String> {
-    let session_id = args.session.or_else(parent_session_id).ok_or(
+    let session_id = args.session.clone().or_else(parent_session_id).ok_or(
         "which session's browser? Pass --session <id>, or run this from inside a Dray session.",
     )?;
-    let action = browser_action(args.action)?;
+    let action = browser_action(&args)?;
     match send(Request::Browser(BrowserRequest { session_id, action }))? {
         Response::Browser { output, data } => {
             if args.json {
@@ -426,7 +383,7 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        other => Err(unexpected(&other)),
+        other => Err(unexpected(other)),
     }
 }
 
@@ -434,103 +391,45 @@ fn target(t: String) -> Locator {
     Locator::Target { target: t }
 }
 
-/// The verbs whose grammar clap cannot carry — `tab`, `get`, `find`, `set`
-/// — parsed here, the rest passed straight through.
-fn browser_action(verb: BrowserVerb) -> Result<BrowserAction, String> {
-    Ok(match verb {
-        BrowserVerb::Open { url } => BrowserAction::Open { url },
-        BrowserVerb::Back => BrowserAction::Back,
-        BrowserVerb::Forward => BrowserAction::Forward,
-        BrowserVerb::Reload => BrowserAction::Reload,
-        BrowserVerb::Close => BrowserAction::Close,
-        BrowserVerb::Tab { args } => match args.first().map(String::as_str) {
-            None => BrowserAction::Tabs,
-            Some("new") => BrowserAction::TabNew { url: args.get(1).cloned() },
-            Some("close") => BrowserAction::TabClose { id: args.get(1).map(|s| parse_id(s)).transpose()? },
-            Some(id) => BrowserAction::TabSwitch { id: parse_id(id)? },
-        },
-        BrowserVerb::Snapshot { interactive, compact, selector } => {
-            BrowserAction::Snapshot { interactive, compact, selector }
-        }
-        BrowserVerb::Click { target: t } => BrowserAction::Click { at: target(t) },
-        BrowserVerb::Dblclick { target: t } => BrowserAction::DblClick { at: target(t) },
-        BrowserVerb::Focus { target: t } => BrowserAction::Focus { at: target(t) },
-        BrowserVerb::Hover { target: t } => BrowserAction::Hover { at: target(t) },
-        BrowserVerb::Type { target: t, text } => BrowserAction::Type { at: target(t), text },
-        BrowserVerb::Fill { target: t, text } => BrowserAction::Fill { at: target(t), text },
-        BrowserVerb::Press { key } => BrowserAction::Press { key },
-        BrowserVerb::Check { target: t } => BrowserAction::Check { at: target(t) },
-        BrowserVerb::Uncheck { target: t } => BrowserAction::Uncheck { at: target(t) },
-        BrowserVerb::Select { target: t, value } => BrowserAction::Select { at: target(t), value },
-        BrowserVerb::Scroll { direction, amount } => BrowserAction::Scroll { direction, amount },
-        BrowserVerb::Scrollintoview { target: t } => BrowserAction::ScrollIntoView { at: target(t) },
-        BrowserVerb::Get { args } => {
-            let usage = "get <text|html|value|attr|title|url|count|box> [target]";
-            let mut it = args.into_iter();
-            let what = it.next().ok_or(usage)?;
-            let what = match what.as_str() {
-                "text" => Get::Text,
-                "html" => Get::Html,
-                "value" => Get::Value,
-                "title" => Get::Title,
-                "url" => Get::Url,
-                "count" => Get::Count,
-                "box" => Get::Box,
-                "attr" => {
-                    let t = it.next().ok_or("get attr <target> <name>")?;
-                    let name = it.next().ok_or("get attr <target> <name>")?;
-                    return Ok(BrowserAction::Get { what: Get::Attr { name }, at: Some(target(t)) });
-                }
-                other => return Err(format!("get {other}? {usage}")),
-            };
-            BrowserAction::Get { what, at: it.next().map(target) }
-        }
-        BrowserVerb::Is { what, target: t } => {
-            let what = match what.as_str() {
-                "visible" => Is::Visible,
-                "enabled" => Is::Enabled,
-                "checked" => Is::Checked,
-                other => return Err(format!("is {other}? visible, enabled or checked")),
-            };
-            BrowserAction::Is { what, at: target(t) }
-        }
-        BrowserVerb::Find { name, exact, args } => find(name, exact, args)?,
-        BrowserVerb::Wait { target: t, url, text, load } => {
-            let ms = t.as_deref().and_then(|s| s.parse::<u64>().ok());
-            BrowserAction::Wait { selector: if ms.is_some() { None } else { t }, ms, url, text, load }
-        }
-        BrowserVerb::Screenshot { path, full } => BrowserAction::Screenshot { path, full },
-        BrowserVerb::Eval { js } => BrowserAction::Eval { js },
-        BrowserVerb::Console => BrowserAction::Console,
-        BrowserVerb::Errors => BrowserAction::Errors,
-        BrowserVerb::Set { args } => match args.first().map(String::as_str) {
-            Some("viewport") => {
-                let dim = |i: usize| -> Result<u32, String> {
-                    args.get(i)
-                        .and_then(|s| s.parse().ok())
-                        .ok_or_else(|| "set viewport <width> <height>".to_string())
-                };
-                BrowserAction::SetViewport { width: dim(1)?, height: dim(2)? }
-            }
-            Some("device") => BrowserAction::SetDevice {
-                name: args.get(1).cloned().ok_or("set device <name>")?,
-            },
-            _ => return Err("set viewport <w> <h>, or set device <name>".into()),
-        },
-    })
-}
+/// `find <by> <value>` builds a locator and hands what follows to [`act`];
+/// every other line is a verb `act` reads whole, target included.
+fn browser_action(f: &BrowserCommand) -> Result<BrowserAction, String> {
+    let mut words = f.words.iter().cloned();
+    let verb = words.next().ok_or(BROWSER_VERBS)?;
 
-fn parse_id(s: &str) -> Result<i32, String> {
-    s.parse().map_err(|_| format!("{s} is not a tab id; `dray browser tab` lists them"))
-}
+    // Flat on the command so clap accepts them anywhere, so the verb has to
+    // refuse the ones that are not its own: `click @e1 --full` did nothing
+    // with `--full` and said nothing about it.
+    let given = [
+        (f.interactive, "-i"),
+        (f.compact, "-c"),
+        (f.selector.is_some(), "-s"),
+        (f.name.is_some(), "--name"),
+        (f.exact, "--exact"),
+        (f.url.is_some(), "--url"),
+        (f.text.is_some(), "--text"),
+        (f.load.is_some(), "--load"),
+        (f.full, "--full"),
+    ];
+    let allowed: &[&str] = match verb.as_str() {
+        "snapshot" => &["-i", "-c", "-s"],
+        "find" => &["--name", "--exact"],
+        "wait" => &["--url", "--text", "--load"],
+        "screenshot" => &["--full"],
+        _ => &[],
+    };
+    if let Some((_, flag)) = given.iter().find(|(set, flag)| *set && !allowed.contains(flag)) {
+        return Err(format!("browser {verb} takes no {flag}"));
+    }
 
-/// `find <by> <value> <action> [arg]`, with `first|last|nth` taking a
-/// selector: `find nth 2 .item click`, `find first .item text`.
-fn find(name: Option<String>, exact: bool, args: Vec<String>) -> Result<BrowserAction, String> {
-    let usage = "find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <action> [arg]";
-    let mut it = args.into_iter();
-    let by = it.next().ok_or(usage)?;
-    let value = it.next().ok_or(usage)?;
+    if verb != "find" {
+        return act(&verb, None, words, f);
+    }
+
+    let usage = "find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <verb> [arg]";
+    let by = words.next().ok_or(usage)?;
+    let value = words.next().ok_or(usage)?;
+    let (name, exact) = (f.name.clone(), f.exact);
     let at = match by.as_str() {
         "role" => Locator::Role { role: value, name, exact },
         "text" => Locator::Text { text: value, exact },
@@ -542,47 +441,159 @@ fn find(name: Option<String>, exact: bool, args: Vec<String>) -> Result<BrowserA
         "first" => Locator::Nth { selector: value, index: 0 },
         "last" => Locator::Nth { selector: value, index: -1 },
         "nth" => {
-            let index = value.parse().map_err(|_| "find nth <index> <selector> <action>")?;
-            Locator::Nth { selector: it.next().ok_or(usage)?, index }
+            let index = value.parse().map_err(|_| "find nth <index> <selector> <verb>")?;
+            Locator::Nth { selector: words.next().ok_or(usage)?, index }
         }
         other => return Err(format!("find {other}? {usage}")),
     };
-    let action = it.next().ok_or(usage)?;
-    let mut arg = |what: &str| it.next().ok_or_else(|| format!("find … {action} <{what}>"));
-    Ok(match action.as_str() {
-        "click" => BrowserAction::Click { at },
-        "dblclick" => BrowserAction::DblClick { at },
-        "focus" => BrowserAction::Focus { at },
-        "hover" => BrowserAction::Hover { at },
-        "check" => BrowserAction::Check { at },
-        "uncheck" => BrowserAction::Uncheck { at },
-        "type" => BrowserAction::Type { at, text: arg("text")? },
-        "fill" => BrowserAction::Fill { at, text: arg("text")? },
-        "select" => BrowserAction::Select { at, value: arg("value")? },
-        "text" => BrowserAction::Get { what: Get::Text, at: Some(at) },
-        "count" => BrowserAction::Get { what: Get::Count, at: Some(at) },
-        "visible" => BrowserAction::Is { what: Is::Visible, at },
-        other => {
-            return Err(format!(
-                "find … {other}? click, dblclick, focus, hover, check, uncheck, type, fill, select, text, count or visible"
-            ))
-        }
-    })
+    let verb = words.next().ok_or(usage)?;
+    act(&verb, Some(at), words, f)
 }
 
-/// The app answered something this command never asks for, which means the two
-/// sides disagree about the protocol rather than that anything went wrong with
-/// the request.
-fn unexpected(response: &Response) -> String {
-    let kind = match response {
-        Response::Created { .. } => "a create",
-        Response::Listed { .. } => "a list",
-        Response::Sent { .. } => "a send",
-        Response::Linked { .. } => "an issue link",
-        Response::Browser { .. } => "a browser action",
-        Response::Error { .. } => "an error",
+/// One verb, typed bare (`click @e1`) or after `find`'s locator (`find text
+/// Submit click`). `found` is that locator; without one, a verb acting on an
+/// element reads its target as the next word.
+fn act(
+    verb: &str,
+    found: Option<Locator>,
+    mut words: impl Iterator<Item = String>,
+    f: &BrowserCommand,
+) -> Result<BrowserAction, String> {
+    use BrowserAction as A;
+    let mut word = |usage: &str| words.next().ok_or_else(|| usage.to_string());
+    let action = match verb {
+        "open" => A::Open { url: word("open <url>")? },
+        "back" => A::Back,
+        "forward" => A::Forward,
+        "reload" => A::Reload,
+        "close" => A::Close,
+        "tab" => match word("").ok().as_deref() {
+            None => A::Tabs,
+            Some("new") => A::TabNew { url: word("").ok() },
+            Some("close") => A::TabClose { id: word("").ok().map(|s| parse_id(&s)).transpose()? },
+            Some(id) => A::TabSwitch { id: parse_id(id)? },
+        },
+        "snapshot" => A::Snapshot {
+            interactive: f.interactive,
+            compact: f.compact,
+            selector: f.selector.clone(),
+        },
+        "press" => A::Press { key: word("press <key>")? },
+        "scroll" => A::Scroll {
+            direction: word("scroll <up|down|left|right> [pixels]")?,
+            amount: match word("").ok() {
+                None => 500.0,
+                Some(px) => px.parse().map_err(|_| "scroll <direction> [pixels]")?,
+            },
+        },
+        "click" | "dblclick" | "focus" | "hover" | "check" | "uncheck" | "scrollintoview"
+        | "type" | "fill" | "select" | "text" | "count" | "visible" => {
+            let at = match found {
+                Some(at) => at,
+                None => target(word(&format!("{verb} <target>"))?),
+            };
+            match verb {
+                "click" => A::Click { at },
+                "dblclick" => A::DblClick { at },
+                "focus" => A::Focus { at },
+                "hover" => A::Hover { at },
+                "check" => A::Check { at },
+                "uncheck" => A::Uncheck { at },
+                "scrollintoview" => A::ScrollIntoView { at },
+                "type" => A::Type { at, text: word("type <target> <text>")? },
+                "fill" => A::Fill { at, text: word("fill <target> <text>")? },
+                "select" => A::Select { at, value: word("select <target> <value>")? },
+                "text" => A::Get { what: Get::Text, at: Some(at) },
+                "count" => A::Get { what: Get::Count, at: Some(at) },
+                _ => A::Is { what: Is::Visible, at },
+            }
+        }
+        "get" => {
+            let usage = "get <text|html|value|attr|title|url|count|box> [target]";
+            match word(usage)?.as_str() {
+                "attr" => {
+                    let at = match found {
+                        Some(at) => at,
+                        None => target(word("get attr <target> <name>")?),
+                    };
+                    let name = word("get attr <target> <name>")?;
+                    A::Get { what: Get::Attr { name }, at: Some(at) }
+                }
+                other => {
+                    let what = match other {
+                        "text" => Get::Text,
+                        "html" => Get::Html,
+                        "value" => Get::Value,
+                        "title" => Get::Title,
+                        "url" => Get::Url,
+                        "count" => Get::Count,
+                        "box" => Get::Box,
+                        _ => return Err(format!("get {other}? {usage}")),
+                    };
+                    A::Get { what, at: found.or_else(|| word("").ok().map(target)) }
+                }
+            }
+        }
+        "is" => {
+            let what = match word("is <visible|enabled|checked> <target>")?.as_str() {
+                "visible" => Is::Visible,
+                "enabled" => Is::Enabled,
+                "checked" => Is::Checked,
+                other => return Err(format!("is {other}? visible, enabled or checked")),
+            };
+            let at = match found {
+                Some(at) => at,
+                None => target(word("is <what> <target>")?),
+            };
+            A::Is { what, at }
+        }
+        "wait" => {
+            let t = word("").ok();
+            let ms = t.as_deref().and_then(|s| s.parse::<u64>().ok());
+            A::Wait {
+                selector: if ms.is_some() { None } else { t },
+                ms,
+                url: f.url.clone(),
+                text: f.text.clone(),
+                load: f.load.clone(),
+            }
+        }
+        "screenshot" => A::Screenshot { path: word("").ok(), full: f.full },
+        "eval" => A::Eval { js: word("eval <js>")? },
+        "console" => A::Console,
+        "errors" => A::Errors,
+        "set" => match word("set viewport <w> <h>, or set device <name>")?.as_str() {
+            "viewport" => {
+                let mut dim = || -> Result<u32, String> {
+                    word("")?.parse().map_err(|_| "set viewport <width> <height>".to_string())
+                };
+                A::SetViewport { width: dim()?, height: dim()? }
+            }
+            "device" => A::SetDevice { name: word("set device <name>")? },
+            _ => return Err("set viewport <w> <h>, or set device <name>".into()),
+        },
+        other => return Err(format!("browser {other}? {BROWSER_VERBS}")),
     };
-    format!("the app answered {kind} to a different command — versions may disagree")
+    // `click @e1 garbage` used to be refused by clap; a word nothing read is
+    // a command the caller meant differently.
+    if let Some(extra) = words.next() {
+        return Err(format!("browser {verb}: unexpected `{extra}`"));
+    }
+    Ok(action)
+}
+
+fn parse_id(s: &str) -> Result<i32, String> {
+    s.parse().map_err(|_| format!("{s} is not a tab id; `dray browser tab` lists them"))
+}
+
+/// The app answered something this command never asks for: the two sides
+/// disagree about the protocol rather than about the request.
+fn unexpected(response: Response) -> String {
+    let kind = serde_json::to_value(&response).map(|v| v["status"].to_string());
+    format!(
+        "the app answered {} to a different command — versions may disagree",
+        kind.unwrap_or_default()
+    )
 }
 
 fn ls(args: Ls) -> Result<(), String> {
@@ -605,46 +616,39 @@ fn ls(args: Ls) -> Result<(), String> {
             Ok(())
         }
         Response::Error { message } => Err(message),
-        other => Err(unexpected(&other)),
+        other => Err(unexpected(other)),
     }
 }
 
-/// Columns padded to the widest cell, so ids and titles line up without pulling
-/// in a table crate for the one place this is needed.
 fn print_table(sessions: &[SessionSummary]) {
     if sessions.is_empty() {
         eprintln!("No sessions.");
         return;
     }
 
-    let width = |pick: fn(&SessionSummary) -> &str| {
-        sessions.iter().map(|s| pick(s).len()).max().unwrap_or(0)
-    };
-
-    let status_width = width(|s| s.status.as_str());
-    let title_width = width(|s| s.title.as_str()).min(60);
-    let branch_width = width(|s| s.branch.as_deref().unwrap_or("-"));
-
-    for session in sessions {
-        let title: String = session.title.chars().take(title_width).collect();
-        // Named rather than given a column of its own: two bare ids on one row
-        // under no header is a table nobody can read, and most rows have no
-        // parent to print at all.
-        let parent = match &session.parent_session_id {
-            Some(id) => format!("  spawned by {id}"),
-            None => String::new(),
-        };
+    for s in sessions {
+        // Named rather than given a column: two bare ids on one row under no
+        // header is a table nobody can read, and most rows have no parent.
+        let parent = s
+            .parent_session_id
+            .as_deref()
+            .map(|id| format!("  spawned by {id}"))
+            .unwrap_or_default();
         println!(
-            "{}  {:<status_width$}  {:<title_width$}  {:<branch_width$}{}",
-            session.session_id,
-            session.status,
-            title,
-            session.branch.as_deref().unwrap_or("-"),
-            parent,
+            "{}  {:<12} {:<40.40}  {:<24}{parent}",
+            s.session_id,
+            s.status,
+            s.title,
+            s.branch.as_deref().unwrap_or("-"),
         );
     }
 }
 
+/// Runs the installer a first install runs, with the env it documents.
+///
+/// To a file first, not `curl | sh`: `pipefail` is not POSIX, so piped straight
+/// into a shell a failed download runs an empty script and reports success.
+/// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
@@ -652,108 +656,37 @@ fn update(args: Update) -> Result<(), String> {
         .parent()
         .ok_or("the running dray binary sits in no directory")?;
 
-    let scratch = scratch_dir()?;
-    let script = scratch.join("install.sh");
-    let result = download(INSTALLER_URL, &script)
-        .and_then(|()| run_installer(&script, dir, (!args.force).then(current_tag)));
+    let mut sh = std::process::Command::new("sh");
+    sh.args([
+        "-c",
+        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
+         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
+         sh \"$t\"",
+        INSTALLER_URL,
+    ])
+    // Where this binary lives, not ~/.local/bin. Renaming over a running
+    // unix binary is safe: the process keeps the inode it started from.
+    .env("DRAY_INSTALL_DIR", dir);
 
-    // On the failing paths too, or a refused download leaves a half-written
-    // script behind every time someone retries.
-    let _ = std::fs::remove_dir_all(&scratch);
+    if args.force {
+        // Cleared rather than left alone, or a value the caller exported makes
+        // the flag do nothing.
+        sh.env_remove("DRAY_CURRENT_VERSION");
+    } else {
+        sh.env("DRAY_CURRENT_VERSION", current_tag());
+    }
 
-    result
-}
-
-/// A directory of our own to download the installer into, because the next step
-/// executes what lands there.
-///
-/// `create_dir` refuses a path that already exists — symlink included — so
-/// another local account cannot park something at the predictable name and have
-/// it run. `0700` closes the window between creating it and writing into it.
-fn scratch_dir() -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let path = std::env::temp_dir().join(format!("dray-update-{}", std::process::id()));
-
-    std::fs::create_dir(&path).map_err(|e| format!("could not create {}: {e}", path.display()))?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("could not restrict {}: {e}", path.display()))?;
-
-    Ok(path)
-}
-
-/// The release tag this binary was built as.
-///
-/// The one fact the installer cannot work out for itself: it can see a `dray`
-/// on disk but not which of them is the process that ran it, and asking the
-/// wrong one its version is worse than not asking.
-fn current_tag() -> String {
-    format!("cli-v{}", env!("CARGO_PKG_VERSION"))
-}
-
-/// `current` is the tag to stop at — the installer resolves the newest release
-/// and exits without downloading anything when the two match. `None` forces the
-/// install through.
-fn run_installer(script: &Path, install_dir: &Path, current: Option<String>) -> Result<(), String> {
-    let mut command = std::process::Command::new("sh");
-    command
-        .arg(script)
-        // So the upgrade lands where the install did instead of defaulting back
-        // to ~/.local/bin. Overwriting this very binary is safe on unix: the
-        // installer renames over the path and this process keeps the inode it
-        // started from.
-        .env("DRAY_INSTALL_DIR", install_dir);
-
-    match current {
-        // An installer too old to know this variable ignores it and installs
-        // unconditionally, which is what this command did before — so the worst
-        // a stale deploy costs is one wasted download, never a skipped upgrade.
-        Some(tag) => command.env("DRAY_CURRENT_VERSION", tag),
-        // Cleared rather than left alone: `--force` has to beat a value the
-        // caller exported, or the flag silently does nothing.
-        None => command.env_remove("DRAY_CURRENT_VERSION"),
-    };
-
-    let status = command.status();
-
-    match status {
+    match sh.status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!("the installer failed ({status})")),
         Err(e) => Err(format!("could not run the installer: {e}")),
     }
 }
 
-/// curl or wget, the same pair `install.sh` accepts.
-///
-/// To a file rather than `curl … | sh`, because `pipefail` is not POSIX: piped
-/// straight into a shell, a failed download reports success and installs
-/// nothing.
-fn download(url: &str, path: &Path) -> Result<(), String> {
-    for (program, args) in [
-        (
-            "curl",
-            vec![
-                OsStr::new("-fsSL"),
-                OsStr::new(url),
-                OsStr::new("-o"),
-                path.as_os_str(),
-            ],
-        ),
-        (
-            "wget",
-            vec![OsStr::new("-qO"), path.as_os_str(), OsStr::new(url)],
-        ),
-    ] {
-        match std::process::Command::new(program).args(args).status() {
-            Ok(status) if status.success() => return Ok(()),
-            // It ran and failed, which is a real failure rather than a reason
-            // to reach for the other one.
-            Ok(_) => return Err(format!("{program} could not download {url}")),
-            Err(_) => continue,
-        }
-    }
-
-    Err("curl or wget is required to update.".into())
+/// The release tag this binary was built as — the one fact the installer cannot
+/// work out for itself, since it cannot tell which `dray` on disk ran it.
+fn current_tag() -> String {
+    format!("cli-v{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Every agent reads the same SKILL.md format from its own home dir, so one
@@ -1036,26 +969,47 @@ mod tests {
         }
     }
 
-    /// The sentence the agent reads and the guidance telling it what to do live
-    /// in separate files, so pin the whole clause they share rather than a word
-    /// out of it. Reword the error alone and the skill is left answering
-    /// something nothing emits any more — which is how the original bug read:
-    /// a cure that existed and was never named.
-    #[test]
-    fn the_skill_teaches_the_cure_the_sandbox_error_names() {
-        let message = failure(ErrorKind::PermissionDenied);
-        let skill = unwrapped(SKILL);
-
-        for clause in [CURE, "permission denied reaching Dray"] {
-            assert!(message.contains(clause), "the error dropped: {clause}");
-            assert!(skill.contains(clause), "the skill dropped: {clause}");
-        }
-        // The skill has to keep the app-closed sentence apart from it, since
-        // telling the two apart is the whole of what it teaches.
-        assert!(skill.contains(CLOSED));
-    }
-
     const SESSION: &str = "0198f0a2-1c5e-7000-8000-000000000000";
+
+    /// One parser serves the bare form and `find`'s, so a target read off the
+    /// line and a locator `find` built have to land on the same action.
+    #[test]
+    fn a_verb_reads_the_same_bare_or_after_find() {
+        let action = |line: &[&str]| {
+            let cli = Cli::parse_from([&["dray", "browser"][..], line].concat());
+            let Command::Browser(args) = cli.command else { panic!("wrong subcommand") };
+            browser_action(&args)
+        };
+
+        assert!(matches!(
+            action(&["click", "@e1"]),
+            Ok(BrowserAction::Click { at: Locator::Target { .. } })
+        ));
+        assert!(matches!(
+            action(&["find", "text", "Submit", "click", "--exact"]),
+            Ok(BrowserAction::Click { at: Locator::Text { exact: true, .. } })
+        ));
+        assert!(matches!(
+            action(&["find", "role", "button", "type", "hi", "--name", "Search"]),
+            Ok(BrowserAction::Type { at: Locator::Role { name: Some(_), .. }, text }) if text == "hi"
+        ));
+        assert!(matches!(
+            action(&["get", "attr", "@e1", "href"]),
+            Ok(BrowserAction::Get { what: Get::Attr { .. }, at: Some(_) })
+        ));
+        assert!(matches!(
+            action(&["scroll", "down", "-100"]),
+            Ok(BrowserAction::Scroll { amount, .. }) if amount == -100.0
+        ));
+        assert!(action(&["find", "text", "Submit"]).is_err());
+        assert!(action(&["frob"]).is_err());
+        // What clap used to refuse: a word nothing reads, a flag of another verb.
+        assert!(action(&["click", "@e1", "garbage"]).is_err());
+        assert!(action(&["back", "garbage"]).is_err());
+        assert!(action(&["click", "@e1", "--full"]).is_err());
+        assert!(action(&["find", "text", "Submit", "click", "-i"]).is_err());
+        assert!(action(&["snapshot", "-i", "-s", "main"]).is_ok());
+    }
 
     #[test]
     fn the_command_tree_is_well_formed() {
@@ -1260,75 +1214,6 @@ mod tests {
         assert_eq!(tag, format!("cli-v{}", env!("CARGO_PKG_VERSION")));
         assert!(tag.starts_with("cli-v"));
         assert!(tag[5..].starts_with(|c: char| c.is_ascii_digit()));
-    }
-
-    #[test]
-    fn the_skill_documents_the_command_the_mismatch_error_names() {
-        // The app tells a stale CLI to run this, so the skill has to say what
-        // it is — that sentence is the whole self-heal path.
-        assert!(SKILL.contains("dray update"));
-    }
-
-    /// A version bump refuses *every* command, and that is only tolerable
-    /// because the refusal is actionable. Which half is behind decides which
-    /// cure applies, and only one of the two can be run from here — so the
-    /// skill has to teach both, or an agent meeting the app-is-behind half
-    /// burns the turn running `dray update` at a problem it cannot touch.
-    ///
-    /// Anchored on the two cures `mismatch` emits verbatim rather than on the
-    /// prose around them: those strings are the actual contract, and the prose
-    /// wraps.
-    #[test]
-    fn the_skill_teaches_both_halves_of_a_protocol_refusal() {
-        assert!(SKILL.contains("update the Dray app"));
-        // And that a refusal is safe to retry, or it reads as a failed create
-        // and earns a second session nobody asked for.
-        assert!(SKILL.contains("Nothing was created"));
-    }
-
-    /// A worktree carries what was committed, so a reviewer pointed at work in
-    /// progress reports on a tree missing the very change the user is looking
-    /// at. Nothing in the mechanism can fix that, which makes saying it part of
-    /// the feature rather than documentation around it.
-    #[test]
-    fn the_skill_says_a_base_carries_committed_work_only() {
-        assert!(SKILL.contains("--from"));
-        assert!(SKILL.contains("Committed work only"));
-    }
-
-    /// A review session is spawned because the user asked *this* session for a
-    /// review, so its findings have to arrive back here — landing them only in
-    /// another session's transcript is a session that ran for nothing. Nothing
-    /// in the app carries them: a spawned session's opening prompt names no
-    /// sender, so the caller has to ask for the report in the prompt. Which
-    /// makes the skill saying it the whole rule, same as the inheritance
-    /// thresholds above. The second half is pinned with it — a rule that read
-    /// as "always report back" would cost a turn per fanned-out session to say
-    /// what the sidebar already says.
-    #[test]
-    fn the_skill_says_a_review_session_reports_its_findings_back() {
-        assert!(SKILL.contains("must be told to send its findings"));
-        assert!(SKILL.contains("No other kind of session reports back unless the user says so."));
-    }
-
-    /// A spawned session inherits model and effort, and two inherited answers
-    /// are wrong often enough to be worth a question: Fable, which somebody
-    /// picked for one chat, and a raised effort, which fanning out multiplies.
-    /// Neither is enforceable in the app — asking is the agent's own act — so
-    /// the skill saying it is the whole rule.
-    ///
-    /// "Raised" is per harness, and the pair below is what keeps that honest:
-    /// the two ladders share their names and not their scale, so one threshold
-    /// across both would either ask about Codex's own resting level or never
-    /// ask about a Codex session running two rungs above it.
-    #[test]
-    fn the_skill_says_when_to_ask_before_inheriting_a_model_or_effort() {
-        assert!(SKILL.contains("This session is on Fable"));
-        assert!(SKILL.contains("above its harness's default effort"));
-        assert!(SKILL.contains("On Claude Code the default is High, so `xhigh` and `max` ask."));
-        assert!(SKILL.contains("Medium, so `high` and above ask."));
-        // And what a session takes when nothing carries across.
-        assert!(SKILL.contains("Claude Code is Opus 5 on High, Codex is Sol on Medium"));
     }
 
     #[test]

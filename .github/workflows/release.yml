@@ -73,45 +73,9 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - id: rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      # Restores only — `cache/restore`, not `cache`. The entry is written by
-      # warm-cache.yml on `main`, the one scope a tag build can read from;
-      # saving here would write one under this tag's own ref that nothing will
-      # ever read again. Key and paths have to stay in step with that file,
-      # `registry/src` above all — see the note there for what it costs to drop.
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/src
-            ~/.cargo/git/db
-            ~/.cache/cef
-            apps/desktop/src-tauri/target
-          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
-
-      - run: pnpm install --frozen-lockfile
-
-      # The browser's bindings compile against the CEF SDK: headers plus a
-      # C++ wrapper that `cef-dll-sys`'s build script builds with CMake and
-      # Ninja, downloading the SDK into CEF_PATH first (one per target). The
-      # framework inside that SDK is never copied anywhere — the app fetches
-      # its own after install, see chromium.rs — so the bundle carries only
-      # the helper apps built below.
-      - run: |
-          brew install ninja
-          echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"
+      # Restores the cache warm-cache.yml wrote on `main`; see the action for
+      # why the two share it.
+      - uses: ./.github/actions/desktop-setup
 
       # The helper apps are signed here, before the bundler runs, with the
       # same identity it will use on the app around them. `bundle.macOS.files`
@@ -209,47 +173,6 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern latest.json --output manifest.json --clobber
 
-          # Whether $1 is strictly newer than $2 — the same semver comparison
-          # the updater plugin makes, prerelease rules included. Not `sort -V`,
-          # which gets wrong exactly the case that matters here: it puts
-          # 0.9.4-beta.2 *above* 0.9.4.
-          newer() {
-            node -e '
-              const parse = (v) => {
-                const [core, pre] = v.replace(/^v/, "").split("+")[0].split(/-(.+)/);
-                return { core: core.split("."), pre: pre ? pre.split(".") : null };
-              };
-              // Digit strings compared by length then lexically, never through
-              // Number(): above 2^53 distinct identifiers compare equal there,
-              // and "equal" is a promote that can move a manifest backwards.
-              const cmpNum = (a, b) => {
-                a = a.replace(/^0+(?=\d)/, ""); b = b.replace(/^0+(?=\d)/, "");
-                return a.length !== b.length ? a.length - b.length : a < b ? -1 : a > b ? 1 : 0;
-              };
-              const cmpId = (a, b) => {
-                const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
-                if (na && nb) return cmpNum(a, b);
-                if (na !== nb) return na ? -1 : 1;
-                return a < b ? -1 : a > b ? 1 : 0;
-              };
-              const cmp = (x, y) => {
-                for (let i = 0; i < 3; i++) {
-                  const c = cmpNum(x.core[i] ?? "0", y.core[i] ?? "0");
-                  if (c) return c;
-                }
-                if (!x.pre || !y.pre) return (x.pre ? -1 : 0) - (y.pre ? -1 : 0);
-                for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
-                  if (x.pre[i] === undefined) return -1;
-                  if (y.pre[i] === undefined) return 1;
-                  const c = cmpId(x.pre[i], y.pre[i]);
-                  if (c) return c;
-                }
-                return 0;
-              };
-              process.exit(cmp(parse(process.argv[1]), parse(process.argv[2])) > 0 ? 0 : 1);
-            ' "$1" "$2"
-          }
-
           # Writes the release over a channel manifest unless that would move
           # the channel *backwards*. A stable release still serves both
           # channels — someone on beta should be offered the newer stable — but
@@ -259,10 +182,17 @@ jobs:
           # beta opt-in could never reach the beta at all. An equal version
           # rewrites, so re-running a release republishes its own manifest; a
           # missing or unreadable manifest is written, never an error.
+          #
+          # node-semver's own comparison, prerelease rules included — the one
+          # the updater plugin makes. Not `sort -V`, which puts 0.9.4-beta.2
+          # *above* 0.9.4. `-p` lets a prerelease satisfy the range. Installed
+          # up front so a registry failure fails the job rather than reading
+          # as "not newer" and overwriting.
+          npm install --global semver
           NEW="$(jq -r .version manifest.json)"
           promote() {
             cur="$(jq -r '.version // empty' "$1" 2>/dev/null || true)"
-            if [ -n "$cur" ] && newer "$cur" "$NEW"; then
+            if [ -n "$cur" ] && semver -p -r ">$NEW" "$cur" >/dev/null; then
               echo "keeping $1 at $cur — $NEW is older"
             else
               cp manifest.json "$1"
