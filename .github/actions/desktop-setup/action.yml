@@ -1,0 +1,76 @@
+name: Desktop build setup
+description: >
+  pnpm, Rust with both Apple targets, the cargo cache and the CEF build tools.
+  One place, so release.yml and warm-cache.yml meet on the same cache key —
+  runner, toolchain and target list all feed it.
+
+outputs:
+  cache-key:
+    description: The exact key this run looked for, for warm-cache to save under.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether that exact key already exists.
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-path:
+    description: Every path the key covers.
+    value: ${{ steps.paths.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - id: rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+    # Plain `actions/cache` rather than `swatinem/rust-cache`, for one path in
+    # this list: `registry/src`. rust-cache deletes it before saving, since
+    # cargo can re-extract it from the `.crate` archives beside it — true, and
+    # it halves the cache. But re-extraction stamps every source file with the
+    # restore time, *newer* than the `target` artifacts restored alongside, and
+    # build scripts are mtime-checked: every crate carrying one reruns and
+    # everything downstream rebuilds. Measured with rust-cache reporting `full
+    # match: true`: 40 crates per target for ~8 minutes a target. Tar restores
+    # mtimes as saved, so keeping `src` keeps the order. The cost is a larger
+    # entry and a target dir nothing prunes but GitHub's 10 GB LRU eviction.
+    - id: paths
+      shell: bash
+      run: |
+        {
+          echo 'paths<<EOF'
+          printf '%s\n' '~/.cargo/registry/index' '~/.cargo/registry/cache' \
+            '~/.cargo/registry/src' '~/.cargo/git/db' '~/.cache/cef' \
+            'apps/desktop/src-tauri/target'
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    # Restore only. Saving is warm-cache.yml's, on `main` — the one scope a tag
+    # build can read from; a tag build saving would write under its own ref
+    # that nothing reads again. The version bump in every release changes
+    # Cargo.lock, so the exact key misses once per release by design and the
+    # prefix restore carries the tree across; only `dray` itself moved.
+    - id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+        restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
+
+    - shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # The browser's bindings compile against the CEF SDK: headers plus a C++
+    # wrapper that `cef-dll-sys`'s build script builds with CMake and Ninja,
+    # downloading the SDK into CEF_PATH first (one per target), where the cache
+    # above keeps it. The framework inside is never copied anywhere — the app
+    # fetches its own after install, see chromium.rs.
+    - shell: bash
+      run: |
+        brew install ninja
+        echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"

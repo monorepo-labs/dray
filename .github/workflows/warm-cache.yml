@@ -9,9 +9,8 @@ name: Warm cache
 # every time — and every build compiled the dependency tree from cold. That was
 # ~19 of the ~20 minutes. `main` is the one scope a tag build can read.
 #
-# The cache key is written out by hand here and in the release job rather than
-# derived, so the two halves meet on a string both files show. Anything feeding
-# it — runner, toolchain, target list — has to match there too.
+# The cache key, paths and everything feeding them live in
+# .github/actions/desktop-setup, which the release job runs too.
 
 on:
   push:
@@ -38,58 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      # Runner, toolchain and target list all feed the cache key, so they have
-      # to match the release job or the entry is unreadable there.
-      - id: rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      # Plain `actions/cache` rather than `swatinem/rust-cache`, for one path in
-      # this list: `registry/src`. rust-cache deletes it before saving, on the
-      # reasoning that cargo can re-extract it from the `.crate` archives beside
-      # it — true, and it halves the cache. But re-extraction stamps every
-      # source file with the restore time, which lands them *newer* than the
-      # `target` artifacts restored alongside. Registry deps are fingerprinted
-      # by version rather than mtime, so most of the tree survives that; build
-      # scripts are mtime-checked, so every crate carrying one reruns and
-      # everything downstream of it rebuilds with it.
-      #
-      # Measured, with rust-cache reporting `full match: true`: 40 crates per
-      # target — ring, libz-sys, libgit2-sys, lmdb-master-sys, the objc2 family,
-      # tauri, and each of their dependents — for ~8 minutes a target. Tar
-      # restores mtimes as they were saved, so keeping `src` keeps the order.
-      #
-      # The cost is a larger entry and a target dir nothing prunes. GitHub
-      # evicts at 10 GB, least-recently-used, which is the only sweeper here.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/src
-            ~/.cargo/git/db
-            ~/.cache/cef
-            apps/desktop/src-tauri/target
-          # The version bump in every release changes Cargo.lock, so the exact
-          # key misses once per release by design. The prefix restore is what
-          # carries the tree across; only `dray` itself moved.
-          key: darwin-cargo-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
-
-      - run: pnpm install --frozen-lockfile
-
-      # What the CEF bindings' build script needs — see release.yml. The SDK
-      # it downloads lands in the cache above, so the release build finds it.
-      - run: |
-          brew install ninja
-          echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"
+      - id: setup
+        uses: ./.github/actions/desktop-setup
 
       # Compiled the way the release compiles it, rather than with a bare
       # `cargo build --release`. `tauri build` turns on production features —
@@ -105,3 +54,10 @@ jobs:
       # build step.
       - run: pnpm tauri build --no-bundle --target universal-apple-darwin --features cef
         working-directory: apps/desktop
+
+      # The setup action only restores; this is the one job that writes.
+      - if: steps.setup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.setup.outputs.cache-path }}
+          key: ${{ steps.setup.outputs.cache-key }}

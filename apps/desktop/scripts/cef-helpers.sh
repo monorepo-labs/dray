@@ -22,6 +22,15 @@ PROFILE=${PROFILE:-debug}
 FLAG=""
 [ "$PROFILE" = release ] && FLAG=--release
 
+# Hardened-runtime codesign, or nothing without SIGN_IDENTITY. An ad-hoc
+# signature cannot carry a timestamp.
+sign() {
+  [ -n "$SIGN_IDENTITY" ] || return 0
+  T=--timestamp
+  [ "$SIGN_IDENTITY" = "-" ] && T=""
+  codesign --force --options runtime $T -s "$SIGN_IDENTITY" "$@"
+}
+
 cd "$ROOT/src-tauri"
 mkdir -p "$OUT"
 if [ -n "$TARGETS" ]; then
@@ -40,11 +49,7 @@ if [ -n "$TARGETS" ]; then
   UNI="target/universal-apple-darwin/$PROFILE"
   mkdir -p "$UNI"
   cp "$BIN" "$UNI/dray-helper"
-  if [ -n "$SIGN_IDENTITY" ]; then
-    T=--timestamp
-    [ "$SIGN_IDENTITY" = "-" ] && T=""
-    codesign --force --options runtime $T -s "$SIGN_IDENTITY" "$UNI/dray-helper"
-  fi
+  sign "$UNI/dray-helper"
 else
   cargo build $FLAG --bin dray-helper --features cef
   BIN="target/$PROFILE/dray-helper"
@@ -74,14 +79,7 @@ for suffix in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
   <key>LSEnvironment</key><dict><key>MallocNanoZone</key><string>0</string></dict>
 </dict></plist>
 EOF
-  if [ -n "$SIGN_IDENTITY" ]; then
-    # An ad-hoc signature cannot carry a timestamp.
-    TS=--timestamp
-    [ "$SIGN_IDENTITY" = "-" ] && TS=""
-    codesign --force --options runtime $TS \
-      --entitlements "$ROOT/src-tauri/HelperEntitlements.plist" \
-      -s "$SIGN_IDENTITY" "$app"
-  fi
+  sign --entitlements "$ROOT/src-tauri/HelperEntitlements.plist" "$app"
 done
 
 echo "cef helpers at $OUT"
