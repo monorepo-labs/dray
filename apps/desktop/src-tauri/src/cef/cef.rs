@@ -158,27 +158,32 @@ fn ensure_started() -> bool {
     if let Some(ok) = *started {
         return ok;
     }
-    let ok = start();
-    *started = Some(ok);
-    ok
+    // A missing framework is the one outcome not remembered: Remove can take
+    // it between a caller's preflight and here, and a download can put it
+    // back, so that is "not yet" rather than "never".
+    let outcome = start();
+    if outcome.is_some() {
+        *started = outcome;
+    }
+    outcome.unwrap_or(false)
 }
 
-fn start() -> bool {
-    let Some(app) = APP.get() else { return false };
+fn start() -> Option<bool> {
+    let Some(app) = APP.get() else { return Some(false) };
     // Held from finding the framework to loading it, so `chromium::remove`
     // cannot take it off disk in between and leave this process's one
     // chance at starting CEF spent on a path that is no longer there.
     let mut loaded = crate::chromium::load_guard();
     let Some(paths) = paths() else {
-        eprintln!("cef: no Chromium framework found; browser disabled");
-        return false;
+        eprintln!("cef: no Chromium framework on disk yet");
+        return None;
     };
     let framework = paths.framework;
     let library = framework.join("Chromium Embedded Framework");
     let c_path = std::ffi::CString::new(library.as_os_str().as_encoded_bytes()).expect("path");
     if cef::load_library(Some(unsafe { &*c_path.as_ptr() })) != 1 {
         eprintln!("cef: could not load {}", library.display());
-        return false;
+        return Some(false);
     }
     *loaded = true;
     drop(loaded);
@@ -190,7 +195,7 @@ fn start() -> bool {
     let ret = execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut());
     if ret >= 0 {
         eprintln!("cef: execute_process answered {ret} in the browser process");
-        return false;
+        return Some(false);
     }
 
     let mtm = MainThreadMarker::new().expect("cef::start off the main thread");
@@ -212,11 +217,11 @@ fn start() -> bool {
     let mut cef_app = DrayApp::new();
     if initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) != 1 {
         eprintln!("cef: initialize failed");
-        return false;
+        return Some(false);
     }
     start_pump(app.clone());
     eprintln!("cef: initialized, devtools on 127.0.0.1:{DEBUG_PORT}");
-    true
+    Some(true)
 }
 
 fn path_str(path: &Path) -> CefString {
@@ -446,6 +451,11 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
         return Err(crate::chromium::not_ready_reason());
     }
     if !ensure_started() {
+        // Not started and nothing remembered: the framework went missing under
+        // us, and the reason is whatever `chromium` says now.
+        if STARTED.lock().unwrap().is_none() {
+            return Err(crate::chromium::not_ready_reason());
+        }
         return Err("Chromium could not start".into());
     }
     let info = child_window_info()?;
