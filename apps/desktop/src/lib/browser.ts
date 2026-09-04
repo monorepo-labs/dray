@@ -89,18 +89,21 @@ function start() {
     setViewport(sessionId, { preset, width, height });
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
-  // the browser, which leaves `null` and both surfaces silent. Listener
-  // first, and the snapshot dropped if an event overtook it: a download
-  // finishing inside the round trip is otherwise put back to "downloading"
-  // by the older answer, with nothing later to correct it.
-  let events = 0;
-  void listen<ChromiumStatus>("chromium_status", (e) => {
-    events++;
-    setChromium(e.payload);
-  });
-  void invoke<ChromiumStatus>("chromium_status")
-    .then((status) => events === 0 && setChromium(status))
-    .catch(() => undefined);
+  // the browser, which leaves `null` and both surfaces silent. The listener
+  // is *awaited* before the snapshot is asked for, and the snapshot dropped
+  // if an event landed meanwhile: a download finishing inside the round trip
+  // is otherwise put back to "downloading" by the older answer, with nothing
+  // later to correct it.
+  void (async () => {
+    let events = 0;
+    await listen<ChromiumStatus>("chromium_status", (e) => {
+      events++;
+      setChromium(e.payload);
+    });
+    const seen = events;
+    const status = await invoke<ChromiumStatus>("chromium_status").catch(() => null);
+    if (status && events === seen) setChromium(status);
+  })();
   // Radix puts `pointer-events: none` on body while a modal is open. The
   // native view would sit over the dialog otherwise.
   new MutationObserver(() => {

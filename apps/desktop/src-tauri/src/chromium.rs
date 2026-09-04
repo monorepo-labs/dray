@@ -333,12 +333,15 @@ fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
-/// The framework is mapped into this process. Set by `cef::start`, never
-/// cleared: CEF cannot be shut down and started again in one process.
-static LOADED: AtomicBool = AtomicBool::new(false);
+/// Whether the framework is mapped into this process. `cef::start` holds
+/// the lock from finding the framework to loading it and leaves `true`
+/// behind, never cleared: CEF cannot be shut down and started again in one
+/// process. [`remove`] holds it across its check and delete, so neither can
+/// slip between the other's two halves.
+static LOADED: Mutex<bool> = Mutex::new(false);
 
-pub fn mark_loaded() {
-    LOADED.store(true, Ordering::SeqCst);
+pub fn load_guard() -> std::sync::MutexGuard<'static, bool> {
+    LOADED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Takes the framework off disk. Refused once CEF has loaded it: the
@@ -349,14 +352,21 @@ pub async fn remove(app: &AppHandle) -> Result<()> {
     if RUNNING.load(Ordering::SeqCst) {
         bail!("Chromium is still downloading");
     }
-    if LOADED.load(Ordering::SeqCst) {
-        bail!("Chromium is in use. Quit and reopen Dray, then remove it.");
-    }
-    match fs::remove_dir_all(version_dir()).await {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).context("could not remove Chromium"),
-    }
+    // Blocking, since the guard is a std mutex `cef::start` takes on the
+    // main thread and cannot be held across an await.
+    tokio::task::spawn_blocking(|| {
+        let loaded = load_guard();
+        if *loaded {
+            bail!("Chromium is in use. Quit and reopen Dray, then remove it.");
+        }
+        match std::fs::remove_dir_all(version_dir()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).context("could not remove Chromium"),
+        }
+    })
+    .await
+    .context("remove task failed")??;
     set(app, ChromiumStatus::Absent);
     Ok(())
 }

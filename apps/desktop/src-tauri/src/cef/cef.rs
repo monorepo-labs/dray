@@ -165,6 +165,10 @@ fn ensure_started() -> bool {
 
 fn start() -> bool {
     let Some(app) = APP.get() else { return false };
+    // Held from finding the framework to loading it, so `chromium::remove`
+    // cannot take it off disk in between and leave this process's one
+    // chance at starting CEF spent on a path that is no longer there.
+    let mut loaded = crate::chromium::load_guard();
     let Some(paths) = paths() else {
         eprintln!("cef: no Chromium framework found; browser disabled");
         return false;
@@ -176,7 +180,8 @@ fn start() -> bool {
         eprintln!("cef: could not load {}", library.display());
         return false;
     }
-    crate::chromium::mark_loaded();
+    *loaded = true;
+    drop(loaded);
     let _ = api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
 
     let args = Args::new();

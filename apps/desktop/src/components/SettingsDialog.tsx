@@ -741,6 +741,10 @@ function BrowserRow() {
   const id = useId();
   const status = useChromium();
   const [confirming, setConfirming] = useState(false);
+  // Why the last Remove was refused — once CEF has loaded the framework the
+  // answer is "quit and reopen", and a button that swallows that looks like
+  // one that does nothing.
+  const [error, setError] = useState<string | null>(null);
 
   if (!status) return null;
 
@@ -749,9 +753,13 @@ function BrowserRow() {
       id={id}
       label="Browser"
       description={
-        confirming
-          ? "Chromium will be downloaded again the next time Dray starts."
-          : describeChromium(status)
+        error ? (
+          <span className="text-destructive">{error}</span>
+        ) : confirming ? (
+          "Chromium will be downloaded again the next time Dray starts."
+        ) : (
+          describeChromium(status)
+        )
       }
     >
       {chromiumBusy(status) ? (
@@ -765,15 +773,27 @@ function BrowserRow() {
       ) : status.state === "ready" ? (
         confirming ? (
           <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setConfirming(false);
+                setError(null);
+              }}
+            >
               Cancel
             </Button>
             <Button
               variant="destructive"
               size="sm"
               onClick={async () => {
-                await removeChromium().catch(console.error);
-                setConfirming(false);
+                try {
+                  await removeChromium();
+                  setConfirming(false);
+                  setError(null);
+                } catch (e) {
+                  setError(String(e));
+                }
               }}
             >
               Remove
