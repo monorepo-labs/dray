@@ -192,7 +192,9 @@ fn start() -> Option<bool> {
     let args = Args::new();
     // Returns -1 for the browser process; helpers are a separate binary, so
     // this process is never anything else.
-    let ret = execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut());
+    let ret = keeping_signal(libc::SIGCHLD, || {
+        execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut())
+    });
     if ret >= 0 {
         eprintln!("cef: execute_process answered {ret} in the browser process");
         return Some(false);
@@ -215,7 +217,10 @@ fn start() -> Option<bool> {
         ..Default::default()
     };
     let mut cef_app = DrayApp::new();
-    if initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) != 1 {
+    let ok = keeping_signal(libc::SIGCHLD, || {
+        initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) == 1
+    });
+    if !ok {
         eprintln!("cef: initialize failed");
         return Some(false);
     }
@@ -226,6 +231,90 @@ fn start() -> Option<bool> {
 
 fn path_str(path: &Path) -> CefString {
     CefString::from(path.to_string_lossy().as_ref())
+}
+
+/// Chromium's browser-process init resets SIGCHLD to `SIG_DFL`, which wipes
+/// the handler tokio reaps children through: every later `git` spawn then
+/// waits forever, and `send_msg` holds the sessions lock across one, so one
+/// tab opened made every session unsendable and unstoppable until restart.
+/// Chromium clears the thread's signal mask in the same breath, so that is
+/// put back too. A child exiting *during* `f` raised its signal into
+/// `SIG_DFL`, where it was discarded — and its waiter may be the one holding
+/// the sessions lock, so waiting for the next spawn's signal is not enough.
+/// A synthetic one after the restore makes every tokio waiter re-check now.
+fn keeping_signal<T>(signal: libc::c_int, f: impl FnOnce() -> T) -> T {
+    let mut saved: libc::sigaction = unsafe { std::mem::zeroed() };
+    let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigaction(signal, std::ptr::null(), &mut saved);
+        libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &mut mask);
+    }
+    let out = f();
+    unsafe {
+        libc::sigaction(signal, &saved, std::ptr::null_mut());
+        libc::pthread_sigmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut());
+        // `raise`, not `kill(getpid())`: it targets this thread and lands
+        // before returning, where a process-directed one may go to another
+        // thread later.
+        libc::raise(signal);
+    }
+    out
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::keeping_signal;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DELIVERED: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn count(_: libc::c_int) {
+        DELIVERED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn action_of(signal: libc::c_int) -> libc::sigaction {
+        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigaction(signal, std::ptr::null(), &mut current) };
+        current
+    }
+
+    fn blocked(signal: libc::c_int) -> bool {
+        let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &mut mask) };
+        unsafe { libc::sigismember(&mask, signal) == 1 }
+    }
+
+    /// SIGUSR2, not SIGCHLD: tests share one process, and a window on the
+    /// real signal could strand a git test's child exiting at that moment.
+    #[test]
+    fn a_handler_reset_inside_is_put_back_and_kicked() {
+        let before = action_of(libc::SIGUSR2);
+        let mut ours: libc::sigaction = unsafe { std::mem::zeroed() };
+        ours.sa_sigaction = count as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        unsafe { libc::sigaction(libc::SIGUSR2, &ours, std::ptr::null_mut()) };
+
+        keeping_signal(libc::SIGUSR2, || {
+            // What Chromium does: disposition to default, mask cleared. The
+            // mask here goes the other way to prove it is restored, not
+            // merely left empty.
+            let dfl: libc::sigaction = unsafe { std::mem::zeroed() };
+            let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::sigaction(libc::SIGUSR2, &dfl, std::ptr::null_mut());
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGUSR2);
+                libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            }
+            assert_eq!(action_of(libc::SIGUSR2).sa_sigaction, libc::SIG_DFL);
+            assert!(blocked(libc::SIGUSR2));
+        });
+
+        assert_eq!(action_of(libc::SIGUSR2).sa_sigaction, ours.sa_sigaction);
+        assert!(!blocked(libc::SIGUSR2));
+        assert_eq!(DELIVERED.load(Ordering::SeqCst), 1, "the synthetic signal reached the restored handler");
+
+        unsafe { libc::sigaction(libc::SIGUSR2, &before, std::ptr::null_mut()) };
+    }
 }
 
 fn on_main(f: impl FnOnce() + Send + 'static) -> Result<(), String> {
