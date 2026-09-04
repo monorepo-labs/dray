@@ -152,7 +152,7 @@ export type Readiness = {
 /// be judged by the same rule the panel is, without carrying a panel's worth of
 /// pull request to do it. Nullable because the marks query asks for them on its
 /// open half alone.
-export type MergeState = {
+type MergeState = {
   state: string;
   isDraft: boolean;
   mergeable: string | null;
@@ -173,7 +173,7 @@ export type MergeState = {
 /// and [readyToMerge] asks the one question a notice turns on. A predicate
 /// written beside this rather than out of it would be a second copy of an order
 /// that took a while to get right.
-export type MergeVerdict =
+type MergeVerdict =
   | "merged"
   | "closed"
   | "conflict"
@@ -347,7 +347,7 @@ export function mergeReadiness(pr: PullRequest): Readiness {
   }
 }
 
-export type CheckSummary = {
+type CheckSummary = {
   passed: number;
   failed: number;
   pending: number;

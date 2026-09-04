@@ -129,7 +129,7 @@ const CONTENT_KEY_BY_TOOL: Record<string, string> = {
   NotebookEdit: "new_source",
 };
 
-export type StreamingCall = {
+type StreamingCall = {
   /// Null until the stream has carried the whole value. A path printed while
   /// still arriving would grow character by character, which reads as a glitch
   /// rather than as progress.

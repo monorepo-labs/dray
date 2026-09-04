@@ -121,12 +121,14 @@ describe("handoffActions", () => {
   //
   // `hasSession` is true so the row is the whole row, and `runServer` is then
   // skipped by name rather than dodged by leaving it out: the clause that makes
-  // it longer — "in the background" — is the one clause it cannot lose, and
-  // `runServer.test.ts` pins that instead. Left to the default this rule would
-  // read as covered while quietly testing every button but the one it misses.
+  // it longer — "in the background" — is the one clause it cannot lose, since
+  // without it the CLI runs the server in a foreground Bash that times out.
   it("keeps the prompts to a few words", () => {
     for (const action of handoffActions(status({ dirty: 1 }), false, true)) {
-      if (action.id === "runServer") continue;
+      if (action.id === "runServer") {
+        expect(action.prompt).toContain("in the background");
+        continue;
+      }
       expect(action.prompt.split(" ").length).toBeLessThanOrEqual(5);
     }
   });

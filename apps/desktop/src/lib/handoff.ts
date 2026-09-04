@@ -1,5 +1,6 @@
-import { RUN_SERVER_PROMPT } from "@/lib/runServer";
 import type { WorkStatus } from "@/types/events";
+
+const RUN_SERVER_PROMPT = "start the dev server in the background";
 
 /// One thing the reader can hand the session, as a button.
 ///
@@ -80,7 +81,10 @@ export function handoffActions(
   hasSession = false,
 ): HandoffAction[] {
   // Built ahead of the git checks rather than beside them, because running a
-  // server needs no repository to run in.
+  // server needs no repository to run in. Vague about which server — the agent
+  // reads the repo — but "in the background" is load-bearing: without it the
+  // CLI runs `pnpm dev` in a foreground Bash, which times out and takes the
+  // server down with it.
   const run: HandoffAction[] = hasSession
     ? [{ id: "runServer", label: "Run server", prompt: RUN_SERVER_PROMPT }]
     : [];

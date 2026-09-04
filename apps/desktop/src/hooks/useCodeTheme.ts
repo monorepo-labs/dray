@@ -7,7 +7,9 @@ import {
   type CodeThemeId,
   type CodeThemePair,
 } from "@/lib/codeTheme";
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { useTheme } from "@/hooks/useTheme";
+import { channel } from "@/lib/channel";
 
 const KEY = "ade.codeTheme";
 
@@ -15,36 +17,20 @@ const KEY = "ade.codeTheme";
 /// this, and several of each are mounted at once — with `useLocalStorage`'s
 /// per-component `useState` they would each hold their own copy and only the
 /// component that owned the picker would re-render on a change.
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 let current: CodeThemeId = read();
 
 function read(): CodeThemeId {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw === null) return DEFAULT_CODE_THEME;
-    const parsed = JSON.parse(raw) as CodeThemeId;
-    return CODE_THEMES.some((t) => t.id === parsed) ? parsed : DEFAULT_CODE_THEME;
-  } catch {
-    return DEFAULT_CODE_THEME;
-  }
+  const stored = readLocalStorage<CodeThemeId>(KEY, DEFAULT_CODE_THEME);
+  return CODE_THEMES.some((t) => t.id === stored) ? stored : DEFAULT_CODE_THEME;
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-/// Exported so a settings surface can set this without holding the hook.
-export function setCodeTheme(id: CodeThemeId) {
+function setCodeTheme(id: CodeThemeId) {
   if (id === current) return;
   current = id;
-  try {
-    localStorage.setItem(KEY, JSON.stringify(id));
-  } catch {
-    // Non-fatal: the preference just won't outlive the session.
-  }
-  for (const listener of listeners) listener();
+  writeLocalStorage(KEY, id);
+  changed.emit();
 }
 
 /// The chosen code theme, the pair it resolves to, and a setter.
@@ -57,7 +43,7 @@ export function useCodeTheme(): {
   setCodeTheme: (id: CodeThemeId) => void;
 } {
   const id = useSyncExternalStore(
-    subscribe,
+    changed.subscribe,
     () => current,
     () => DEFAULT_CODE_THEME,
   );

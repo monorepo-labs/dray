@@ -22,7 +22,7 @@ import type {
   Project,
 } from "@/types/events";
 
-export type ComposerToolbarProps = {
+type ComposerToolbarProps = {
   /// Creation-time only, like project and branch: it decides which child runs.
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;

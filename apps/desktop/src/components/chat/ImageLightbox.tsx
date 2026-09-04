@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 
-export type LightboxImage = { src: string; name: string };
+type LightboxImage = { src: string; name: string };
 
 /// The images of one message at full size, over the transcript rather than
 /// inside it.

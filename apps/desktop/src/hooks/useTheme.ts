@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
 import {
   applyTheme,
   modeFor,
@@ -20,7 +21,7 @@ import {
 /// same argument [useCodeTheme](./useCodeTheme.ts) makes applies here too.
 type ThemeState = { name: ThemeName; mode: ThemeMode; resolvedMode: ResolvedMode };
 
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 let current: ThemeState | null = null;
 let unwatch: (() => void) | null = null;
@@ -47,10 +48,6 @@ function store(): ThemeState {
   return current;
 }
 
-function emit() {
-  for (const listener of listeners) listener();
-}
-
 /// Re-subscribes to the OS only while the mode is `system`. Torn down and rebuilt on
 /// every change rather than filtered at the callback, so a window left on a fixed
 /// mode holds no listener at all.
@@ -66,7 +63,7 @@ function rewatch() {
     const resolvedMode = applyTheme(state.name, state.mode);
     if (resolvedMode === current?.resolvedMode) return;
     current = { ...state, resolvedMode };
-    emit();
+    changed.emit();
   });
 }
 
@@ -79,7 +76,7 @@ function set(next: Partial<Pick<ThemeState, "name" | "mode">>) {
   if (name === state.name && mode === state.mode) return;
   current = { name, mode, resolvedMode: applyTheme(name, mode) };
   rewatch();
-  emit();
+  changed.emit();
 }
 
 /// Exported so a surface can set these without holding the hook.
@@ -91,17 +88,12 @@ export function setMode(mode: ThemeMode) {
   set({ mode });
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
 /// The palette, the mode as chosen, and the mode as rendered.
 ///
 /// `resolvedMode` is what is actually on screen — read that, not `mode`, when a
 /// component needs to branch on light/dark (a Shiki theme, say).
 export function useTheme() {
-  const state = useSyncExternalStore(subscribe, store, store);
+  const state = useSyncExternalStore(changed.subscribe, store, store);
 
   return {
     theme: state.name,

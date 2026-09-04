@@ -45,7 +45,7 @@ import type {
 /// Everything the panel needs, owned by `App` — see [usePullRequest]. The panel
 /// draws it and nothing more, because the tab row above it reads the same data
 /// to decide whether to exist and where to sit.
-export type PrData = ReturnType<typeof usePullRequest>;
+type PrData = ReturnType<typeof usePullRequest>;
 
 type PrPanelProps = PrData & {
   /// The branch this session's work lands on. Null for a session in a

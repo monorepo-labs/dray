@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
+import { truncate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
 import {
@@ -219,10 +220,7 @@ export default function ToolCall({
   // place the reason lives.
   const echoesHeader = name === "Skill" && !failed;
   const shownOutput = echoesViewer || echoesHeader ? "" : output;
-  const shown =
-    shownOutput.length > PREVIEW_CHARS
-      ? `${shownOutput.slice(0, PREVIEW_CHARS)}…`
-      : shownOutput;
+  const shown = truncate(shownOutput, PREVIEW_CHARS);
 
   // Output stays behind the expander regardless of length. Auto-showing short
   // results only made rows inconsistent — some opened, some didn't, with no

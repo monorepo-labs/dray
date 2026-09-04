@@ -76,7 +76,7 @@ function rememberFileVersions(key: string, value: FileVersions) {
 /// of a baseline is immediate, since there is nothing on screen to keep.
 const REFRESH_DEBOUNCE = 300;
 
-export type ChangesState = {
+type ChangesState = {
   changes: ChangeSet | null;
   error: string | null;
   /// A read is in flight. Never blanks the view: the previous result stays up

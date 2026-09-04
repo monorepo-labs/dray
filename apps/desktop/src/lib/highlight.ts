@@ -9,7 +9,7 @@
 import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseSlashCommand } from "@/lib/slash";
 
-export type Segment = {
+type Segment = {
   kind: "text" | "command" | "mention" | "issue" | "url";
   text: string;
 };

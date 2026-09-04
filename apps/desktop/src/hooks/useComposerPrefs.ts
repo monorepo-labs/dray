@@ -26,7 +26,7 @@ export type EffortByModel = Partial<Record<ModelId, Effort>>;
 /// seeds from whatever the repo is checked out to, since restoring a name without
 /// running the checkout would have the composer claim a branch the tree isn't on;
 /// `projectPath` is already persisted backend-side by `set_last_selected_project`.
-export type ComposerPrefs = {
+type ComposerPrefs = {
   /// Which agent a new session starts on. Sticky like the rest of this row —
   /// somebody who works in Codex should not re-pick it every time.
   harness: Harness;

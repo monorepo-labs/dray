@@ -93,7 +93,7 @@ export const THEMES: Theme[] = [
 ];
 
 export const DEFAULT_THEME: ThemeName = "default";
-export const DEFAULT_MODE: ThemeMode = "dark";
+const DEFAULT_MODE: ThemeMode = "dark";
 
 function theme(name: ThemeName): Theme | undefined {
   return THEMES.find((t) => t.id === name);
@@ -140,11 +140,11 @@ const MODE_KEY = "ade.mode";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 /// Whether the OS currently prefers dark. Falsy in any environment without matchMedia.
-export function systemPrefersDark(): boolean {
+function systemPrefersDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia(DARK_QUERY).matches;
 }
 
-export function resolveMode(mode: ThemeMode): ResolvedMode {
+function resolveMode(mode: ThemeMode): ResolvedMode {
   if (mode === "system") return systemPrefersDark() ? "dark" : "light";
   return mode;
 }
