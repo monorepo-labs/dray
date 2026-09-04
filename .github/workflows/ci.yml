@@ -1,0 +1,109 @@
+name: CI
+
+# Exists to compile the browser before a tag does. The CEF code sits behind
+# the `cef` feature, so `cargo check`, `cargo test` and everything a developer
+# runs skip it, and the release build on a tag was the first thing to compile
+# it — after which the tag was already on origin. Two betas in one day were
+# re-cut over that. `cargo check --features cef` compiles the whole crate, so
+# it covers the plain check as well.
+#
+# The rest is the pre-tag suite from RELEASING.md, since a runner already
+# checked out and warm can run it for a few seconds more.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A second push to a PR cancels the run still going for the first. On `main`
+# the run is what writes the cache below, so it is left to finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Incremental artifacts are worthless across machines and are most of what a
+  # target dir weighs — see warm-cache.yml.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Its own cache, not the release's. That entry is what `tauri build`
+      # leaves behind — release profile, `custom-protocol` on, per-target
+      # dirs — and nothing here compiles that way: `check` writes metadata
+      # into `target/debug` and `test` builds the dev profile there, so a
+      # restore of it would carry the registry and the CEF SDK across and
+      # not one compiled crate.
+      #
+      # Same path list as warm-cache.yml, `registry/src` included, for the
+      # mtime reason written there. Saved from `main` alone: a PR's save
+      # lands under its own ref where only that PR can read it, and at a
+      # gigabyte apiece it would churn the 10 GB the release cache lives in.
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+            ~/.cache/cef
+            apps/desktop/src-tauri/target
+          key: darwin-ci-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: darwin-ci-${{ steps.rust.outputs.cachekey }}-
+
+      - run: pnpm install --frozen-lockfile
+
+      # The CEF bindings' build script downloads the SDK into CEF_PATH and
+      # builds its C++ wrapper with CMake and Ninja — see release.yml.
+      - run: |
+          brew install ninja
+          echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"
+
+      - run: pnpm build
+        working-directory: apps/desktop
+
+      - run: pnpm test
+        working-directory: apps/desktop
+
+      - run: cargo check --features cef
+        working-directory: apps/desktop/src-tauri
+
+      # Unfiltered on purpose: ts-rs regenerates `src/types/events.ts` from
+      # whatever tests ran, and a filtered run leaves it partial. Nothing
+      # here diffs the tree afterwards for the same reason.
+      - run: cargo test
+        working-directory: apps/desktop/src-tauri
+
+      # Its own cargo project. The app and the CLI depend on it by path and
+      # compile only its lib, never its `#[cfg(test)]` module.
+      - run: cargo test
+        working-directory: crates/dray-proto
+
+      - if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+            ~/.cache/cef
+            apps/desktop/src-tauri/target
+          key: darwin-ci-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
