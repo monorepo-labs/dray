@@ -53,12 +53,12 @@ export type WorkItem = AgentEvent | ToolGroup;
 
 /// The `permission_requested` payload, narrowed out of the union once here so
 /// the renderer doesn't re-check a type the builder already established.
-export type PermissionRequestPayload = Extract<
+type PermissionRequestPayload = Extract<
   AgentEvent["payload"],
   { type: "permission_requested" }
 >;
 
-export type QuestionsAskedPayload = Extract<
+type QuestionsAskedPayload = Extract<
   AgentEvent["payload"],
   { type: "questions_asked" }
 >;
@@ -81,7 +81,7 @@ export function isToolGroup(item: WorkItem): item is ToolGroup {
 /// under the agent's activity. That exemption is also why it is subtracted from
 /// `rows`: that count is what the toggle promises to reveal, and a row already
 /// visible is not part of the promise.
-export function isQueuedPrompt(item: WorkItem): boolean {
+function isQueuedPrompt(item: WorkItem): boolean {
   return !isToolGroup(item) && item.payload.type === "user_message";
 }
 
@@ -211,7 +211,7 @@ function bySeq(a: AgentEvent, b: AgentEvent) {
 
 /// The `turn_completed` payload, narrowed once so both readers of the failure
 /// rule take the same shape.
-export type TurnCompletedPayload = Extract<
+type TurnCompletedPayload = Extract<
   AgentEvent["payload"],
   { type: "turn_completed" }
 >;

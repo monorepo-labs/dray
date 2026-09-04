@@ -1,5 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { channel } from "@/lib/channel";
+
 /// Whether the app window is frontmost. Read imperatively rather than as React
 /// state: the one caller that matters is inside a Tauri event listener
 /// registered once, where a state value would be the mount-time one forever.
@@ -11,12 +13,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 /// The DOM pair is the fallback for `pnpm dev`, where there is no Tauri window.
 let focused = document.hasFocus();
 
-const listeners = new Set<(focused: boolean) => void>();
+const changed = channel<boolean>();
 
 function set(next: boolean) {
   if (next === focused) return;
   focused = next;
-  for (const listener of listeners) listener(next);
+  changed.emit(next);
 }
 
 try {
@@ -40,9 +42,4 @@ export function isWindowFocused(): boolean {
 }
 
 /// Subscribe to focus changes; returns the unsubscribe.
-export function onFocusChange(listener: (focused: boolean) => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
+export const onFocusChange = changed.subscribe;

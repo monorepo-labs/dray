@@ -8,7 +8,7 @@ import type { Harness } from "@/types/events";
 /// surface whose job is to be quiet. It also lets one selected icon go
 /// `text-foreground` while the other stays muted, which is the whole of how the
 /// picker shows which agent is on.
-export function ClaudeIcon({ className }: { className?: string }) {
+function ClaudeIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -22,7 +22,7 @@ export function ClaudeIcon({ className }: { className?: string }) {
   );
 }
 
-export function OpenAiIcon({ className }: { className?: string }) {
+function OpenAiIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -50,7 +50,7 @@ export function OpenAiIcon({ className }: { className?: string }) {
 ///
 /// MIT, © Earendil Inc. & Contributors. Credited in the root README beside the
 /// ported themes.
-export function PiIcon({ className }: { className?: string }) {
+function PiIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 800 800"

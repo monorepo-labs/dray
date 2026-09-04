@@ -1,5 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
+
 /// Unsent composer text, keyed by the session it was typed into. `null` is the
 /// new-task composer's own key, which a session UUID can never collide with.
 ///
@@ -18,16 +20,7 @@ import { useCallback, useSyncExternalStore } from "react";
 /// saying, and an app restart is long enough that restoring it a week later
 /// would read as the composer having text in it for no reason.
 const drafts = new Map<string | null, string>();
-const listeners = new Set<() => void>();
-
-function emit() {
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+const changed = channel<void>();
 
 /// Sets a session's draft outright. Exported for tests and for `appendToDraft`;
 /// the composer reaches it through the setter [`useDraft`] returns.
@@ -38,7 +31,7 @@ export function writeDraft(sessionId: string | null, next: string) {
   if (next) drafts.set(sessionId, next);
   else drafts.delete(sessionId);
 
-  emit();
+  changed.emit();
 }
 
 /// A session's draft without subscribing to it. For tests and for callers that
@@ -72,7 +65,7 @@ export function appendToDraft(sessionId: string | null, text: string) {
 /// itself from it.
 export function useDraft(sessionId: string | null) {
   const message = useSyncExternalStore(
-    subscribe,
+    changed.subscribe,
     // Reads the map on every render rather than holding a copy, so a write from
     // the mic button is seen by the textarea without the two being connected.
     // Safe against `useSyncExternalStore`'s reference check because the value is

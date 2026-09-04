@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@/types/events";
 
-export type ChangeRange = {
+type ChangeRange = {
   /// The newest prompt's snapshot — the "before" side. Null when there is
   /// nothing to diff against, which is ordinary rather than an error: a
   /// session in a plain directory records no snapshots, and neither does one
