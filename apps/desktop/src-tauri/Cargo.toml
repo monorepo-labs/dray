@@ -5,6 +5,8 @@ description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
 license = "Apache-2.0"
+# Two binaries once the helper exists; `tauri dev` runs `cargo run` bare.
+default-run = "dray"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -90,6 +92,39 @@ transcribe-cpp = { version = "0.2", default-features = false, features = [
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 transcribe-cpp = { version = "0.2", default-features = false }
+
+# Embedded Chromium for the in-app browser, macOS only for now. Behind a
+# feature so a build without the CEF binaries on disk still compiles: the
+# `cef-dll-sys` build script downloads ~130MB and runs CMake, which is not
+# something `cargo check` should need. See cef/cef.rs.
+[features]
+default = []
+cef = ["dep:cef", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+
+[target.'cfg(target_os = "macos")'.dependencies.cef]
+version = "151.8.0"
+optional = true
+default-features = false
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
+optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+version = "0.3"
+optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
+optional = true
+
+# CEF's renderer, GPU and utility processes run this instead of the app.
+# Copied five times into `Contents/Frameworks/Dray Helper*.app` by the bundle
+# step; a single binary, since only the bundle name tells them apart.
+[[bin]]
+name = "dray-helper"
+path = "src/bin/dray_helper.rs"
+required-features = ["cef"]
 
 [dev-dependencies]
 # Paused-clock tests for the engine's idle unload; a real ten-minute sleep is untestable.

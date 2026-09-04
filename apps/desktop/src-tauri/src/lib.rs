@@ -16,6 +16,10 @@ pub mod analytics;
 pub mod apps;
 pub mod attachments;
 pub mod binpath;
+#[cfg(all(feature = "cef", target_os = "macos"))]
+#[path = "cef/cef.rs"]
+pub mod cef;
+mod local_servers;
 pub mod docs;
 #[path = "events/events.rs"]
 pub mod events;
@@ -700,6 +704,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Chromium first: it patches NSApp and starts its pump, and every
+            // window already exists here for it to parent a view into.
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::init(app.handle());
             // A persisted `in_progress` can't be true anymore — no child
             // survived the restart. Spawned, not awaited: the reset needs no
             // window, and the frontend's first fetch lands well after it.
@@ -746,6 +754,25 @@ pub fn run() {
             list_models,
             refresh_models,
             agent_availability,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_open,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_tabs,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_activate,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_close,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_nav,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_layout,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_zoom,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_devtools,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_pick,
+            local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,
             list_slash_commands,

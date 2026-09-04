@@ -533,6 +533,31 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 
 **No run names itself.** The state is already on every row in it — the yellow rail mark, the green one, the working indicator — so a heading is a second copy of what the rows say, and three of them turn a list of sessions into a list of headings. Only the project heading is drawn, on the first of its runs; the break between runs is what says one ended, which makes that spacer the whole signal — and **it needs `shrink-0`**, since a bare height in a flex column collapses to nothing once the list overflows, i.e. on exactly the long sidebar it exists for. Every row beside it is held up by its own `min-h`. `sortSessions` takes the same reading as the render, or ⌘⇧↑/↓ steps rows where they used to be.
 
+## The browser
+
+**Chromium embedded through CEF (cef-rs), behind the `cef` cargo feature, macOS only.** [cef.rs](apps/desktop/src-tauri/src/cef/cef.rs) owns the tabs; [automation.rs](apps/desktop/src-tauri/src/cef/automation.rs) is `dray browser`. Design and the rejected routes (screencast, WKWebView) are in DRA-155. Dev: `pnpm tauri dev --features cef` with `CEF_PATH` pointing at the framework.
+
+**Each session has its own tabs and its own profile** — `RequestContext` with `cache_path` a *direct child* of `root_cache_path` (`~/.dray/browser/<session-id>`), or CEF refuses the profile. The native view sits above the webview, so nothing in the DOM can draw over it: modals hide it (a body `pointer-events: none` observer), tooltips open `side="top"`, and a "new tab" is *pending* with no browser behind it so the pane can draw an empty state.
+
+- **Never hold the `TABS` lock across a call into CEF.** `load_url` fires `on_loading_state_change` before it returns, and that handler takes the lock. Clone the `Browser` out (`browser_of`), drop the guard, then call.
+- **`do_close` returns 1 and removes the `NSView` itself.** CEF's default sends `performClose:` to the top-level window, which is Dray's quit prompt, and returning 1 alone destroys nothing.
+- **A hidden `NSView` drops input.** Chromium marks the widget hidden and every mouse and key event dispatched to it goes nowhere, measured with a page listener. `reveal` unhides the view off-screen for an input verb and `apply_layout` puts it back. Screenshots and `eval` work hidden; only input needs this.
+- `Target.createTarget` over the debug port is refused by CEF, so tabs are created through `browser_host_create_browser` only.
+- **A popup is CEF's, not a tab made beside it.** `on_before_popup` rewrites the window info and client to ours and returns 0, so `window.open` answers a real window that OAuth flows post back through; cancelling and opening the URL as a fresh tab returned `null` to the page.
+- **CEF can hand over a replacement browser under an id it has not closed yet**, so `on_after_created` replaces a same-id entry and `on_before_close` removes only the instance it holds (`is_same`, called with the lock released).
+- **The picker's console channel is gated per tab and typed.** Any page can log the prefix; only a tab whose picker this app started is listened to, once, and only a payload shaped like `PickedElement`. A render-process binding would be the trusted channel.
+
+**`dray browser` is agent-browser's grammar on Dray's own tabs — no agent-browser binary, no MCP, no debug port.** Each browser gets a DevTools channel of its own (`send_dev_tools_message` in, a `DevToolsMessageObserver` out), so an action is a few CDP calls on the session's active tab and the session id is the only address: an agent can reach no other session's pages by construction. Pointer and key verbs use `Input.dispatch*`, since that is what a person's click does; locators and reads are one page-side script, `HELPERS_JS`, shared by `snapshot` and `find` so the two name the same element.
+
+- **Protocol v5.** `Request::Browser` fails to parse on an older app, which reads as a broken CLI rather than an app with no browser; the bump makes it "update the Dray app". **Do not install a v5 `dray` over `~/.local/bin` while the release app is what reviewers run on** — every `dray send` there is refused. Test through the dev socket: a wrapper setting `DRAY_ENDPOINT=~/.dray/dray-dev.sock` in front of `apps/cli/target/debug/dray`.
+- **`wait_loaded` watches for loading to *begin* before waiting for it to end.** A click's CDP reply lands before the renderer has left the page, so "not loading" answered at once is the old page, and the next verb reads the old URL. 600ms window, then assume no navigation.
+- **`scroll` is `window.scrollBy`, not `mouseWheel`.** The wheel event never answers on a page with nothing to scroll, and hangs the verb for the full timeout.
+- **`press Enter` carries `unmodifiedText` beside `text`.** With `text` alone the key types and does not submit a form.
+- **`set device` names live in `DEVICES` and in `VIEWPORT_PRESETS` both**; a test holds them together. `set viewport`/`set device` ride a `browser_viewport` event into the pane's store, so the device bar shows what the agent set.
+- `console`/`errors` drain a per-tab buffer fed from `on_console_message`; the picker's own lines are kept out of it.
+
+**A link in the transcript asks first.** Both the assistant's markdown links and a URL in the user's own bubble go through `openLink`, which raises [LinkDialog](apps/desktop/src/components/chat/LinkDialog.tsx): Return opens in Dray, a second button opens the system browser, ⌘-click skips the question and leaves the app. One dialog for the whole app, fed by a module store, since the anchors are rendered several components below anything that could hold the state. URLs in user text are a `url` segment from `highlightSegments`, `http(s)://` only, with the sentence's trailing punctuation left outside.
+
 ## Forking a session
 
 **A fork is one conversation carried on twice.** A sidebar row's right-click submenu: **Fork in new worktree** and **Fork here**. Both copy the whole conversation — `--fork-session` takes a session and nothing narrower — so the two differ only in *where* the copy runs.

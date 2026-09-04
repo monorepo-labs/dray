@@ -117,12 +117,16 @@ export function PanelToggle({
 
 /// Which body the right panel is showing. This is the set, not the order —
 /// see `tabOrder`.
-export const PANEL_TABS = ["changes", "subagents", "pr", "issue", "docs"] as const;
+export const PANEL_TABS = ["changes", "browser", "subagents", "pr", "issue", "docs"] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
 const LABELS: Record<PanelTab, string> = {
   changes: "Changes",
+  // The session's browser lives here. Always drawn, unlike PR or Docs: its
+  // empty state is a URL bar, which is a place to start rather than a
+  // sentence saying there is nothing.
+  browser: "Browser",
   subagents: "Subagents",
   // Singular, and not "Linear": the panel is about the work's issue whoever
   // tracks it, and a session usually carries one.
@@ -162,7 +166,7 @@ export function tabOrder({
   docs: boolean;
   issue: boolean;
 }): readonly PanelTab[] {
-  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
   // After Changes, which is what keeps Issue immediately before Subagents.
   if (docs) tabs.push("docs");
   // Immediately before Subagents wherever it is drawn, so the row's order is

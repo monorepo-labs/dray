@@ -119,6 +119,22 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  it("marks an http(s) URL and leaves the sentence's punctuation outside it", () => {
+    expect(highlightSegments("see https://example.com/a?b=1). ok")).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "url", text: "https://example.com/a?b=1" },
+      { kind: "text", text: "). ok" },
+    ]);
+    expect(highlightSegments("(https://en.wikipedia.org/wiki/Foo_(bar))")).toEqual([
+      { kind: "text", text: "(" },
+      { kind: "url", text: "https://en.wikipedia.org/wiki/Foo_(bar)" },
+      { kind: "text", text: ")" },
+    ]);
+    expect(highlightSegments("nothttps://x.y and http:// alone")).toEqual([
+      { kind: "text", text: "nothttps://x.y and http:// alone" },
+    ]);
+  });
+
   it("leaves an email address plain", () => {
     expect(highlightSegments("ping me@example.com about it")).toEqual([
       { kind: "text", text: "ping me@example.com about it" },

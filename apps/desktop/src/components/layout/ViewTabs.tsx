@@ -6,13 +6,14 @@ import { IS_MAC } from "@/lib/platform";
 /// Which view fills the main column. Set and order in one, unlike the right
 /// panel's tabs: none of these are conditional, so a Terminal view joins by
 /// being added here and given a body.
-export const VIEW_TABS = ["chat", "changes"] as const;
+export const VIEW_TABS = ["chat", "changes", "browser"] as const;
 
 export type ViewTab = (typeof VIEW_TABS)[number];
 
 const LABELS: Record<ViewTab, string> = {
   chat: "Chat",
   changes: "Changes",
+  browser: "Browser",
 };
 
 /// The main column's tab row, drawn in the titlebar beside the session's name.
