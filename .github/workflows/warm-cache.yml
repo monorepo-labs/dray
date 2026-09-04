@@ -20,6 +20,7 @@ on:
     paths:
       - "apps/desktop/src-tauri/**"
       - ".github/workflows/warm-cache.yml"
+      - ".github/actions/desktop-setup/**"
   workflow_dispatch:
 
 concurrency:

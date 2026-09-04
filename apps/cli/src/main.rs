@@ -396,6 +396,32 @@ fn target(t: String) -> Locator {
 fn browser_action(f: &BrowserCommand) -> Result<BrowserAction, String> {
     let mut words = f.words.iter().cloned();
     let verb = words.next().ok_or(BROWSER_VERBS)?;
+
+    // Flat on the command so clap accepts them anywhere, so the verb has to
+    // refuse the ones that are not its own: `click @e1 --full` did nothing
+    // with `--full` and said nothing about it.
+    let given = [
+        (f.interactive, "-i"),
+        (f.compact, "-c"),
+        (f.selector.is_some(), "-s"),
+        (f.name.is_some(), "--name"),
+        (f.exact, "--exact"),
+        (f.url.is_some(), "--url"),
+        (f.text.is_some(), "--text"),
+        (f.load.is_some(), "--load"),
+        (f.full, "--full"),
+    ];
+    let allowed: &[&str] = match verb.as_str() {
+        "snapshot" => &["-i", "-c", "-s"],
+        "find" => &["--name", "--exact"],
+        "wait" => &["--url", "--text", "--load"],
+        "screenshot" => &["--full"],
+        _ => &[],
+    };
+    if let Some((_, flag)) = given.iter().find(|(set, flag)| *set && !allowed.contains(flag)) {
+        return Err(format!("browser {verb} takes no {flag}"));
+    }
+
     if verb != "find" {
         return act(&verb, None, words, f);
     }
@@ -435,7 +461,7 @@ fn act(
 ) -> Result<BrowserAction, String> {
     use BrowserAction as A;
     let mut word = |usage: &str| words.next().ok_or_else(|| usage.to_string());
-    Ok(match verb {
+    let action = match verb {
         "open" => A::Open { url: word("open <url>")? },
         "back" => A::Back,
         "forward" => A::Forward,
@@ -484,25 +510,29 @@ fn act(
         }
         "get" => {
             let usage = "get <text|html|value|attr|title|url|count|box> [target]";
-            let what = match word(usage)?.as_str() {
-                "text" => Get::Text,
-                "html" => Get::Html,
-                "value" => Get::Value,
-                "title" => Get::Title,
-                "url" => Get::Url,
-                "count" => Get::Count,
-                "box" => Get::Box,
+            match word(usage)?.as_str() {
                 "attr" => {
                     let at = match found {
                         Some(at) => at,
                         None => target(word("get attr <target> <name>")?),
                     };
                     let name = word("get attr <target> <name>")?;
-                    return Ok(A::Get { what: Get::Attr { name }, at: Some(at) });
+                    A::Get { what: Get::Attr { name }, at: Some(at) }
                 }
-                other => return Err(format!("get {other}? {usage}")),
-            };
-            A::Get { what, at: found.or_else(|| word("").ok().map(target)) }
+                other => {
+                    let what = match other {
+                        "text" => Get::Text,
+                        "html" => Get::Html,
+                        "value" => Get::Value,
+                        "title" => Get::Title,
+                        "url" => Get::Url,
+                        "count" => Get::Count,
+                        "box" => Get::Box,
+                        _ => return Err(format!("get {other}? {usage}")),
+                    };
+                    A::Get { what, at: found.or_else(|| word("").ok().map(target)) }
+                }
+            }
         }
         "is" => {
             let what = match word("is <visible|enabled|checked> <target>")?.as_str() {
@@ -543,7 +573,13 @@ fn act(
             _ => return Err("set viewport <w> <h>, or set device <name>".into()),
         },
         other => return Err(format!("browser {other}? {BROWSER_VERBS}")),
-    })
+    };
+    // `click @e1 garbage` used to be refused by clap; a word nothing read is
+    // a command the caller meant differently.
+    if let Some(extra) = words.next() {
+        return Err(format!("browser {verb}: unexpected `{extra}`"));
+    }
+    Ok(action)
 }
 
 fn parse_id(s: &str) -> Result<i32, String> {
@@ -553,7 +589,11 @@ fn parse_id(s: &str) -> Result<i32, String> {
 /// The app answered something this command never asks for: the two sides
 /// disagree about the protocol rather than about the request.
 fn unexpected(response: Response) -> String {
-    format!("the app answered {response:?} to a different command — versions may disagree")
+    let kind = serde_json::to_value(&response).map(|v| v["status"].to_string());
+    format!(
+        "the app answered {} to a different command — versions may disagree",
+        kind.unwrap_or_default()
+    )
 }
 
 fn ls(args: Ls) -> Result<(), String> {
@@ -608,6 +648,7 @@ fn print_table(sessions: &[SessionSummary]) {
 ///
 /// To a file first, not `curl | sh`: `pipefail` is not POSIX, so piped straight
 /// into a shell a failed download runs an empty script and reports success.
+/// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
@@ -618,7 +659,9 @@ fn update(args: Update) -> Result<(), String> {
     let mut sh = std::process::Command::new("sh");
     sh.args([
         "-c",
-        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && curl -fsSL \"$0\" -o \"$t\" && sh \"$t\"",
+        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
+         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
+         sh \"$t\"",
         INSTALLER_URL,
     ])
     // Where this binary lives, not ~/.local/bin. Renaming over a running
@@ -960,6 +1003,12 @@ mod tests {
         ));
         assert!(action(&["find", "text", "Submit"]).is_err());
         assert!(action(&["frob"]).is_err());
+        // What clap used to refuse: a word nothing reads, a flag of another verb.
+        assert!(action(&["click", "@e1", "garbage"]).is_err());
+        assert!(action(&["back", "garbage"]).is_err());
+        assert!(action(&["click", "@e1", "--full"]).is_err());
+        assert!(action(&["find", "text", "Submit", "click", "-i"]).is_err());
+        assert!(action(&["snapshot", "-i", "-s", "main"]).is_ok());
     }
 
     #[test]
