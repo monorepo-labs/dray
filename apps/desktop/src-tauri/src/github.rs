@@ -9,7 +9,7 @@
 use anyhow::Result;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, process::Stdio, sync::OnceLock};
+use std::{collections::HashMap, process::Stdio, sync::LazyLock};
 use tokio::{process::Command, sync::Mutex};
 use ts_rs::TS;
 
@@ -239,29 +239,29 @@ impl<T> Nodes<T> {
     }
 }
 
-/// Generic over the node shape, because both queries here answer with the same
-/// three envelopes around a `pullRequests` connection and only the fields
-/// inside it differ.
+/// Generic over the repository shape, because both queries here answer with
+/// the same two envelopes around `repository` and only what is asked of it
+/// differs: one `pullRequests` connection, or two under aliases.
 #[derive(Deserialize)]
-struct Response<T> {
-    data: Option<ResponseData<T>>,
+struct Response<R> {
+    data: Option<ResponseData<R>>,
     /// GraphQL reports a failed query with a 200 and an `errors` array, so a
     /// zero exit code proves nothing on its own.
     #[serde(default)]
     errors: Vec<GraphQlError>,
 }
 
-impl<T> Response<T> {
-    /// The connection's nodes, or the first error GitHub reported.
-    fn prs(self) -> Result<Vec<T>, String> {
+impl<R> Response<R> {
+    /// The repository answered with, or the first error GitHub reported.
+    ///
+    /// Errors are checked before the data: a failed query answers with a 200
+    /// and a null `data`, so reading the connection first turns "could not
+    /// resolve repository" into "this repo has no pull requests".
+    fn repository(self) -> Result<Option<R>, String> {
         if let Some(first) = self.errors.first() {
             return Err(first.message.clone());
         }
-        Ok(self
-            .data
-            .and_then(|d| d.repository)
-            .map(|r| Nodes::take(r.pull_requests))
-            .unwrap_or_default())
+        Ok(self.data.and_then(|d| d.repository))
     }
 }
 
@@ -272,14 +272,14 @@ struct GraphQlError {
 }
 
 #[derive(Deserialize)]
-struct ResponseData<T> {
-    repository: Option<Repository<T>>,
+struct ResponseData<R> {
+    repository: Option<R>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Repository<T> {
-    pull_requests: Option<Nodes<T>>,
+struct PrsRepository {
+    pull_requests: Option<Nodes<RawPr>>,
 }
 
 #[derive(Deserialize)]
@@ -810,10 +810,10 @@ async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
 /// is paid once per checkout: a remote does not move while the app is running,
 /// and the same bargain the command cache and `binpath` already make.
 async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
-    static SLUGS: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
-    let slugs = SLUGS.get_or_init(|| Mutex::new(HashMap::new()));
+    static SLUGS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    if let Some(hit) = slugs.lock().await.get(cwd) {
+    if let Some(hit) = SLUGS.lock().await.get(cwd) {
         return Ok(hit.clone());
     }
 
@@ -825,7 +825,7 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("could not read the repository name from {slug:?}"))?;
     let pair = (owner.to_string(), name.to_string());
 
-    slugs.lock().await.insert(cwd.to_string(), pair.clone());
+    SLUGS.lock().await.insert(cwd.to_string(), pair.clone());
     Ok(pair)
 }
 
@@ -885,10 +885,16 @@ async fn prs_for_branch_inner(cwd: &str, branch: &str) -> Result<Vec<PullRequest
 
 /// Splits parsing off the spawn so the fixture can exercise it.
 fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
-    let response: Response<RawPr> =
+    let response: Response<PrsRepository> =
         serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
 
-    let mut prs: Vec<PullRequest> = response.prs()?.into_iter().map(RawPr::map).collect();
+    let mut prs: Vec<PullRequest> = response
+        .repository()?
+        .map(|r| Nodes::take(r.pull_requests))
+        .unwrap_or_default()
+        .into_iter()
+        .map(RawPr::map)
+        .collect();
 
     // An open PR is the one being worked on whatever its age, so it outranks a
     // newer merged one — otherwise reopening an old branch shows the reader the
@@ -1026,21 +1032,7 @@ fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> PrChecksState {
         .unwrap_or(PrChecksState::Clear)
 }
 
-/// The two-connection answer. `Response<T>` next door can't serve it: it is
-/// generic over the *node* shape around one field named `pullRequests`, and
-/// this asks the same field twice under two aliases.
-#[derive(Deserialize)]
-struct MarksResponse {
-    data: Option<MarksData>,
-    #[serde(default)]
-    errors: Vec<GraphQlError>,
-}
-
-#[derive(Deserialize)]
-struct MarksData {
-    repository: Option<MarksRepository>,
-}
-
+/// The two-connection answer: `pullRequests` asked twice under two aliases.
 #[derive(Deserialize)]
 struct MarksRepository {
     open: Option<Nodes<RawPrMark>>,
@@ -1084,19 +1076,10 @@ async fn pr_marks_inner(cwd: &str) -> Result<Vec<PrMark>, String> {
 
 /// Splits parsing off the spawn, like [`read_prs`].
 fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
-    let response: MarksResponse =
+    let response: Response<MarksRepository> =
         serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
 
-    // Checked before the data, for [`Response::prs`]'s reason: a failed query
-    // answers with a 200 and a null `data`, so reading the connections first
-    // turns "could not resolve repository" into "this repo has no pull
-    // requests".
-    if let Some(first) = response.errors.first() {
-        return Err(first.message.clone());
-    }
-
-    let repository = response.data.and_then(|d| d.repository);
-    let (open, merged) = match repository {
+    let (open, merged) = match response.repository()? {
         Some(r) => (Nodes::take(r.open), Nodes::take(r.merged)),
         None => (Vec::new(), Vec::new()),
     };

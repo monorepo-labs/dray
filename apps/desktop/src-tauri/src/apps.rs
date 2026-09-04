@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Mutex, OnceLock},
+    sync::{LazyLock, Mutex},
 };
 
 use serde::Serialize;
@@ -131,7 +131,7 @@ fn search_dirs() -> Vec<PathBuf> {
         PathBuf::from("/System/Applications/Utilities"),
     ];
     // Where JetBrains Toolbox and per-user installs land.
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = std::env::home_dir() {
         dirs.push(home.join("Applications"));
     }
     dirs
@@ -160,10 +160,8 @@ fn installed(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
 /// Icons cost two spawns each, so they are read once per bundle path and held
 /// for the life of the process. Keyed by path, so an app that moves is read
 /// again rather than drawn with the old one.
-fn icon_cache() -> &'static Mutex<HashMap<PathBuf, Option<String>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static ICONS: LazyLock<Mutex<HashMap<PathBuf, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The `.icns` a bundle names as its icon.
 ///
@@ -198,7 +196,7 @@ fn icns_path(bundle: &Path) -> Option<PathBuf> {
 /// The bundle's icon as a `data:` PNG, read through `sips` — on every mac, and
 /// the only thing here that turns an `.icns` into something a webview draws.
 fn read_icon(bundle: &Path) -> Option<String> {
-    if let Ok(cache) = icon_cache().lock() {
+    if let Ok(cache) = ICONS.lock() {
         if let Some(hit) = cache.get(bundle) {
             return hit.clone();
         }
@@ -228,7 +226,7 @@ fn read_icon(bundle: &Path) -> Option<String> {
         })
     });
 
-    if let Ok(mut cache) = icon_cache().lock() {
+    if let Ok(mut cache) = ICONS.lock() {
         cache.insert(bundle.to_path_buf(), icon.clone());
     }
     icon

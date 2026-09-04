@@ -9,12 +9,15 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::{fs, sync::Mutex};
+use tokio::sync::Mutex;
 use ts_rs::TS;
 
-use crate::{issues::TrackerAccount, store::get_home_app_dir};
+use crate::{
+    issues::TrackerAccount,
+    store::{get_home_app_dir, read_json, write_atomic},
+};
 
 /// Serializes writers. The file is rewritten whole, so a concurrent writer
 /// would drop the other's field — same bargain `projects.json` makes.
@@ -151,17 +154,7 @@ fn opted_out() -> AppSettings {
 /// Takes the directory so a test can round-trip against a tempdir rather than
 /// the real `~/.dray`.
 async fn read_from(dir: &Path) -> Result<AppSettings> {
-    let contents = match fs::read_to_string(path_in(dir)).await {
-        Ok(v) => v,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AppSettings::default()),
-        Err(e) => return Err(e).context("could not open settings file"),
-    };
-
-    if contents.trim().is_empty() {
-        return Ok(AppSettings::default());
-    }
-
-    serde_json::from_str(&contents).context("could not parse settings file")
+    read_json(&path_in(dir)).await
 }
 
 pub async fn write(settings: &AppSettings) -> Result<()> {
@@ -175,20 +168,7 @@ pub async fn write(settings: &AppSettings) -> Result<()> {
 /// index does — a torn settings file would fail to parse on the next launch and
 /// read as opted out, silently undoing whatever was just set.
 async fn write_to(dir: &Path, settings: &AppSettings) -> Result<()> {
-    let path = path_in(dir);
-    let tmp = path.with_extension("json.tmp");
-
-    fs::write(&tmp, serde_json::to_string_pretty(settings)?)
-        .await
-        .context("could not write settings file")?;
-
-    if let Err(e) = fs::rename(&tmp, &path).await {
-        // Or the next write inherits a stale temp file it never wrote.
-        let _ = fs::remove_file(&tmp).await;
-        return Err(e).context("could not replace settings file");
-    }
-
-    Ok(())
+    write_atomic(&path_in(dir), serde_json::to_string_pretty(settings)?).await
 }
 
 fn path_in(dir: &Path) -> PathBuf {

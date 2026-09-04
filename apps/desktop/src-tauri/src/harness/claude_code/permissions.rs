@@ -40,27 +40,37 @@ pub struct PendingRequest {
     pub input: Value,
     /// Keyed by [`PermissionOption::id`].
     pub options: HashMap<String, ResolvedOption>,
-    /// The JSON-RPC id the answer has to name, for a harness that asked as a
-    /// peer rather than over a control channel.
-    ///
-    /// `None` is Claude Code, whose reply is a `control_response` addressed by
-    /// the request id this entry is filed under. Held here rather than worked
-    /// out at reply time because only the reader that took the request knows
-    /// it — and an answer aimed at the wrong id is ignored in silence on both
-    /// protocols.
-    pub rpc_id: Option<i64>,
-    /// pi's dialog method (`select`, `confirm`, `input`), for a request an
-    /// *extension* asked rather than a permission gate.
-    ///
-    /// Held because pi has no one verdict envelope: each dialog is answered in
-    /// its own shape, and `confirm` reads a different field from the other two.
-    /// The id the answer names is the request id this entry is already filed
-    /// under, so only the method has to be remembered.
-    ///
-    /// `None` for both other harnesses, and a pi permission gate — should one
-    /// ever exist — would set it too, because what varies is the reply shape and
-    /// not who asked.
-    pub pi_dialog_method: Option<String>,
+    /// Which channel the answer travels on, and so what shape it takes. Held
+    /// here rather than worked out at reply time because only the reader that
+    /// took the request knows — and an answer aimed at the wrong id is ignored
+    /// in silence on every protocol.
+    pub reply: Reply,
+}
+
+/// How a request is answered: one shape per harness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reply {
+    /// Claude Code: a `control_response` addressed by the request id the entry
+    /// is filed under.
+    Control,
+    /// Codex asked as a JSON-RPC peer, so the answer names the id it asked with.
+    Rpc(i64),
+    /// A pi *extension* dialog (`select`, `confirm`, `input`), answered in its
+    /// method's own shape: pi has no one verdict envelope, and `confirm` reads
+    /// a different field from the other two. A pi permission gate — should one
+    /// ever exist — would take this too, since what varies is the reply shape
+    /// and not who asked.
+    PiDialog(String),
+}
+
+impl Reply {
+    /// The dialog method, for a request that came from a pi dialog.
+    pub fn dialog_method(&self) -> Option<&str> {
+        match self {
+            Reply::PiDialog(method) => Some(method),
+            _ => None,
+        }
+    }
 }
 
 /// A button, plus the wire payload picking it sends.
@@ -93,10 +103,7 @@ impl PendingRequest {
             tool_name: request.tool_name.clone(),
             input: request.input.clone(),
             options,
-            // Claude answers on the control channel, addressed by the request
-            // id this entry is already filed under.
-            rpc_id: None,
-            pi_dialog_method: None,
+            reply: Reply::Control,
         };
 
         (pending, offered)
@@ -108,12 +115,8 @@ impl PendingRequest {
     /// was never asked about.
     pub fn for_questions(request: &PermissionRequest) -> Self {
         Self {
-            tool_use_id: request.tool_use_id.clone(),
-            tool_name: request.tool_name.clone(),
-            input: request.input.clone(),
             options: HashMap::new(),
-            rpc_id: None,
-            pi_dialog_method: None,
+            ..Self::new(request).0
         }
     }
 }

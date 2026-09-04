@@ -14,14 +14,14 @@
 //! CLI the moment they do.
 
 use super::control::{ControlLine, ControlRequest};
+use crate::harness::ProbeCache;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, process::Stdio, sync::OnceLock, time::Duration};
+use std::{process::Stdio, sync::LazyLock, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
-    sync::Mutex,
     time::timeout,
 };
 use ts_rs::TS;
@@ -80,12 +80,12 @@ fn supported(commands: Vec<SlashCommand>) -> Vec<SlashCommand> {
 }
 
 /// Probes are ~1.5s each, so the answer is kept for the life of the process.
-/// Keyed by directory because project and local scopes make the list per-repo.
 ///
 /// Never invalidated: a plugin installed while the app is open needs a restart
 /// to show up, which is the same bargain `binpath` makes and cheaper than
 /// re-probing on every keystroke.
-static CACHE: OnceLock<Mutex<HashMap<String, Vec<SlashCommand>>>> = OnceLock::new();
+static CACHE: LazyLock<ProbeCache<Vec<SlashCommand>>> =
+    LazyLock::new(|| ProbeCache::new(Duration::MAX));
 
 /// A probe that hangs must not hold the picker open forever. Generous against
 /// the ~1.5s measured: a cold CLI on a large repo is slower, and the cost of
@@ -95,22 +95,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The slash commands available in `cwd`, cached after the first read.
 pub async fn list_commands(cwd: &str) -> Result<Vec<SlashCommand>> {
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    if let Some(hit) = cache.lock().await.get(cwd) {
-        return Ok(hit.clone());
-    }
-
-    let commands = timeout(PROBE_TIMEOUT, probe(cwd))
+    CACHE
+        .get_or_probe(cwd, || async {
+            timeout(PROBE_TIMEOUT, probe(cwd))
+                .await
+                .context("timed out asking the CLI for its slash commands")?
+        })
         .await
-        .context("timed out asking the CLI for its slash commands")??;
-
-    cache
-        .lock()
-        .await
-        .insert(cwd.to_string(), commands.clone());
-
-    Ok(commands)
 }
 
 /// Spawns a throwaway child purely to ask it what it can do, then kills it.

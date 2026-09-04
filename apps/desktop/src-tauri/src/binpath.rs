@@ -12,6 +12,7 @@
 //! change while the app runs.
 
 use crate::harness::Harness;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -36,18 +37,27 @@ const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/co
 /// already was — a spawn error naming the binary — instead of turning a
 /// resolvable-by-PATH case we didn't predict into a hard stop.
 pub async fn claude() -> PathBuf {
-    if let Some(path) = CLAUDE_PATH.get() {
-        return path.clone();
+    cached(&CLAUDE_PATH, or_bare("claude")).await
+}
+
+/// The slot's answer, or `resolve`'s, kept for the life of the process.
+///
+/// A race here is harmless: both threads resolved the same binary, and the
+/// loser just drops its copy.
+async fn cached<T: Clone>(slot: &'static OnceLock<T>, resolve: impl Future<Output = T>) -> T {
+    if let Some(hit) = slot.get() {
+        return hit.clone();
     }
+    let resolved = resolve.await;
+    slot.get_or_init(|| resolved).clone()
+}
 
-    let resolved = resolve("claude")
-        .await
-        .unwrap_or_else(|| PathBuf::from("claude"));
-
-    // A race here is harmless: both threads resolved the same binary, and the
-    // loser just drops its copy.
-    let _ = CLAUDE_PATH.set(resolved);
-    CLAUDE_PATH.get().cloned().unwrap_or_else(|| PathBuf::from("claude"))
+/// Resolves `name`, falling back to the bare name rather than erroring: that
+/// keeps the failure where it already was — a spawn error naming the binary —
+/// instead of turning a resolvable-by-PATH case we didn't predict into a hard
+/// stop.
+async fn or_bare(name: &str) -> PathBuf {
+    resolve(name).await.unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// The absolute path to `gh`, or `None` where it isn't installed.
@@ -60,13 +70,7 @@ pub async fn claude() -> PathBuf {
 /// The answer is cached including its absence, so installing `gh` while the app
 /// runs needs a restart — the same bargain the login-shell probe already makes.
 pub async fn gh() -> Option<PathBuf> {
-    if let Some(path) = GH_PATH.get() {
-        return path.clone();
-    }
-
-    let resolved = resolve("gh").await;
-    let _ = GH_PATH.set(resolved);
-    GH_PATH.get().cloned().flatten()
+    cached(&GH_PATH, resolve("gh")).await
 }
 
 /// The absolute path to a `codex` that can actually speak app-server.
@@ -86,10 +90,10 @@ pub async fn gh() -> Option<PathBuf> {
 /// like [`gh`]: a Codex session is one the reader picked, so a spawn error
 /// naming the binary is the honest failure.
 pub async fn codex() -> PathBuf {
-    if let Some(path) = CODEX_PATH.get() {
-        return path.clone();
-    }
+    cached(&CODEX_PATH, resolve_codex()).await
+}
 
+async fn resolve_codex() -> PathBuf {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = search_path("codex") {
         candidates.push(path);
@@ -116,11 +120,7 @@ pub async fn codex() -> PathBuf {
         }
     }
 
-    let _ = CODEX_PATH.set(resolved.unwrap_or_else(|| PathBuf::from("codex")));
-    CODEX_PATH
-        .get()
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("codex"))
+    resolved.unwrap_or_else(|| PathBuf::from("codex"))
 }
 
 static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -139,14 +139,7 @@ static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// `pi --mode rpc` and ask, so the real check costs nothing extra there and a
 /// constant here would be a second thing to keep true.
 pub async fn pi() -> PathBuf {
-    if let Some(path) = PI_PATH.get() {
-        return path.clone();
-    }
-
-    let resolved = resolve("pi").await.unwrap_or_else(|| PathBuf::from("pi"));
-
-    let _ = PI_PATH.set(resolved);
-    PI_PATH.get().cloned().unwrap_or_else(|| PathBuf::from("pi"))
+    cached(&PI_PATH, or_bare("pi")).await
 }
 
 #[cfg(test)]
@@ -160,7 +153,7 @@ mod pi_resolution_tests {
     async fn where_pi_resolves_to() {
         println!("pi -> {}", super::pi().await.display());
         // The mise branch alone, since any earlier hit hides it above.
-        let mise = dirs::home_dir().unwrap().join(".local/share/mise/installs");
+        let mise = std::env::home_dir().unwrap().join(".local/share/mise/installs");
         println!("mise pi -> {:?}", super::find_versioned(&mise, 2, &["bin", "", "pi"], "pi"));
     }
 }
@@ -276,7 +269,7 @@ fn search_path(bin: &str) -> Option<PathBuf> {
 /// installed is invisible to the agent unless these are put back — the same
 /// failure this module exists to solve for `claude`, one layer out.
 pub fn known_dirs() -> Vec<PathBuf> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = std::env::home_dir() else {
         return Vec::new();
     };
 
@@ -373,7 +366,7 @@ fn with_dirs(inherited: &std::ffi::OsStr, extra: Vec<PathBuf>) -> String {
 /// common bundle launch never pays for a shell spawn. Not exhaustive by design
 /// — [`login_shell_which`] is the general answer, this is the fast path.
 fn search_known_dirs(bin: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let home = std::env::home_dir()?;
     let candidates = known_dirs();
 
     if let Some(found) = candidates

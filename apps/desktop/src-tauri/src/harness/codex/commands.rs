@@ -14,15 +14,14 @@
 //! have to agree, and both read the same `skills/list`.
 
 use super::rpc::RpcClient;
-use crate::harness::claude_code::commands::SlashCommand;
+use crate::harness::{claude_code::commands::SlashCommand, ProbeCache};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, process::Stdio, time::Duration};
+use std::{process::Stdio, sync::LazyLock, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
-    sync::Mutex,
     time::timeout,
 };
 
@@ -65,7 +64,7 @@ struct SkillsList {
 /// Kept for the life of the process, keyed by directory, exactly as Claude
 /// Code's list is: a probe costs a child, and a skill installed while Dray is
 /// open is a restart away rather than a keystroke away.
-static CACHE: Mutex<Option<HashMap<String, Vec<Skill>>>> = Mutex::const_new(None);
+static CACHE: LazyLock<ProbeCache<Vec<Skill>>> = LazyLock::new(|| ProbeCache::new(Duration::MAX));
 
 /// A probe that hangs must not hold the picker open forever.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -78,25 +77,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// hand, so it staying shut is a smaller failure than an error over the
 /// composer.
 async fn list_skills(cwd: &str) -> Vec<Skill> {
-    if let Some(hit) = CACHE.lock().await.as_ref().and_then(|map| map.get(cwd)) {
-        return hit.clone();
-    }
-
-    let skills = match probe(cwd).await {
-        Ok(skills) => skills,
-        Err(err) => {
-            eprintln!("[codex commands] {err:#}");
-            return Vec::new();
-        }
-    };
-
     CACHE
-        .lock()
+        .get_or_probe(cwd, || probe(cwd))
         .await
-        .get_or_insert_with(HashMap::new)
-        .insert(cwd.to_string(), skills.clone());
-
-    skills
+        .unwrap_or_else(|err| {
+            eprintln!("[codex commands] {err:#}");
+            Vec::new()
+        })
 }
 
 /// The picker's rows for `cwd`.

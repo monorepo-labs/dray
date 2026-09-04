@@ -701,7 +701,7 @@ fn current_tag() -> String {
 const SKILL_HOMES: [&str; 3] = [".claude", ".codex", ".agents"];
 
 fn install_skill() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("could not resolve your home directory")?;
+    let home = std::env::home_dir().ok_or("could not resolve your home directory")?;
 
     for agent_home in SKILL_HOMES {
         let dir = home.join(agent_home).join("skills").join("dray");

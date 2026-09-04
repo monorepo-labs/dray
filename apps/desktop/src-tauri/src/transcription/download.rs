@@ -9,21 +9,17 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures_util::StreamExt;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
-use tokio::{
-    fs,
-    io::{AsyncWriteExt, BufWriter},
-};
+use tokio::fs;
 use ts_rs::TS;
 
 use super::catalog::{self, TranscriptionModel};
+use crate::download::{download_verified, Cancelled};
 use crate::store::get_home_app_dir;
 
 /// Progress for the settings tab's bar.
@@ -109,11 +105,10 @@ pub async fn delete(model: &TranscriptionModel) -> Result<()> {
 /// A cancelled entry is *removed* rather than set false, so "is this cancelled"
 /// and "is this running" are one question. Keyed by model id, since that is
 /// what the button in settings has to hand.
-static CANCELLED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static CANCELLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn cancel_flag(model_id: &str, set: bool) {
-    let mut guard = CANCELLED.lock().expect("cancel set poisoned");
-    let ids = guard.get_or_insert_with(HashSet::new);
+    let mut ids = CANCELLED.lock().expect("cancel set poisoned");
 
     if set {
         ids.insert(model_id.to_string());
@@ -126,8 +121,7 @@ fn is_cancelled(model_id: &str) -> bool {
     CANCELLED
         .lock()
         .expect("cancel set poisoned")
-        .as_ref()
-        .is_some_and(|ids| ids.contains(model_id))
+        .contains(model_id)
 }
 
 /// One running download per model, so a restart cannot race the task it is
@@ -146,13 +140,13 @@ fn is_cancelled(model_id: &str) -> bool {
 /// thing to do, and it only has to *wait*. The old task observes the flag at its
 /// next chunk and releases, which is why the flag is cleared after the lock is
 /// taken and not before.
-static IN_FLIGHT: Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = Mutex::new(None);
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn in_flight_slot(model_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     IN_FLIGHT
         .lock()
         .expect("in-flight set poisoned")
-        .get_or_insert_with(HashMap::new)
         .entry(model_id.to_string())
         .or_default()
         .clone()
@@ -166,19 +160,6 @@ fn in_flight_slot(model_id: &str) -> Arc<tokio::sync::Mutex<()>> {
 pub fn cancel(model_id: &str) {
     cancel_flag(model_id, true);
 }
-
-/// Raised when the reader called the download off. Carried as an error so the
-/// `.part` cleanup and the cancelled state share one path out.
-#[derive(Debug)]
-pub struct Cancelled;
-
-impl std::fmt::Display for Cancelled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "download cancelled")
-    }
-}
-
-impl std::error::Error for Cancelled {}
 
 /// Whether the bytes actually landed on disk.
 ///
@@ -223,11 +204,11 @@ pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<Dow
         // A cancel is what the reader asked for, so it ends the progress entry
         // without an error message the settings tab would have to draw.
         if e.downcast_ref::<Cancelled>().is_some() {
-            emit_cancelled(app, model);
+            emit(app, model, 0, model.size_bytes, None, true);
             return Ok(Downloaded::Cancelled);
         }
 
-        emit(app, model, 0, model.size_bytes, Some(e.to_string()));
+        emit(app, model, 0, model.size_bytes, Some(e.to_string()), false);
 
         return Err(e);
     }
@@ -236,90 +217,31 @@ pub async fn download(app: &AppHandle, model: &TranscriptionModel) -> Result<Dow
         .await
         .context("could not move the downloaded model into place")?;
 
-    emit(app, model, model.size_bytes, model.size_bytes, None);
+    emit(app, model, model.size_bytes, model.size_bytes, None, false);
 
     Ok(Downloaded::Installed)
 }
 
 async fn stream_to(app: &AppHandle, model: &TranscriptionModel, part: &Path) -> Result<()> {
-    let response = reqwest::get(model.url())
-        .await
-        .context("could not reach Hugging Face")?;
-
-    if !response.status().is_success() {
-        bail!("download failed with status {}", response.status());
-    }
-
     // The catalog's size is the one used for progress, not `content_length`:
     // the header can be absent or wrong, and it is also what the finished file
     // is checked against, so the bar and the check agree by construction.
     let total = model.size_bytes;
 
-    let file = fs::File::create(part)
-        .await
-        .context("could not open the download file")?;
-    let mut writer = BufWriter::new(file);
-    let mut hasher = Sha256::new();
-    let mut received: u64 = 0;
-    let mut last_emit = 0u64;
-
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        // Between chunks is the one point where giving up leaves nothing half
-        // written that the caller has to reason about.
-        if is_cancelled(model.id) {
-            return Err(Cancelled.into());
-        }
-
-        let chunk = chunk.context("the download was interrupted")?;
-
-        hasher.update(&chunk);
-        writer
-            .write_all(&chunk)
-            .await
-            .context("could not write the model to disk")?;
-
-        received += chunk.len() as u64;
-
-        // Roughly every 4MB. One event per chunk is thousands of round trips to
-        // the webview for a bar that redraws at screen resolution.
-        if received - last_emit >= 4 << 20 {
-            last_emit = received;
-            emit(app, model, received, total, None);
-        }
-    }
-
-    writer
-        .flush()
-        .await
-        .context("could not finish writing the model")?;
-
-    if received != model.size_bytes {
-        bail!(
-            "downloaded {received} bytes where the catalog expects {}",
-            model.size_bytes
-        );
-    }
-
-    let digest = hex(&hasher.finalize());
-    if digest != model.sha256 {
-        bail!("the downloaded model does not match its published checksum");
-    }
-
-    Ok(())
+    download_verified(
+        &model.url(),
+        part,
+        total,
+        model.sha256,
+        || is_cancelled(model.id),
+        |received| emit(app, model, received, total, None, false),
+    )
+    .await
 }
 
-fn emit(app: &AppHandle, model: &TranscriptionModel, received: u64, total: u64, error: Option<String>) {
-    emit_progress(app, model, received, total, error, false);
-}
-
-/// The closing event for a download the reader called off.
-fn emit_cancelled(app: &AppHandle, model: &TranscriptionModel) {
-    emit_progress(app, model, 0, model.size_bytes, None, true);
-}
-
-fn emit_progress(
+/// One progress event. `cancelled` is the closing event for a download the
+/// reader called off.
+fn emit(
     app: &AppHandle,
     model: &TranscriptionModel,
     received: u64,
@@ -339,10 +261,6 @@ fn emit_progress(
     );
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Resolves an id to the path of an installed model, or says why not.
 pub async fn installed_path(model_id: &str) -> Result<PathBuf> {
     let model =
@@ -358,24 +276,6 @@ pub async fn installed_path(model_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_is_lowercase_and_padded() {
-        assert_eq!(hex(&[0x00, 0x0f, 0xff]), "000fff");
-    }
-
-    /// The catalog's hashes are compared against this spelling, so a change in
-    /// width or case here silently fails every download.
-    #[test]
-    fn hex_of_a_known_digest_matches_the_catalog_spelling() {
-        let digest = hex(&Sha256::digest(b""));
-
-        assert_eq!(
-            digest,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(digest.len(), 64);
-    }
 
     #[tokio::test]
     async fn unknown_model_id_is_an_error() {
