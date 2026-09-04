@@ -12,7 +12,6 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
-import { shouldEvict } from "@/lib/evict";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
@@ -1664,6 +1663,9 @@ useEffect(() => {
   };
 }, [selectedSessionId]);
 
+/// How long a loaded transcript may sit unviewed before it is dropped.
+const IDLE_EVICT_MS = 10 * 60 * 1000;
+
 /// Drops idle transcripts from memory. Every transcript opened since launch
 /// stayed resident before this — hundreds of megabytes by the end of a day.
 /// The log on disk is complete, so an evicted session reloads through the
@@ -1682,22 +1684,21 @@ useEffect(() => {
 const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
   const now = Date.now();
   setSessions((prev) => {
-    const kept = prev.filter(
-      (s) =>
-        !shouldEvict({
-          selected:
-            s.sessionId === selectedSessionIdRef.current ||
-            s.sessionId === selectionRequestRef.current,
-          status:
-            s.sessionId === force?.sessionId && force.status
-              ? force.status
-              : statusBySessionRef.current[s.sessionId],
-          asking: (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0,
-          lastViewed: lastViewedRef.current.get(s.sessionId),
-          now,
-          force: s.sessionId === force?.sessionId,
-        }),
-    );
+    const kept = prev.filter((s) => {
+      const forced = s.sessionId === force?.sessionId;
+      const selected =
+        s.sessionId === selectedSessionIdRef.current ||
+        s.sessionId === selectionRequestRef.current;
+      const status =
+        forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+      const asking = (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0;
+      // Never the session on screen, one mid-turn (its live events would land
+      // in the early-event hold), or one holding a card only its child can redraw.
+      if (selected || status === "in_progress" || asking) return true;
+      if (forced) return false;
+      // Never viewed since load counts as idle.
+      return now - (lastViewedRef.current.get(s.sessionId) ?? 0) < IDLE_EVICT_MS;
+    });
     return kept.length === prev.length ? prev : kept;
   });
 };

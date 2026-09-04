@@ -22,7 +22,3 @@ export const DRAY_X = "https://x.com/dray_hq";
 export const FEEDBACK = "https://x.com/yogesharc";
 
 export const COMPANY = "Monorepo Labs";
-
-/// What the nav shows when GitHub cannot be asked. Bump it now and then so a
-/// rate-limited render does not undercount by much.
-export const STARS_FALLBACK = 23;

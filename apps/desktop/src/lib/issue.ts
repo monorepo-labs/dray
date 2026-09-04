@@ -14,10 +14,11 @@
 ///
 /// [slash.ts]: ./slash.ts
 /// [mention.ts]: ./mention.ts
+import { channel } from "@/lib/channel";
 import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
 
 /// The tag token the caret is sitting in.
-export type IssueSpan = {
+type IssueSpan = {
   start: number;
   end: number;
   /// Everything after the `#`, to the end of the token — not to the caret, so
@@ -146,7 +147,7 @@ const GROUPS: { key: IssueStateKind; label: string }[] = [
   { key: "other", label: "Other" },
 ];
 
-export type IssueGrouping = {
+type IssueGrouping = {
   key: IssueStateKind;
   label: string;
   issues: Issue[];
@@ -180,7 +181,7 @@ export function groupIssues(issues: Issue[]): IssueGrouping[] {
 /// it.
 let reads = 0;
 
-const listeners = new Set<() => void>();
+const bumped = channel<void>();
 
 /// The generation a read starting now belongs to. Captured before the request
 /// goes out and checked again before anything is written.
@@ -192,14 +193,11 @@ export function issueGeneration(): number {
 /// replaces them.
 export function newIssueGeneration(): number {
   reads += 1;
-  for (const listener of listeners) listener();
+  bumped.emit();
   return reads;
 }
 
 /// For `useSyncExternalStore`, so a hook holding an answer read under the old
 /// generation re-reads rather than sitting on it until something else happens to
 /// remount it.
-export function subscribeIssueGeneration(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+export const subscribeIssueGeneration = bumped.subscribe;

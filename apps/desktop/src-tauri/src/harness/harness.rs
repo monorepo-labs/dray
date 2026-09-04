@@ -12,7 +12,14 @@ pub mod codex;
 #[path = "pi/pi.rs"]
 pub mod pi;
 
+pub mod rpc;
+
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    future::Future,
+    time::{Duration, Instant},
+};
 
 /// The child's `PATH`: the inherited one with the user-bin directories put
 /// back.
@@ -43,6 +50,95 @@ pub fn agent_path(bin: &std::path::Path) -> String {
         .collect();
     dirs.extend(crate::binpath::resolved_bin_dirs());
     crate::binpath::child_path(dirs)
+}
+
+/// Whether a harness's failure text names a login problem, case-insensitively.
+///
+/// Each harness keeps its own needle list rather than sharing one: the lists
+/// are written to under-match, since the failed-turn row draws the sentence
+/// whatever this answers — a wording missed costs the login button and keeps
+/// the report, while one claimed wrongly sends the reader to log in over
+/// something else entirely. Widen only from a real capture.
+pub fn mentions_any(text: &str, needles: &[&str]) -> bool {
+    let text = text.to_lowercase();
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+/// Logs a line this build could not use and files it for investigation, with
+/// the raw line beside it. One file and one set of stages for every harness,
+/// because the question it answers is the same: how well does *this build*
+/// cover the wire format. Failing to *record* a failure is itself only logged —
+/// the read loop must survive anything.
+pub async fn record_failure(harness: Harness, session_id: &str, stage: &str, detail: &str, line: &str) {
+    let name = harness.wire_name();
+    eprintln!("[{name} {stage} err] {detail}\n[{stage} err] raw line: {line}");
+
+    if let Err(err) = crate::store::record_parse_failure(session_id, stage, detail, line).await {
+        eprintln!("[{name} parse-failure write err] {err}");
+    }
+}
+
+/// Copies the child's stderr to this process's, for logging only.
+pub async fn read_stderr(harness: Harness, stderr: tokio::process::ChildStderr) -> anyhow::Result<()> {
+    use tokio::io::AsyncBufReadExt;
+
+    let name = harness.wire_name();
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+
+    while let Some(line) = lines.next_line().await? {
+        if !line.trim().is_empty() {
+            eprintln!("[{name} stderr] {line}");
+        }
+    }
+
+    Ok(())
+}
+
+/// What a throwaway probe answered, kept by directory — every picker's list is
+/// per-repo, and a probe costs a child. `fresh_for` is how long an answer
+/// stands: `Duration::MAX` for the life of the process, where "restart the app"
+/// is the accepted cure, and a window where the reader can change the answer
+/// while Dray is open (pi's providers and extensions).
+///
+/// A failed probe is never cached, and the lock is not held across one, so two
+/// early readers may probe twice rather than one waiting on the other.
+pub struct ProbeCache<T> {
+    entries: std::sync::Mutex<HashMap<String, (Instant, T)>>,
+    fresh_for: Duration,
+}
+
+impl<T: Clone> ProbeCache<T> {
+    pub fn new(fresh_for: Duration) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+            fresh_for,
+        }
+    }
+
+    /// The cached answer for `key` while it is fresh, else `probe`'s.
+    pub async fn get_or_probe<F, Fut>(&self, key: &str, probe: F) -> anyhow::Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        if let Some((at, hit)) = self.entries.lock().unwrap().get(key) {
+            if at.elapsed() < self.fresh_for {
+                return Ok(hit.clone());
+            }
+        }
+
+        let answer = probe().await?;
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), (Instant::now(), answer.clone()));
+        Ok(answer)
+    }
+
+    /// Drops every answer, so the next read probes again.
+    pub fn forget(&self) {
+        self.entries.lock().unwrap().clear();
+    }
 }
 
 #[cfg(test)]

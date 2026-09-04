@@ -375,7 +375,7 @@ export function refreshActiveDoc(sid: string | null) {
 /// A doc whose first read failed is retried outright. Refresh landing on the one
 /// state with a visible error and doing nothing would be a control that provably
 /// cannot help.
-export function refreshDoc(sid: string | null, path: string) {
+function refreshDoc(sid: string | null, path: string) {
   if (!sid) return;
   const doc = find(sid, path);
   if (!doc || doc.body.status === "loading") return;

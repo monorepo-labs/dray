@@ -31,6 +31,8 @@ use std::{
 };
 use ts_rs::TS;
 
+use crate::Fail;
+
 /// One row in the picker. `path` is relative to the indexed directory, which is
 /// also what gets typed into the prompt — the CLI resolves `@path` against the
 /// same cwd the child was spawned in, so no rewriting is needed on either side.
@@ -134,9 +136,24 @@ fn index_for(cwd: &str) -> Result<SharedFilePicker> {
 /// walk overlaps with the user typing their prompt rather than starting on the
 /// keystroke that opens the picker. Purely an optimization: [`search_files`]
 /// builds the index itself if this was never called.
-pub fn warm(cwd: &str) -> Result<()> {
-    index_for(cwd)?;
+#[tauri::command]
+pub async fn warm_file_index(cwd: String) -> Result<(), Fail> {
+    tokio::task::spawn_blocking(move || index_for(&cwd))
+        .await
+        .map_err(anyhow::Error::from)??;
     Ok(())
+}
+
+/// Fuzzy file search for the `@` picker.
+///
+/// On `spawn_blocking` because the index is synchronous throughout — the search
+/// holds a `parking_lot` read guard across the whole scoring pass, which is not
+/// something that may be held across an await point.
+#[tauri::command]
+pub async fn search_files(cwd: String, query: String, limit: usize) -> Result<Vec<FileMatch>, Fail> {
+    Ok(tokio::task::spawn_blocking(move || search(&cwd, &query, limit))
+        .await
+        .map_err(anyhow::Error::from)??)
 }
 
 /// The best `limit` matches for `query` in `cwd`, best first.
@@ -146,7 +163,7 @@ pub fn warm(cwd: &str) -> Result<()> {
 /// depth, which surfaces the files the current turn has been touching. That is
 /// the right list to open a bare `@` on, so it is deliberately not replaced with
 /// an alphabetical dump.
-pub fn search(cwd: &str, query: &str, limit: usize) -> Result<Vec<FileMatch>> {
+fn search(cwd: &str, query: &str, limit: usize) -> Result<Vec<FileMatch>> {
     let shared = index_for(cwd)?;
 
     // Only costs anything while the first scan is still running; afterwards the

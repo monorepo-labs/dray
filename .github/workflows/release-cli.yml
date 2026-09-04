@@ -66,12 +66,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/cli-v')
         working-directory: apps/cli
         run: |
-          set -euo pipefail
-          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          tag="${GITHUB_REF_NAME#cli-v}"
-          echo "tag $tag, crate $crate"
-          [ "$tag" = "$crate" ] || {
-            echo "::error::tag $GITHUB_REF_NAME does not match apps/cli version $crate"
+          grep -qx "version = \"${GITHUB_REF_NAME#cli-v}\"" Cargo.toml || {
+            echo "::error::tag $GITHUB_REF_NAME does not match the version in apps/cli/Cargo.toml"
             exit 1
           }
 

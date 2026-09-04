@@ -5,7 +5,7 @@
 
 use crate::{
     events::{
-        now_rfc3339, rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef,
+        rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef,
         BlockType, ContextWindow, DeltaEvent, ImageRef, ModelUsage, PermissionBehavior, Question,
         QuestionOption, SessionInfo,
         Settings, Subagent, ToolResult, ToolType, TurnStatus, Usage,
@@ -33,7 +33,6 @@ use std::{
     },
 };
 
-use uuid::Uuid;
 
 pub struct Mapper {
     /// Set by `message_start`, read by the block frames that follow it.
@@ -346,19 +345,13 @@ impl Mapper {
             None => self.get_seq(),
         };
 
-        AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id,
-            harness: Harness::ClaudeCode,
-            seq,
-            ts: timestamp.unwrap_or_else(now_rfc3339),
-            // No Claude Code line carries one; the session layer opens a turn
-            // when it writes a prompt.
-            turn_id: None,
-            subagent,
-            payload,
-            raw: None,
+        // No Claude Code line carries a turn id; the session layer opens a turn
+        // when it writes a prompt.
+        let mut event = AgentEvent::mint(session_id, Harness::ClaudeCode, seq, None, subagent, payload);
+        if let Some(ts) = timestamp {
+            event.ts = ts;
         }
+        event
     }
 
     /// Routes a system event by subtype. Most subtypes have no mapping yet
@@ -857,13 +850,10 @@ fn is_interrupt_notice(text: &str) -> bool {
 /// we miss costs the button and keeps the report, while a wording we claim
 /// wrongly sends the reader to log in over something else entirely.
 fn is_auth_failure(text: &str) -> bool {
-    const NEEDLES: &[&str] = &[
-        "please run /login",
-        "failed to authenticate",
-        "not logged in",
-    ];
-    let text = text.to_lowercase();
-    NEEDLES.iter().any(|needle| text.contains(needle))
+    crate::harness::mentions_any(
+        text,
+        &["please run /login", "failed to authenticate", "not logged in"],
+    )
 }
 
 /// Claude Code wraps a failed tool's message in `<tool_use_error>` tags. That is

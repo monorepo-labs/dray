@@ -13,7 +13,7 @@
 //! app-server behind a Node process.
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
-use crate::harness::Harness::Codex;
+use crate::harness::{read_stderr, record_failure, Harness::Codex};
 use crate::models::{Effort, Model};
 use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStderr, ChildStdout, Command},
+    process::{ChildStdout, Command},
     sync::Mutex,
 };
 
@@ -94,14 +94,26 @@ pub struct TurnSettings {
 }
 
 impl TurnSettings {
-    fn new(model: &Model, effort: Option<Effort>, permission_mode: ApprovalPolicy) -> Result<Self> {
+    fn new(model: &Model, effort: Option<Effort>, permission_mode: ApprovalPolicy) -> Self {
         let (approval_policy, sandbox) = approval_for(permission_mode);
 
-        Ok(Self {
+        Self {
             model: model.arg.clone(),
             effort: effort.map(Effort::as_arg),
             approval_policy,
             sandbox,
+        }
+    }
+
+    /// What `thread/start` and `thread/resume` both restate. No `effort` —
+    /// `ThreadStartParams` has no such field, and one sent anyway is accepted
+    /// and dropped, so it rides every `turn/start` instead.
+    fn thread_params(&self) -> Value {
+        json!({
+            "model": self.model,
+            "approvalPolicy": self.approval_policy,
+            "sandbox": self.sandbox,
+            "developerInstructions": DEVELOPER_INSTRUCTIONS,
         })
     }
 }
@@ -116,11 +128,11 @@ pub async fn init(
     is_new_session: bool,
     app: &AppHandle,
 ) -> Result<Session> {
-    // Both ahead of the spawn, and for one reason: everything between the spawn
+    // Ahead of the spawn, and for one reason: everything between the spawn
     // and the kill-wrapped `open_thread` below has to be infallible, or a `?`
-    // returns leaving a child nothing can reach. A model with no alias and an
-    // unreadable log are both refusals that owe the caller no process.
-    let settings = TurnSettings::new(model, effort, permission_mode)?;
+    // returns leaving a child nothing can reach. An unreadable log is a
+    // refusal that owes the caller no process.
+    let settings = TurnSettings::new(model, effort, permission_mode);
     let seq_start = if is_new_session {
         0
     } else {
@@ -186,7 +198,7 @@ pub async fn init(
     });
 
     tokio::spawn(async move {
-        if let Err(error) = read_stderr(stderr).await {
+        if let Err(error) = read_stderr(Codex, stderr).await {
             eprintln!("Failed to read Codex stderr: {error}");
         }
     });
@@ -290,17 +302,10 @@ async fn handshake(client: &RpcClient) -> Result<()> {
     client.notify("initialized", json!({}))
 }
 
-/// Opens a fresh thread. No `effort` here — `ThreadStartParams` has no such
-/// field, and one sent anyway is accepted and dropped, so it rides every
-/// `turn/start` instead.
+/// Opens a fresh thread.
 async fn start_thread(client: &RpcClient, settings: &TurnSettings, cwd: &str) -> Result<String> {
-    let params = json!({
-        "cwd": cwd,
-        "model": settings.model,
-        "approvalPolicy": settings.approval_policy,
-        "sandbox": settings.sandbox,
-        "developerInstructions": DEVELOPER_INSTRUCTIONS,
-    });
+    let mut params = settings.thread_params();
+    params["cwd"] = json!(cwd);
 
     let answer = client.request("thread/start", params).await?;
 
@@ -319,18 +324,10 @@ async fn resume_thread(
     thread_id: &str,
     settings: &TurnSettings,
 ) -> Result<()> {
-    client
-        .request(
-            "thread/resume",
-            json!({
-                "threadId": thread_id,
-                "model": settings.model,
-                "approvalPolicy": settings.approval_policy,
-                "sandbox": settings.sandbox,
-                "developerInstructions": DEVELOPER_INSTRUCTIONS,
-            }),
-        )
-        .await?;
+    let mut params = settings.thread_params();
+    params["threadId"] = json!(thread_id);
+
+    client.request("thread/resume", params).await?;
 
     Ok(())
 }
@@ -433,8 +430,8 @@ async fn read_stdout(
             // deadline, exactly as an unanswered `can_use_tool` does.
             Incoming::Request { id, method, params } => {
                 let kind = match method.as_str() {
-                    "item/commandExecution/requestApproval" => Some(ApprovalKind::Command),
-                    "item/fileChange/requestApproval" => Some(ApprovalKind::FileChange),
+                    "item/commandExecution/requestApproval" => Some(ApprovalKind::COMMAND),
+                    "item/fileChange/requestApproval" => Some(ApprovalKind::FILE_CHANGE),
                     _ => None,
                 };
 
@@ -448,7 +445,7 @@ async fn read_stdout(
                         if let Err(err) =
                             raise_permission(&handles, &mut mapper, id, kind, params).await
                         {
-                            record_failure(
+                            record_failure(Codex,
                                 &handles.session_id,
                                 "unsupported_request",
                                 &err.to_string(),
@@ -459,7 +456,7 @@ async fn read_stdout(
                         }
                     }
                     None => {
-                        record_failure(&handles.session_id, "unsupported_request", &method, &line)
+                        record_failure(Codex, &handles.session_id, "unsupported_request", &method, &line)
                             .await;
 
                         // Not an approval, so there is nothing to put to the
@@ -479,13 +476,13 @@ async fn read_stdout(
 
             Incoming::Response { id, matched: false } => {
                 let detail = format!("no caller waiting on id {id}");
-                record_failure(&handles.session_id, "stray_response", &detail, &line).await;
+                record_failure(Codex, &handles.session_id, "stray_response", &detail, &line).await;
                 continue;
             }
             Incoming::Response { .. } => continue,
 
             Incoming::Malformed => {
-                record_failure(&handles.session_id, "parse", "not a JSON-RPC message", &line).await;
+                record_failure(Codex, &handles.session_id, "parse", "not a JSON-RPC message", &line).await;
                 continue;
             }
         };
@@ -493,7 +490,7 @@ async fn read_stdout(
         let event = match parser::parse_notification(&method, params) {
             Ok(event) => event,
             Err(err) => {
-                record_failure(&handles.session_id, "map", &err.to_string(), &line).await;
+                record_failure(Codex, &handles.session_id, "map", &err.to_string(), &line).await;
                 continue;
             }
         };
@@ -503,7 +500,7 @@ async fn read_stdout(
         // are — it is a coverage gap, and the catch-all only stops it costing
         // the line.
         if matches!(event, parser::CodexEvent::Unknown) {
-            record_failure(&handles.session_id, "unknown_method", &method, &line).await;
+            record_failure(Codex, &handles.session_id, "unknown_method", &method, &line).await;
             continue;
         }
 
@@ -545,19 +542,6 @@ async fn read_stdout(
 
         for agent_event in mapper.map(event) {
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
-        }
-    }
-
-    Ok(())
-}
-
-async fn read_stderr(stderr: ChildStderr) -> Result<()> {
-    let reader = BufReader::new(stderr);
-    let mut lines = reader.lines();
-
-    while let Some(line) = lines.next_line().await? {
-        if !line.trim().is_empty() {
-            eprintln!("[codex stderr] {line}");
         }
     }
 
@@ -691,8 +675,8 @@ async fn raise_permission(
     let event = mapper.synthesize(AgentEventPayload::PermissionRequested {
         request_id,
         tool_use_id: request.item_id.clone(),
-        tool_name: kind.tool_name().to_string(),
-        display_name: Some(kind.display_name().to_string()),
+        tool_name: kind.tool_name.to_string(),
+        display_name: Some(kind.display_name.to_string()),
         title: request.command.clone(),
         description: request.reason.clone(),
         // Carried on the card itself rather than left to the tool row: the row
@@ -722,18 +706,6 @@ async fn raise_permission(
     handles.app.emit("agent_event", &event)?;
 
     Ok(())
-}
-
-/// Files a line this build could not use, with the raw line beside it.
-///
-/// Same file and same stages as Claude Code's, because the question it answers
-/// is the same: how well does *this build* cover the wire format.
-async fn record_failure(session_id: &str, stage: &str, detail: &str, line: &str) {
-    eprintln!("[codex {stage} err] {detail}\n[{stage} err] raw line: {line}");
-
-    if let Err(err) = store::record_parse_failure(session_id, stage, detail, line).await {
-        eprintln!("[codex parse-failure write err] {err}");
-    }
 }
 
 #[cfg(test)]
@@ -917,7 +889,7 @@ mod tests {
     #[test]
     fn the_captured_approval_becomes_a_card_and_an_answer() {
         let request = captured_approval();
-        let (pending, options) = permissions::pending_for(&request, ApprovalKind::Command, 0);
+        let (pending, options) = permissions::pending_for(&request, ApprovalKind::COMMAND, 0);
 
         assert!(
             options
@@ -1429,8 +1401,7 @@ mod tests {
         let default = crate::models::default_model_for(Codex).expect("Codex names a default model");
         let model =
             crate::models::find_model(&default).expect("the default Codex model should be listed");
-        let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto)
-            .expect("the default Codex model has an alias");
+        let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto);
 
         let thread_id = start_thread(
             &client,

@@ -11,6 +11,8 @@ use tokio::{fs, io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
 use uuid::Uuid;
 
+use crate::Fail;
+
 /// What the composer's branch picker needs to render and guard itself.
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
@@ -32,18 +34,8 @@ pub struct BranchList {
 /// A missing binary or a non-repo directory is a normal outcome here, not an
 /// error worth propagating — see [`list_branches`].
 async fn git(cwd: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        // A branch poll shouldn't contend with a background index refresh.
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .await
-        .ok()?;
-
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    // A branch poll shouldn't contend with a background index refresh.
+    exec(cwd, &[("GIT_OPTIONAL_LOCKS", "0")], args).await.ok()
 }
 
 /// Local branches, the current one, and whether the tree is dirty.
@@ -51,7 +43,8 @@ async fn git(cwd: &str, args: &[&str]) -> Option<String> {
 /// A directory that isn't a repo reads as an empty list rather than an error:
 /// the user is allowed to attach any folder, and the picker hides itself when
 /// there are no branches.
-pub async fn list_branches(cwd: &str) -> Result<BranchList> {
+#[tauri::command]
+pub async fn list_branches(cwd: &str) -> Result<BranchList, Fail> {
     // `for-each-ref` is plumbing; `git branch` decorates the current entry with
     // `* ` and can paginate or colorize depending on the user's config.
     let Some(raw) = git(
@@ -63,11 +56,7 @@ pub async fn list_branches(cwd: &str) -> Result<BranchList> {
         return Ok(BranchList::default());
     };
 
-    let current = git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        // Detached HEAD reports the literal string rather than a branch name.
-        .filter(|s| !s.is_empty() && s != "HEAD");
+    let current = head_branch(cwd).await;
 
     let dirty = git(cwd, &["status", "--porcelain"])
         .await
@@ -159,18 +148,22 @@ pub async fn default_base(cwd: &str) -> Option<String> {
 ///
 /// Called from the composer's branch picker, never with a child running: only
 /// a new session can pick a branch, so nothing is reading the tree as it moves.
-pub async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<()> {
+///
+/// Returns the branch list as it stands after the switch, so the picker
+/// re-renders from one round trip rather than following up with its own.
+#[tauri::command]
+pub async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<BranchList, Fail> {
     let list = list_branches(cwd).await?;
 
     // Membership is also the injection guard: no shell is involved, but a name
     // beginning with `-` would be read as a flag. Checking against the branches
     // git just reported is simpler than escaping rules and closes the same hole.
     if !list.branches.iter().any(|b| b == branch) {
-        bail!("no such branch: {branch}");
+        fail!("no such branch: {branch}");
     }
 
     if list.current.as_deref() == Some(branch) {
-        return Ok(());
+        return Ok(list);
     }
 
     if stash {
@@ -183,13 +176,27 @@ pub async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<()>
     // Bare `checkout` carries uncommitted changes across when the file is
     // identical on both branches, and refuses when it isn't. That refusal is
     // the whole safety story here, so it must not be forced away.
-    run(cwd, &["checkout", branch]).await
+    run(cwd, &["checkout", branch]).await?;
+
+    list_branches(cwd).await
 }
 
 /// Runs git and turns a non-zero exit into an error carrying git's own stderr,
 /// which names the conflicting files — the part the user needs to act on.
 async fn run(cwd: &str, args: &[&str]) -> Result<()> {
-    let out = Command::new("git").args(args).current_dir(cwd).output().await?;
+    exec(cwd, &[], args).await.map(drop)
+}
+
+/// One git invocation: stdout on success, git's own stderr as the error.
+/// Every spawn but `cat-file`'s streamed one goes through here.
+async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+
+    let out = cmd.output().await?;
 
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -200,7 +207,7 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
         });
     }
 
-    Ok(())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Porcelain prints one line per changed path, so the count is the line count.
@@ -286,21 +293,10 @@ async fn real_index_path(cwd: &str) -> Option<PathBuf> {
 /// the clean filter runs during `add` — persists as a `None` baseline and shows
 /// up only as a permanently empty panel, with nothing anywhere saying why.
 async fn git_with_index(cwd: &str, index: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_INDEX_FILE", index)
-        .output()
+    exec(cwd, &[("GIT_INDEX_FILE", index)], args)
         .await
-        .ok()?;
-
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        eprintln!("[snapshot err] git {}: {}", args.join(" "), err.trim());
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+        .map_err(|err| eprintln!("[snapshot err] git {}: {err}", args.join(" ")))
+        .ok()
 }
 
 /// The tree a fresh `-w` worktree starts out holding, resolved through the same
@@ -434,9 +430,10 @@ fn is_tree_id(id: &str) -> bool {
 /// Renames are detected (`-M`) rather than reported as a delete plus an add,
 /// since the panel names a file per row and two rows for one move reads as
 /// twice the work.
-pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<ChangeSet> {
-    if !is_tree_id(base) {
-        bail!("invalid baseline id");
+#[tauri::command]
+pub async fn changes_since(cwd: &str, baseline: &str, head: Option<&str>) -> Result<ChangeSet, Fail> {
+    if !is_tree_id(baseline) {
+        fail!("invalid baseline id");
     }
 
     // Whether the far side is the working tree as it stands, which is the only
@@ -447,7 +444,7 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
     let head = match head {
         Some(h) => {
             if !is_tree_id(h) {
-                bail!("invalid head id");
+                fail!("invalid head id");
             }
             h.to_string()
         }
@@ -456,7 +453,7 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
             .context("could not snapshot the working tree")?,
     };
 
-    let mut files = match diff_trees(cwd, base, &head).await {
+    let mut files = match diff_trees(cwd, baseline, &head).await {
         Ok(files) => files,
         Err(e) => {
             // A snapshot is persisted forever but its tree object is not: the
@@ -464,10 +461,10 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
             // prune window collects them. Either side can be the casualty — a
             // frozen head is as collectable as the baseline. Checked only on
             // the failure path, so the ordinary read pays nothing for it.
-            if !object_exists(cwd, base).await || !object_exists(cwd, &head).await {
-                bail!("this turn's snapshot is no longer in the repository — git has since collected it");
+            if !object_exists(cwd, baseline).await || !object_exists(cwd, &head).await {
+                fail!("this turn's snapshot is no longer in the repository — git has since collected it");
             }
-            return Err(e);
+            return Err(e.into());
         }
     };
 
@@ -479,7 +476,7 @@ pub async fn changes_since(cwd: &str, base: &str, head: Option<&str>) -> Result<
     let removed = files.iter().map(|f| f.removed).sum();
 
     Ok(ChangeSet {
-        base: base.to_string(),
+        base: baseline.to_string(),
         head,
         files,
         added,
@@ -658,15 +655,16 @@ const MAX_BLOB: u64 = 1 << 20;
 /// `head` must be the id [`changes_since`] returned, not a fresh snapshot: the
 /// agent may have written the file again since, and re-snapshotting here would
 /// show a diff the file list never counted.
-pub async fn file_versions(
+#[tauri::command]
+pub async fn file_change(
     cwd: &str,
     base: &str,
     head: &str,
     path: &str,
     old_path: Option<&str>,
-) -> Result<FileVersions> {
+) -> Result<FileVersions, Fail> {
     if !is_tree_id(base) || !is_tree_id(head) {
-        bail!("invalid tree id");
+        fail!("invalid tree id");
     }
 
     // A rename's old side lives under the old name; every other status has the
@@ -926,7 +924,8 @@ const MAX_LOG_PAGE: u32 = 200;
 ///
 /// Empty for a directory that isn't a repo and for a branch with no commits
 /// yet — the same "not an error, just nothing to draw" the branch list takes.
-pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>> {
+#[tauri::command]
+pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>, Fail> {
     let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
     let skip = format!("--skip={skip}");
 
@@ -999,7 +998,8 @@ async fn fork_point(cwd: &str) -> Option<String> {
 /// its own. And after a rebase that replays another branch's commits onto a new
 /// base, git no longer knows whose were whose. Over-reporting is the safe
 /// direction, the same reading the unpushed-commit count takes.
-pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>> {
+#[tauri::command]
+pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>, Fail> {
     let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
     let skip = format!("--skip={skip}");
 
@@ -1181,19 +1181,11 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
 /// branch someone else has pushed to reads as fewer commits behind than it is —
 /// the push itself is what surfaces that, as git's own rejection.
 pub async fn sync_status(cwd: &str) -> SyncStatus {
-    let branch = git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "HEAD");
-
-    let Some(branch) = branch else {
+    let Some(branch) = head_branch(cwd).await else {
         return SyncStatus::default();
     };
 
-    let upstream = git(cwd, &["rev-parse", "--abbrev-ref", "@{u}"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let upstream = upstream_branch(cwd).await;
 
     let ahead = if upstream.is_some() {
         git(cwd, &["rev-list", "--count", "@{u}..HEAD"])
@@ -1320,7 +1312,7 @@ fn is_managed_worktree(project_path: &Path, worktree_path: &Path) -> bool {
         return false;
     }
 
-    worktree_path.parent() == Some(&project_path.join(".claude").join("worktrees"))
+    worktree_path.parent() == Some(&worktrees_dir(project_path))
         && worktree_path.file_name().is_some()
 }
 
@@ -1394,6 +1386,30 @@ pub async fn current_branch(cwd: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The checked-out branch by `rev-parse`: `None` on a detached HEAD, where it
+/// answers the literal string `HEAD`, and on an unborn branch, where it fails.
+/// [`current_branch`] names an unborn branch, which the callers here do not
+/// want — nothing can be pushed from or synced against it yet.
+async fn head_branch(cwd: &str) -> Option<String> {
+    git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "HEAD")
+}
+
+/// The branch HEAD tracks, or `None` where it tracks nothing.
+async fn upstream_branch(cwd: &str) -> Option<String> {
+    git(cwd, &["rev-parse", "--abbrev-ref", "@{u}"])
+        .await
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Where a project's managed worktrees live — the CLI's own `-w` layout.
+pub fn worktrees_dir(project_path: &Path) -> PathBuf {
+    project_path.join(".claude").join("worktrees")
+}
+
 /// The commit `base` names, or `None` when it names nothing in this repo.
 ///
 /// `^{commit}` rather than a bare verify, so a tag or a tree-ish is either
@@ -1453,10 +1469,7 @@ pub fn worktree_branch(name: &str) -> String {
 /// never releases the lock, which is the whole reason removal has to unlock
 /// first; a tree made here has no such lock to leave behind.
 pub async fn create_worktree(project_path: &str, name: &str, base: &str) -> Result<String> {
-    let path = PathBuf::from(project_path)
-        .join(".claude")
-        .join("worktrees")
-        .join(name);
+    let path = worktrees_dir(Path::new(project_path)).join(name);
 
     // Checked before the tree, not after: `worktree add` on an unresolvable
     // start point leaves the branch and directory behind on some git versions,
@@ -2160,7 +2173,7 @@ mod tests {
         let keep = changes.files.iter().find(|f| f.path == "keep.txt").unwrap();
         assert_eq!((keep.added, keep.removed), (1, 0));
 
-        let versions = file_versions(at, &base, &changes.head, "keep.txt", None)
+        let versions = file_change(at, &base, &changes.head, "keep.txt", None)
             .await
             .unwrap();
         assert_eq!(
@@ -2172,13 +2185,13 @@ mod tests {
         assert!(versions.unreadable.is_none());
 
         // A deletion has no new side, and an addition no old one.
-        let deleted = file_versions(at, &base, &changes.head, "gone.txt", None)
+        let deleted = file_change(at, &base, &changes.head, "gone.txt", None)
             .await
             .unwrap();
         assert_eq!(deleted.old_text.as_deref(), Some("x\ny\n"));
         assert!(deleted.new_text.is_none());
 
-        let added = file_versions(at, &base, &changes.head, "new.txt", None)
+        let added = file_change(at, &base, &changes.head, "new.txt", None)
             .await
             .unwrap();
         assert!(added.old_text.is_none());
@@ -2214,7 +2227,7 @@ mod tests {
         assert_eq!(names, vec!["keep.txt"]);
         assert_eq!((changes.added, changes.removed), (1, 0));
 
-        let versions = file_versions(at, &base, &head, "keep.txt", None)
+        let versions = file_change(at, &base, &head, "keep.txt", None)
             .await
             .unwrap();
         assert_eq!(
@@ -2268,13 +2281,13 @@ mod tests {
         let bin = changes.files.iter().find(|f| f.path == "bin.dat").unwrap();
         assert!(bin.binary, "git reports `-` counts, which must set the flag");
 
-        let versions = file_versions(at, &base, &changes.head, "bin.dat", None)
+        let versions = file_change(at, &base, &changes.head, "bin.dat", None)
             .await
             .unwrap();
         assert_eq!(versions.unreadable, Some(Unreadable::Binary));
         assert!(versions.new_text.is_none(), "lossy bytes reached the UI");
 
-        let versions = file_versions(at, &base, &changes.head, "big.txt", None)
+        let versions = file_change(at, &base, &changes.head, "big.txt", None)
             .await
             .unwrap();
         assert_eq!(versions.unreadable, Some(Unreadable::TooLarge));
@@ -2403,7 +2416,7 @@ mod tests {
         assert_eq!(file.status, ChangeStatus::Renamed);
         assert_eq!(file.old_path.as_deref(), Some("keep.txt"));
 
-        let versions = file_versions(at, &base, &changes.head, &file.path, file.old_path.as_deref())
+        let versions = file_change(at, &base, &changes.head, &file.path, file.old_path.as_deref())
             .await
             .unwrap();
         // The old side must resolve under `keep.txt`. Read under the new name it

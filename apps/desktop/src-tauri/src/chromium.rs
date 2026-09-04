@@ -14,15 +14,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use futures_util::StreamExt;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
-use tokio::{
-    fs,
-    io::{AsyncWriteExt, BufWriter},
-    sync::Notify,
-};
+use tokio::{fs, sync::Notify};
 use ts_rs::TS;
 
 /// The CEF version the `cef` crate in Cargo.toml binds. Framework and
@@ -110,7 +104,7 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
 
 /// `~/.dray/cef/`, holding one version directory at a time.
 fn cef_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".dray/cef")
+    std::env::home_dir().unwrap_or_default().join(".dray/cef")
 }
 
 fn version_dir() -> PathBuf {
@@ -257,40 +251,17 @@ async fn download(app: &AppHandle) -> Result<()> {
 }
 
 async fn stream_to(app: &AppHandle, tarball: &Tarball, part: &Path) -> Result<()> {
-    let response = reqwest::get(tarball.url())
-        .await
-        .context("could not reach the CEF download server")?;
-    if !response.status().is_success() {
-        bail!("download failed with status {}", response.status());
-    }
-
-    let file = fs::File::create(part).await.context("could not open the download file")?;
-    let mut writer = BufWriter::new(file);
-    let mut hasher = Sha256::new();
-    let mut received = 0u64;
-    let mut last_emit = 0u64;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("the download was interrupted")?;
-        hasher.update(&chunk);
-        writer.write_all(&chunk).await.context("could not write to disk")?;
-        received += chunk.len() as u64;
-        if received - last_emit >= 4 << 20 {
-            last_emit = received;
-            set(app, ChromiumStatus::Downloading { received, total: tarball.size });
-        }
-    }
-    writer.flush().await?;
-
-    if received != tarball.size {
-        bail!("downloaded {received} bytes where {} were expected", tarball.size);
-    }
-    let digest: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if digest != tarball.sha256 {
-        bail!("the download does not match its published checksum");
-    }
-    Ok(())
+    let total = tarball.size;
+    crate::download::download_verified(
+        &tarball.url(),
+        part,
+        total,
+        tarball.sha256,
+        // Nothing cancels this one: no prompt, no opt-out.
+        || false,
+        |received| set(app, ChromiumStatus::Downloading { received, total }),
+    )
+    .await
 }
 
 /// Everything in `~/.dray/cef` but the current version: older frameworks,

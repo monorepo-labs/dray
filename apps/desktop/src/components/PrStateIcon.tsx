@@ -31,7 +31,7 @@ const STATES = {
 /// carries it, and the panel passing nothing reads as nothing to say. Named
 /// apart from `PullRequest.checks`, which is a list of individual checks and
 /// would collide here.
-export type PrStateOf = { state: string; isDraft: boolean; checksState?: PrChecksState };
+type PrStateOf = { state: string; isDraft: boolean; checksState?: PrChecksState };
 
 function keyOf(pr: PrStateOf): keyof typeof STATES {
   if (pr.state === "MERGED") return "MERGED";

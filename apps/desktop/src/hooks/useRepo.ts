@@ -11,7 +11,7 @@ const REFRESH_DEBOUNCE = 300;
 
 /// One page of history. Deep enough that most readers never reach the end of
 /// it, short enough that opening the tab costs one small read.
-export const LOG_PAGE = 50;
+const LOG_PAGE = 50;
 
 /// Runs `read` once on activation and then on every `revision` bump behind the
 /// debounce, and hands back a `refresh` that skips it.
@@ -93,7 +93,7 @@ export function useHeadTree(
   return { tree, settled, refresh: read };
 }
 
-export type CommitLog = {
+type CommitLog = {
   commits: readonly Commit[];
   error: string | null;
   loading: boolean;

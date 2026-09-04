@@ -1,34 +1,13 @@
 import { COUNTRIES } from "@/lib/countries";
-import AE from "country-flag-icons/react/3x2/AE";
-import BR from "country-flag-icons/react/3x2/BR";
-import CA from "country-flag-icons/react/3x2/CA";
-import CL from "country-flag-icons/react/3x2/CL";
-import CN from "country-flag-icons/react/3x2/CN";
-import DE from "country-flag-icons/react/3x2/DE";
-import EG from "country-flag-icons/react/3x2/EG";
-import ES from "country-flag-icons/react/3x2/ES";
-import FR from "country-flag-icons/react/3x2/FR";
-import GB from "country-flag-icons/react/3x2/GB";
-import ID from "country-flag-icons/react/3x2/ID";
-import IE from "country-flag-icons/react/3x2/IE";
-import IN from "country-flag-icons/react/3x2/IN";
-import JP from "country-flag-icons/react/3x2/JP";
-import NG from "country-flag-icons/react/3x2/NG";
-import NL from "country-flag-icons/react/3x2/NL";
-import NP from "country-flag-icons/react/3x2/NP";
-import PH from "country-flag-icons/react/3x2/PH";
-import SG from "country-flag-icons/react/3x2/SG";
-import TH from "country-flag-icons/react/3x2/TH";
-import US from "country-flag-icons/react/3x2/US";
-import VN from "country-flag-icons/react/3x2/VN";
 
-/// The flags, keyed by the same ISO code [`COUNTRIES`] carries. Deep imports
-/// rather than one named import off the package index: the index re-exports
-/// every country there is, and pulling twenty-two out of it puts all 250 into
-/// the module graph.
-const FLAGS: Record<string, React.ComponentType<{ className?: string }>> = {
-  AE, BR, CA, CL, CN, DE, EG, ES, FR, GB, ID, IE, IN, JP, NG, NL, NP, PH, SG, TH, US, VN,
-};
+/// ISO alpha-2 code → regional-indicator pair, which every platform font
+/// draws as the flag. Windows Chrome draws the two letters instead; accepted,
+/// since the name beside it carries the meaning either way.
+function flag(code: string): string {
+  return String.fromCodePoint(
+    ...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65),
+  );
+}
 
 /// Where the run starts. A loop has no first item, so this is free to choose —
 /// and it is worth choosing, because at rest the band's left edge is under the
@@ -62,7 +41,6 @@ export function UsedBy({ className }: { className?: string }) {
       <div className="mt-5 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
         <div className="flex w-max animate-marquee gap-6">
           {[...RUN, ...RUN].map((c, i) => {
-            const Flag = FLAGS[c.code];
             const clone = i >= RUN.length;
             return (
               <span
@@ -70,9 +48,7 @@ export function UsedBy({ className }: { className?: string }) {
                 aria-hidden={clone || undefined}
                 className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground"
               >
-                {/* Rounded and hairlined, or a white flag on a dark page reads
-                    as a hole rather than as a flag. */}
-                <Flag className="h-3.5 w-auto rounded-[2px] ring-1 ring-white/15" />
+                <span aria-hidden>{flag(c.code)}</span>
                 {c.name}
               </span>
             );

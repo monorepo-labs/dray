@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import Orb from "@/components/Orb";
 
+import { truncate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const PREVIEW_CHARS = 280;
@@ -31,7 +32,7 @@ export default function Reasoning({
 
   if (streaming) {
     const long = trimmed.length > PREVIEW_CHARS;
-    const shown = open || !long ? trimmed : `${trimmed.slice(0, PREVIEW_CHARS)}…`;
+    const shown = open ? trimmed : truncate(trimmed, PREVIEW_CHARS);
 
     return (
       <div>

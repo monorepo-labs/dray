@@ -88,7 +88,7 @@ export function applyCommand(text: string, name: string): { text: string; caret:
 /// than a field. It fails benignly — a reworded suffix files a command under the
 /// wrong heading and changes nothing else — so it is not worth a sturdier scheme
 /// that the wire doesn't support.
-export type CommandSource = "harness" | "plugin" | "user";
+type CommandSource = "harness" | "plugin" | "user";
 
 const SCOPE_SUFFIX = /\((?:user|project)\)\s*$/;
 
@@ -103,7 +103,7 @@ export function commandSource(command: SlashCommand): CommandSource {
 /// Structurally a `PickerGroup<SlashCommand>` — the field is `items` rather than
 /// `commands` so it can be handed to the shared menu without a mapping step
 /// whose only job would be renaming it.
-export type CommandGroup = {
+type CommandGroup = {
   label: string | null;
   items: SlashCommand[];
 };

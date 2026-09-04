@@ -234,7 +234,7 @@ impl Desk {
 
         let outstanding = self.drain();
         for (request_id, request) in &outstanding {
-            let Some(method) = &request.pi_dialog_method else {
+            let Some(method) = request.reply.dialog_method() else {
                 continue;
             };
 
@@ -352,8 +352,8 @@ impl Desk {
         };
 
         let method = pending
-            .pi_dialog_method
-            .as_deref()
+            .reply
+            .dialog_method()
             .context("that request did not come from a pi dialog")?;
 
         Ok((
@@ -380,8 +380,7 @@ mod tests {
             tool_name: method.to_string(),
             input: Value::Null,
             options: HashMap::new(),
-            rpc_id: None,
-            pi_dialog_method: Some(method.to_string()),
+            reply: crate::harness::claude_code::permissions::Reply::PiDialog(method.to_string()),
         }
     }
 

@@ -184,7 +184,7 @@ export function openDevTools(sessionId: string) {
 
 // --- Picking an element ------------------------------------------------------
 
-export type PickedElement = {
+type PickedElement = {
   url: string;
   title: string;
   selector: string;

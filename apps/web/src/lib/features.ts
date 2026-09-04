@@ -1,6 +1,5 @@
-/// The four things the page sells, in reading order. Each carries the capture
-/// that shows it; `Board` drops those from its own run so nothing appears
-/// twice.
+/// The four things the page sells, in reading order, each with the capture
+/// that shows it.
 ///
 /// `label` is the term itself — "Agent orchestration" — for the reader who
 /// already knows it and needs nothing else. `title` is the one sentence for
@@ -79,5 +78,3 @@ export const FEATURES: Feature[] = [
     },
   },
 ];
-
-export const FEATURED_SRCS = new Set(FEATURES.map((f) => f.video.src));

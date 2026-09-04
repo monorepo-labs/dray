@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import { Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
-import "react-tweet/theme.css";
 import "./globals.css";
 
 // The app loads these through fontsource; here they come from next/font so the

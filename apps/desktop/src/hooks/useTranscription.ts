@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { playDictationSound } from "@/lib/dictationSound";
+import { playDictationSound } from "@/lib/sound";
 import type { DownloadProgress, TranscribeOutcome, TranscriptionStatus } from "@/types/events";
 
 /// How far each in-flight download has got, keyed by model id.

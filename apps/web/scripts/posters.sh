@@ -2,8 +2,8 @@
 # Grabs a still from every mp4 in public/ into public/posters/.
 #
 # The posters are what let the videos load lazily without leaving black
-# tiles on the board, so run this after dropping a new capture in and before
-# adding its entry to src/lib/media.ts.
+# tiles, so run this after dropping a new capture in and before adding its
+# entry to src/lib/features.ts.
 #
 #   ./scripts/posters.sh          # only what is missing
 #   ./scripts/posters.sh --force  # redo everything

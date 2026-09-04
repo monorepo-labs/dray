@@ -502,23 +502,19 @@ impl Mapper {
     }
 
     fn event(&self, payload: AgentEventPayload) -> AgentEvent {
-        AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: self.session_id.clone(),
-            harness: Harness::Pi,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: crate::events::now_rfc3339(),
-            // pi has no turn identifier on the wire, and Dray's transcript
-            // groups by user message anyway — the reasoning Claude Code already
-            // documents.
-            turn_id: None,
-            // pi ships no subagents. One arrives only through an extension, and
-            // its work reaches the wire as ordinary tool calls with nothing to
-            // correlate them by.
-            subagent: None,
+        // No turn id: pi has no turn identifier on the wire, and Dray's
+        // transcript groups by user message anyway — the reasoning Claude Code
+        // already documents. No subagent: pi ships none, and one arriving
+        // through an extension reaches the wire as ordinary tool calls with
+        // nothing to correlate them by.
+        AgentEvent::mint(
+            self.session_id.clone(),
+            Harness::Pi,
+            self.seq.fetch_add(1, Relaxed),
+            None,
+            None,
             payload,
-            raw: None,
-        }
+        )
     }
 }
 
@@ -563,7 +559,7 @@ fn flatten_content(result: &Value) -> String {
 /// also fail with no credential at all, and no capture of that exists. Widen
 /// from a real one, never from a guess.
 fn is_auth_failure(text: &str) -> bool {
-    text.to_lowercase().contains("oauth refresh failed")
+    crate::harness::mentions_any(text, &["oauth refresh failed"])
 }
 
 #[cfg(test)]

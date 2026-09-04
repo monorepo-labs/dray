@@ -10,7 +10,6 @@
 // and pnpm doesn't hoist it, so importing the name directly doesn't resolve.
 import type { BundledTheme } from "streamdown";
 
-
 /// `@pierre/theming` registers these alongside Shiki's bundled set, so the
 /// shared highlighter resolves them by name like any other — but they are
 /// absent from `BundledTheme`, which only covers what Shiki itself ships.
@@ -19,7 +18,7 @@ type PierreTheme = "pierre-dark" | "pierre-light";
 /// A theme id the shared highlighter can resolve. Keeping this a union rather
 /// than `string` means a typo in the table below is a build error instead of a
 /// theme that silently fails to load at runtime.
-export type ShikiThemeName = BundledTheme | PierreTheme;
+type ShikiThemeName = BundledTheme | PierreTheme;
 
 export type CodeThemePair = { light: ShikiThemeName; dark: ShikiThemeName };
 
@@ -46,7 +45,7 @@ type CodeThemeEntry = {
 /// The pair used when the user hasn't chosen, and the one `auto` resolves to.
 /// Pierre's own themes: they ship with the diff renderer and were drawn for it,
 /// so the diff chrome and the syntax colors come from one hand.
-export const DEFAULT_PAIR: CodeThemePair = { light: "pierre-light", dark: "pierre-dark" };
+const DEFAULT_PAIR: CodeThemePair = { light: "pierre-light", dark: "pierre-dark" };
 
 /// The picker's contents. Every entry is a real light/dark pair — a theme with
 /// no counterpart in the other mode would leave one mode unreadable, so

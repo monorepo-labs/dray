@@ -9,7 +9,7 @@ use crate::{
         claude_code::{
             self,
             control::{ControlLine, ControlRequest},
-            permissions::{answer_response, decision_response, PendingPermissions},
+            permissions::{answer_response, decision_response, PendingPermissions, Reply},
         },
     },
     issues::{self, IssueRef},
@@ -290,7 +290,7 @@ async fn remove_session_worktree(item: &SessionIndexItem) -> Result<()> {
     let path = worktree_path(&item.project_path, name);
     // Claude Code's own naming, minted at creation and never written to the
     // index — the same rebuild `sessionBranch` does on the frontend.
-    let branch = format!("worktree-{name}");
+    let branch = git::worktree_branch(name);
 
     git::remove_worktree(&item.project_path, &path, Some(&branch)).await?;
 
@@ -1695,13 +1695,13 @@ impl Session {
         // Answered on the channel that asked. Codex was handed its decision by
         // the server and sends it back whole; Claude's verdict is composed here
         // out of the rule the button carried.
-        match (&self.stdin, pending.rpc_id) {
-            (Transport::Rpc(thread), Some(rpc_id)) => {
+        match (&self.stdin, &pending.reply) {
+            (Transport::Rpc(thread), Reply::Rpc(rpc_id)) => {
                 let decision = chosen
                     .decision
                     .clone()
                     .context("this option carries no decision to send")?;
-                thread.client.respond(rpc_id, json!({"decision": decision}))?;
+                thread.client.respond(*rpc_id, json!({"decision": decision}))?;
             }
             _ => {
                 write_line(

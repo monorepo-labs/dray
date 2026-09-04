@@ -17,7 +17,6 @@ use crate::harness::Harness;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
-use uuid::Uuid;
 
 use super::parser::{
     CodexEvent, DeltaNotification, ErrorNotification, FileChangeEntry, ItemNotification,
@@ -862,21 +861,18 @@ impl Mapper {
     }
 
     fn event(&self, payload: AgentEventPayload) -> AgentEvent {
-        AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: self.session_id.clone(),
-            harness: Harness::Codex,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: crate::events::now_rfc3339(),
-            turn_id: self.turn_id.clone(),
+        AgentEvent::mint(
+            self.session_id.clone(),
+            Harness::Codex,
+            self.seq.fetch_add(1, Relaxed),
+            self.turn_id.clone(),
             // Set for every line arriving on a subagent's thread, which is what
             // files its work into the panel instead of the transcript. The
             // frontend correlates on `subagent.id == the spawning call's
             // callId`, and that is exactly what the registry holds.
-            subagent: self.current.clone(),
+            self.current.clone(),
             payload,
-            raw: None,
-        }
+        )
     }
 }
 
@@ -920,8 +916,7 @@ fn is_auth_failure(err: &TurnError) -> bool {
         return true;
     }
 
-    let message = err.message.to_lowercase();
-    message.contains("codex login") || message.contains("sign in again")
+    crate::harness::mentions_any(&err.message, &["codex login", "sign in again"])
 }
 
 /// What to call a subagent on its card.
