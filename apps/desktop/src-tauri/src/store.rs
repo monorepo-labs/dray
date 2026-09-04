@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    vec,
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -168,13 +165,6 @@ pub struct SessionSnapshot {
     #[ts(flatten)]
     pub index_item: SessionIndexItem,
     pub events: Vec<AgentEvent>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionIndexByProject {
-    pub path: String,
-    pub indexes: Vec<SessionIndexItem>,
 }
 
 static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
@@ -366,29 +356,6 @@ pub async fn list_session_index_items(
 /// Split out from the async read so it can be tested without an `index.json`.
 fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
     items.into_iter().filter(|i| i.archived == archived).collect()
-}
-
-/// All sessions, bucketed by `project_path` — the sidebar's project grouping.
-#[tauri::command]
-pub async fn list_sessions_by_project() -> Result<Vec<SessionIndexByProject>, Fail> {
-    let sessions = read_index().await?;
-    let mut sessions_grouped: Vec<SessionIndexByProject> = Vec::new();
-
-    for session in sessions {
-        if let Some(project) = sessions_grouped
-            .iter_mut()
-            .find(|p| p.path == session.project_path)
-        {
-            project.indexes.push(session);
-        } else {
-            sessions_grouped.push(SessionIndexByProject {
-                path: session.project_path.clone(),
-                indexes: vec![session],
-            });
-        }
-    }
-
-    Ok(sessions_grouped)
 }
 
 impl SessionIndexItem {

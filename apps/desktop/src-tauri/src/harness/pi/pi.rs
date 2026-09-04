@@ -579,7 +579,7 @@ async fn read_stdout(
         // with both halves from one model. Going dark instead would need the
         // fold to know that readings before this point are void — see
         // PI-PLAN.md.
-        if matches!(event, parser::PiEvent::ModelChanged { .. }) {
+        if matches!(event, parser::PiEvent::ModelChanged) {
             let client = client.clone();
             let context_window = mapper.context_window();
             context_window.store(0, Relaxed);

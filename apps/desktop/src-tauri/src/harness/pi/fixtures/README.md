@@ -36,11 +36,11 @@ See PI-PLAN.md §3.
 
 ## What the model was
 
-Six of these ran against a **scripted OpenAI-completions provider**
-(`scripts/pi-capture/stub-server.mjs`), not a real model. That is the honest
-label and it is worth reading precisely: the pi process, the RPC framing, the
-event vocabulary, the tool execution, the extension host and the session file
-are all real — only the model's tokens are canned. It buys determinism, every
+Six of these ran against a **scripted OpenAI-completions provider**, not a
+real model. That is the honest label and it is worth reading precisely: the pi
+process, the RPC framing, the event vocabulary, the tool execution, the
+extension host and the session file are all real — only the model's tokens are
+canned. It buys determinism, every
 event type in one capture, and no API key.
 
 Three captures reached the network: `live_turn.jsonl` and `live_models.jsonl`
@@ -79,8 +79,9 @@ been believed:
 
 ## Re-capturing
 
-`scripts/pi-capture/` holds the whole harness — the driver, the stub provider,
-the probe extension and one scenario file per fixture. Its README says how.
+The capture harness — driver, stub provider, probe extension and one scenario
+per fixture — lived at `apps/desktop/scripts/pi-capture/` and was deleted in
+DRA-167. Recover it from git history to re-capture.
 
 ## Not captured
 

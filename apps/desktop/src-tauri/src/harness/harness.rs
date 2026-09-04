@@ -475,15 +475,6 @@ impl Harness {
 /// it in place is only correct if the wire really carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
-    /// Whether this build can drive the harness at all.
-    ///
-    /// Answered *before* a session exists, because the index row is written
-    /// ahead of the spawn: a harness that bails inside `Session::init` leaves a
-    /// sidebar row pointing at an agent that can never run, and every retry
-    /// fails against it identically. All three are true today; the field stays
-    /// because the next harness is typed before it is driven, and that window
-    /// is exactly what this closes.
-    pub drivable: bool,
     /// Whether the CLI creates a worktree itself, given a name.
     ///
     /// Claude Code's `-w` does. Nothing else has such a flag, so Dray resolves
@@ -537,7 +528,6 @@ impl Harness {
             // against the CLI: the reply after `set_model` comes from the new
             // model, so no respawn is needed.
             Harness::ClaudeCode => Capabilities {
-                drivable: true,
                 creates_own_worktree: true,
                 applies_model_in_place: true,
                 applies_effort_in_place: false,
@@ -555,7 +545,6 @@ impl Harness {
             // for. Respawning settles both, and `thread/resume` carries the
             // conversation across it.
             Harness::Codex => Capabilities {
-                drivable: true,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
@@ -575,7 +564,6 @@ impl Harness {
             // fork. Verified live — a pi spawned on a copy reports the new path,
             // counts the parent's messages, and quotes its first prompt back.
             Harness::Pi => Capabilities {
-                drivable: true,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
@@ -585,12 +573,10 @@ impl Harness {
                 fork_needs_cli: false,
             },
             // A session some other build wrote and this one cannot run. `false`
-            // throughout, and `drivable` is what this variant exists for: the
-            // row still draws, so the reader can see the session is there and
-            // read its transcript, and nothing will try to spawn a child for a
-            // CLI it cannot name.
+            // throughout: the row still draws, so the reader can see the session
+            // is there and read its transcript, and `names_a_cli` is what stops
+            // anything spawning a child for a CLI it cannot name.
             Harness::Other(_) => Capabilities {
-                drivable: false,
                 creates_own_worktree: false,
                 applies_model_in_place: false,
                 applies_effort_in_place: false,

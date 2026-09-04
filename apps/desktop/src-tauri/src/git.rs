@@ -1203,85 +1203,6 @@ pub async fn sync_status(cwd: &str) -> SyncStatus {
     }
 }
 
-/// Git resolves a pathspec as a glob and reads leading `:` as magic, so a file
-/// genuinely named `a*.txt` or `:weird` would stage its neighbours or nothing
-/// at all. These paths come from our own change list and name real files, so
-/// literal is not a restriction — it is what the caller already meant.
-const LITERAL_PATHSPECS: &[(&str, &str)] = &[("GIT_LITERAL_PATHSPECS", "1")];
-
-/// Commits exactly `paths` — the files the reader left checked — and nothing
-/// else.
-///
-/// Two commands rather than one. `add -A` is what makes an untracked file
-/// committable at all (`commit -- <path>` refuses a path git has never heard
-/// of) and what records a deletion. The pathspec on `commit` then implies
-/// `--only`, so the commit is built from HEAD plus these paths: anything the
-/// user had staged for an *unchecked* file stays staged and uncommitted, which
-/// is the promise the checkboxes make.
-///
-/// Porcelain rather than the temp-index plumbing [`snapshot_tree`] uses,
-/// deliberately: this is meant to move HEAD, and a `commit-tree` that left the
-/// real index untouched would leave every just-committed file reading as a
-/// staged revert afterwards.
-#[tauri::command]
-pub async fn commit_files(
-    cwd: &str,
-    summary: &str,
-    description: Option<&str>,
-    paths: Vec<String>,
-) -> Result<(), Fail> {
-    let summary = summary.trim();
-    if summary.is_empty() {
-        fail!("a commit needs a summary");
-    }
-    if paths.is_empty() {
-        fail!("no files are selected to commit");
-    }
-    // A `-` leading path is already closed by the `--` both commands carry;
-    // this is the empty and NUL case, which would silently widen the pathspec.
-    if paths.iter().any(|p| p.is_empty() || p.contains('\0')) {
-        fail!("invalid path in the selection");
-    }
-
-    let mut add = vec!["add", "-A", "--"];
-    add.extend(paths.iter().map(String::as_str));
-    exec(cwd, LITERAL_PATHSPECS, &add).await?;
-
-    let description = description.map(str::trim).filter(|d| !d.is_empty());
-
-    let mut commit = vec!["commit", "-m", summary];
-    // A second `-m` rather than a joined string: git's own blank line between
-    // subject and body is the convention every tool reading this expects.
-    if let Some(description) = description {
-        commit.push("-m");
-        commit.push(description);
-    }
-    commit.push("--");
-    commit.extend(paths.iter().map(String::as_str));
-
-    exec(cwd, LITERAL_PATHSPECS, &commit).await?;
-    Ok(())
-}
-
-/// Pushes the current branch, publishing it when it has no upstream yet.
-///
-/// No force, ever: a rejected non-fast-forward comes back as git's own stderr
-/// for the reader to deal with, which for a session's own branch usually means
-/// someone else pushed to it.
-#[tauri::command]
-pub async fn push_branch(cwd: &str) -> Result<(), Fail> {
-    let branch = head_branch(cwd)
-        .await
-        .context("not on a branch, so there is nothing to push")?;
-
-    if upstream_branch(cwd).await.is_some() {
-        return Ok(run(cwd, &["push"]).await?);
-    }
-
-    // Git's own output for the name, and a branch name cannot begin with `-`.
-    Ok(run(cwd, &["push", "-u", "origin", &branch]).await?)
-}
-
 /// What removing this worktree would cost, read once so the dialog and the
 /// removal agree about what is in the way.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
@@ -2920,41 +2841,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commits_only_the_checked_paths() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
-        fs::write(dir.join("gone.txt"), "x\ny\nedited\n").await.unwrap();
-        // Untracked, and checked — `commit -- <path>` alone refuses a path git
-        // has never heard of, so this is what proves the `add` is doing work.
-        fs::write(dir.join("new.txt"), "fresh\n").await.unwrap();
-
-        commit_files(
-            at,
-            "commit two of three",
-            None,
-            vec!["keep.txt".into(), "new.txt".into()],
-        )
-        .await
-        .unwrap();
-
-        let committed = git(at, &["show", "--name-only", "--format=", "HEAD"])
-            .await
-            .unwrap();
-        assert!(committed.contains("keep.txt"));
-        assert!(committed.contains("new.txt"));
-        assert!(!committed.contains("gone.txt"));
-
-        // The unchecked file is still dirty, which is the whole promise the
-        // checkboxes make.
-        let dirty = git(at, &["status", "--porcelain"]).await.unwrap();
-        assert!(dirty.contains("gone.txt"));
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
     async fn the_working_tree_lists_the_newest_edit_first() {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
@@ -2982,138 +2868,6 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn an_unchecked_file_keeps_what_was_staged_for_it() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        // Someone staged part of `gone.txt` by hand and then left it out of the
-        // commit. The pathspec form of `commit` implies `--only`, so that work
-        // has to survive — otherwise unchecking a file would quietly discard
-        // whatever was already staged for it.
-        fs::write(dir.join("gone.txt"), "x\ny\nstaged\n").await.unwrap();
-        run(at, &["add", "gone.txt"]).await.unwrap();
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
-
-        commit_files(at, "keep only", None, vec!["keep.txt".into()])
-            .await
-            .unwrap();
-
-        let staged = git(at, &["show", ":gone.txt"]).await.unwrap();
-        assert_eq!(staged, "x\ny\nstaged\n");
-        // Staged, and still uncommitted — the commit took only `keep.txt`.
-        let committed = git(at, &["show", "HEAD:gone.txt"]).await.unwrap();
-        assert!(!committed.contains("staged"));
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn a_checked_deletion_is_committed_as_one() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        fs::remove_file(dir.join("gone.txt")).await.unwrap();
-
-        commit_files(at, "drop it", None, vec!["gone.txt".into()])
-            .await
-            .unwrap();
-
-        assert!(git(at, &["cat-file", "-e", "HEAD:gone.txt"]).await.is_none());
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn a_glob_named_file_stages_only_itself() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        // Without GIT_LITERAL_PATHSPECS this pathspec would sweep up every
-        // `a…txt` in the tree — including the decoy.
-        fs::write(dir.join("a*.txt"), "literal\n").await.unwrap();
-        fs::write(dir.join("also.txt"), "decoy\n").await.unwrap();
-
-        commit_files(at, "literal path", None, vec!["a*.txt".into()])
-            .await
-            .unwrap();
-
-        let committed = git(at, &["show", "--name-only", "--format=", "HEAD"])
-            .await
-            .unwrap();
-        assert!(committed.contains("a*.txt"));
-        assert!(!committed.contains("also.txt"));
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn a_description_lands_under_a_blank_line() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nedited\n").await.unwrap();
-
-        commit_files(at, "subject line", Some("why it happened"), vec!["keep.txt".into()])
-            .await
-            .unwrap();
-
-        let message = git(at, &["log", "-1", "--format=%B"]).await.unwrap();
-        assert_eq!(message.trim_end(), "subject line\n\nwhy it happened");
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn an_empty_summary_or_selection_is_refused() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        assert!(commit_files(at, "   ", None, vec!["keep.txt".into()]).await.is_err());
-        assert!(commit_files(at, "fine", None, vec![]).await.is_err());
-
-        fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn a_branch_publishes_then_pushes() {
-        let dir = scratch_repo().await;
-        let at = dir.to_str().unwrap();
-
-        let remote = std::env::temp_dir().join(format!("dray-remote-{}", Uuid::now_v7()));
-        fs::create_dir_all(&remote).await.unwrap();
-        run(remote.to_str().unwrap(), &["init", "-q", "--bare", "."])
-            .await
-            .unwrap();
-        run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
-            .await
-            .unwrap();
-
-        // Unpublished: no upstream, and no count to report against one.
-        let before = sync_status(at).await;
-        assert!(before.branch.is_some());
-        assert_eq!(before.upstream, None);
-        assert_eq!(before.ahead, 0);
-
-        push_branch(at).await.unwrap();
-
-        let published = sync_status(at).await;
-        assert!(published.upstream.is_some());
-        assert_eq!(published.ahead, 0);
-
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nmore\n").await.unwrap();
-        commit_files(at, "one more", None, vec!["keep.txt".into()])
-            .await
-            .unwrap();
-        assert_eq!(sync_status(at).await.ahead, 1);
-
-        push_branch(at).await.unwrap();
-        assert_eq!(sync_status(at).await.ahead, 0);
-
-        fs::remove_dir_all(&dir).await.ok();
-        fs::remove_dir_all(&remote).await.ok();
     }
 
     /// The composer's action row draws itself off these four facts, and a dirty
@@ -3151,7 +2905,7 @@ mod tests {
         run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
             .await
             .unwrap();
-        push_branch(at).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
 
         let status = work_status(at).await;
         let default = status.default_branch.expect("a pushed branch resolves one");
@@ -3179,7 +2933,7 @@ mod tests {
         run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
             .await
             .unwrap();
-        push_branch(at).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
 
         // On the base itself, with everything pushed: nothing to propose.
         let on_base = work_status(at).await;
@@ -3187,13 +2941,14 @@ mod tests {
 
         run(at, &["checkout", "-q", "-b", "feature"]).await.unwrap();
         fs::write(dir.join("keep.txt"), "a\nb\nc\nchanged\n").await.unwrap();
-        commit_files(at, "work", None, vec!["keep.txt".into()]).await.unwrap();
+        run(at, &["add", "-A"]).await.unwrap();
+        run(at, &["commit", "-qm", "work"]).await.unwrap();
 
         // Committed but unpushed: ahead of both.
         let unpushed = work_status(at).await;
         assert_eq!(unpushed.ahead_of_base, Some(1));
 
-        push_branch(at).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
 
         // Pushed in full. `ahead` falls back to zero and `ahead_of_base` must
         // not — this is the exact state a branch is in when its PR is opened.
@@ -3224,7 +2979,7 @@ mod tests {
             .unwrap();
 
         run(at, &["checkout", "-q", "-b", "release/current"]).await.unwrap();
-        push_branch(at).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
         // `-b` on the ref git would have written for us, so `origin/HEAD`
         // resolves the way a cloned repo's does.
         run(

@@ -1,6 +1,5 @@
 packages:
   - "apps/*"
-  - "packages/*"
 
 allowBuilds:
   # Fetches the platform-specific binary vite runs; without it, builds fail on a

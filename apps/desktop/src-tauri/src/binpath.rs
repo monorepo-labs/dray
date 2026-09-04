@@ -177,7 +177,7 @@ mod pi_resolution_tests {
 /// and it is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
-    harness.caps().drivable && agent_installed(harness).await
+    harness.names_a_cli() && agent_installed(harness).await
 }
 
 /// Whether the CLI is on this machine, whether or not this build can drive it.

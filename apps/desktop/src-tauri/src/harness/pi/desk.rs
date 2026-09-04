@@ -249,11 +249,6 @@ impl Desk {
         outstanding
     }
 
-    #[cfg(test)]
-    fn cancel_cards_for_test(&self) {
-        let _ = self.cancel_outstanding();
-    }
-
     /// Retires every card still up, because the pi that asked has gone.
     ///
     /// Called when the reader ends, which is the one signal that covers every
@@ -514,7 +509,7 @@ mod tests {
     fn a_stop_cancels_its_cards_where_a_teardown_only_takes_them() {
         let (id, token, desk, pending) = desk_holding("d-6", "confirm");
 
-        desk.cancel_cards_for_test();
+        let _ = desk.cancel_outstanding();
         assert!(
             pending.lock().unwrap().is_empty(),
             "a Stop clears what was outstanding"

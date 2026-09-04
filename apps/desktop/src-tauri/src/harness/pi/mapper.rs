@@ -365,13 +365,9 @@ impl Mapper {
                 })]
             }
 
-            // Modelled, drawn as nothing. See `PiEvent::is_ignored` for why each
-            // is here rather than left unknown.
-            other if other.is_ignored() => Vec::new(),
-
-            // Everything else is either not wired yet — approvals — or a line
-            // this build has never seen. Neither draws a row, and the read loop
-            // files the unknown ones.
+            // Everything else is modelled and drawn as nothing, not wired yet —
+            // approvals — or a line this build has never seen. None draws a
+            // row, and the read loop files the unknown ones.
             _ => Vec::new(),
         }
     }

@@ -467,7 +467,6 @@ impl Mapper {
                 last_tool: Some(last_tool_name),
                 usage: Some(Usage::from(usage)),
             }),
-            // SystemEvent::TaskUpdated { task_id, patch, uuid, session_id }
             SystemEvent::TaskNotification {
                 task_id,
                 status,
