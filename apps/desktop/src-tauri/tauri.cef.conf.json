@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "macOS": {
+      "files": {
+        "Frameworks/Dray Helper.app": "target/cef-helpers/Dray Helper.app",
+        "Frameworks/Dray Helper (GPU).app": "target/cef-helpers/Dray Helper (GPU).app",
+        "Frameworks/Dray Helper (Renderer).app": "target/cef-helpers/Dray Helper (Renderer).app",
+        "Frameworks/Dray Helper (Plugin).app": "target/cef-helpers/Dray Helper (Plugin).app",
+        "Frameworks/Dray Helper (Alerts).app": "target/cef-helpers/Dray Helper (Alerts).app"
+      }
+    }
+  }
+}

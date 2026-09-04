@@ -105,30 +105,35 @@ struct TabsEvent {
 
 // --- Setup -----------------------------------------------------------------
 
-/// Where the framework and helpers live: a real bundle's `Contents/Frameworks`,
-/// or the dev layout `scripts/cef-dev-bundle.sh` assembles beside the debug
-/// binary, shaped exactly like one so CEF resolves helpers the same way.
+/// Where the helpers and the framework live. The helpers ship in the bundle's
+/// `Contents/Frameworks`, or in the dev layout `scripts/cef-dev-bundle.sh`
+/// assembles beside the debug binary, shaped like a bundle so CEF resolves
+/// them the same way. The framework sits beside them only in dev, where that
+/// script links it in; a release loads the one `chromium` downloaded.
 struct Paths {
-    frameworks: PathBuf,
+    framework: PathBuf,
+    helpers: PathBuf,
     bundle: PathBuf,
 }
 
 fn paths() -> Option<Paths> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
-    let bundled = exe_dir.join("../Frameworks");
-    if bundled.join(FRAMEWORK).exists() {
-        return Some(Paths {
-            bundle: bundled.join("../..").canonicalize().ok()?,
-            frameworks: bundled.canonicalize().ok()?,
-        });
-    }
     let dev = exe_dir.join("cef/Dray.app");
-    let frameworks = dev.join("Contents/Frameworks");
-    frameworks.join(FRAMEWORK).exists().then(|| Paths {
-        frameworks,
-        bundle: dev,
-    })
+    let bundle = if dev.join("Contents/Frameworks").is_dir() {
+        dev
+    } else {
+        exe_dir.join("../..").canonicalize().ok()?
+    };
+    let helpers = bundle.join("Contents/Frameworks");
+    let beside = helpers.join(FRAMEWORK);
+    let framework = if beside.exists() { beside } else { crate::chromium::installed_framework()? };
+    Some(Paths { framework, helpers, bundle })
+}
+
+/// A framework beside the helpers is the dev layout, and nothing to fetch.
+fn dev_framework() -> Option<PathBuf> {
+    paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
 
 fn browser_dir() -> PathBuf {
@@ -140,6 +145,7 @@ fn browser_dir() -> PathBuf {
 /// first tab (`ensure_started`) and a reader who never opens one pays nothing.
 pub fn init(app: &AppHandle) {
     let _ = APP.set(app.clone());
+    crate::chromium::start(app.clone(), dev_framework());
 }
 
 static STARTED: Mutex<Option<bool>> = Mutex::new(None);
@@ -163,7 +169,7 @@ fn start() -> bool {
         eprintln!("cef: no Chromium framework found; browser disabled");
         return false;
     };
-    let framework = paths.frameworks.join(FRAMEWORK);
+    let framework = paths.framework;
     let library = framework.join("Chromium Embedded Framework");
     let c_path = std::ffi::CString::new(library.as_os_str().as_encoded_bytes()).expect("path");
     if cef::load_library(Some(unsafe { &*c_path.as_ptr() })) != 1 {
@@ -188,7 +194,7 @@ fn start() -> bool {
         no_sandbox: 1,
         external_message_pump: 1,
         remote_debugging_port: DEBUG_PORT,
-        browser_subprocess_path: path_str(&paths.frameworks.join(HELPER)),
+        browser_subprocess_path: path_str(&paths.helpers.join(HELPER)),
         framework_dir_path: path_str(&framework),
         main_bundle_path: path_str(&paths.bundle),
         // Every session's cache path must sit under this one; CEF refuses
@@ -428,6 +434,11 @@ fn child_window_info() -> Result<WindowInfo, String> {
 /// Creates a browser for `session`. Its tab appears in `on_after_created`,
 /// which is where CEF hands the browser back. Main thread.
 fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
+    // Before `ensure_started`, which remembers a failure for the life of the
+    // process: a tab asked for mid-download must wait, not write CEF off.
+    if paths().is_none() {
+        return Err(crate::chromium::not_ready_reason());
+    }
     if !ensure_started() {
         return Err("Chromium could not start".into());
     }

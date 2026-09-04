@@ -19,6 +19,10 @@ pub mod binpath;
 #[cfg(all(feature = "cef", target_os = "macos"))]
 #[path = "cef/cef.rs"]
 pub mod cef;
+// Compiled without the feature too: it needs nothing of CEF's, and that is
+// what keeps its types in `events.ts` and its tests in a bare `cargo test`.
+#[cfg(target_os = "macos")]
+pub mod chromium;
 mod local_servers;
 pub mod docs;
 #[path = "events/events.rs"]
@@ -772,6 +776,12 @@ pub fn run() {
             cef::browser_devtools,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_pick,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            chromium::chromium_status,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            chromium::chromium_download,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            chromium::chromium_remove,
             local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,

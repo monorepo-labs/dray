@@ -75,6 +75,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/src
             ~/.cargo/git/db
+            ~/.cache/cef
             apps/desktop/src-tauri/target
           # The version bump in every release changes Cargo.lock, so the exact
           # key misses once per release by design. The prefix restore is what
@@ -83,6 +84,12 @@ jobs:
           restore-keys: darwin-cargo-${{ steps.rust.outputs.cachekey }}-
 
       - run: pnpm install --frozen-lockfile
+
+      # What the CEF bindings' build script needs — see release.yml. The SDK
+      # it downloads lands in the cache above, so the release build finds it.
+      - run: |
+          brew install ninja
+          echo "CEF_PATH=$HOME/.cache/cef" >> "$GITHUB_ENV"
 
       # Compiled the way the release compiles it, rather than with a bare
       # `cargo build --release`. `tauri build` turns on production features —
@@ -96,5 +103,5 @@ jobs:
       # Apple credentials, and produces nothing but the cache. It runs
       # `beforeBuildCommand` itself, which is why there is no separate frontend
       # build step.
-      - run: pnpm tauri build --no-bundle --target universal-apple-darwin
+      - run: pnpm tauri build --no-bundle --target universal-apple-darwin --features cef
         working-directory: apps/desktop

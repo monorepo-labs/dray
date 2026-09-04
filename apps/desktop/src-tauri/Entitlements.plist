@@ -5,10 +5,17 @@
   included, and under it the microphone is refused before TCC ever prompts
   unless this entitlement is present. Without it: no dialog, no row in
   Privacy & Security, and the usage string in Info.plist never shows.
+
+  Library validation is off because the Chromium framework is downloaded
+  after install (see chromium.rs) and carries only CEF's ad-hoc signature,
+  which the hardened runtime otherwise refuses to load. The helper apps
+  carry the same in HelperEntitlements.plist.
 -->
 <plist version="1.0">
   <dict>
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
   </dict>
 </plist>
