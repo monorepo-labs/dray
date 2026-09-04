@@ -66,19 +66,6 @@ function QuestionnaireTitle({
   )
 }
 
-function QuestionnaireDescription({
-  className,
-  ...props
-}: React.ComponentProps<typeof QuestionnairePrimitive.Description>) {
-  return (
-    <QuestionnairePrimitive.Description
-      data-slot="questionnaire-description"
-      className={cn("text-sm text-pretty text-muted-foreground", className)}
-      {...props}
-    />
-  )
-}
-
 function QuestionnaireChoices({
   className,
   ...props
@@ -171,19 +158,6 @@ function QuestionnaireInput({
         {...props}
       />
     </div>
-  )
-}
-
-function QuestionnaireError({
-  className,
-  ...props
-}: React.ComponentProps<typeof QuestionnairePrimitive.Error>) {
-  return (
-    <QuestionnairePrimitive.Error
-      data-slot="questionnaire-error"
-      className={cn("mt-2 text-sm text-destructive", className)}
-      {...props}
-    />
   )
 }
 
@@ -309,8 +283,6 @@ export {
   QuestionnaireChoice,
   QuestionnaireChoiceDescription,
   QuestionnaireChoices,
-  QuestionnaireDescription,
-  QuestionnaireError,
   QuestionnaireInput,
   QuestionnaireItem,
   QuestionnaireNext,

@@ -26,9 +26,9 @@ use serde_json::Value;
 /// One line pi wrote, typed.
 ///
 /// `Unknown` is a coverage gap and is filed as one. It is deliberately not the
-/// same thing as a line we have modelled and chosen to draw nothing for — see
-/// [`PiEvent::is_ignored`] — because folding the two turns the failure log from
-/// a signal into noise, which is the `tool_progress` lesson from Claude Code.
+/// same thing as a line we have modelled and chosen to draw nothing for, which
+/// gets a variant of its own — folding the two turns the failure log from a
+/// signal into noise, which is the `tool_progress` lesson from Claude Code.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum PiEvent {
@@ -122,26 +122,15 @@ pub enum PiEvent {
     /// a report quietly fails, because the app's own record is what the picker
     /// draws and what a resume replays. Modelled so the failure log stays a
     /// list of real gaps.
-    ModelChanged {
-        #[serde(default)]
-        model: Option<String>,
-    },
-    ThinkingLevelChanged {
-        #[serde(default)]
-        level: Option<String>,
-    },
+    ModelChanged,
+    ThinkingLevelChanged,
 
     /// pi's own view of what is queued behind the running turn.
     ///
     /// Dray keeps its own queue in `Session` and draws from that, so this is
     /// pi's copy of a fact the app already owns. Modelled to keep the failure
     /// log honest; whether the two should be reconciled is PI-PLAN.md §12.
-    QueueUpdate {
-        #[serde(default)]
-        steering: Vec<String>,
-        #[serde(default)]
-        follow_up: Vec<String>,
-    },
+    QueueUpdate,
 
     CompactionStart,
     /// A compaction finished, whether or not it produced anything.
@@ -223,34 +212,6 @@ pub enum PiEvent {
     /// A line this build has never seen. Filed, and costs nothing else.
     #[serde(other)]
     Unknown,
-}
-
-impl PiEvent {
-    /// Whether this is a line we have seen and decided says nothing worth a row.
-    ///
-    /// Kept apart from [`PiEvent::Unknown`] so the parse-failure log stays a
-    /// list of real coverage gaps.
-    pub fn is_ignored(&self) -> bool {
-        matches!(
-            self,
-            // A retry that succeeded is simply the request going through, so
-            // the next event is what clears the indicator — the same rule
-            // Claude Code's `api_retry` follows, and it needs no line of its
-            // own to say so.
-            PiEvent::AutoRetryEnd
-                | PiEvent::ToolExecutionUpdate
-                | PiEvent::BashExecutionUpdate
-                | PiEvent::EntryAppended
-                | PiEvent::SessionInfoChanged
-                | PiEvent::UserBash
-                | PiEvent::SummarizationRetryScheduled
-                | PiEvent::SummarizationRetryAttemptStart
-                | PiEvent::SummarizationRetryFinished
-                | PiEvent::ModelChanged { .. }
-                | PiEvent::ThinkingLevelChanged { .. }
-                | PiEvent::QueueUpdate { .. }
-        )
-    }
 }
 
 /// What a compaction saved, where it got far enough to say.

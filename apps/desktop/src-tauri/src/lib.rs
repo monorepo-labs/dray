@@ -7,7 +7,7 @@ use crate::{
     models::{Effort, Model, ModelId},
     projects::Project,
     session::{Harness, QueuedMessage, SendOutcome, SessionManager},
-    store::{SessionIndexByProject, SessionIndexItem, SessionSnapshot, SessionStatus},
+    store::{SessionIndexItem, SessionSnapshot, SessionStatus},
 };
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
@@ -315,13 +315,6 @@ async fn search_files(cwd: String, query: String, limit: usize) -> Result<Vec<Fi
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-async fn list_sessions_by_project() -> Result<Vec<SessionIndexByProject>, String> {
-    store::list_sessions_by_project()
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// One side of the archived split. The sidebar's toggle is the only caller, and
 /// it never wants both at once, so the flag it holds is the argument.
 #[tauri::command]
@@ -469,25 +462,6 @@ async fn sync_status(cwd: String) -> git::SyncStatus {
 #[tauri::command]
 async fn work_status(cwd: String) -> git::WorkStatus {
     git::work_status(&cwd).await
-}
-
-/// Commits the checked files alone. `paths` are this session's own change list,
-/// so a path the reader unchecked is one this never sees.
-#[tauri::command]
-async fn commit_files(
-    cwd: &str,
-    summary: &str,
-    description: Option<&str>,
-    paths: Vec<String>,
-) -> Result<(), String> {
-    git::commit_files(cwd, summary, description, &paths)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn push_branch(cwd: &str) -> Result<(), String> {
-    git::push_branch(cwd).await.map_err(|e| e.to_string())
 }
 
 /// Returns the entry as written so the sidebar re-renders from the stored value
@@ -788,7 +762,6 @@ pub fn run() {
             list_slash_commands,
             warm_file_index,
             search_files,
-            list_sessions_by_project,
             list_session_index_items,
             get_session_by_id,
             list_projects,
@@ -806,8 +779,6 @@ pub fn run() {
             log_branch_commits,
             sync_status,
             work_status,
-            commit_files,
-            push_branch,
             set_session_flags,
             detach_session,
             delete_session,

@@ -266,13 +266,6 @@ export function shortenPath(path: string): string {
   return parts.slice(-2).join("/");
 }
 
-/// Formats a duration the way a reader scans it, not to full precision.
-export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
-}
-
 /// Pretty-prints tool input for the expanded view, dropping the fields the row
 /// header already shows so the body isn't a duplicate of the summary line.
 export function formatToolInput(input: JsonValue, omit: string[]): string | null {

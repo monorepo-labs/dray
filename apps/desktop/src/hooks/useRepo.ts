@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { reconcileLog } from "@/lib/commit";
-import type { Commit, SyncStatus } from "@/types/events";
+import type { Commit } from "@/types/events";
 
 /// Same bargain [useChanges](./useChanges.ts) makes: a turn's events arrive in
 /// bursts, and only *refreshes* wait them out — the first read of a directory
@@ -194,32 +194,4 @@ export function useCommitLog(
   usePolledRead(cwd, revision, active, read);
 
   return { commits, error, loading, settled, hasMore, loadMore, refresh: read };
-}
-
-/// Where the branch stands against its upstream, for the push button.
-export function useSyncStatus(
-  cwd: string,
-  revision: string,
-  active: boolean,
-): { status: SyncStatus | null; refresh: () => void } {
-  const [status, setStatus] = useState<SyncStatus | null>(null);
-
-  const issued = useRef(0);
-
-  const read = useCallback(() => {
-    const token = ++issued.current;
-    void invoke<SyncStatus>("sync_status", { cwd })
-      .then((next) => issued.current === token && setStatus(next))
-      .catch(() => issued.current === token && setStatus(null));
-  }, [cwd]);
-
-  const [seeded, setSeeded] = useState(cwd);
-  if (seeded !== cwd) {
-    setSeeded(cwd);
-    setStatus(null);
-  }
-
-  usePolledRead(cwd, revision, active, read);
-
-  return { status, refresh: read };
 }

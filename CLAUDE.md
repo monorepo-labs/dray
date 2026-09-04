@@ -58,7 +58,6 @@ pnpm workspace, two apps, no shared package yet.
 ```
 apps/desktop/   the Tauri app — everything below this section describe it
 apps/web/       marketing site: Next.js App Router, Tailwind 4, deploy Vercel
-packages/       empty; first shared thing go here, not into either app
 ```
 
 Root `package.json` carry **no dependencies** — name, `packageManager`, `pnpm --filter` aliases only. Keep it that way: dep at root install into root `node_modules`, which both apps resolve through, so version drift there show up as one app mysteriously working.
@@ -75,7 +74,7 @@ Dray keep to one visual language — one radius scale, one yellow, filled button
 
 ## Commands
 
-Use **pnpm**, not npm. `tauri.conf.json` hardcode `pnpm dev` / `pnpm build` as before-commands. Stale `package-lock.json` sit next to `pnpm-lock.yaml` — ignore it; `npm install` desync tree.
+Use **pnpm**, not npm. `tauri.conf.json` hardcode `pnpm dev` / `pnpm build` as before-commands.
 
 **Every app command run from its own package dir.** Workspace root hold no deps, only thin `pnpm --filter` aliases (`pnpm app`, `pnpm web`). Anything else — `cargo`, `vitest`, `tauri build` — want real cwd, because relative paths in `tauri.conf.json`, `.cargo/config.toml` and `install.sh` all resolve against it.
 
@@ -254,8 +253,6 @@ The right panel's Changes tab stays and answers a different question: the panel 
 - **The selected file is derived, never stored** (`find(path) ?? files[0]`), so a file that stops being changed can't leave the pane pointing at nothing.
 
 **The view reads, never writes — and that is not "not yet".** The conversation next door is where work gets made and committed, so a second place to write commits is a second way to do what the reader is already asking the agent for. No checkbox, no message box, no push button, no discard.
-
-The backend keeps `commit_files` and `push_branch` anyway, registered and tested: **UI absent, capability parked**, because the hard part is *which* paths go in. If it comes back: `add -A -- <paths>` then `commit -m … -- <paths>`, both `GIT_LITERAL_PATHSPECS=1`. `add` is what makes an untracked file committable at all and what records a deletion. A pathspec on `commit` implies `--only`, so anything staged for an unchecked file stays staged — pinned by test. Porcelain, not the temp-index plumbing `snapshot_tree` uses: this is *meant* to move HEAD.
 
 ## Spaces
 
@@ -829,7 +826,7 @@ Several things are deliberately unfinished — don't mistake them for bugs.
 - **Forks copy the conversation whole and record no lineage.** The CLI exposes no fork-at-message, and `fork_from` is cleared once the CLI carries the fork out, so nothing on disk says which session a fork came from.
 - **Dray never writes to the issue tracker**, and there is **no issue-side project mapping** — the connection is workspace-wide.
 - **The handoff row has no Revert, Amend or Stash** — each destroys or rewrites work, and a button that sends a prompt for one is a button whose blast radius is decided by the model. No Push either, and that one went on width.
-- **The repo view reads, commits and pushes — no fetch, no pull, no discard.** The ahead count is against the *last known* upstream, so a branch someone else pushed to reads as level until the push itself fails.
+- **The repo view reads — no fetch, no pull, no discard.** The ahead count is against the *last known* upstream, so a branch someone else pushed to reads as level until the push itself fails.
 - **Sidebar PR marks say open, draft or merged; checks say running or failing.** No number, no per-check detail, no merge readiness, nothing at all for passing.
 - **Spawned sessions inherit permission mode, so most block immediately.** The default stance is `auto`, so a fanned-out session stops at its first `Write` waiting for a card nobody is next to. `dray new` takes no `--permission-mode`, and adding one raises a real question: an agent in a `plan` session spawning a `bypassPermissions` child is an escalation past the stance the user set. Clamping the child to be no more autonomous than the parent is the likely shape of the fix.
 - **No reading a transcript back.** Create, list and send exist; reading what another session said does not, and a parent cannot learn a child finished except by polling `dray ls`.

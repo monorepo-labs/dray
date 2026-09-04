@@ -182,11 +182,6 @@ export function openDevTools(sessionId: string) {
   return invoke("browser_devtools", { sessionId });
 }
 
-/// CEF's zoom level as the percentage Chrome would show.
-export function zoomPercent(level: number) {
-  return Math.round(1.2 ** level * 100);
-}
-
 // --- Picking an element ------------------------------------------------------
 
 export type PickedElement = {

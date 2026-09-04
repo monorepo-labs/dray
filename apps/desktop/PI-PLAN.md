@@ -10,8 +10,7 @@ scripted OpenAI-completions provider rather than a real model: the pi process,
 the RPC framing, the tool execution and the extension host are all real, only
 the tokens are canned. Three reached the network — `live_turn.jsonl` and
 `live_models.jsonl` against a working xAI login, `failed_turn_live.jsonl`
-against an expired one. The fixtures README says which is which and
-`scripts/pi-capture/` re-runs any of them.
+against an expired one. The fixtures README says which is which.
 
 The stub was more generous than a real provider in two places and both are
 called out where they matter (§7, §9). That is the whole reason the live pair
@@ -1841,7 +1840,7 @@ Codex convention and `t` is added, because it is what shows that a `*_end`
 delta lands after two later blocks have started.
 
 The fixtures README maps each file to what it pins and says which ran against
-the scripted provider. `scripts/pi-capture/` re-runs any of them.
+the scripted provider.
 
 ### Test layers
 
