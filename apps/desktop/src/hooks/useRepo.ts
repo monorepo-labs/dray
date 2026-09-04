@@ -195,4 +195,3 @@ export function useCommitLog(
 
   return { commits, error, loading, settled, hasMore, loadMore, refresh: read };
 }
-
