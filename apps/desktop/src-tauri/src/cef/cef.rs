@@ -192,7 +192,9 @@ fn start() -> Option<bool> {
     let args = Args::new();
     // Returns -1 for the browser process; helpers are a separate binary, so
     // this process is never anything else.
-    let ret = execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut());
+    let ret = keeping_signal(libc::SIGCHLD, || {
+        execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut())
+    });
     if ret >= 0 {
         eprintln!("cef: execute_process answered {ret} in the browser process");
         return Some(false);
@@ -215,7 +217,10 @@ fn start() -> Option<bool> {
         ..Default::default()
     };
     let mut cef_app = DrayApp::new();
-    if initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) != 1 {
+    let ok = keeping_signal(libc::SIGCHLD, || {
+        initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) == 1
+    });
+    if !ok {
         eprintln!("cef: initialize failed");
         return Some(false);
     }
@@ -226,6 +231,51 @@ fn start() -> Option<bool> {
 
 fn path_str(path: &Path) -> CefString {
     CefString::from(path.to_string_lossy().as_ref())
+}
+
+/// Chromium's browser-process init resets SIGCHLD to `SIG_DFL`, which wipes
+/// the handler tokio reaps children through: every later `git` spawn then
+/// waits forever, and `send_msg` holds the sessions lock across one, so one
+/// tab opened made every session unsendable and unstoppable until restart.
+/// A child exiting *during* `f` still loses its signal; tokio re-checks all
+/// pending children on the next SIGCHLD, so that one resolves with the next
+/// spawn rather than never.
+fn keeping_signal<T>(signal: libc::c_int, f: impl FnOnce() -> T) -> T {
+    let mut saved: libc::sigaction = unsafe { std::mem::zeroed() };
+    unsafe { libc::sigaction(signal, std::ptr::null(), &mut saved) };
+    let out = f();
+    unsafe { libc::sigaction(signal, &saved, std::ptr::null_mut()) };
+    out
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::keeping_signal;
+
+    extern "C" fn noop(_: libc::c_int) {}
+
+    fn handler_of(signal: libc::c_int) -> libc::sighandler_t {
+        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigaction(signal, std::ptr::null(), &mut current) };
+        current.sa_sigaction
+    }
+
+    /// SIGUSR2, not SIGCHLD: tests share one process, and a window on the
+    /// real signal could strand a git test's child exiting at that moment.
+    #[test]
+    fn a_handler_reset_inside_is_put_back() {
+        let mut ours: libc::sigaction = unsafe { std::mem::zeroed() };
+        ours.sa_sigaction = noop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        unsafe { libc::sigaction(libc::SIGUSR2, &ours, std::ptr::null_mut()) };
+
+        keeping_signal(libc::SIGUSR2, || {
+            let dfl: libc::sigaction = unsafe { std::mem::zeroed() };
+            unsafe { libc::sigaction(libc::SIGUSR2, &dfl, std::ptr::null_mut()) };
+            assert_eq!(handler_of(libc::SIGUSR2), libc::SIG_DFL);
+        });
+
+        assert_eq!(handler_of(libc::SIGUSR2), ours.sa_sigaction);
+    }
 }
 
 fn on_main(f: impl FnOnce() + Send + 'static) -> Result<(), String> {
