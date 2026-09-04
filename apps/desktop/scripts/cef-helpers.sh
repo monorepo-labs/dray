@@ -32,6 +32,19 @@ if [ -n "$TARGETS" ]; then
   done
   BIN="$OUT/dray-helper"
   lipo -create $BINS -output "$BIN"
+  # Tauri's universal build lipos the app binary alone, then its bundler
+  # demands every [[bin]] in the package at that same path — so a universal
+  # release fails on a helper the host-arch build gets for free. Signed here
+  # for the same reason the app bundles are: the bundler signs nothing it did
+  # not build, and an unsigned Mach-O in Contents/MacOS fails notarization.
+  UNI="target/universal-apple-darwin/$PROFILE"
+  mkdir -p "$UNI"
+  cp "$BIN" "$UNI/dray-helper"
+  if [ -n "$SIGN_IDENTITY" ]; then
+    T=--timestamp
+    [ "$SIGN_IDENTITY" = "-" ] && T=""
+    codesign --force --options runtime $T -s "$SIGN_IDENTITY" "$UNI/dray-helper"
+  fi
 else
   cargo build $FLAG --bin dray-helper --features cef
   BIN="target/$PROFILE/dray-helper"

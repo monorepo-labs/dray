@@ -5,7 +5,7 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.14.0-beta.1
+## 0.14.0-beta.2
 
 ### Added
 
