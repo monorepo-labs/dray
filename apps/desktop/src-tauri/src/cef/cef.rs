@@ -237,44 +237,83 @@ fn path_str(path: &Path) -> CefString {
 /// the handler tokio reaps children through: every later `git` spawn then
 /// waits forever, and `send_msg` holds the sessions lock across one, so one
 /// tab opened made every session unsendable and unstoppable until restart.
-/// A child exiting *during* `f` still loses its signal; tokio re-checks all
-/// pending children on the next SIGCHLD, so that one resolves with the next
-/// spawn rather than never.
+/// Chromium clears the thread's signal mask in the same breath, so that is
+/// put back too. A child exiting *during* `f` raised its signal into
+/// `SIG_DFL`, where it was discarded — and its waiter may be the one holding
+/// the sessions lock, so waiting for the next spawn's signal is not enough.
+/// A synthetic one after the restore makes every tokio waiter re-check now.
 fn keeping_signal<T>(signal: libc::c_int, f: impl FnOnce() -> T) -> T {
     let mut saved: libc::sigaction = unsafe { std::mem::zeroed() };
-    unsafe { libc::sigaction(signal, std::ptr::null(), &mut saved) };
+    let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigaction(signal, std::ptr::null(), &mut saved);
+        libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &mut mask);
+    }
     let out = f();
-    unsafe { libc::sigaction(signal, &saved, std::ptr::null_mut()) };
+    unsafe {
+        libc::sigaction(signal, &saved, std::ptr::null_mut());
+        libc::pthread_sigmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut());
+        // `raise`, not `kill(getpid())`: it targets this thread and lands
+        // before returning, where a process-directed one may go to another
+        // thread later.
+        libc::raise(signal);
+    }
     out
 }
 
 #[cfg(test)]
 mod signal_tests {
     use super::keeping_signal;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    extern "C" fn noop(_: libc::c_int) {}
+    static DELIVERED: AtomicUsize = AtomicUsize::new(0);
 
-    fn handler_of(signal: libc::c_int) -> libc::sighandler_t {
+    extern "C" fn count(_: libc::c_int) {
+        DELIVERED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn action_of(signal: libc::c_int) -> libc::sigaction {
         let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
         unsafe { libc::sigaction(signal, std::ptr::null(), &mut current) };
-        current.sa_sigaction
+        current
+    }
+
+    fn blocked(signal: libc::c_int) -> bool {
+        let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &mut mask) };
+        unsafe { libc::sigismember(&mask, signal) == 1 }
     }
 
     /// SIGUSR2, not SIGCHLD: tests share one process, and a window on the
     /// real signal could strand a git test's child exiting at that moment.
     #[test]
-    fn a_handler_reset_inside_is_put_back() {
+    fn a_handler_reset_inside_is_put_back_and_kicked() {
+        let before = action_of(libc::SIGUSR2);
         let mut ours: libc::sigaction = unsafe { std::mem::zeroed() };
-        ours.sa_sigaction = noop as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        ours.sa_sigaction = count as extern "C" fn(libc::c_int) as libc::sighandler_t;
         unsafe { libc::sigaction(libc::SIGUSR2, &ours, std::ptr::null_mut()) };
 
         keeping_signal(libc::SIGUSR2, || {
+            // What Chromium does: disposition to default, mask cleared. The
+            // mask here goes the other way to prove it is restored, not
+            // merely left empty.
             let dfl: libc::sigaction = unsafe { std::mem::zeroed() };
-            unsafe { libc::sigaction(libc::SIGUSR2, &dfl, std::ptr::null_mut()) };
-            assert_eq!(handler_of(libc::SIGUSR2), libc::SIG_DFL);
+            let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::sigaction(libc::SIGUSR2, &dfl, std::ptr::null_mut());
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGUSR2);
+                libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            }
+            assert_eq!(action_of(libc::SIGUSR2).sa_sigaction, libc::SIG_DFL);
+            assert!(blocked(libc::SIGUSR2));
         });
 
-        assert_eq!(handler_of(libc::SIGUSR2), ours.sa_sigaction);
+        assert_eq!(action_of(libc::SIGUSR2).sa_sigaction, ours.sa_sigaction);
+        assert!(!blocked(libc::SIGUSR2));
+        assert_eq!(DELIVERED.load(Ordering::SeqCst), 1, "the synthetic signal reached the restored handler");
+
+        unsafe { libc::sigaction(libc::SIGUSR2, &before, std::ptr::null_mut()) };
     }
 }
 
