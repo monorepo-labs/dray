@@ -5,7 +5,15 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.14.0-beta.2
+## 0.14.0-beta.3
+
+### Fixed
+
+- **Opening a browser tab no longer freezes every session.** Chromium's
+  startup reset the signal handler Dray reaps child processes through, so
+  the first `git` command after the first tab waited forever — and since a
+  send waits on one, every session went unsendable and unstoppable until
+  restart.
 
 ### Added
 
