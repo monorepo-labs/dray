@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    vec,
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -15,24 +12,20 @@ use crate::{
     issues::IssueRef,
     models::{Effort, ModelId},
     session::Harness,
+    Fail,
 };
 
 /// Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
 /// means finished *and unread* — the transition back to `Idle` is the user
 /// looking at the session, not anything the agent does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
+    #[default]
     Idle,
     InProgress,
     Completed,
-}
-
-impl Default for SessionStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -174,20 +167,13 @@ pub struct SessionSnapshot {
     pub events: Vec<AgentEvent>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionIndexByProject {
-    pub path: String,
-    pub indexes: Vec<SessionIndexItem>,
-}
-
 static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// `~/.dray`, creating it if this is the first run. If `~/.automedon` exists
 /// from before the app's rename and `~/.dray` doesn't yet, the old directory
 /// is moved into place so a rename never orphans a user's session history.
 pub async fn get_home_app_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("could not resolve home directory")?;
+    let home = std::env::home_dir().context("could not resolve home directory")?;
     let path = home.join(".dray");
 
     if !fs::try_exists(&path).await.unwrap_or(false) {
@@ -307,20 +293,9 @@ pub async fn delete_pi_session_file(session_id: &str) -> Result<()> {
 
 /// Reads and parses `index.json`. Missing or empty file reads as no sessions,
 /// not an error.
-pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {
+pub async fn read_index() -> Result<Vec<SessionIndexItem>> {
     let path = get_sessions_dir().await?.join("index.json");
-
-    let contents = match fs::read_to_string(path).await {
-        Ok(v) => v,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).context("could not open session file"),
-    };
-
-    if contents.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut items = serde_json::from_str::<Vec<SessionIndexItem>>(&contents)?;
+    let mut items: Vec<SessionIndexItem> = read_json(&path).await?;
     // The one place the on-disk spelling of effort becomes the real one; every
     // reader above this reads `effort` and nothing else.
     items.iter_mut().for_each(decode_effort);
@@ -328,15 +303,52 @@ pub async fn list_session_index_items() -> Result<Vec<SessionIndexItem>> {
     Ok(items)
 }
 
+/// One JSON file, read whole. A missing or blank file is the default — the
+/// convention every file under `~/.dray` shares, since "nothing written yet"
+/// is the ordinary state on a fresh install and never an error.
+pub async fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    let contents = match fs::read_to_string(path).await {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(e) => return Err(e).with_context(|| format!("could not open {}", path.display())),
+    };
+
+    if contents.trim().is_empty() {
+        return Ok(T::default());
+    }
+
+    serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
+}
+
+/// Rewrites a file whole, landing via write-temp + `rename` so a reader never
+/// sees a torn file: the index parses as one `Vec`, and a half-written one
+/// reads as no sessions at all.
+pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    let tmp = path.with_extension("json.tmp");
+
+    fs::write(&tmp, contents)
+        .await
+        .with_context(|| format!("could not write {}", tmp.display()))?;
+
+    if let Err(e) = fs::rename(&tmp, path).await {
+        // Or the next write inherits a stale temp file it never wrote.
+        let _ = fs::remove_file(&tmp).await;
+        return Err(e).with_context(|| format!("could not replace {}", path.display()));
+    }
+
+    Ok(())
+}
+
 /// The index filtered to one side of `archived` — the sidebar shows exactly one
 /// of the two at a time, so a parameter keeps it to one function rather than a
 /// pair that would drift. Callers that need every entry (`set_*`, `get_*`) still
 /// use [`list_session_index_items`] directly.
-pub async fn list_session_index_items_by_archived(
+#[tauri::command]
+pub async fn list_session_index_items(
     archived: bool,
-) -> Result<Vec<SessionIndexItem>> {
+) -> Result<Vec<SessionIndexItem>, Fail> {
     Ok(filter_by_archived(
-        list_session_index_items().await?,
+        read_index().await?,
         archived,
     ))
 }
@@ -344,28 +356,6 @@ pub async fn list_session_index_items_by_archived(
 /// Split out from the async read so it can be tested without an `index.json`.
 fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
     items.into_iter().filter(|i| i.archived == archived).collect()
-}
-
-/// All sessions, bucketed by `project_path` — the sidebar's project grouping.
-pub async fn list_sessions_by_project() -> Result<Vec<SessionIndexByProject>> {
-    let sessions = list_session_index_items().await?;
-    let mut sessions_grouped: Vec<SessionIndexByProject> = Vec::new();
-
-    for session in sessions {
-        if let Some(project) = sessions_grouped
-            .iter_mut()
-            .find(|p| p.path == session.project_path)
-        {
-            project.indexes.push(session);
-        } else {
-            sessions_grouped.push(SessionIndexByProject {
-                path: session.project_path.clone(),
-                indexes: vec![session],
-            });
-        }
-    }
-
-    Ok(sessions_grouped)
 }
 
 impl SessionIndexItem {
@@ -397,7 +387,7 @@ impl SessionIndexItem {
             // A worktree's branch is the CLI's to name, so it's derived rather
             // than read; everything else records the branch actually checked out.
             branch: match worktree_name {
-                Some(name) => Some(format!("worktree-{name}")),
+                Some(name) => Some(crate::git::worktree_branch(name)),
                 None => branch.map(str::to_string),
             },
             worktree_name: worktree_name.map(str::to_string),
@@ -447,7 +437,7 @@ impl SessionIndexItem {
             },
             project_path: self.project_path.clone(),
             branch: match worktree_name {
-                Some(name) => Some(format!("worktree-{name}")),
+                Some(name) => Some(crate::git::worktree_branch(name)),
                 None => self.branch.clone(),
             },
             worktree_name: worktree_name.map(str::to_string),
@@ -542,7 +532,7 @@ pub async fn resolve_unclaimed_worktree_name(
     project_path: &str,
     requested: Option<&str>,
 ) -> Result<String> {
-    let mut claimed: Vec<String> = list_session_index_items()
+    let mut claimed: Vec<String> = read_index()
         .await?
         .into_iter()
         .filter(|i| i.project_path == project_path)
@@ -625,9 +615,7 @@ pub fn session_branch(item: &SessionIndexItem, observed: Option<&str>) -> Option
 /// `claude -w <name>` places the tree here and names its branch
 /// `worktree-<name>` — both confirmed against the worktree fixtures.
 pub fn worktree_path(project_path: &str, name: &str) -> String {
-    PathBuf::from(project_path)
-        .join(".claude")
-        .join("worktrees")
+    crate::git::worktrees_dir(Path::new(project_path))
         .join(name)
         .to_string_lossy()
         .into_owned()
@@ -710,7 +698,7 @@ fn title_from_prompt(prompt: &str) -> String {
 pub async fn append_session_index_item(session: SessionIndexItem) -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     sessions.push(session);
 
     write_session_index(&sessions).await
@@ -727,7 +715,7 @@ pub async fn touch_session_index_item(
 ) -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(());
     };
@@ -753,10 +741,11 @@ pub async fn touch_session_index_item(
 ///
 /// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
 /// list, and detaching must not jump the row to the top of it.
-pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>> {
+#[tauri::command]
+pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(None);
     };
@@ -769,14 +758,15 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
     Ok(Some(updated))
 }
 
+#[tauri::command]
 pub async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
     pinned: Option<bool>,
-) -> Result<Option<SessionIndexItem>> {
+) -> Result<Option<SessionIndexItem>, Fail> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(None);
     };
@@ -816,7 +806,7 @@ pub async fn set_session_flags(
 pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec<IssueRef>> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         bail!("no such session: {session_id}");
     };
@@ -848,7 +838,7 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
 pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<IssueRef>> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         bail!("no such session: {session_id}");
     };
@@ -872,7 +862,7 @@ pub async fn delete_session(session_id: &str) -> Result<bool> {
     let existed = {
         let _guard = INDEX_LOCK.lock().await;
 
-        let mut sessions = list_session_index_items().await?;
+        let mut sessions = read_index().await?;
         let before = sessions.len();
         sessions.retain(|i| i.session_id != session_id);
 
@@ -906,7 +896,7 @@ pub async fn set_session_status(
 ) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(None);
     };
@@ -954,7 +944,7 @@ pub async fn relocate_session_to_project(
 ) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(None);
     };
@@ -987,7 +977,7 @@ pub async fn relocate_session_to_project(
 pub async fn backfill_removed_worktrees() -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     if mark_relocated(&mut sessions) {
         write_session_index(&sessions).await?;
     }
@@ -1021,7 +1011,7 @@ fn mark_relocated(items: &mut [SessionIndexItem]) -> bool {
 pub async fn reset_in_progress_sessions() -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let mut changed = false;
     for item in sessions.iter_mut() {
         if item.status == SessionStatus::InProgress {
@@ -1046,7 +1036,7 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
 pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(None);
     };
@@ -1067,7 +1057,7 @@ pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<S
 pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(());
     };
@@ -1154,23 +1144,12 @@ fn decode_effort(item: &mut SessionIndexItem) {
 async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {
     let path = get_sessions_dir().await?.join("index.json");
     let encoded: Vec<SessionIndexItem> = sessions.iter().map(encode_effort).collect();
-    let contents = serde_json::to_string(&encoded)?;
-    let tmp = path.with_extension("json.tmp");
-
-    fs::write(&tmp, contents)
-        .await
-        .context("failed to write session index")?;
-
-    fs::rename(&tmp, &path)
-        .await
-        .context("failed to rename session index")?;
-
-    Ok(())
+    write_atomic(&path, serde_json::to_string(&encoded)?).await
 }
 
 /// Looks up one session's index entry by id.
 pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>> {
-    let items = list_session_index_items().await?;
+    let items = read_index().await?;
 
     Ok(items.into_iter().find(|i| i.session_id == session_id))
 }
@@ -1178,7 +1157,8 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// `None` means the id isn't in the index. An indexed session with no log yet
 /// is normal — it was written before its process spawned — and yields empty
 /// `events` rather than `None`.
-pub async fn get_session_by_id(session_id: &str) -> Result<Option<SessionSnapshot>> {
+#[tauri::command]
+pub async fn get_session_by_id(session_id: &str) -> Result<Option<SessionSnapshot>, Fail> {
     let Some(index_item) = get_session_index_item(session_id).await? else {
         return Ok(None);
     };
@@ -1319,7 +1299,7 @@ async fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
     let _guard = INDEX_LOCK.lock().await;
 
-    let mut sessions = list_session_index_items().await?;
+    let mut sessions = read_index().await?;
     let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
         return Ok(false);
     };

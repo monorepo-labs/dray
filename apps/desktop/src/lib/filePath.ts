@@ -34,7 +34,7 @@ const GAP = /[^\S\r\n]/;
 /// nothing.
 const LOCATOR = /(?::\d+(?::\d+)?|#L\d+)$/;
 
-export type FilePathMatch = { start: number; end: number; path: string };
+type FilePathMatch = { start: number; end: number; path: string };
 
 /// Whether `path` is an absolute path worth offering to open.
 ///

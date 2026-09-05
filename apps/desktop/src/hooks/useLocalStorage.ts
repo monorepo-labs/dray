@@ -1,23 +1,11 @@
 import { useCallback, useState } from "react";
 
-/// What a write held that the store refused to take.
-///
-/// The write below is best-effort and the hook keeps the value in React state
-/// either way, which is what makes "the preference just won't outlive the
-/// session" true. It was only true for the hook: a reader coming through
-/// [`readLocalStorage`] got the last value the store *accepted*, so on that
-/// path the two disagreed — and the pair that would disagree is a menu and the
-/// chord that has to cycle exactly what the menu draws.
-const unwritten = new Map<string, unknown>();
-
 /// One stored preference, read outside a render.
 ///
 /// Exported so a plain function can read a key this hook writes without keeping
 /// a second copy of the JSON encoding — which is the sort of contract that
 /// drifts once and then silently reads every stored value as its default.
 export function readLocalStorage<T>(key: string, initial: T): T {
-  if (unwritten.has(key)) return unwritten.get(key) as T;
-
   try {
     const raw = localStorage.getItem(key);
     return raw === null ? initial : (JSON.parse(raw) as T);
@@ -26,16 +14,13 @@ export function readLocalStorage<T>(key: string, initial: T): T {
   }
 }
 
-/// Stores one preference, best-effort, and keeps it readable either way.
-///
-/// Split out of the hook so the pair with [`readLocalStorage`] can be tested
-/// without a renderer — which is the half that broke, not the React state.
+/// Stores one preference, best-effort: a refused write costs the preference
+/// its next launch, never the render.
 export function writeLocalStorage<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-    unwritten.delete(key);
   } catch {
-    unwritten.set(key, value);
+    // Quota or a store the webview refuses; the value lives in state meanwhile.
   }
 }
 

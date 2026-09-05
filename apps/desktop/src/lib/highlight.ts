@@ -9,8 +9,8 @@
 import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseSlashCommand } from "@/lib/slash";
 
-export type Segment = {
-  kind: "text" | "command" | "mention" | "issue";
+type Segment = {
+  kind: "text" | "command" | "mention" | "issue" | "url";
   text: string;
 };
 
@@ -23,7 +23,28 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   command: "text-accent-command",
   mention: "text-accent-mention",
   issue: "text-accent-issue",
+  // Underlined and nothing else: a URL is already its own colour of word,
+  // and it must read the same in the composer, where it is only text.
+  url: "underline decoration-muted-foreground underline-offset-2",
 };
+
+/// Punctuation a sentence puts after a URL, not in it. A closing paren stays
+/// only where the URL opened one, as Wikipedia's do.
+const URL_TAIL = /[.,;:!?'"»›]+$/;
+
+/// The URL a run of non-space characters starting at `text[i]` holds, or
+/// `null`. Only `http(s)://` — a bare `example.com` is a word until proven
+/// otherwise, and the cost of a miss is one un-clickable link.
+function urlAt(text: string, i: number): string | null {
+  if (!/^https?:\/\/\S/i.test(text.slice(i, i + 9))) return null;
+  let end = i;
+  while (end < text.length && !SPACE.test(text[end])) end += 1;
+  let url = text.slice(i, end).replace(URL_TAIL, "");
+  while (url.endsWith(")") && (url.match(/\(/g) ?? []).length < (url.match(/\)/g) ?? []).length) {
+    url = url.slice(0, -1);
+  }
+  return url;
+}
 
 /// A mention split into the part worth reading and the part that is only there
 /// to disambiguate it.
@@ -66,6 +87,15 @@ export function highlightSegments(text: string): Segment[] {
 
   for (; i < text.length; i += 1) {
     const opener = text[i];
+    if (opener === "h" && (i === 0 || SPACE.test(text[i - 1]) || OPENERS.includes(text[i - 1]))) {
+      const url = urlAt(text, i);
+      if (!url) continue;
+      if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
+      segments.push({ kind: "url", text: url });
+      plainFrom = i + url.length;
+      i = plainFrom - 1;
+      continue;
+    }
     if (opener !== "@" && opener !== "#") continue;
     // Must open a word, which is what keeps an email address and a `#fff`
     // colour plain. Note this also holds at `i === plainFrom` right after a

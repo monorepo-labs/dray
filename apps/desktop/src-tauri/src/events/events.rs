@@ -871,47 +871,44 @@ pub enum PermissionMode {
     BypassPermissions,
 }
 
-/// Hand-rolled to avoid a date dependency for one display-only field; `seq`, not
-/// `ts`, is the ordering key.
+/// Millisecond UTC, `Z`-suffixed — display only; `seq`, not `ts`, is the
+/// ordering key.
 pub fn now_rfc3339() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-
-    rfc3339(now.as_secs() as i64, now.subsec_millis())
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// Unix seconds → RFC3339, for wire fields carrying an epoch timestamp where
 /// this model uses strings — Claude Code's `resetsAt`, notably.
 pub fn rfc3339_from_unix(secs: i64) -> String {
-    rfc3339(secs, 0)
+    chrono::DateTime::from_timestamp(secs, 0)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn rfc3339(secs: i64, millis: u32) -> String {
-    // Days since epoch → civil date, per Howard Hinnant's algorithm.
-    let days = secs.div_euclid(86_400);
-    let secs_of_day = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        y,
-        m,
-        d,
-        secs_of_day / 3_600,
-        (secs_of_day % 3_600) / 60,
-        secs_of_day % 60,
-        millis
-    )
+impl AgentEvent {
+    /// The fields every mapper mints the same way: a fresh id, the time now,
+    /// no raw line. The rest is the harness's own — its counter, its turn id,
+    /// whichever subagent the line belongs to.
+    pub fn mint(
+        session_id: String,
+        harness: Harness,
+        seq: u64,
+        turn_id: Option<String>,
+        subagent: Option<Subagent>,
+        payload: AgentEventPayload,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::now_v7().to_string(),
+            session_id,
+            harness,
+            seq,
+            ts: now_rfc3339(),
+            turn_id,
+            subagent,
+            payload,
+            raw: None,
+        }
+    }
 }
 
 #[cfg(test)]

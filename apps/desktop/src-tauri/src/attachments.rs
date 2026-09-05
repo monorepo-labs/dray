@@ -139,12 +139,17 @@ pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     out
 }
 
-/// `~/.dray/attachments/<session-id>`, creating it if needed.
-async fn attachments_dir(session_id: &str) -> Result<PathBuf> {
-    let path = get_home_app_dir()
+/// `~/.dray/attachments/<session-id>`.
+async fn attachments_path(session_id: &str) -> Result<PathBuf> {
+    Ok(get_home_app_dir()
         .await?
         .join("attachments")
-        .join(session_id);
+        .join(session_id))
+}
+
+/// [`attachments_path`], created if needed.
+async fn attachments_dir(session_id: &str) -> Result<PathBuf> {
+    let path = attachments_path(session_id).await?;
     fs::create_dir_all(&path).await?;
     Ok(path)
 }
@@ -152,10 +157,7 @@ async fn attachments_dir(session_id: &str) -> Result<PathBuf> {
 /// Drops a session's archived images. Called when the session itself is
 /// deleted; a missing directory is the ordinary case, not an error.
 pub async fn delete_session_attachments(session_id: &str) -> Result<()> {
-    let path = get_home_app_dir()
-        .await?
-        .join("attachments")
-        .join(session_id);
+    let path = attachments_path(session_id).await?;
 
     match fs::remove_dir_all(&path).await {
         Ok(()) => Ok(()),

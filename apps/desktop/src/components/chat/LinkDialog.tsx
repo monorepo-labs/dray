@@ -1,6 +1,5 @@
-import { Copy, ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import type { LinkSafetyModalProps } from "streamdown";
+import { Copy, CornerDownLeft, ExternalLink } from "lucide-react";
+import { useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,65 +12,72 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { dismissLink, resolveLink, usePendingLink } from "@/lib/openLink";
 
-/// The confirm a transcript link opens, in place of Streamdown's own.
+/// The question a transcript link asks: here, or in the system browser.
 ///
-/// Its modal is replaced rather than restyled because its Open button calls
-/// `window.open`, which a Tauri webview answers by doing nothing at all — no
-/// error, no navigation, so the dialog reads as a dead button next to a Copy
-/// link that works. The route out of the app is `openUrl`, the same one the PR
-/// panel takes, and `onConfirm` is therefore deliberately unused.
-export default function LinkDialog({ url, isOpen, onClose }: LinkSafetyModalProps) {
-  // Both buttons close, so neither needs a "Copied" state — the dialog going
-  // away is the confirmation, and a card that stays up after being answered
-  // asks the reader to dismiss it twice.
-  const copy = async () => {
-    await navigator.clipboard.writeText(url);
-    onClose();
-  };
+/// One dialog for the whole app, fed by `openLink`'s store, since links are
+/// rendered by Streamdown and the user bubble several components below
+/// anything that could hold the state. Return opens in Dray — the common
+/// answer — and the whole URL is shown, wrapping rather than truncating: the
+/// host is the reason to show it and the tail is where a link lies.
+export default function LinkDialog() {
+  const url = usePendingLink();
+  const action = useRef<HTMLButtonElement>(null);
 
-  const open = async () => {
-    try {
-      await openUrl(url);
-    } catch (err) {
-      console.error("failed to open link", err);
-    }
-    onClose();
+  const copy = async () => {
+    if (url) await navigator.clipboard.writeText(url);
+    dismissLink();
   };
 
   return (
-    <AlertDialog open={isOpen} onOpenChange={(next) => !next && onClose()}>
-      <AlertDialogContent>
+    <AlertDialog open={url !== null} onOpenChange={(next) => !next && dismissLink()}>
+      {/* Wider than the default card: three answers and a copy sit on one
+          row, and a grid child's `min-width: auto` would otherwise let the
+          row set the width and run out past the edge. */}
+      <AlertDialogContent
+        className="max-w-120"
+        // Radix focuses Cancel on open, so Return would dismiss. Focus lands
+        // on the in-app answer instead — and only focus, so Return on any
+        // other button still presses that button.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          action.current?.focus();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Open this link?</AlertDialogTitle>
-          <AlertDialogDescription>It opens in your default browser.</AlertDialogDescription>
+          <AlertDialogDescription>
+            In Dray's browser, or in your default browser.
+          </AlertDialogDescription>
         </AlertDialogHeader>
-        {/* The whole URL, wrapping and scrolling rather than truncating — the
-            host is the reason to show it and the tail is where a link lies. */}
-        <div className="max-h-32 overflow-y-auto rounded-md bg-muted p-3 font-mono text-ui break-all">
+        <div className="max-h-32 min-w-0 overflow-y-auto rounded-md bg-muted p-3 font-mono text-ui break-all">
           {url}
         </div>
-        <AlertDialogFooter>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-ui sm:mr-auto"
-            onClick={() => void copy()}
-          >
-            <Copy />
-            Copy link
-          </Button>
+        <AlertDialogFooter className="min-w-0 sm:items-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Copy link"
+                className="sm:mr-auto"
+                onClick={() => void copy()}
+              >
+                <Copy />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Copy link</TooltipContent>
+          </Tooltip>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            // Radix closes on click; `preventDefault` holds it open until the
-            // opener has answered, so a failure closes through `open` alone.
-            onClick={(e) => {
-              e.preventDefault();
-              void open();
-            }}
-          >
+          <Button variant="outline" onClick={() => resolveLink(true)}>
             <ExternalLink />
-            Open link
+            System browser
+          </Button>
+          <AlertDialogAction ref={action} onClick={() => resolveLink(false)}>
+            Open in Dray
+            <CornerDownLeft data-icon="inline-end" className="opacity-70" />
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -26,7 +26,7 @@ pub mod rpc;
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy, TurnStatus};
 use crate::harness::claude_code::permissions::PendingPermissions;
-use crate::harness::Harness::Pi;
+use crate::harness::{read_stderr, record_failure, Harness::Pi};
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
 use crate::store::{self, next_seq_by_session_id};
@@ -39,7 +39,7 @@ use tauri::{AppHandle, Emitter};
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStderr, ChildStdout, Command},
+    process::{Child, ChildStdout, Command},
     sync::Mutex,
 };
 
@@ -252,7 +252,7 @@ pub async fn init(
     });
 
     tokio::spawn(async move {
-        if let Err(error) = read_stderr(stderr).await {
+        if let Err(error) = read_stderr(Pi, stderr).await {
             eprintln!("Failed to read pi stderr: {error}");
         }
     });
@@ -534,11 +534,11 @@ async fn read_stdout(
             Incoming::Event(raw) => raw,
             Incoming::Response { matched: true } => continue,
             Incoming::Response { matched: false } => {
-                record_failure(&session_id, "stray_response", "no caller waiting", &line).await;
+                record_failure(Pi, &session_id, "stray_response", "no caller waiting", &line).await;
                 continue;
             }
             Incoming::Malformed => {
-                record_failure(&session_id, "parse", "not JSON", &line).await;
+                record_failure(Pi, &session_id, "parse", "not JSON", &line).await;
                 continue;
             }
         };
@@ -546,7 +546,7 @@ async fn read_stdout(
         let event = match parser::parse_line(&raw) {
             Ok(event) => event,
             Err(err) => {
-                record_failure(&session_id, "parse", &err.to_string(), &line).await;
+                record_failure(Pi, &session_id, "parse", &err.to_string(), &line).await;
                 continue;
             }
         };
@@ -556,7 +556,7 @@ async fn read_stdout(
         // are — it is a coverage gap, and the catch-all only stops it costing
         // the line.
         if matches!(event, parser::PiEvent::Unknown) {
-            record_failure(&session_id, "unknown_line", &parser::describe_line(&line), &line).await;
+            record_failure(Pi, &session_id, "unknown_line", &parser::describe_line(&line), &line).await;
             continue;
         }
 
@@ -579,7 +579,7 @@ async fn read_stdout(
         // with both halves from one model. Going dark instead would need the
         // fold to know that readings before this point are void — see
         // PI-PLAN.md.
-        if matches!(event, parser::PiEvent::ModelChanged { .. }) {
+        if matches!(event, parser::PiEvent::ModelChanged) {
             let client = client.clone();
             let context_window = mapper.context_window();
             context_window.store(0, Relaxed);
@@ -609,7 +609,7 @@ async fn read_stdout(
             let Some((request_id, request, questions)) = dialog::for_request(&event) else {
                 if !dialog::ANNOUNCEMENTS.contains(&method.as_str()) {
                     let asked = title.clone().unwrap_or_else(|| method.clone());
-                    record_failure(&session_id, "unsupported_request", &asked, &line).await;
+                    record_failure(Pi, &session_id, "unsupported_request", &asked, &line).await;
 
                     // `cancelled` is the one answer every dialog understands,
                     // resolving each to the default it was built with. A refusal
@@ -699,31 +699,6 @@ async fn read_stdout(
     }
 
     Ok(())
-}
-
-async fn read_stderr(stderr: ChildStderr) -> Result<()> {
-    let reader = BufReader::new(stderr);
-    let mut lines = reader.lines();
-
-    while let Some(line) = lines.next_line().await? {
-        if !line.trim().is_empty() {
-            eprintln!("[pi stderr] {line}");
-        }
-    }
-
-    Ok(())
-}
-
-/// Files a line this build could not use, with the raw line beside it.
-///
-/// Same file and same stages as the other two harnesses', because the question
-/// it answers is the same: how well does *this build* cover the wire format.
-async fn record_failure(session_id: &str, stage: &str, detail: &str, line: &str) {
-    eprintln!("[pi {stage} err] {detail}\n[{stage} err] raw line: {line}");
-
-    if let Err(err) = store::record_parse_failure(session_id, stage, detail, line).await {
-        eprintln!("[pi parse-failure write err] {err}");
-    }
 }
 
 #[cfg(test)]
@@ -875,7 +850,7 @@ mod tests {
     /// insert was refused.
     #[test]
     fn a_stop_never_leaves_a_dialog_registered() {
-        use crate::harness::claude_code::permissions::{PendingPermissions, PendingRequest};
+        use crate::harness::claude_code::permissions::{PendingPermissions, PendingRequest, Reply};
 
         for round in 0..2_000 {
             let client = PiClient::detached();
@@ -894,8 +869,7 @@ mod tests {
                             tool_name: "confirm".to_string(),
                             input: serde_json::Value::Null,
                             options: Default::default(),
-                            rpc_id: None,
-                            pi_dialog_method: Some("confirm".to_string()),
+                            reply: Reply::PiDialog("confirm".to_string()),
                         },
                     )
                 })

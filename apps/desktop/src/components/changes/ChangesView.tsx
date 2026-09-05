@@ -35,9 +35,7 @@ const NO_FILES: readonly ChangedFile[] = [];
 ///
 /// Read-only, deliberately. The conversation next door is where work gets made
 /// and committed — a second place to write commits would be a second way to do
-/// the thing the reader is already asking the agent for. The backend keeps
-/// `commit_files` and `push_branch` for when a surface for them earns its way
-/// back; nothing in the UI calls them today.
+/// the thing the reader is already asking the agent for.
 ///
 /// Scoped to the whole tree, unlike the right panel's changes tab, which
 /// answers "what did this turn do" and stays as it is. Everything runs against

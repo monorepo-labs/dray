@@ -14,22 +14,8 @@
 /// state is the backend's fold of GitHub's rollup, which the panel's per-check
 /// list is not). So each side says *what it thinks is stale* and the other
 /// re-reads for itself, which keeps one source of truth per surface.
+import { channel } from "@/lib/channel";
 import type { PullRequest } from "@/types/events";
-
-type Listener<T> = (value: T) => void;
-
-function channel<T>() {
-  const listeners = new Set<Listener<T>>();
-  return {
-    subscribe(listener: Listener<T>): () => void {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
-    },
-    emit(value: T) {
-      for (const listener of listeners) listener(value);
-    },
-  };
-}
 
 /// Whether a session cwd belongs to a repo root — the root itself, or a
 /// worktree under it. Both readers key differently (marks by root, panel by

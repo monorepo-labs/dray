@@ -45,11 +45,11 @@ pub enum ControlRequest<'a> {
     Initialize,
 }
 
-/// A [`ControlRequest`] in the envelope the CLI reads it from.
+/// A [`ControlRequest`] in the envelope the CLI reads it from. The struct's own
+/// name is the `type` tag, so the constant is spelled once.
 #[derive(Debug, Serialize)]
+#[serde(tag = "type", rename = "control_request")]
 pub struct ControlLine<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
     /// The reply carries this back, and matching on it is the only way to tell
     /// our own answer from everything else on the stream — so it is public.
     pub request_id: String,
@@ -59,7 +59,6 @@ pub struct ControlLine<'a> {
 impl<'a> ControlLine<'a> {
     pub fn new(request: ControlRequest<'a>) -> Self {
         Self {
-            kind: "control_request",
             request_id: Uuid::now_v7().to_string(),
             request,
         }

@@ -90,7 +90,7 @@ export const FILE_LINK_CLASS = "dray-file-path-link";
 
 /// Enough of hast to walk it. Typed here rather than pulled from `@types/hast`,
 /// which is not a dependency and would be one for four fields.
-export type HastNode = {
+type HastNode = {
   type: string;
   tagName?: string;
   value?: string;

@@ -1,9 +1,0 @@
-{
-  "bin": "${PI_BIN}",
-  "cwd": "${PROBE}/work",
-  "args": ["--session", "${PROBE}/sessions/019a0000-dead-7000-8000-000000000001.jsonl"],
-  "steps": [
-    { "sleep": 2500 },
-    { "send": { "id": "q1", "type": "get_state" }, "sleep": 1200 }
-  ]
-}

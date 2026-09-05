@@ -4,9 +4,9 @@
 /// numbers themselves are nobody's business and this early they only shrink the
 /// claim the row is making.
 ///
-/// `code` is ISO 3166-1 alpha-2, which is what `country-flag-icons` keys its
-/// SVGs on. Two that are not the country's first two letters: the United
-/// Kingdom is `GB` and the United Arab Emirates is `AE`.
+/// `code` is ISO 3166-1 alpha-2, which is what the flag emoji is built from.
+/// Two that are not the country's first two letters: the United Kingdom is
+/// `GB` and the United Arab Emirates is `AE`.
 export const COUNTRIES: { code: string; name: string }[] = [
   { code: "NP", name: "Nepal" },
   { code: "US", name: "United States" },

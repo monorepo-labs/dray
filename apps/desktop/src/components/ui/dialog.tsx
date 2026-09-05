@@ -8,12 +8,6 @@ function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>)
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
-function DialogTrigger({
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
-  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
-}
-
 /// Frame, overlay and animation match `alert-dialog`'s exactly: to a reader the
 /// two are the same object, and they differ only in whether the app is asking a
 /// question or the reader opened something.
@@ -101,5 +95,4 @@ export {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 }

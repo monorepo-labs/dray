@@ -9,20 +9,20 @@
 //!
 //! Deliberately not shared with Claude Code. Its control channel is its own
 //! envelope — `type: control_request`, a UUID `request_id`, double-wrapped
-//! responses — and adapting two working modules to serve one real user is the
-//! bar CLAUDE.md sets for `packages/`. The generic core here is small; lift it
-//! into `harness/jsonrpc.rs` when a second JSON-RPC harness exists.
+//! responses. The writer and the pending map are shared with pi through
+//! [`crate::harness::rpc`]; the JSON-RPC framing is what stays here.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering::Relaxed};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::Duration;
+
+use crate::harness::rpc::{spawn_writer, Outbound, Pending};
+
 
 /// How long any request may go unanswered before it is given up on.
 ///
@@ -81,39 +81,22 @@ pub enum Incoming {
 /// from where it is read, exactly as Claude's unanswerable control request is.
 #[derive(Clone, Debug)]
 pub struct RpcClient {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<Outbound>,
     next_id: Arc<AtomicI64>,
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>>>,
+    pending: Pending<i64, RpcError>,
 }
 
 impl RpcClient {
     /// Takes the child's stdin and spawns the one task allowed to write to it.
-    ///
-    /// A queue rather than a lock because the read loop writes too. With a
-    /// mutex the reader would hold it across a line while answering an
-    /// approval, and a prompt arriving from the composer would wait behind it;
-    /// worse, the reader could block on a write while the thing unblocking that
-    /// write is a line it has not read yet.
-    pub fn new(mut stdin: ChildStdin) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    pub fn new(stdin: ChildStdin) -> Self {
+        Self::over(spawn_writer(stdin))
+    }
 
-        tokio::spawn(async move {
-            while let Some(line) = rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err()
-                    || stdin.write_all(b"\n").await.is_err()
-                    || stdin.flush().await.is_err()
-                {
-                    // The child is gone. The read loop sees the same thing and
-                    // is what reports it; there is nothing useful to say twice.
-                    break;
-                }
-            }
-        });
-
+    fn over(tx: mpsc::UnboundedSender<Outbound>) -> Self {
         Self {
             tx,
             next_id: Arc::new(AtomicI64::new(1)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Pending::new(),
         }
     }
 
@@ -130,24 +113,11 @@ impl RpcClient {
         timeout: Duration,
     ) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        let rx = self.pending.register(id);
 
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
 
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(value))) => Ok(value),
-            Ok(Ok(Err(err))) => bail!("{method} failed: {err}"),
-            // The sender was dropped without answering, which only happens when
-            // the child died and took the pending map with it.
-            Ok(Err(_)) => bail!("{method} was never answered — the agent exited"),
-            // Dropped by hand: giving up on the answer has to give up the slot
-            // too, or an unresponsive server leaks one entry per attempt.
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                bail!("{method} went unanswered for {}s", timeout.as_secs())
-            }
-        }
+        self.pending.wait(&id, rx, timeout, method, "the agent").await
     }
 
     /// Sends a notification: no id, so nothing to wait for.
@@ -215,13 +185,7 @@ impl RpcClient {
                     None => Ok(value.get("result").cloned().unwrap_or(Value::Null)),
                 };
 
-                // A response for an id nobody waits on is odd but never fatal:
-                // the caller may have given up, or the server may be confused.
-                // Reported, never panicked on.
-                let matched = match self.pending.lock().await.remove(&id) {
-                    Some(waiter) => waiter.send(outcome).is_ok(),
-                    None => false,
-                };
+                let matched = self.pending.settle(&id, outcome);
                 Incoming::Response { id, matched }
             }
             (None, None) => Incoming::Malformed,
@@ -231,7 +195,7 @@ impl RpcClient {
     fn send(&self, value: &impl Serialize) -> Result<()> {
         let line = serde_json::to_string(value)?;
         self.tx
-            .send(line)
+            .send(Outbound::Line(line))
             .map_err(|_| anyhow::anyhow!("the agent's input pipe is closed"))
     }
 }
@@ -243,13 +207,9 @@ mod tests {
     /// A client with no child behind it. The writer task drains into nothing,
     /// which is all these need — every assertion here is about the demux.
     fn detached() -> RpcClient {
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        RpcClient {
-            tx,
-            next_id: Arc::new(AtomicI64::new(1)),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-        }
+        RpcClient::over(tx)
     }
 
     /// A live server that stops answering is the one failure a closed pipe
@@ -267,7 +227,7 @@ mod tests {
 
         // The slot goes with it, or one unresponsive server leaks an entry per
         // attempt for as long as the session is open.
-        assert!(client.pending.lock().await.is_empty());
+        assert!(client.pending.is_empty());
     }
 
     /// The three shapes are told apart structurally, and getting this wrong is

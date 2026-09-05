@@ -5,6 +5,73 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.14.0-beta.4
+
+### Changed
+
+- **A large amount of unused code is gone** — dead components, duplicated
+  helpers, a marketing page's worth of unshipped sections. Nothing here was
+  meant to change what the app does, which is exactly why a beta is where it
+  lands: anything that behaves differently is a bug, so say so.
+
+### Fixed
+
+- **Keyboard shortcuts keep working after you use the browser.** Hiding a
+  tab left the keys going to a Chromium view that was no longer on screen
+  and dropped them, so ⌘E and the rest did nothing until you clicked
+  something. ⌘⇧[ and ⌘⇧] work there now too.
+- **Opening a browser tab no longer freezes every session.** Chromium's
+  startup reset the signal handler Dray reaps child processes through, so
+  the first `git` command after the first tab waited forever — and since a
+  send waits on one, every session went unsendable and unstoppable until
+  restart.
+
+### Added
+
+- **Dray has a browser.** ⌘3 for the full view, or the Browser tab in the
+  right pane. Tabs with favicons, device sizes, zoom, hard reload and
+  DevTools on their chords, and a list of local servers that shows only
+  this checkout's — another worktree's dev server never appears. Each
+  session gets its own tabs and its own cookies.
+- **Chromium is not in the download.** The app fetches it a few seconds
+  after the first window opens, ~330MB, and Settings → Integrations shows
+  where it has got to. Keeping it out of the bundle keeps it out of every
+  update too.
+- **`dray browser` lets an agent drive that browser** — open pages, click,
+  type, read and screenshot, in its own session's tabs and nowhere else.
+  It needs a matching CLI: run `dray update`.
+- **A link in the chat asks where to open.** Dray's browser or the system
+  one, with ⌘-click skipping the question. URLs you type in your own
+  messages are clickable now too.
+
+## 0.13.2
+
+### Fixed
+
+- **Installing an update relaunches the app again.** Install swapped the
+  bundle and then quit for good — the relaunch ran on a path this app's own
+  exit handler got to first. It now launches the new bundle before the old
+  one exits, and a refusal is reported instead of leaving nothing running.
+- **A sidebar row's working orb no longer overlaps its title.** The slot
+  took its width from the hover buttons, which a pinned row mid-turn draws
+  none of.
+
+## 0.13.1
+
+### Changed
+
+- **The space switcher takes the project filter's shape** — a name over a
+  dot track, click to step to the next — so the two controls that scope the
+  session list work the same way. Their order is yours to set, with ▲▼ in
+  Settings.
+
+### Fixed
+
+- **Memory: the working orb and the shimmer get their own compositing
+  layers.** Both repaint every frame, and painted into the page they
+  repainted the whole document at animation rate whenever a session was
+  mid-turn — which fed a WebKit leak of around a gigabyte an hour of use.
+
 ## 0.13.0
 
 ### Added

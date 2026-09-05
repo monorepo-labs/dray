@@ -1,5 +1,6 @@
-import { RUN_SERVER_PROMPT } from "@/lib/runServer";
 import type { WorkStatus } from "@/types/events";
+
+const RUN_SERVER_PROMPT = "start the dev server in the background";
 
 /// One thing the reader can hand the session, as a button.
 ///
@@ -17,7 +18,7 @@ import type { WorkStatus } from "@/types/events";
 /// spelling it out here is a spec competing with the repo's own instructions,
 /// and this repo has firm ones about commit messages.
 ///
-/// There used to be a second kind. `push` ran `push_branch` directly, on the
+/// There used to be a second kind. `push` ran a backend push command directly, on the
 /// grounds that pushing has one correct implementation and nothing to decide —
 /// and it owned both ends of its own feedback because it reported into no
 /// transcript: a spinner on the button, an error banner above the composer, a
@@ -80,7 +81,10 @@ export function handoffActions(
   hasSession = false,
 ): HandoffAction[] {
   // Built ahead of the git checks rather than beside them, because running a
-  // server needs no repository to run in.
+  // server needs no repository to run in. Vague about which server — the agent
+  // reads the repo — but "in the background" is load-bearing: without it the
+  // CLI runs `pnpm dev` in a foreground Bash, which times out and takes the
+  // server down with it.
   const run: HandoffAction[] = hasSession
     ? [{ id: "runServer", label: "Run server", prompt: RUN_SERVER_PROMPT }]
     : [];

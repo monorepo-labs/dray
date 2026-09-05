@@ -95,6 +95,11 @@ export function formatBytes(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
+/// Cuts `s` to `max` chars with an ellipsis, or returns it whole.
+export function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
 /// Trailing path segment, for showing a project as its folder name.
 export function basename(path: string): string {
   const parts = path.replace(/\/+$/, "").split("/");

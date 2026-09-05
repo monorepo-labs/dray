@@ -11,7 +11,6 @@ pnpm workspace.
 | -------------- | ----------------------------------------------------------- |
 | `apps/desktop` | The Tauri app. React 19 + Vite frontend, Rust backend.       |
 | `apps/web`     | Marketing site. Next.js App Router, deployed to Vercel.      |
-| `packages`     | Shared code. Empty until something is genuinely wanted twice. |
 
 ## Getting started
 

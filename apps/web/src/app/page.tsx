@@ -1,7 +1,6 @@
 import Image from "next/image";
-import { AppleGlyph } from "@/components/AppleGlyph";
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
-// import { Board } from "@/components/Board";
+import { DownloadButton } from "@/components/DownloadButton";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
@@ -9,31 +8,26 @@ import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
 import { Testimonials } from "@/components/Testimonials";
 import { UsedBy } from "@/components/UsedBy";
-// import { Tweets } from "@/components/Tweets";
-import { DOWNLOAD, DOWNLOAD_SIZE } from "@/lib/links";
+import { DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
 
 /// Two widths, nested. The shell caps at 6xl and only the hero screenshot
 /// uses all of it — a capture of a whole window wants every pixel it can
 /// get. Everything that is text sits in the 3xl column inside it, so a
-/// sentence never runs half a screen from the capture beside it. Padding is
-/// flat, not responsive: it has to match the board's own gap exactly, and a
-/// value that grew with the viewport would drift out of step with one that
-/// doesn't.
+/// sentence never runs half a screen from the capture beside it.
 const SHELL = "mx-auto w-full max-w-6xl px-3";
 const COLUMN = "mx-auto w-full max-w-3xl";
 
 export default function Home() {
   return (
     <main className={SHELL}>
-      {/* Left-aligned and deliberately shallow: the board below is what the
-          page is actually for, and every line here is a line of it pushed
-          off the first screen. The pitch is one sentence because a second
-          one said nothing the captures do not show. The nav above it holds
-          the wordmark and the repo link — the one thing worth reaching from
-          anywhere on the page. Top inset is flat `pt-3`, matching the
-          shell's own horizontal padding; the bottom one lives on the spacer
-          past the board, for the same reason. */}
+      {/* Left-aligned and deliberately shallow: the captures below are what
+          the page is actually for, and every line here is a line of them
+          pushed off the first screen. The pitch is one sentence because a
+          second one said nothing the captures do not show. The nav above it
+          holds the wordmark and the repo link — the one thing worth reaching
+          from anywhere on the page. Top inset is flat `pt-3`, matching the
+          shell's own horizontal padding. */}
       <section className={`${COLUMN} pt-3 pb-6 sm:pb-8`}>
         <div className="mb-6 sm:mb-8">
           <Nav />
@@ -72,13 +66,7 @@ export default function Home() {
         </p>
 
         <div className="mt-5 flex items-center gap-3">
-          <a
-            href={DOWNLOAD}
-            className="inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
-          >
-            <AppleGlyph className="size-4" />
-            Download for macOS
-          </a>
+          <DownloadButton />
           <span className="text-sm text-muted-foreground">{DOWNLOAD_SIZE}</span>
         </div>
 
@@ -95,8 +83,8 @@ export default function Home() {
 
       {/* The first thing after the pitch is the app itself, whole: a session
           beside its PR. A still, not a clip, so it is on screen from the
-          first paint — `priority` for that — and it wears the board's own
-          radius and border so it reads as the first tile, not a banner. The
+          first paint — `priority` for that — and it wears the feature tiles'
+          radius and border so it reads as the first of them, not a banner. The
           capture keeps the desktop behind the window: the glass edge and the
           shadow are part of what the app looks like, and a tight crop of the
           window loses both. */}
@@ -112,23 +100,14 @@ export default function Home() {
           joke only works in the slot it is imitating. */}
       <UsedBy className={`${COLUMN} mb-12 sm:mb-16`} />
 
-      {/* What the app does, before the board shows what it looks like. A
-          visitor who scrolls past four sections has read four features; one
-          who scrolled past seven silent clips had read none. */}
+      {/* What the app does, each beside the clip that shows it. A visitor
+          who scrolls past four sections has read four features; one who
+          scrolled past seven silent clips had read none. */}
       <Features className={COLUMN} />
 
       {/* After the features, not before: what the app does has to land
           before a stranger's reaction to it means anything. */}
       <Testimonials className={`${COLUMN} mb-12 sm:mb-16`} />
-
-      {/* Parked with the tweets: four sections say what four clips could
-          not, and a board of leftovers under them read as the page running
-          on. `MEDIA` and `Board` stay for when a capture earns a slot. */}
-      {/* <Board /> */}
-
-      {/* Parked, not dropped — two cards under a full-width board read as
-          a different site starting. See src/components/Tweets.tsx. */}
-      {/* <Tweets className="mx-auto mt-12 max-w-4xl px-6" /> */}
 
       <Footer className={COLUMN} />
     </main>

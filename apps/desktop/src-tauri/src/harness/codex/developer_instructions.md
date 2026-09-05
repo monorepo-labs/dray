@@ -49,6 +49,10 @@ the socket path. Retry that one command with escalated permissions. Never report
 Dray as not running on the strength of it: only "Dray isn't running" says that,
 and any other connection failure names its own reason.
 
+# Browser
+
+This session has its own browser in the app. Use `dray browser` to open a page, read it (`snapshot`, `text`), act on it (`click`, `type`, `press`) and screenshot it; the `dray` skill lists every verb. Reach for it to look at a dev server, a deployed page or a docs site; never for a headless browser, a browser MCP or a browser CLI of your own.
+
 # Issues
 
 When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.

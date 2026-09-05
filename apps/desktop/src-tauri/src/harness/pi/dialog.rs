@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 use super::parser::PiEvent;
 use crate::events::{Question, QuestionOption};
-use crate::harness::claude_code::permissions::PendingRequest;
+use crate::harness::claude_code::permissions::{PendingRequest, Reply};
 
 /// The methods that block. Kept as one list because the read loop and this
 /// module have to agree on which lines get a card and which get dropped, and
@@ -145,8 +145,7 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
         tool_name: method.clone(),
         input: Value::Null,
         options: HashMap::new(),
-        rpc_id: None,
-        pi_dialog_method: Some(method.clone()),
+        reply: Reply::PiDialog(method.clone()),
     };
 
     let questions = vec![Question {
@@ -219,7 +218,7 @@ mod tests {
         let (id, pending, questions) = for_request(&event).expect("a select blocks");
 
         assert_eq!(id, "d-1", "the dialog's id is the request id");
-        assert_eq!(pending.pi_dialog_method.as_deref(), Some("select"));
+        assert_eq!(pending.reply.dialog_method(), Some("select"));
         assert_eq!(questions[0].question, "Allow probe_tool?");
 
         let labels: Vec<&str> = questions[0]
@@ -309,7 +308,7 @@ mod tests {
 
         assert!(questions[0].options.is_empty());
         assert!(questions[0].free_text);
-        assert_eq!(pending.pi_dialog_method.as_deref(), Some("editor"));
+        assert_eq!(pending.reply.dialog_method(), Some("editor"));
 
         assert_eq!(
             response("editor", "d-1", &answers("rewritten", "Edit the message")),
@@ -422,7 +421,7 @@ mod tests {
                 .filter_map(|event| {
                     let (_, pending, questions) = for_request(&event)?;
                     Some((
-                        pending.pi_dialog_method.unwrap_or_default(),
+                        pending.reply.dialog_method().unwrap_or_default().to_string(),
                         questions[0].free_text,
                         questions[0].options.len(),
                     ))

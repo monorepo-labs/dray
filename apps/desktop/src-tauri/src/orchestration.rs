@@ -49,10 +49,6 @@ pub const SESSION_CREATED: &str = "session_created";
 /// field free to disagree with the chain it describes.
 const MAX_DEPTH: usize = 2;
 
-/// Guards the walk against an index that somehow points at itself. Cheap
-/// insurance: a cycle here would hang the caller's turn rather than fail it.
-const MAX_WALK: usize = 64;
-
 /// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
 /// `dray.sock` otherwise.
 ///
@@ -191,17 +187,27 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
         .await
         .context("could not read the request")?;
 
-    let response = match serde_json::from_str::<Envelope>(&line) {
-        // Answered before the request is even looked at: an old CLI against a
-        // new app must be told to upgrade, not handed a guess at what it meant.
-        Ok(envelope) if envelope.v != PROTOCOL_VERSION => Response::error(mismatch(envelope.v)),
-        Ok(envelope) => match dispatch(envelope.request, app).await {
+    // Answered before the request is even looked at: an old CLI against a
+    // new app must be told to upgrade, not handed a guess at what it meant —
+    // and a *new* CLI against an old app must be told the same, which is why
+    // `v` is read on its own first. `Envelope` flattens the request in, so a
+    // variant this build cannot spell fails the whole parse and the version
+    // would never be seen.
+    #[derive(serde::Deserialize)]
+    struct Version {
+        v: u32,
+    }
+    let response = match serde_json::from_str::<Version>(&line) {
+        Ok(Version { v }) if v != PROTOCOL_VERSION => Response::error(mismatch(v)),
+        _ => match serde_json::from_str::<Envelope>(&line) {
+            Ok(envelope) => match dispatch(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
             // string is what it reads back as tool output.
-            Err(e) => Response::error(format!("{e:#}")),
+                Err(e) => Response::error(format!("{e:#}")),
+            },
+            Err(e) => Response::error(format!("could not parse the request: {e}")),
         },
-        Err(e) => Response::error(format!("could not parse the request: {e}")),
     };
 
     write_half
@@ -218,6 +224,24 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
         Request::ListSessions(list) => list_sessions(list).await,
         Request::SendMessage(send) => send_message(send, app).await,
         Request::LinkIssues(link) => link_issues(link).await,
+        Request::Browser(browser) => browse(browser).await,
+    }
+}
+
+/// One `dray browser` step. The browser is macOS-only and behind a feature,
+/// so the refusal names that rather than reading as a broken CLI.
+async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
+    #[cfg(all(feature = "cef", target_os = "macos"))]
+    {
+        Ok(match crate::cef::automation::run(&request.session_id, request.action).await {
+            Ok((output, data)) => Response::Browser { output, data },
+            Err(message) => Response::error(message),
+        })
+    }
+    #[cfg(not(all(feature = "cef", target_os = "macos")))]
+    {
+        let _ = request;
+        Ok(Response::error("this build of Dray has no browser"))
     }
 }
 
@@ -435,7 +459,7 @@ async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {
-    let items = store::list_session_index_items_by_archived(false).await?;
+    let items = store::list_session_index_items(false).await?;
 
     let scope = if list.all {
         None
@@ -456,16 +480,20 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
     Ok(Response::Listed { sessions })
 }
 
-/// How many creates deep this session already sits. A session with no parent is
-/// depth 0, one created by an agent is depth 1.
+/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
+/// session with no parent is depth 0, one created by an agent is depth 1.
+///
+/// The walk stops at the cap rather than counting on: anything past it is
+/// refused whatever the number, and stopping is what keeps an index that
+/// somehow points at itself from hanging the caller's turn.
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();
 
     while let Some(id) = cursor {
         depth += 1;
-        if depth >= MAX_WALK {
-            bail!("the session's parent chain does not terminate");
+        if depth >= MAX_DEPTH {
+            break;
         }
         cursor = store::get_session_index_item(&id)
             .await?

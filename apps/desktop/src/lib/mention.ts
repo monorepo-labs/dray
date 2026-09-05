@@ -14,7 +14,7 @@
 /// The span is returned rather than just the query because [`applyMention`]
 /// needs to know what to replace — a mention can be anywhere in the line, so
 /// unlike a command there is no "from the start" to rewrite from.
-export type MentionSpan = {
+type MentionSpan = {
   start: number;
   end: number;
   /// Everything after the `@`, up to the end of the token — not up to the

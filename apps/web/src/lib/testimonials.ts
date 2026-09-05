@@ -1,6 +1,6 @@
-/// What people said on X, transcribed from the posts themselves. Not
-/// `react-tweet` embeds (see src/components/Tweets.tsx): every one of these is
-/// a reply, and the embed component wants a standalone post.
+/// What people said on X, transcribed from the posts themselves rather than
+/// embedded: every one of these is a reply, and an embed wants a standalone
+/// post.
 ///
 /// `avatar` is a path under `public/avatars/`. Absent is an ordinary state and
 /// draws the initial instead, so a quote can go up before its picture does.

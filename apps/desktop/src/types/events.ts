@@ -432,6 +432,11 @@ binary: boolean, };
 export type CheckState = "success" | "failure" | "pending" | "skipped" | "cancelled" | "neutral";
 
 /**
+ * Where the download stands, for the settings row and the browser pane.
+ */
+export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", received: number, total: number, } | { "state": "extracting" } | { "state": "ready", version: string, sizeBytes: number, } | { "state": "failed", message: string, };
+
+/**
  * What kind of entry a timeline row is. A review carries a verdict where a
  * plain comment carries none, and that verdict is most of what the row says.
  */
@@ -608,6 +613,23 @@ export type InputDevice = {
  * index silently starts naming a different device.
  */
 name: string, isDefault: boolean, };
+
+/**
+ * Which half of the install failed, and it is tagged because the two have
+ * opposite cures: a swap that did not complete leaves nothing to open, so
+ * pressing the button again is the answer, where a failed *relaunch* left the
+ * new bundle on disk and only opening it finishes the job. Telling the reader
+ * to quit and reopen for a swap that never landed sends them to do nothing.
+ *
+ * "Did not complete" is deliberately weaker than "changed nothing": the
+ * plugin moves the old bundle to a temp backup before unpacking, and a final
+ * rename that fails returns `Err` without putting it back. Narrow, upstream,
+ * and not something to claim the opposite of in a comment.
+ *
+ * A tag rather than a sentence the frontend matches on, so rewording a message
+ * cannot silently swap one cure for the other.
+ */
+export type InstallError = { "stage": "install", message: string, } | { "stage": "relaunch", message: string, };
 
 /**
  * What the settings dialog draws. `None` is a tracker nobody has connected.
@@ -1508,27 +1530,6 @@ export type Subagent = { id: string,
  * Drives the collapsed subagent card's title.
  */
 label: string | null, };
-
-/**
- * Where the current branch stands against its upstream — everything the push
- * button needs to name itself.
- */
-export type SyncStatus = { 
-/**
- * `None` on a detached HEAD and for a directory that isn't a repo, which
- * is how the row hides itself rather than offering a push it can't do.
- */
-branch: string | null, 
-/**
- * `None` for a branch that has never been pushed — the "publish" case.
- */
-upstream: string | null, 
-/**
- * Commits the upstream doesn't have. Zero when there is no upstream: the
- * button reads "Publish branch" there, and a count would be answering a
- * question nobody asked yet.
- */
-ahead: number, };
 
 export type ToolResult = { 
 /**

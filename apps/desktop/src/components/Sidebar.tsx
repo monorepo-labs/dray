@@ -45,7 +45,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
-import { forkBlocked } from "@/lib/fork";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { isToday, relativeTime } from "@/lib/format";
 import { sessionBranch } from "@/lib/pr";
@@ -136,7 +135,7 @@ type SidebarProps = {
 
 /// One drawn row: the session, how deep it sits, and the flags its connector
 /// rails are drawn from.
-export type SessionListRow = {
+type SessionListRow = {
   item: SessionIndexItem;
   /// Levels below the top. 0 is a root and draws no connector at all.
   depth: number;
@@ -230,7 +229,7 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
 /// Pinned is a kind of its own rather than another path, because it is the one
 /// group that spans projects — a path on it could only be a lie or a null, and
 /// either leaves the render guessing which sort of group it is holding.
-export type SessionGroup =
+type SessionGroup =
   | { kind: "pinned"; rows: SessionListRow[] }
   | {
       kind: "project";
@@ -249,13 +248,13 @@ export type SessionGroup =
 /// saying so on its own row — the working indicator sits where the timestamp
 /// would be — and a run of its own moved a row twice for one piece of work,
 /// out on send and back on the turn ending.
-export type SessionState = "asking" | "completed" | "idle";
+type SessionState = "asking" | "completed" | "idle";
 
 /// Strongest first, which is also the order the runs are drawn in.
-export const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
+const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
 
 /// How many rows a project needs before it is split at all.
-export const STATE_SPLIT_MIN = 3;
+const STATE_SPLIT_MIN = 3;
 
 /// What the app has heard about every session this run.
 ///
@@ -271,7 +270,7 @@ export type LiveSessions = {
 /// Live status wins over the item's own field, which is only as fresh as the
 /// last list fetch — but that field is what carries a `completed` across a
 /// restart, where the live map is empty.
-export function sessionState(
+function sessionState(
   item: SessionIndexItem,
   live?: LiveSessions,
 ): SessionState {
@@ -576,7 +575,7 @@ export function SidebarToggle({
 ///
 /// Gone with a collapsed sidebar, since the sidebar is. ⌘, is the route that
 /// survives that, which is why the tooltip names it.
-export function SettingsButton({ onOpen }: { onOpen: () => void }) {
+function SettingsButton({ onOpen }: { onOpen: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -618,8 +617,8 @@ function spaceEntries(spaces: string[]): (string | null)[] {
 /// Shaped like the project filter below it: the name over a dot track, a click
 /// steps to the next one. Two controls scoping the same list should not be two
 /// different kinds of control, and the dots say how many spaces there are,
-/// which the chevron never did. No swipe — this sits in the titlebar strip, one
-/// line high, where the project filter has a whole band to aim at.
+/// which the chevron never did. This sits in the titlebar strip, one line high,
+/// where the project filter has a whole band to aim at.
 ///
 /// Switching only. Making a space and filing projects into it live in Settings,
 /// since both are things done once and neither belongs in the strip a reader
@@ -731,7 +730,7 @@ function SpaceSwitcher({
 /// A worktree's branch is already `worktree-<name>`, so the prefix goes and the
 /// badge names the tree the way the sidebar and `dray ls` do — stripped after
 /// the `main` test, or a tree named `main` would read as no branch at all.
-export function devBadgeLabel(branch: string | null): string {
+function devBadgeLabel(branch: string | null): string {
   if (branch === null || branch === "" || branch === "main") return "Dev";
   return `Dev · ${branch.replace(/^worktree-/, "")}`;
 }
@@ -748,7 +747,7 @@ export function devBadgeLabel(branch: string | null): string {
 /// not beside the app's name, and the orange it wore made the corner's quietest
 /// fact its loudest. One line — a long branch truncates rather than pushing the
 /// row, with `title` restoring it.
-export function DevBadge() {
+function DevBadge() {
   return (
     <div
       title={__DEV_BRANCH__ ?? undefined}
@@ -1254,7 +1253,7 @@ function DotTrack({
   className?: string;
 }) {
   // Reserved height, so revealing the track never shifts what is under it. One
-  // entry is the whole story already — a lone dot would offer a gesture that
+  // entry is the whole story already — a lone dot would offer a step that
   // can't go anywhere.
   return (
     <div className="h-1.5">
@@ -1293,12 +1292,6 @@ function DotTrack({
   );
 }
 
-// How far a swipe must travel before it counts as one. Momentum keeps firing
-// `wheel` long after the fingers lift, so a gesture ends on one of two signs
-// that the push is over: a stretch of quiet, or deltas decayed to the tail.
-// Quiet alone was not enough — the tail can outlast a second deliberate swipe,
-// which is what made every other swipe do nothing.
-const SWIPE_PX = 36;
 /// A group heading, and where the group is a project, the button that starts a
 /// task in it. The plus only appears under the cursor: the row is a label first
 /// and every heading carrying one at rest would draw more chrome than the
@@ -1335,18 +1328,14 @@ function HeadingRow({
   );
 }
 
-const SWIPE_END_MS = 120;
-const SWIPE_TAIL = 2;
-
 /// The project filter. The label names the current scope and the dots under it
 /// are the map: one per entry, **the active one always in the middle**, so the
 /// row slides under a fixed centre rather than a marker travelling along a fixed
 /// row. That is what keeps the indicator readable once there are more projects
 /// than dots that fit.
 ///
-/// Switching is a two-finger swipe or a tap, both anywhere over the band. Swipe
-/// means the same thing in both modes — the menu is what a *tap* becomes once
-/// there are enough projects to pick from, not a replacement for the gesture.
+/// Switching is a tap anywhere over the band, which becomes a menu once there
+/// are enough projects to pick from.
 function ProjectFilter({
   projects,
   value,
@@ -1356,7 +1345,7 @@ function ProjectFilter({
   value: string | null;
   onChange: (path: string | null) => void;
 }) {
-  // "All" is an entry rather than a special case, so the swipe, the dots and
+  // "All" is an entry rather than a special case, so the tap, the dots and
   // the menu all walk one list and can't disagree about what's next.
   const entries = useMemo(
     () => [
@@ -1372,74 +1361,18 @@ function ProjectFilter({
   const activeIndex = found === -1 ? 0 : found;
   const active = entries[activeIndex];
 
-  const ref = useRef<HTMLDivElement>(null);
-  const travel = useRef(0);
-  const armed = useRef(true);
-  const idle = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const endGesture = () => {
-      travel.current = 0;
-      armed.current = true;
-    };
-
-    const onWheel = (e: WheelEvent) => {
-      // Vertical wins. The session list scrolls right below this, and a swipe
-      // that is mostly down must not be read as a sideways one.
-      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-      // Claimed so the webview can't read it as an overscroll gesture. Bound
-      // natively because React's own wheel listener is passive, where
-      // `preventDefault` is a no-op.
-      e.preventDefault();
-
-      window.clearTimeout(idle.current);
-      idle.current = window.setTimeout(endGesture, SWIPE_END_MS);
-
-      // One step per gesture: momentum alone is enough to cross the threshold
-      // several more times, which would fling the filter past what was aimed at.
-      if (!armed.current) {
-        if (Math.abs(e.deltaX) <= SWIPE_TAIL) endGesture();
-        return;
-      }
-
-      // A reversal starts the count over rather than subtracting from it. A
-      // swipe is rarely one clean direction, and letting the two cancel is what
-      // made a real push sometimes add up to nothing.
-      if (Math.sign(e.deltaX) !== Math.sign(travel.current)) travel.current = 0;
-      travel.current += e.deltaX;
-      if (Math.abs(travel.current) < SWIPE_PX) return;
-
-      const next = activeIndex + Math.sign(travel.current);
-      armed.current = false;
-      travel.current = 0;
-      // Clamped, not wrapped — the track is a line, and jumping it end to end
-      // would read as the dots losing their place.
-      if (next >= 0 && next < entries.length) onChange(entries[next].path);
-    };
-
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [activeIndex, entries, onChange]);
-
-  useEffect(() => () => window.clearTimeout(idle.current), []);
-
   const menuMode = projects.length >= PROJECT_MENU_FROM;
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
   // last entry would just look broken.
   const cycle = () => onChange(entries[(activeIndex + 1) % entries.length].path);
 
-  // The band is the control, not the label: the swipe only fires where the
-  // cursor is, and aiming at 20 characters of text to start a gesture is what
-  // read as the swipe working only sometimes. Tap answers on the same surface,
-  // so both gestures have the same target. Nothing inside is a button — one
-  // click target, so there is no inner element to swallow a tap or fire twice.
+  // The band is the control, not the label: aiming at 20 characters of text
+  // is what read as the tap working only sometimes. Nothing inside is a button
+  // — one click target, so there is no inner element to swallow a tap or fire
+  // twice.
   const band = (
     <div
-      ref={ref}
       role="button"
       tabIndex={0}
       // In menu mode the trigger's own handlers arrive through `asChild`.
@@ -1485,8 +1418,8 @@ function ProjectFilter({
 
   if (!menuMode) return band;
 
-  // The band is the trigger, so a tap anywhere on it opens the list — the same
-  // surface the swipe answers on, rather than a second smaller one on the label.
+  // The band is the trigger, so a tap anywhere on it opens the list rather
+  // than a second smaller target on the label.
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{band}</DropdownMenuTrigger>
@@ -1587,9 +1520,9 @@ function RowMenu({
   onFork: (worktree: boolean) => void;
   /// The session's turn is in flight. The CLI forks by reading its transcript,
   /// which a live child is appending to mid-turn, so a fork taken now can
-  /// inherit half a turn. From [`forkBlocked`](@/lib/fork), which is where the
-  /// rule is written — the backend refuses on the same question, and this only
-  /// saves the trip.
+  /// inherit half a turn. `SessionManager::fork` refuses on the same question
+  /// (`turn_in_flight`, which is exactly `in_progress`) and nothing wider —
+  /// a session still running a background task forks fine.
   forkDisabled: boolean;
   onDelete: () => void;
   /// Absent on a row that isn't nested — there is nothing to detach from, and
@@ -1802,7 +1735,7 @@ function SessionRow({
   return (
     <RowMenu
       onFork={(worktree) => void onFork(item.sessionId, worktree)}
-      forkDisabled={forkBlocked(status)}
+      forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
     >
@@ -1989,7 +1922,12 @@ function SessionRow({
             read at once; `visibility` would flip instantly while the button's
             inherited `transition-all` still crossfades, which is what read as an
             overlap. */}
-        <div className="relative flex shrink-0 items-center justify-end self-stretch pl-2">
+        {/* `min-w-5` because the slot's width comes from the buttons, and a row
+            that inherits its pin while mid-turn draws neither of them — leaving
+            a zero-width slot for the absolutely-drawn orb to hang out of, over
+            the title. 20px is the orb's own box, the widest thing that can be
+            shown with no button beside it. */}
+        <div className="relative flex min-w-5 shrink-0 items-center justify-end self-stretch pl-2">
           {/* `pointer-events-none` unconditionally: it's never a target, and a
               faded-but-present element still hit-tests — stacked on `right-0` it
               would otherwise swallow the cursor over the last button, which reads

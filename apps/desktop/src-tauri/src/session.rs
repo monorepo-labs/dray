@@ -9,7 +9,7 @@ use crate::{
         claude_code::{
             self,
             control::{ControlLine, ControlRequest},
-            permissions::{answer_response, decision_response, PendingPermissions},
+            permissions::{answer_response, decision_response, PendingPermissions, Reply},
         },
     },
     issues::{self, IssueRef},
@@ -290,7 +290,7 @@ async fn remove_session_worktree(item: &SessionIndexItem) -> Result<()> {
     let path = worktree_path(&item.project_path, name);
     // Claude Code's own naming, minted at creation and never written to the
     // index — the same rebuild `sessionBranch` does on the frontend.
-    let branch = format!("worktree-{name}");
+    let branch = git::worktree_branch(name);
 
     git::remove_worktree(&item.project_path, &path, Some(&branch)).await?;
 
@@ -1166,6 +1166,12 @@ impl SessionManager {
     /// Deletes a session: kills its child if one is running, then drops the
     /// index entry and the log. Returns whether the index held it.
     ///
+    /// The agent process's pid, for finding what it started (a dev server is a
+    /// descendant). `None` while no child is running.
+    pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
+        self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
+    }
+
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {
@@ -1173,6 +1179,8 @@ impl SessionManager {
         if let Some(session) = running {
             session.kill().await?;
         }
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        crate::cef::close_session(session_id);
 
         // Best-effort for the same reason the attachments below are, and with
         // one cost worth naming: a removal that fails here orphans the tree
@@ -1687,13 +1695,13 @@ impl Session {
         // Answered on the channel that asked. Codex was handed its decision by
         // the server and sends it back whole; Claude's verdict is composed here
         // out of the rule the button carried.
-        match (&self.stdin, pending.rpc_id) {
-            (Transport::Rpc(thread), Some(rpc_id)) => {
+        match (&self.stdin, &pending.reply) {
+            (Transport::Rpc(thread), Reply::Rpc(rpc_id)) => {
                 let decision = chosen
                     .decision
                     .clone()
                     .context("this option carries no decision to send")?;
-                thread.client.respond(rpc_id, json!({"decision": decision}))?;
+                thread.client.respond(*rpc_id, json!({"decision": decision}))?;
             }
             _ => {
                 write_line(

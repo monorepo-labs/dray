@@ -27,7 +27,9 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useTheme } from "@/hooks/useTheme";
-import type { ManualCheck } from "@/hooks/useUpdater";
+import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
+import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
+import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
   cachedApps,
   fileOpenerChoices,
@@ -170,6 +172,7 @@ export default function SettingsDialog({
             integrations: (
               <Section>
                 <OpenFilesRow />
+                <BrowserRow />
                 {/* Draws nothing until something is connected, which is why it
                     carries no heading of its own — a heading left standing over
                     nothing names a group the reader cannot reach. Connecting
@@ -667,8 +670,10 @@ function UpdatesRow({
     </Button>
   );
 
+  // The same sentence the sidebar row draws, since this dialog covers it — a
+  // reader who pressed the button here would otherwise get no answer at all.
   return (
-    <SettingRow id={id} label="Updates">
+    <SettingRow id={id} label="Updates" description={updateFailure(manual)}>
       {ready && blocked ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
@@ -720,6 +725,90 @@ function AnalyticsRow({
         checked={view?.analyticsEnabled ?? false}
         onCheckedChange={onChange}
       />
+    </SettingRow>
+  );
+}
+
+/// The in-app browser's Chromium: downloaded after install rather than shipped,
+/// so this is where the reader sees it land, retries a failed fetch, or takes
+/// the 300MB back. Nothing to draw in a build without the browser, where the
+/// status read fails and stays `null`.
+///
+/// Remove asks twice in the row, the way the model list does — the file comes
+/// back with one press, but only after a download the reader may not want
+/// twice on a slow link.
+function BrowserRow() {
+  const id = useId();
+  const status = useChromium();
+  const [confirming, setConfirming] = useState(false);
+  // Why the last Remove was refused — once CEF has loaded the framework the
+  // answer is "quit and reopen", and a button that swallows that looks like
+  // one that does nothing.
+  const [error, setError] = useState<string | null>(null);
+
+  if (!status) return null;
+
+  return (
+    <SettingRow
+      id={id}
+      label="Browser"
+      description={
+        error ? (
+          <span className="text-destructive">{error}</span>
+        ) : confirming ? (
+          "Chromium will be downloaded again the next time Dray starts."
+        ) : (
+          describeChromium(status)
+        )
+      }
+    >
+      {chromiumBusy(status) ? (
+        status.state === "downloading" ? (
+          <span className="text-ui tabular-nums text-muted-foreground">
+            {chromiumPercent(status)}%
+          </span>
+        ) : (
+          <Spinner className="size-4 text-muted-foreground" />
+        )
+      ) : status.state === "ready" ? (
+        confirming ? (
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setConfirming(false);
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={async () => {
+                try {
+                  await removeChromium();
+                  setConfirming(false);
+                  setError(null);
+                } catch (e) {
+                  setError(String(e));
+                }
+              }}
+            >
+              Remove
+            </Button>
+          </div>
+        ) : (
+          <Button id={id} variant="outline" size="sm" onClick={() => setConfirming(true)}>
+            Remove
+          </Button>
+        )
+      ) : (
+        <Button id={id} variant="outline" size="sm" onClick={() => void downloadChromium()}>
+          {status.state === "failed" ? "Retry" : "Download"}
+        </Button>
+      )}
     </SettingRow>
   );
 }

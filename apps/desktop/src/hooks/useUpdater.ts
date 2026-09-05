@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import type { UpdateChannel, UpdateStatus } from "@/types/events";
+import type { InstallError, UpdateChannel, UpdateStatus } from "@/types/events";
 
 // Long enough that a session left open for a week still finds an update, short
 // enough that it isn't only ever the launch check doing the work.
@@ -14,13 +14,41 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // doesn't settle in as a second permanent row.
 const VERDICT_MS = 4000;
 
-/// What a hand-triggered check is doing.
+/// What something the reader asked for is doing.
 ///
 /// The scheduled check has no such state and wants none — it stays silent
 /// unless it found something, because nobody asked it. The menu item is a
 /// question, so it is answered either way, including when the answer is that
 /// nothing happened.
-export type ManualCheck = "idle" | "checking" | "up_to_date" | "failed";
+///
+/// The two install failures ride here rather than on a prop of their own, since
+/// the footer has one line to say things in either way. They are the verdicts
+/// that do not retire themselves — both leave the reader with something to do,
+/// where a check that found nothing leaves them with nothing.
+export type ManualCheck =
+  | "idle"
+  | "checking"
+  | "up_to_date"
+  | "failed"
+  | "install_failed"
+  | "relaunch_failed";
+
+/// The sentence a failed install has to say, or `null` for every other state.
+///
+/// Shared, because the sidebar row and the Settings row draw the same verdict
+/// and a reader who pressed the button in Settings must not have to find the
+/// sidebar behind the dialog to learn what happened.
+///
+/// The two sentences name different cures on purpose: the first is a swap that
+/// did not complete, so the button beside it is the answer; the second is an
+/// update that landed and did not come up, where only opening it again
+/// finishes. Neither promises what the tree looks like — see `InstallError`.
+export function updateFailure(manual: ManualCheck): string | null {
+  if (manual === "install_failed") return "Couldn't install the update.";
+  if (manual === "relaunch_failed")
+    return "Update installed. Quit and open Dray again.";
+  return null;
+}
 
 /// Checks for an update on launch and on an interval, and holds what the
 /// backend reports back.
@@ -128,15 +156,23 @@ export function useUpdater() {
     return () => clearTimeout(timer);
   }, [manual]);
 
-  // Resolving at all means the install failed — the backend relaunches the app
-  // on success, so nothing downstream of this ever runs.
-  const install = useCallback(
-    () =>
-      invoke("install_update").catch((e) => {
-        console.error("[update install]", e);
-      }),
-    [],
-  );
+  // The backend launches the new bundle and *then* asks to exit, so a rejection
+  // here is a real answer rather than the silence a diverging call left behind.
+  // Resolving usually means the process is about to die, and the state written
+  // on that path is never painted.
+  //
+  // The stage is read off the error's own tag, never its message. An unshaped
+  // rejection — the IPC itself failing — reads as `install`, the safe half:
+  // claiming a swap that never happened sends the reader to quit for nothing,
+  // where the other way round costs one press of a button that then works.
+  const install = useCallback(() => {
+    setManual("idle");
+    return invoke("install_update").catch((e: unknown) => {
+      console.error("[update install]", e);
+      const stage = (e as InstallError | null)?.stage;
+      setManual(stage === "relaunch" ? "relaunch_failed" : "install_failed");
+    });
+  }, []);
 
   // Same path the menu item takes, so a check asked for in Settings and one
   // asked for from the menu bar are one thing with one in-flight guard.

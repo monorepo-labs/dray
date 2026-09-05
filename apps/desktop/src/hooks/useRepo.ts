@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { reconcileLog } from "@/lib/commit";
-import type { Commit, SyncStatus } from "@/types/events";
+import type { Commit } from "@/types/events";
 
 /// Same bargain [useChanges](./useChanges.ts) makes: a turn's events arrive in
 /// bursts, and only *refreshes* wait them out — the first read of a directory
@@ -11,7 +11,7 @@ const REFRESH_DEBOUNCE = 300;
 
 /// One page of history. Deep enough that most readers never reach the end of
 /// it, short enough that opening the tab costs one small read.
-export const LOG_PAGE = 50;
+const LOG_PAGE = 50;
 
 /// Runs `read` once on activation and then on every `revision` bump behind the
 /// debounce, and hands back a `refresh` that skips it.
@@ -93,7 +93,7 @@ export function useHeadTree(
   return { tree, settled, refresh: read };
 }
 
-export type CommitLog = {
+type CommitLog = {
   commits: readonly Commit[];
   error: string | null;
   loading: boolean;
@@ -194,32 +194,4 @@ export function useCommitLog(
   usePolledRead(cwd, revision, active, read);
 
   return { commits, error, loading, settled, hasMore, loadMore, refresh: read };
-}
-
-/// Where the branch stands against its upstream, for the push button.
-export function useSyncStatus(
-  cwd: string,
-  revision: string,
-  active: boolean,
-): { status: SyncStatus | null; refresh: () => void } {
-  const [status, setStatus] = useState<SyncStatus | null>(null);
-
-  const issued = useRef(0);
-
-  const read = useCallback(() => {
-    const token = ++issued.current;
-    void invoke<SyncStatus>("sync_status", { cwd })
-      .then((next) => issued.current === token && setStatus(next))
-      .catch(() => issued.current === token && setStatus(null));
-  }, [cwd]);
-
-  const [seeded, setSeeded] = useState(cwd);
-  if (seeded !== cwd) {
-    setSeeded(cwd);
-    setStatus(null);
-  }
-
-  usePolledRead(cwd, revision, active, read);
-
-  return { status, refresh: read };
 }

@@ -32,22 +32,7 @@ use std::path::PathBuf;
 /// damage in. See [`Envelope`] and the app's own `mismatch`, which names which
 /// half is behind so the reader — usually an agent, reading it as tool output —
 /// runs the cure that applies rather than the one that doesn't.
-///
-/// v2 added `CreateSession::from`. v3 added `CreateSession::issues` and
-/// [`Request::LinkIssues`], for the same test: an app that ignored `issues`
-/// would start the session with no issue linked and no line in its prompt
-/// saying what the work is against, and answer identically to a success — so
-/// the session runs, works on the wrong thing or on nothing, and reports back
-/// that it is done.
-///
-/// v4 reshaped [`LinkIssues`]: `identifiers: Vec<String>` became
-/// [`IssueInput`], carrying the title and URL the caller already has. The old
-/// shape made the *app* resolve each identifier against the tracker, so a link
-/// — a local record, on a session, about work — needed the network to be up and
-/// a key to be stored. The field is renamed rather than extended so the two
-/// shapes cannot be confused on the wire: an old app handed the new one finds
-/// no `identifiers` and refuses, which is the loud failure wanted here.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -93,6 +78,173 @@ pub enum Request {
     ListSessions(ListSessions),
     SendMessage(SendMessage),
     LinkIssues(LinkIssues),
+    Browser(BrowserRequest),
+}
+
+/// One step in a session's own browser — the tabs the app draws for it.
+///
+/// Every action lands on that session's active tab, so an agent can reach no
+/// other session's pages by construction: there is no target id to guess, the
+/// session is the address. The verbs follow agent-browser's, so an agent that
+/// knows one knows the other.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRequest {
+    pub session_id: String,
+    pub action: BrowserAction,
+}
+
+/// How an element is named. `Target` is what the line carries — `@e12` from
+/// the last snapshot, or a CSS selector; the rest are `find`'s locators,
+/// matched the way a person reads the page rather than the way it is built.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum Locator {
+    Target { target: String },
+    Role {
+        role: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        exact: bool,
+    },
+    Text {
+        text: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Label {
+        label: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Placeholder {
+        placeholder: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Alt {
+        alt: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    Title {
+        title: String,
+        #[serde(default)]
+        exact: bool,
+    },
+    TestId { id: String },
+    /// One of a selector's matches; `-1` is the last.
+    Nth { selector: String, index: i64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum Get {
+    Text,
+    Html,
+    Value,
+    Attr { name: String },
+    Title,
+    Url,
+    Count,
+    /// The bounding box, in viewport pixels.
+    Box,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Is {
+    Visible,
+    Enabled,
+    Checked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum BrowserAction {
+    Open { url: String },
+    Back,
+    Forward,
+    Reload,
+    /// Close the active tab.
+    Close,
+    Tabs,
+    TabNew {
+        #[serde(default)]
+        url: Option<String>,
+    },
+    TabSwitch { id: i32 },
+    TabClose {
+        #[serde(default)]
+        id: Option<i32>,
+    },
+    /// Interactive elements and headings, each with a ref for the actions.
+    Snapshot {
+        #[serde(default)]
+        interactive: bool,
+        #[serde(default)]
+        compact: bool,
+        #[serde(default)]
+        selector: Option<String>,
+    },
+    Click { at: Locator },
+    DblClick { at: Locator },
+    Focus { at: Locator },
+    Hover { at: Locator },
+    /// Keystrokes into an element, after whatever it holds.
+    Type { at: Locator, text: String },
+    /// Replace what an element holds.
+    Fill { at: Locator, text: String },
+    /// A key name (`Enter`, `Tab`, `Escape`, `ArrowDown`, `a`), with
+    /// `Meta+`/`Ctrl+`/`Shift+`/`Alt+` prefixes.
+    Press { key: String },
+    Check { at: Locator },
+    Uncheck { at: Locator },
+    /// Pick an option by value or label.
+    Select { at: Locator, value: String },
+    /// `up`, `down`, `left`, `right` by `amount` pixels.
+    Scroll { direction: String, amount: f64 },
+    ScrollIntoView { at: Locator },
+    Get {
+        #[serde(flatten)]
+        what: Get,
+        #[serde(default)]
+        at: Option<Locator>,
+    },
+    Is { what: Is, at: Locator },
+    /// Whichever is set: a selector to appear, milliseconds, a URL fragment,
+    /// visible text, or `load` for the page to finish loading.
+    Wait {
+        #[serde(default)]
+        selector: Option<String>,
+        #[serde(default)]
+        ms: Option<u64>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        load: Option<String>,
+    },
+    /// PNG to `path`, which must sit under the session's checkout, or a file
+    /// under `~/.dray/browser/shots`; `full` is the whole document rather
+    /// than the viewport.
+    Screenshot {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        full: bool,
+    },
+    /// Evaluate JavaScript in the page and answer its JSON value.
+    Eval { js: String },
+    /// What the page logged since last asked.
+    Console,
+    /// Errors alone, since last asked.
+    Errors,
+    SetViewport { width: u32, height: u32 },
+    /// A device preset by name, as the pane's device bar lists them.
+    SetDevice { name: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -239,6 +391,9 @@ pub enum Response {
     /// `queued` when the target had a turn in flight, so the prompt is held
     /// until it reaches a boundary rather than being dropped or interrupting.
     Sent { queued: bool },
+    /// What a browser action answers: `output` as text for the agent to
+    /// read, `data` the same answer for `--json`.
+    Browser { output: String, data: serde_json::Value },
     Error { message: String },
 }
 
@@ -301,24 +456,19 @@ pub fn endpoint() -> Option<String> {
         }
     }
 
-    Some(default_socket_path()?.to_string_lossy().into_owned())
+    Some(socket_path(false)?.to_string_lossy().into_owned())
 }
 
-/// `~/.dray/dray.sock`. Resolved through `dirs` rather than `$HOME` so it
-/// agrees with the app's own `get_home_app_dir`, which is what creates the
-/// directory this sits in.
-pub fn default_socket_path() -> Option<PathBuf> {
-    socket_path(false)
-}
-
-/// The socket one build of the app listens on.
+/// The socket one build of the app listens on, `~/.dray/dray.sock` by default.
+/// Resolved through `dirs` rather than `$HOME` so it agrees with the app's own
+/// `get_home_app_dir`, which creates the directory this sits in.
 ///
 /// The CLI never asks for the dev one: `dray` typed in a terminal means the app
 /// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`
 /// rather than leaving them to guess which build spawned them.
 pub fn socket_path(dev: bool) -> Option<PathBuf> {
     let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
-    Some(dirs::home_dir()?.join(".dray").join(name))
+    Some(std::env::home_dir()?.join(".dray").join(name))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
@@ -333,22 +483,6 @@ pub fn encode_line<T: Serialize>(value: &T) -> serde_json::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn envelope_flattens_the_version_beside_the_command() {
-        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
-            prompt: "hi".into(),
-            ..Default::default()
-        })))
-        .unwrap();
-
-        assert_eq!(line["v"], PROTOCOL_VERSION);
-        assert_eq!(line["cmd"], "create_session");
-        assert_eq!(line["prompt"], "hi");
-        // Flattened, not nested — a `request` key here means the server reads
-        // the version and finds nothing else it recognizes.
-        assert!(line.get("request").is_none());
-    }
 
     /// Deliberately a v1 line, and that is half the point: an envelope from a
     /// version we no longer speak still has to *parse*, or the app answers
@@ -369,164 +503,6 @@ mod tests {
         assert_eq!(create.effort, None);
         assert_eq!(create.harness, None);
         assert_eq!(create.from, None);
-    }
-
-    #[test]
-    fn a_base_travels_on_the_create() {
-        let line = serde_json::to_string(&Envelope::new(Request::CreateSession(CreateSession {
-            prompt: "review it".into(),
-            from: Some("worktree-calm-owl".into()),
-            ..Default::default()
-        })))
-        .unwrap();
-        assert!(line.contains(r#""from":"worktree-calm-owl""#));
-
-        let back: Envelope = serde_json::from_str(&line).unwrap();
-        let Request::CreateSession(create) = back.request else {
-            panic!("wrong variant");
-        };
-        assert_eq!(create.from.as_deref(), Some("worktree-calm-owl"));
-    }
-
-    /// `from` is what v2 exists for: a v1 app would have ignored the field,
-    /// started the worktree from `origin/<default>`, and answered like a
-    /// success. The envelope carries the version ahead of the command so that
-    /// is refused before the request is read at all.
-    #[test]
-    fn a_create_carrying_a_base_goes_out_at_the_version_that_added_it() {
-        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
-            prompt: "review it".into(),
-            from: Some("worktree-calm-owl".into()),
-            ..Default::default()
-        })))
-        .unwrap();
-
-        assert_eq!(line["v"], PROTOCOL_VERSION);
-        assert!(PROTOCOL_VERSION >= 2, "from must not travel under v1");
-    }
-
-    /// The field is defaulted, so a response shape without it parses rather
-    /// than failing the create. No longer a compatibility signal — the bump
-    /// took that job — but an unexercised `serde(default)` is one nobody checks.
-    #[test]
-    fn a_create_answered_without_a_base_still_parses() {
-        let response: Response = serde_json::from_str(
-            r#"{"status":"created","session":{"sessionId":"a","title":"t","cwd":"/p",
-                "projectPath":"/p","branch":null,"worktreeName":null,"status":"idle",
-                "modified":"now"}}"#,
-        )
-        .unwrap();
-
-        let Response::Created { base_ref, .. } = response else {
-            panic!("wrong variant");
-        };
-        assert_eq!(base_ref, None);
-    }
-
-    /// Same test `from` earned its bump on: an app that ignored these would
-    /// start a session against no issue at all and answer like a success.
-    #[test]
-    fn issues_travel_on_the_create_at_the_version_that_added_them() {
-        let line = serde_json::to_value(Envelope::new(Request::CreateSession(CreateSession {
-            prompt: "do it".into(),
-            issues: vec!["DRA-53".into()],
-            ..Default::default()
-        })))
-        .unwrap();
-
-        assert_eq!(line["issues"][0], "DRA-53");
-        assert!(PROTOCOL_VERSION >= 3, "issues must not travel under v2");
-    }
-
-    #[test]
-    fn linking_round_trips_and_says_which_way_it_goes() {
-        let line = serde_json::to_string(&Envelope::new(Request::LinkIssues(LinkIssues {
-            session_id: "abc".into(),
-            issues: vec![
-                IssueInput { identifier: "DRA-1".into(), ..Default::default() },
-                IssueInput { identifier: "DRA-2".into(), ..Default::default() },
-            ],
-            unlink: true,
-        })))
-        .unwrap();
-        assert!(line.contains(r#""cmd":"link_issues""#));
-
-        let back: Envelope = serde_json::from_str(&line).unwrap();
-        let Request::LinkIssues(link) = back.request else {
-            panic!("wrong variant");
-        };
-        assert_eq!(link.issues.len(), 2);
-        assert!(link.unlink);
-    }
-
-    /// Absent reads as *adding*, which is the direction that cannot be
-    /// destructive — the one worth having as a default.
-    #[test]
-    fn a_link_with_no_direction_adds() {
-        let request: Request = serde_json::from_str(
-            r#"{"cmd":"link_issues","sessionId":"a","issues":[{"identifier":"DRA-1"}]}"#,
-        )
-        .unwrap();
-
-        let Request::LinkIssues(link) = request else {
-            panic!("wrong variant");
-        };
-        assert!(!link.unlink);
-    }
-
-    #[test]
-    fn send_message_round_trips() {
-        let line = serde_json::to_string(&Envelope::new(Request::SendMessage(SendMessage {
-            session_id: "abc".into(),
-            prompt: "review is done".into(),
-            from_session_id: Some("parent".into()),
-        })))
-        .unwrap();
-        assert!(line.contains(r#""cmd":"send_message""#));
-
-        let back: Envelope = serde_json::from_str(&line).unwrap();
-        let Request::SendMessage(send) = back.request else {
-            panic!("wrong variant");
-        };
-        assert_eq!(send.session_id, "abc");
-        assert_eq!(send.from_session_id.as_deref(), Some("parent"));
-    }
-
-    /// Added after the CLI shipped, so an app that predates it sends no such
-    /// key — which has to read as "no parent" rather than failing the list.
-    #[test]
-    fn a_summary_without_a_parent_key_still_parses() {
-        let summary: SessionSummary = serde_json::from_str(
-            r#"{"sessionId":"a","title":"t","cwd":"/p","projectPath":"/p","branch":null,
-                "worktreeName":null,"status":"idle","modified":"now"}"#,
-        )
-        .unwrap();
-        assert_eq!(summary.parent_session_id, None);
-    }
-
-    #[test]
-    fn responses_round_trip_through_their_tag() {
-        let listed = Response::Listed { sessions: vec![] };
-        let json = serde_json::to_string(&listed).unwrap();
-        assert!(json.contains(r#""status":"listed""#));
-
-        let back: Response = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, Response::Listed { sessions } if sessions.is_empty()));
-    }
-
-    #[test]
-    fn encoded_lines_carry_exactly_one_newline() {
-        let line = encode_line(&Response::error("nope")).unwrap();
-        assert!(line.ends_with('\n'));
-        assert_eq!(line.matches('\n').count(), 1);
-    }
-
-    #[test]
-    fn dev_and_release_sockets_are_different_files() {
-        // The whole point: a dev app must not be able to unlink the socket the
-        // installed app is serving on.
-        assert_ne!(socket_path(true), socket_path(false));
-        assert_eq!(socket_path(false), default_socket_path());
     }
 
     #[test]

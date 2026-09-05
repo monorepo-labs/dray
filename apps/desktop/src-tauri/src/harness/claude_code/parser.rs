@@ -327,34 +327,15 @@ impl RateLimitInfo {
         self.is_using_overage.unwrap_or(false) || !healthy
     }
 
-    /// Whether the window is filling but not yet spent. Nothing consumes this
-    /// yet — approaching a limit is real information and wants its own quiet
-    /// surface, not the banner a reached limit gets.
-    pub fn is_approaching(&self) -> bool {
-        self.status.as_deref() == Some("allowed_warning")
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum SystemEvent {
     HookStarted {
-        hook_id: String,
-        hook_name: String,
-        hook_event: String,
-        uuid: String,
         session_id: String,
     },
     HookResponse {
-        hook_id: String,
-        hook_name: String,
-        hook_event: String,
-        output: String,
-        stdout: String,
-        stderr: String,
-        exit_code: i32,
-        outcome: String,
-        uuid: String,
         session_id: String,
     },
     Init {
@@ -365,18 +346,8 @@ pub enum SystemEvent {
         model: String,
         #[serde(rename = "permissionMode")]
         permission_mode: PermissionMode,
-        slash_commands: Vec<String>,
-        #[serde(rename = "apiKeySource")]
-        api_key_source: String,
         claude_code_version: String,
-        output_style: String,
         agents: Vec<String>,
-        skills: Vec<String>,
-        plugins: Vec<Plugin>,
-        analytics_disabled: bool,
-        product_feedback_disabled: bool,
-        uuid: String,
-        memory_paths: Value,
         fast_mode_state: String,
     },
     Status {
@@ -411,9 +382,6 @@ pub enum SystemEvent {
         session_id: String,
     },
     TaskUpdated {
-        task_id: String,
-        patch: TaskPatch,
-        uuid: String,
         session_id: String,
     },
     TaskNotification {
@@ -429,14 +397,8 @@ pub enum SystemEvent {
         session_id: String,
     },
     /// A one-line recap of the turn that just ended, emitted just before its
-    /// `result`. `summarizes_uuid` names the assistant message it describes.
+    /// `result`.
     PostTurnSummary {
-        summarizes_uuid: String,
-        status_category: String,
-        status_detail: String,
-        /// Empty when nothing is wanted from the user.
-        needs_action: String,
-        uuid: String,
         session_id: String,
     },
     /// The full set of outstanding background tasks, republished whenever it
@@ -929,14 +891,6 @@ pub struct TaskUsage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskPatch {
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub end_time: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultOrigin {
     pub kind: String,
 }
@@ -945,13 +899,6 @@ pub struct ResultOrigin {
 // than duplicated here — the wire shapes match, so these deserialize straight
 // into the `events` types.
 pub use crate::events::{McpServer, PermissionMode};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Plugin {
-    pub name: String,
-    pub path: String,
-    pub source: String,
-}
 
 pub fn parse_line(line: &str) -> Result<ClaudeCodeEvent> {
     serde_json::from_str(line).with_context(|| format!("Failed to parse {line}"))
@@ -1610,8 +1557,7 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            ClaudeCodeEvent::System(SystemEvent::PostTurnSummary { status_detail, .. })
-                if !status_detail.is_empty()
+            ClaudeCodeEvent::System(SystemEvent::PostTurnSummary { .. })
         )));
 
         // Published non-empty while the subagent runs, then empty once it
