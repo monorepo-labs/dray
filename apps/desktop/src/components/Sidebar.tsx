@@ -58,6 +58,11 @@ import type {
   UpdateStatus,
 } from "@/types/events";
 
+/// The sidebar's search field. Named so ⌘F can reach it from `App`: the chord
+/// has to work with the sidebar collapsed, so it lives up there, and `autoFocus`
+/// only covers the field being *mounted* by that same press.
+export const SEARCH_INPUT_ID = "sidebar-search";
+
 type SidebarProps = {
   // Already scoped to `projectFilter` and to `search` by the caller, so the list
   // and the ⌘⇧↑/↓ walk step through exactly the same rows.
@@ -67,6 +72,13 @@ type SidebarProps = {
   // would leave the shortcut stepping rows the sidebar no longer draws.
   search: string;
   onSearchChange: (query: string) => void;
+  /// Whether the search row is drawn as an input rather than as its button.
+  /// Apart from the query itself, since an empty input and the button look the
+  /// same and this is only about where the caret is — and owned by the caller
+  /// because ⌘F has to open it from a *collapsed* sidebar, which is not
+  /// mounted.
+  searchOpen: boolean;
+  onSearchOpenChange: (open: boolean) => void;
   // The live status of every session the app has heard about this run. Wins over
   // the item's own field, which is only as fresh as the last list fetch.
   statusBySession: Record<string, SessionStatus>;
@@ -762,6 +774,8 @@ export default function Sidebar({
   items,
   search,
   onSearchChange,
+  searchOpen,
+  onSearchOpenChange,
   statusBySession,
   askingSessions,
   prFor,
@@ -795,13 +809,8 @@ export default function Sidebar({
 }: SidebarProps) {
   const fullscreen = useFullscreen();
 
-  // Whether the search row is drawn as an input rather than as its button. Kept
-  // apart from the query itself: the empty input and the button look the same,
-  // so this is only about where the caret is.
-  const [searching, setSearching] = useState(false);
-
   const closeSearch = () => {
-    setSearching(false);
+    onSearchOpenChange(false);
     onSearchChange("");
   };
 
@@ -984,11 +993,12 @@ export default function Sidebar({
             that is otherwise plain buttons. The transparent border is what holds
             that promise to the pixel: every button carries one, so the icon
             would sit a pixel further out without it. */}
-        {searching ? (
+        {searchOpen ? (
           <div className="flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
             <Search className="size-3.5 shrink-0" />
             <input
               autoFocus
+              id={SEARCH_INPUT_ID}
               type="text"
               value={search}
               placeholder="Search"
@@ -1005,20 +1015,29 @@ export default function Sidebar({
               // Only where there is nothing to lose. Clicking away from a query
               // that is narrowing the list is not a request to drop it.
               onBlur={() => {
-                if (!search) setSearching(false);
+                if (!search) onSearchOpenChange(false);
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
+            {/* Where ⌘F's keycaps were, saying the other half: Escape is the
+                way out and it takes the query with it. Only with something to
+                lose — over an empty field it would be naming the way out of a
+                state nothing is holding open. */}
+            {search && <Kbd>Esc</Kbd>}
           </div>
         ) : (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setSearching(true)}
+            onClick={() => onSearchOpenChange(true)}
             className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
           >
             <Search />
             Search
+            <KbdGroup className="ml-auto">
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>F</Kbd>
+            </KbdGroup>
           </Button>
         )}
       </div>
