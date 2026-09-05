@@ -1,6 +1,12 @@
 name: Warm cache
 
-# Exists for the cache it leaves behind, nothing else.
+# Exists for the cache it leaves behind, and for being the only thing that
+# compiles the browser.
+#
+# The `cef` feature is off by default, so `cargo check`, `cargo test` and
+# everything run by hand skip `src/cef/` entirely — and the build below is the
+# one place on `main` that turns it on. Whatever else this job is for, a red
+# run here means the browser does not compile.
 #
 # The release workflow only ever runs on a tag, and GitHub scopes cache *reads*
 # to the ref that wrote them plus the default branch. So each release wrote a
@@ -23,9 +29,14 @@ on:
       - ".github/actions/desktop-setup/**"
   workflow_dispatch:
 
+# Superseded runs are left to finish. Cancelling saved runner minutes back when
+# the cache was all this produced, but the build is also the compile signal for
+# the browser now, and the push that supersedes a run is usually the release
+# bump minutes behind it — which is exactly how DRA-166's fix reached a tag with
+# its own run cancelled and nothing having compiled `cef.rs`.
 concurrency:
   group: warm-cache
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # Incremental artifacts are worthless across machines and are most of what a
