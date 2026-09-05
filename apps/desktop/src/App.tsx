@@ -39,6 +39,7 @@ import RightPanel, {
   type PanelTab,
 } from "@/components/RightPanel";
 import Sidebar, {
+  SEARCH_INPUT_ID,
   SidebarToggle,
   filterSessions,
   sortSessions,
@@ -465,6 +466,10 @@ function App() {
   // and a session dropping out of it as a query is typed would stop its repo
   // being polled and make the notice forget a pull request was already ready.
   const [search, setSearch] = useState("");
+  // Whether the sidebar's search row is drawn as a field. Up here rather than in
+  // the sidebar, since ⌘F has to open it from a collapsed one, which is not
+  // mounted at all.
+  const [searchOpen, setSearchOpen] = useState(false);
   const searchedSessions = useMemo(
     () => filterSessions(visibleSessions, search),
     [visibleSessions, search],
@@ -1038,6 +1043,12 @@ function App() {
     if (flags.archived === true && sessionId === selectedSessionId) {
       goToSession(handleNewSession);
     } else if (flags.archived === false) {
+      // Unsettling is the reader saying they found what they came for, so the
+      // query that found it has done its job — and left standing it would hide
+      // the row they just acted on, since the list it lands in is filtered too.
+      setSearch("");
+      setSearchOpen(false);
+
       // The row has just left whichever list it was drawn from, so follow it to
       // the one it landed in and keep it selected — from the sidebar's menu the
       // reader pressed that row, and from the composer's bar they are reading
@@ -1057,6 +1068,15 @@ function App() {
 
   const toggleSidebar = () => setCollapsed((prev) => !prev);
   useHotkey("b", toggleSidebar);
+  // Takes the sidebar with it: the field lives there, and a chord that opened a
+  // search nobody can see would be worse than no chord. `autoFocus` covers the
+  // field this press mounts; the select covers the one already on screen, which
+  // is also what makes ⌘F on a query a replace rather than an append.
+  useHotkey("f", () => {
+    setCollapsed(false);
+    setSearchOpen(true);
+    document.querySelector<HTMLInputElement>(`#${SEARCH_INPUT_ID}`)?.select();
+  });
   useHotkey("n", () => goToSession(handleNewSession));
   // Steps the composer's project picker, and only while that picker is on
   // screen: it is drawn for a new task alone, and `enabled` unregisters rather
@@ -1223,6 +1243,8 @@ function App() {
           items={searchedSessions}
           search={search}
           onSearchChange={setSearch}
+          searchOpen={searchOpen}
+          onSearchOpenChange={setSearchOpen}
           projects={spaceProjects}
           spaces={spaces}
           space={space}
