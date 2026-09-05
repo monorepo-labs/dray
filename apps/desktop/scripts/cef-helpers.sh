@@ -38,9 +38,14 @@ if [ -n "$TAURI_ENV_TARGET_TRIPLE" ]; then
     # profile dir; an explicit one puts it under the triple. Tried in that order.
     *) TARGETS="" ; TRIPLE=$TAURI_ENV_TARGET_TRIPLE ;;
   esac
-  # The bundler's identity, or ad-hoc where none is set — the same "-"
-  # tauri.conf.json signs the app with.
-  SIGN_IDENTITY=${SIGN_IDENTITY:-${APPLE_SIGNING_IDENTITY:--}}
+  # The bundler's identity. Only a debug build may fall back to ad-hoc: an
+  # ad-hoc helper passes `codesign --verify` and the entitlements grep, so a
+  # release missing the secret would go green here and fail on a user's Mac.
+  SIGN_IDENTITY=${SIGN_IDENTITY:-$APPLE_SIGNING_IDENTITY}
+  if [ -z "$SIGN_IDENTITY" ]; then
+    [ "$PROFILE" = debug ] || { echo "$0: release build with no APPLE_SIGNING_IDENTITY" >&2; exit 1; }
+    SIGN_IDENTITY=-
+  fi
 fi
 FLAG=""
 [ "$PROFILE" = release ] && FLAG=--release
