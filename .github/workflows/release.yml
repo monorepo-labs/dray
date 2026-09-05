@@ -77,22 +77,22 @@ jobs:
       # why the two share it.
       - uses: ./.github/actions/desktop-setup
 
-      # The helper apps are signed here, before the bundler runs, with the
-      # same identity it will use on the app around them. `bundle.macOS.files`
-      # copies and signs nothing, and codesign refuses an app whose nested
-      # bundles carry no signature. Their entitlements differ from the app's
-      # too — V8 in the renderer wants JIT — so a `--deep` sign would be the
-      # wrong shape even if the bundler offered one.
+      # The helper apps are signed by cef-helpers.sh, which the cef overlay
+      # runs as `beforeBundleCommand` — after the CLI's own cargo build, before
+      # its bundler — with the same identity the bundler puts on the app around
+      # them. `bundle.macOS.files` copies and signs nothing, and codesign
+      # refuses an app whose nested bundles carry no signature. Their
+      # entitlements differ from the app's too — V8 in the renderer wants JIT —
+      # so a `--deep` sign would be the wrong shape even if the bundler offered
+      # one. The bundler imports the certificate only once it starts signing,
+      # which is after the hook, so it is imported here first.
+      #
+      # It used to run as its own step ahead of the action, with a cargo build
+      # of its own. See the script for why that compiled the tree twice.
       - uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      - run: scripts/cef-helpers.sh src-tauri/target/cef-helpers
-        working-directory: apps/desktop
-        env:
-          PROFILE: release
-          TARGETS: aarch64-apple-darwin x86_64-apple-darwin
-          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
       - uses: tauri-apps/tauri-action@v0
         env:
