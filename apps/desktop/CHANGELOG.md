@@ -5,7 +5,13 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.14.0-beta.5
+## 0.14.0-beta.6
+
+### Changed
+
+- **The main column's Changes tab is now called Diff**, which is what it
+  shows. The right panel keeps its own Changes tab — that one answers what
+  this turn did, where the view answers what the repository looks like.
 
 ### Added
 
