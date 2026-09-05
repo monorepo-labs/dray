@@ -994,7 +994,7 @@ export default function Sidebar({
             that promise to the pixel: every button carries one, so the icon
             would sit a pixel further out without it. */}
         {searchOpen ? (
-          <div className="flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
+          <div className="group flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
             <Search className="size-3.5 shrink-0" />
             <input
               autoFocus
@@ -1019,11 +1019,19 @@ export default function Sidebar({
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
-            {/* Where ⌘F's keycaps were, saying the other half: Escape is the
-                way out and it takes the query with it. Only with something to
-                lose — over an empty field it would be naming the way out of a
-                state nothing is holding open. */}
-            {search && <Kbd>Esc</Kbd>}
+            {/* The slot keeps naming whichever key does something here, and
+                which one that is turns on focus alone: Escape reaches this
+                input and nothing else, where ⌘F is what brings focus back to a
+                field left holding a query. Esc is withheld over an empty field,
+                which is the one state neither key has anything to do in. CSS
+                rather than a `focused` state: the browser already knows. */}
+            {search && (
+              <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>
+            )}
+            <KbdGroup className="group-focus-within:hidden">
+              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>F</Kbd>
+            </KbdGroup>
           </div>
         ) : (
           <Button
