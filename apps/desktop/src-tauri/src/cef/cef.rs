@@ -136,8 +136,12 @@ fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
 
+/// Dev builds get their own profile root, as they get their own socket:
+/// Chromium holds a singleton lock on the root, so a dev build sharing the
+/// release app's would fail to initialize and exit the process.
 fn browser_dir() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join(".dray/browser")
+    let dir = if tauri::is_dev() { ".dray/browser-dev" } else { ".dray/browser" };
+    std::env::home_dir().unwrap_or_default().join(dir)
 }
 
 /// Call once from Tauri's `setup`. Chromium itself is not started here: it
