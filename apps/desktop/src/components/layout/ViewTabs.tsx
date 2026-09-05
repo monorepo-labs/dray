@@ -12,7 +12,7 @@ export type ViewTab = (typeof VIEW_TABS)[number];
 
 const LABELS: Record<ViewTab, string> = {
   chat: "Chat",
-  changes: "Changes",
+  changes: "Diff",
   browser: "Browser",
 };
 
