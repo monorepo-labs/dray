@@ -119,30 +119,31 @@ function WithShortcut({
 
 /// One card.
 ///
-/// Its own component because of `phase`: a card that has been acted on has to
-/// keep saying so for a moment, and state per card cannot live in the map that
-/// renders them.
+/// Its own component for its countdown, which is one `Animation` per card and
+/// cannot live in the map that renders them.
 function NoticeCard({
   notice,
   isNext,
+  done,
   onTake,
   onDeleteWorktree,
 }: {
   notice: Notice;
   isNext: boolean;
+  /// Acted on already, and saying so for a moment before it goes. Owned by the
+  /// stack rather than by the card, because it is what takes the card out of
+  /// the running for the shortcuts — a card the reader has answered must not
+  /// still be what the next keypress lands on.
+  done: boolean;
   onTake: () => void;
   onDeleteWorktree: () => void;
 }) {
-  // Two states, not three. There was a `working` one holding a spinner while
-  // git ran; the removal no longer waits, so the press goes straight to the
-  // answer and a refusal arrives later as its own card.
-  const [phase, setPhase] = useState<"idle" | "done">("idle");
   const [hovered, setHovered] = useState(false);
   const worktree = notice.kind === "worktree";
 
   const bar = useRef<HTMLSpanElement>(null);
   const timer = useRef<Animation | null>(null);
-  const duration = phase === "done" ? CONFIRM_MS : NOTICE_TTL_MS[notice.kind];
+  const duration = done ? CONFIRM_MS : NOTICE_TTL_MS[notice.kind];
 
   // The countdown, and the thing that ends it: one `Animation` object owning
   // both the bar and the dismissal, so there is still exactly one clock.
@@ -178,41 +179,28 @@ function NoticeCard({
   // exists to protect a button they are still reaching for — past that press
   // there is no target left to protect, and a card waiting for the mouse to
   // leave reads as stuck.
-  const frozen = hovered && phase === "idle";
+  const frozen = hovered && !done;
   useEffect(() => {
     if (frozen) timer.current?.pause();
     else timer.current?.play();
   }, [frozen, duration]);
 
-  // Said, not awaited — and "Deleted" is *optimistic*, deliberately. It reports
-  // a removal that is under way rather than one that has happened, which is the
-  // trade this whole surface now makes: the alternative is a spinner saying
-  // "still going" over three git commands, which is the click that reads as
-  // missed. Nothing the reader does from here changes the outcome, and a
-  // cleanup that fails comes back on a `worktree-failed` card, which exists to
-  // take this word back.
-  const confirm = () => {
-    onDeleteWorktree();
-    setPhase("done");
-  };
-
   // ⌘⇧D deletes without the trip to a 40px button, which is the whole point of
-  // the card. Bound here rather than in the stack because pressing it has to
-  // run the same `confirm` the button does — the "Deleted" state is this
-  // card's, and a key that reached past it would delete the worktree while the
-  // card sat there still offering to.
+  // the card. Bound here rather than in the stack because it has to run the
+  // same handler the button does, so the press and the click leave the card in
+  // one state rather than two.
   //
   // A key of its own rather than more meaning on ⌘G: one chord that sometimes
   // navigates and sometimes destroys is the shape that burns someone once.
   // Shifted because plain ⌘D is dictation, app-wide — a card raising itself
   // under the cursor must not take a chord the composer already owns.
-  // Guarded on `isNext` so a stack of cards has exactly one target, the same
-  // one ⌘G has, and on `idle` so a repeat press cannot ask for the removal a
-  // second time while the card sits there saying it already happened.
+  // Guarded on `isNext` alone, which is now enough: a card that has been acted
+  // on stops being next, so a repeat press cannot ask for the same removal
+  // twice and lands on the card behind it instead.
   useHotkey(
     "d",
     () => {
-      if (worktree && isNext && phase === "idle") confirm();
+      if (worktree && isNext) onDeleteWorktree();
     },
     { shift: true },
   );
@@ -263,7 +251,7 @@ function NoticeCard({
             It goes once the deletion has happened: there is nothing left to
             skip, and a live button beside "Deleted" invites a second thought
             about a directory that is already gone. */}
-        {worktree && phase !== "done" && (
+        {worktree && !done && (
           <WithShortcut keys={isNext ? ["G"] : []}>
             <Button
               variant="ghost"
@@ -281,7 +269,7 @@ function NoticeCard({
             it sits on and stops reading as a control at all. `pr-1` because the
             keycaps carry their own inset, which turns the size's own right
             padding into a gap. */}
-        <WithShortcut keys={isNext && phase !== "done" ? (worktree ? ["⇧", "D"] : ["G"]) : []}>
+        <WithShortcut keys={isNext ? (worktree ? ["⇧", "D"] : ["G"]) : []}>
         <Button
           size="xs"
           className={cn(
@@ -293,11 +281,11 @@ function NoticeCard({
             // Done is a statement, not a control. It keeps the fill so the card
             // doesn't reflow into a different shape at the moment the eye is on
             // it, and drops the pointer so nothing invites a second press.
-            phase === "done" && "pointer-events-none",
+            done && "pointer-events-none",
           )}
-          onClick={worktree ? confirm : onTake}
+          onClick={worktree ? onDeleteWorktree : onTake}
         >
-          {phase === "done" ? (
+          {done ? (
             <>
               <Check className="size-3.5" />
               Deleted
@@ -346,11 +334,23 @@ export default function NoticeStack({
 }: NoticeStackProps) {
   const notices = useNotices();
 
-  // The oldest card, which is the top one and the next to expire. Acting on it
-  // rather than the newest is what makes the shortcut repeatable: hitting it
-  // twice clears two cards in the order they arrived, where "newest" would
-  // reshuffle what the key means every time one lands.
-  const next = notices[0] ?? null;
+  // Cards the reader has answered, which are still on screen only to say so.
+  // Pruned as it is written, so keys of cards long gone cannot pile up.
+  const [acted, setActed] = useState<string[]>([]);
+  const markActed = (key: string) =>
+    setActed((keys) => [
+      ...keys.filter((k) => notices.some((n) => noticeKey(n) === k)),
+      key,
+    ]);
+
+  // The oldest card *still waiting on an answer*, which is the top one and the
+  // next to expire. Acting on it rather than the newest is what makes the
+  // shortcut repeatable: hitting it twice clears two cards in the order they
+  // arrived, where "newest" would reshuffle what the key means every time one
+  // lands. Skipping the answered ones is the other half of that — a worktree
+  // card keeps its place for the moment it spends saying "Deleted", and a key
+  // pressed in that window belongs to the card behind it.
+  const next = notices.find((n) => !acted.includes(noticeKey(n))) ?? null;
 
   // Where a card leads, which is the same for the key and for the button. The
   // navigating kinds go somewhere and a worktree card only leaves: its Skip is
@@ -390,8 +390,18 @@ export default function NoticeStack({
           key={noticeKey(notice)}
           notice={notice}
           isNext={notice === next}
+          done={acted.includes(noticeKey(notice))}
           onTake={() => take(notice)}
-          onDeleteWorktree={() => onDeleteWorktree(notice.sessionId)}
+          onDeleteWorktree={() => {
+            // Said, not awaited — and "Deleted" is *optimistic*, deliberately.
+            // It reports a removal that is under way rather than one that has
+            // happened: the alternative is a spinner saying "still going" over
+            // three git commands, which is the click that reads as missed. A
+            // cleanup that fails comes back on a `worktree-failed` card, which
+            // exists to take this word back.
+            onDeleteWorktree(notice.sessionId);
+            markActed(noticeKey(notice));
+          }}
         />
       ))}
     </div>
