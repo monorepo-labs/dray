@@ -19,7 +19,7 @@
 // traits unqualified, so this is the one place a glob is load-bearing.
 use cef::args::Args;
 use cef::*;
-use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Bool, NSObjectProtocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
@@ -612,19 +612,18 @@ fn apply_layout() {
 /// reopen it until a click landed on the chat.
 fn refocus_webview(from: &NSView) {
     let Some(window) = from.window() else { return };
-    let holds = window
-        .firstResponder()
-        .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(from)))
-        .unwrap_or(false);
-    if !holds {
-        return;
-    }
     let Some(parent) = (unsafe { from.superview() }) else { return };
+    // By kind, not name: wry subclasses it as `WryWebView`.
+    let Some(wk) = AnyClass::get(c"WKWebView") else { return };
     let subviews = parent.subviews();
-    let Some(webview) = subviews.iter().find(|v| v.class().name().to_bytes().starts_with(b"WKWebView")) else {
-        return;
-    };
-    window.makeFirstResponder(Some(&**webview));
+    let Some(webview) = subviews.iter().find(|v| v.isKindOfClass(wk)) else { return };
+    let inside = window
+        .firstResponder()
+        .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(&*webview)))
+        .unwrap_or(false);
+    if !inside {
+        window.makeFirstResponder(Some(&**webview));
+    }
 }
 
 /// Unhides a tab's view off-screen, so Chromium treats it as visible and
