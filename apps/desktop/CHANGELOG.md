@@ -5,49 +5,7 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.14.0-beta.6
-
-### Changed
-
-- **The main column's Changes tab is now called Diff**, which is what it
-  shows. The right panel keeps its own Changes tab — that one answers what
-  this turn did, where the view answers what the repository looks like.
-
-### Added
-
-- **⌘F searches the sidebar.** It works with the sidebar collapsed, and Esc
-  clears the field. Settling a session clears the query too — you found the
-  row you came for, and the list it lands in is filtered by that same query.
-
-### Changed
-
-- **Transcripts you have stopped looking at leave memory.** Every one opened
-  since launch used to stay resident, around 650MB after a day. A transcript
-  is dropped on archive, on settle, and after ten minutes unviewed — never
-  the one on screen, never one mid-turn, never one holding a card. Pictures
-  in a transcript load as you reach them rather than all at once.
-- **A large amount of unused code is gone** — dead components, duplicated
-  helpers, a marketing page's worth of unshipped sections. Nothing here was
-  meant to change what the app does, which is exactly why a beta is where it
-  lands: anything that behaves differently is a bug, so say so.
-
-### Fixed
-
-- **Keyboard shortcuts keep working after you use the browser — properly
-  this time.** beta.4 claimed this and did not deliver it: the code looked
-  for the window's web view by name, and the name it looked for is not the
-  one the window actually uses, so focus stayed in the hidden Chromium view
-  and ⌘E and the rest still did nothing until you clicked. ⌘⇧[ and ⌘⇧] work
-  there now too.
-- **A dismissed notice no longer swallows the next one's shortcut.** A card
-  that says "Deleted" sits for a moment on its way out, and it stayed what
-  ⌘G and ⌘⇧D acted on for that whole moment — so one did nothing and the
-  other dismissed a card already leaving.
-- **Opening a browser tab no longer freezes every session.** Chromium's
-  startup reset the signal handler Dray reaps child processes through, so
-  the first `git` command after the first tab waited forever — and since a
-  send waits on one, every session went unsendable and unstoppable until
-  restart.
+## 0.14.0
 
 ### Added
 
@@ -62,10 +20,37 @@ second description of it. GitHub's generated commit list is appended below it.
   update too.
 - **`dray browser` lets an agent drive that browser** — open pages, click,
   type, read and screenshot, in its own session's tabs and nowhere else.
-  It needs a matching CLI: run `dray update`.
+  **It needs a matching CLI: run `dray update`.** An older `dray` is
+  refused by this app outright, and that refusal covers every command, not
+  just the browser ones.
 - **A link in the chat asks where to open.** Dray's browser or the system
   one, with ⌘-click skipping the question. URLs you type in your own
   messages are clickable now too.
+- **⌘F searches the sidebar.** It works with the sidebar collapsed, and Esc
+  clears the field while you are typing in it. Settling a session clears
+  the query too — you found the row you came for, and the list it lands in
+  is filtered by that same query.
+
+### Changed
+
+- **Transcripts you have stopped looking at leave memory.** Every one opened
+  since launch used to stay resident, around 650MB after a day. A transcript
+  is dropped on archive, on settle, and after ten minutes unviewed — never
+  the one on screen, never one mid-turn, never one holding a card. Pictures
+  in a transcript load as you reach them rather than all at once.
+- **The main column's Changes tab is now called Diff**, which is what it
+  shows. The right panel keeps its own Changes tab — that one answers what
+  this turn did, where the view answers what the repository looks like.
+- **A large amount of unused code is gone** — dead components, duplicated
+  helpers, a marketing page's worth of unshipped sections. None of it was
+  meant to change what the app does.
+
+### Fixed
+
+- **A notice on its way out no longer swallows the next one's shortcut.** A
+  card that says "Deleted" sits for a moment before it goes, and it stayed
+  what ⌘G and ⌘⇧D acted on for that whole moment — so one press did nothing
+  and the other dismissed a card already leaving. One press is now one card.
 
 ## 0.13.2
 
