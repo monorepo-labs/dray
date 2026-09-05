@@ -11,6 +11,16 @@
 #                            entitlements. Tauri's bundler signs nothing it
 #                            did not copy itself, and codesign refuses an app
 #                            whose nested bundles carry no signature.
+#
+# As `beforeBundleCommand` (tauri.cef.conf.json) it builds nothing and reads
+# all three off the CLI's own env. `tauri build` compiles every [[bin]] per
+# target already, and it does so with `MACOSX_DEPLOYMENT_TARGET` set from
+# `minimumSystemVersion` and `tauri/custom-protocol` on — a cargo build here
+# with any other env or feature set is not a cache miss on a few crates but a
+# rebuild of the tree: every crate `cc` compiles fingerprints that variable,
+# so libgit2, ring, lmdb, the CEF wrapper and everything above them go dirty,
+# and the CLI's build then flips them all back. Measured on v0.14.0-beta.4:
+# 65 crates here, 63 of the same again in the CLI, 28 of 31 minutes.
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,8 +29,25 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$1"
 OUT=$(cd "$1" && pwd)
 PROFILE=${PROFILE:-debug}
+if [ -n "$TAURI_ENV_TARGET_TRIPLE" ]; then
+  PROFILE=release
+  [ "$TAURI_ENV_DEBUG" = true ] && PROFILE=debug
+  case "$TAURI_ENV_TARGET_TRIPLE" in
+    universal-apple-darwin) TARGETS="aarch64-apple-darwin x86_64-apple-darwin" ;;
+    # No `--target` reports the host triple, whose binary sits in the plain
+    # profile dir; an explicit one puts it under the triple. Tried in that order.
+    *) TARGETS="" ; TRIPLE=$TAURI_ENV_TARGET_TRIPLE ;;
+  esac
+  # The bundler's identity, or ad-hoc where none is set — the same "-"
+  # tauri.conf.json signs the app with.
+  SIGN_IDENTITY=${SIGN_IDENTITY:-${APPLE_SIGNING_IDENTITY:--}}
+fi
 FLAG=""
 [ "$PROFILE" = release ] && FLAG=--release
+
+build() {
+  [ -n "$TAURI_ENV_TARGET_TRIPLE" ] || cargo build $FLAG --bin dray-helper --features cef "$@"
+}
 
 # Hardened-runtime codesign, or nothing without SIGN_IDENTITY. An ad-hoc
 # signature cannot carry a timestamp.
@@ -36,7 +63,7 @@ mkdir -p "$OUT"
 if [ -n "$TARGETS" ]; then
   BINS=""
   for t in $TARGETS; do
-    cargo build $FLAG --bin dray-helper --features cef --target "$t"
+    build --target "$t"
     BINS="$BINS target/$t/$PROFILE/dray-helper"
   done
   BIN="$OUT/dray-helper"
@@ -51,8 +78,9 @@ if [ -n "$TARGETS" ]; then
   cp "$BIN" "$UNI/dray-helper"
   sign "$UNI/dray-helper"
 else
-  cargo build $FLAG --bin dray-helper --features cef
+  build
   BIN="target/$PROFILE/dray-helper"
+  [ -n "$TRIPLE" ] && [ -e "target/$TRIPLE/$PROFILE/dray-helper" ] && BIN="target/$TRIPLE/$PROFILE/dray-helper"
 fi
 
 for suffix in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
