@@ -599,8 +599,32 @@ fn apply_layout() {
                 host.notify_move_or_resize_started();
             }
         }
+        if !show && !view.isHidden() {
+            refocus_webview(view);
+        }
         view.setHidden(!show);
     }
+}
+
+/// Hands focus back to the webview before a tab's view that holds it is
+/// hidden. Hiding leaves the first responder inside the hidden view, and a
+/// hidden widget drops every key — so ⌘E closed the panel and could not
+/// reopen it until a click landed on the chat.
+fn refocus_webview(from: &NSView) {
+    let Some(window) = from.window() else { return };
+    let holds = window
+        .firstResponder()
+        .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(from)))
+        .unwrap_or(false);
+    if !holds {
+        return;
+    }
+    let Some(parent) = (unsafe { from.superview() }) else { return };
+    let subviews = parent.subviews();
+    let Some(webview) = subviews.iter().find(|v| v.class().name().to_bytes().starts_with(b"WKWebView")) else {
+        return;
+    };
+    window.makeFirstResponder(Some(&**webview));
 }
 
 /// Unhides a tab's view off-screen, so Chromium treats it as visible and
@@ -1128,8 +1152,8 @@ wrap_keyboard_handler! {
                 _ if ch.is_ascii_digit() => (ch.to_string(), format!("Digit{ch}")),
                 _ => {
                     let code = match ch {
-                        '[' => "BracketLeft",
-                        ']' => "BracketRight",
+                        '[' | '{' => "BracketLeft",
+                        ']' | '}' => "BracketRight",
                         ',' => "Comma",
                         '.' => "Period",
                         '/' => "Slash",
