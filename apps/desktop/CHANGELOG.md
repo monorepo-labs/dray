@@ -5,10 +5,21 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
-## 0.14.0-beta.3
+## 0.14.0-beta.4
+
+### Changed
+
+- **A large amount of unused code is gone** — dead components, duplicated
+  helpers, a marketing page's worth of unshipped sections. Nothing here was
+  meant to change what the app does, which is exactly why a beta is where it
+  lands: anything that behaves differently is a bug, so say so.
 
 ### Fixed
 
+- **Keyboard shortcuts keep working after you use the browser.** Hiding a
+  tab left the keys going to a Chromium view that was no longer on screen
+  and dropped them, so ⌘E and the rest did nothing until you clicked
+  something. ⌘⇧[ and ⌘⇧] work there now too.
 - **Opening a browser tab no longer freezes every session.** Chromium's
   startup reset the signal handler Dray reaps child processes through, so
   the first `git` command after the first tab waited forever — and since a

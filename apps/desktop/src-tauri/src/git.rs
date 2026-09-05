@@ -1078,11 +1078,10 @@ fn parse_log(raw: &str) -> Vec<Commit> {
         .collect()
 }
 
-/// Where the current branch stands against its upstream — everything the push
-/// button needs to name itself.
-#[derive(Debug, Clone, Default, Serialize, TS)]
-#[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "camelCase")]
+/// Where the current branch stands against its upstream. Read by [`work_status`]
+/// alone since the repo view lost its push button; nothing crosses the bridge
+/// with it.
+#[derive(Debug, Clone, Default)]
 pub struct SyncStatus {
     /// `None` on a detached HEAD and for a directory that isn't a repo, which
     /// is how the row hides itself rather than offering a push it can't do.

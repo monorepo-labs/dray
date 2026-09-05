@@ -90,9 +90,16 @@ export default function ImageRow({
             onClick={() => setOpenIndex(i)}
             className="min-w-0 cursor-zoom-in"
           >
+            {/* Lazy, or every screenshot in the transcript decodes on mount at
+                full resolution — 10–20MB each as a bitmap, kept by WebKit's
+                image cache until memory pressure — for a row drawn 320px tall.
+                Switching between two screenshot-heavy sessions was measured at
+                ~800MB in 90s; only what nears the viewport should decode. */}
             <img
               src={image.src}
               alt=""
+              loading="lazy"
+              decoding="async"
               className={cn(
                 "rounded-md transition-opacity hover:opacity-90",
                 sent
