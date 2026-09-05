@@ -331,17 +331,11 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
 /// the two together are "what have I changed but not committed".
 ///
 /// Takes an owned `cwd` where every command around it borrows: an async command
-/// with a borrowed argument has to return `Result`, and neither this nor
-/// [`sync_status`] can fail — a `Result` here would be a lie the caller then has
-/// to handle.
+/// with a borrowed argument has to return `Result`, and this cannot fail — a
+/// `Result` here would be a lie the caller then has to handle.
 #[tauri::command]
 async fn head_tree(cwd: String) -> Option<String> {
     git::head_tree(&cwd).await
-}
-
-#[tauri::command]
-async fn sync_status(cwd: String) -> git::SyncStatus {
-    git::sync_status(&cwd).await
 }
 
 #[tauri::command]
@@ -640,7 +634,6 @@ pub fn run() {
             head_tree,
             git::log_commits,
             git::log_branch_commits,
-            sync_status,
             work_status,
             store::set_session_flags,
             store::detach_session,

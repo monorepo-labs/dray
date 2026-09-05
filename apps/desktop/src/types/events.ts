@@ -1531,27 +1531,6 @@ export type Subagent = { id: string,
  */
 label: string | null, };
 
-/**
- * Where the current branch stands against its upstream — everything the push
- * button needs to name itself.
- */
-export type SyncStatus = { 
-/**
- * `None` on a detached HEAD and for a directory that isn't a repo, which
- * is how the row hides itself rather than offering a push it can't do.
- */
-branch: string | null, 
-/**
- * `None` for a branch that has never been pushed — the "publish" case.
- */
-upstream: string | null, 
-/**
- * Commits the upstream doesn't have. Zero when there is no upstream: the
- * button reads "Publish branch" there, and a count would be answering a
- * question nobody asked yet.
- */
-ahead: number, };
-
 export type ToolResult = { 
 /**
  * Result content flattened to text; harnesses vary between a bare string
