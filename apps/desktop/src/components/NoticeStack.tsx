@@ -185,26 +185,6 @@ function NoticeCard({
     else timer.current?.play();
   }, [frozen, duration]);
 
-  // ⌘⇧D deletes without the trip to a 40px button, which is the whole point of
-  // the card. Bound here rather than in the stack because it has to run the
-  // same handler the button does, so the press and the click leave the card in
-  // one state rather than two.
-  //
-  // A key of its own rather than more meaning on ⌘G: one chord that sometimes
-  // navigates and sometimes destroys is the shape that burns someone once.
-  // Shifted because plain ⌘D is dictation, app-wide — a card raising itself
-  // under the cursor must not take a chord the composer already owns.
-  // Guarded on `isNext` alone, which is now enough: a card that has been acted
-  // on stops being next, so a repeat press cannot ask for the same removal
-  // twice and lands on the card behind it instead.
-  useHotkey(
-    "d",
-    () => {
-      if (worktree && isNext) onDeleteWorktree();
-    },
-    { shift: true },
-  );
-
   return (
     <Alert
       onMouseEnter={() => setHovered(true)}
@@ -378,6 +358,36 @@ export default function NoticeStack({
     take(next);
   });
 
+  // Said, not awaited — and "Deleted" is *optimistic*, deliberately. It
+  // reports a removal that is under way rather than one that has happened:
+  // the alternative is a spinner saying "still going" over three git
+  // commands, which is the click that reads as missed. A cleanup that fails
+  // comes back on a `worktree-failed` card, which exists to take this word
+  // back.
+  const remove = (notice: Notice) => {
+    onDeleteWorktree(notice.sessionId);
+    markActed(noticeKey(notice));
+  };
+
+  // ⌘⇧D deletes without the trip to a 40px button, which is the whole point of
+  // the worktree card. A key of its own rather than more meaning on ⌘G: one
+  // chord that sometimes navigates and sometimes destroys is the shape that
+  // burns someone once. Shifted because plain ⌘D is dictation, app-wide.
+  //
+  // Bound **once, here**, never per card. Each `useHotkey` is its own
+  // document listener, and React flushes a state update between two native
+  // listeners for one event — so with a binding in every card, card A fired
+  // and marked itself acted, `next` moved to B before B's listener ran, and B
+  // fired too, down the whole stack on one press. One listener reads `next`
+  // once, so one press is one card by construction.
+  useHotkey(
+    "d",
+    () => {
+      if (next?.kind === "worktree") remove(next);
+    },
+    { shift: true },
+  );
+
   if (notices.length === 0) return null;
 
   return (
@@ -392,16 +402,7 @@ export default function NoticeStack({
           isNext={notice === next}
           done={acted.includes(noticeKey(notice))}
           onTake={() => take(notice)}
-          onDeleteWorktree={() => {
-            // Said, not awaited — and "Deleted" is *optimistic*, deliberately.
-            // It reports a removal that is under way rather than one that has
-            // happened: the alternative is a spinner saying "still going" over
-            // three git commands, which is the click that reads as missed. A
-            // cleanup that fails comes back on a `worktree-failed` card, which
-            // exists to take this word back.
-            onDeleteWorktree(notice.sessionId);
-            markActed(noticeKey(notice));
-          }}
+          onDeleteWorktree={() => remove(notice)}
         />
       ))}
     </div>
