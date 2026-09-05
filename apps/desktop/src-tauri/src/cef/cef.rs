@@ -610,18 +610,23 @@ fn apply_layout() {
 /// hidden. Hiding leaves the first responder inside the hidden view, and a
 /// hidden widget drops every key — so ⌘E closed the panel and could not
 /// reopen it until a click landed on the chat.
+///
+/// Only when the responder is inside *this* view: a `reveal`ed off-screen
+/// tab being put back must not take focus off the presented page.
 fn refocus_webview(from: &NSView) {
     let Some(window) = from.window() else { return };
+    let holds = window
+        .firstResponder()
+        .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(from)))
+        .unwrap_or(false);
+    if !holds {
+        return;
+    }
     let Some(parent) = (unsafe { from.superview() }) else { return };
     // By kind, not name: wry subclasses it as `WryWebView`.
     let Some(wk) = AnyClass::get(c"WKWebView") else { return };
     let subviews = parent.subviews();
-    let Some(webview) = subviews.iter().find(|v| v.isKindOfClass(wk)) else { return };
-    let inside = window
-        .firstResponder()
-        .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(&*webview)))
-        .unwrap_or(false);
-    if !inside {
+    if let Some(webview) = subviews.iter().find(|v| v.isKindOfClass(wk)) {
         window.makeFirstResponder(Some(&**webview));
     }
 }
