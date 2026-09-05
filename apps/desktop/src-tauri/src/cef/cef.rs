@@ -19,7 +19,7 @@
 // traits unqualified, so this is the one place a glob is load-bearing.
 use cef::args::Args;
 use cef::*;
-use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Bool, NSObjectProtocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
@@ -614,6 +614,9 @@ fn apply_layout() {
 /// hidden. Hiding leaves the first responder inside the hidden view, and a
 /// hidden widget drops every key — so ⌘E closed the panel and could not
 /// reopen it until a click landed on the chat.
+///
+/// Only when the responder is inside *this* view: a `reveal`ed off-screen
+/// tab being put back must not take focus off the presented page.
 fn refocus_webview(from: &NSView) {
     let Some(window) = from.window() else { return };
     let holds = window
@@ -624,11 +627,12 @@ fn refocus_webview(from: &NSView) {
         return;
     }
     let Some(parent) = (unsafe { from.superview() }) else { return };
+    // By kind, not name: wry subclasses it as `WryWebView`.
+    let Some(wk) = AnyClass::get(c"WKWebView") else { return };
     let subviews = parent.subviews();
-    let Some(webview) = subviews.iter().find(|v| v.class().name().to_bytes().starts_with(b"WKWebView")) else {
-        return;
-    };
-    window.makeFirstResponder(Some(&**webview));
+    if let Some(webview) = subviews.iter().find(|v| v.isKindOfClass(wk)) {
+        window.makeFirstResponder(Some(&**webview));
+    }
 }
 
 /// Unhides a tab's view off-screen, so Chromium treats it as visible and
