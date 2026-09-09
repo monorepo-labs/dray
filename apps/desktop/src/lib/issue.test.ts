@@ -114,7 +114,7 @@ const issue = (identifier: string, kind: IssueStateKind): Issue => ({
   identifier,
   title: identifier,
   url: `https://linear.app/x/issue/${identifier}`,
-  state: { name: "Whatever this team calls it", kind, color: "#000" },
+  state: { id: `state-${kind}`, name: "Whatever this team calls it", kind, color: "#000" },
   priority: "none",
   assignee: null,
   labels: [],
@@ -143,7 +143,7 @@ describe("groupIssues", () => {
   /// really the same few states.
   it("gathers teams that name one state differently", () => {
     const a = issue("DRA-1", "started");
-    const b = { ...issue("OPS-1", "started"), state: { name: "Shipping", kind: "started" as const, color: "#000" } };
+    const b = { ...issue("OPS-1", "started"), state: { id: "state-shipping", name: "Shipping", kind: "started" as const, color: "#000" } };
 
     expect(groupIssues([a, b])).toHaveLength(1);
   });

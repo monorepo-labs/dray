@@ -80,12 +80,34 @@ impl IssueStateKind {
     pub fn settled(self) -> bool {
         matches!(self, Self::Completed | Self::Canceled)
     }
+
+    /// Where the kind sits in the workflow, so a status menu reads in the order
+    /// work moves through rather than in whatever order the API listed.
+    ///
+    /// Linear orders a team's states by type first and by `position` only
+    /// *within* one, so position alone is not an ordering across the whole
+    /// workflow — sorting by it puts "Done" above "Todo" wherever a workspace
+    /// has been reorganised.
+    pub fn flow_rank(self) -> u8 {
+        match self {
+            Self::Triage => 0,
+            Self::Backlog => 1,
+            Self::Unstarted => 2,
+            Self::Started => 3,
+            Self::Completed => 4,
+            Self::Canceled => 5,
+            Self::Other => 6,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct IssueState {
+    /// The tracker's own id. What a status write names — a state is addressed
+    /// by id and never by name, since two teams can both call one "In Review".
+    pub id: String,
     pub name: String,
     pub kind: IssueStateKind,
     /// The tracker's own colour, so a status reads the same here as it does in
@@ -116,6 +138,20 @@ impl IssuePriority {
             3 => Self::Medium,
             4 => Self::Low,
             _ => Self::None,
+        }
+    }
+
+    /// Level back to wire integer. The inverse of [`from_wire`], and the only
+    /// place a priority write spells a number.
+    ///
+    /// [`from_wire`]: Self::from_wire
+    pub fn to_wire(self) -> i64 {
+        match self {
+            Self::Urgent => 1,
+            Self::High => 2,
+            Self::Medium => 3,
+            Self::Low => 4,
+            Self::None => 0,
         }
     }
 
@@ -211,6 +247,14 @@ pub struct IssueDetail {
     /// for, which the panel says plainly rather than drawing an empty box.
     pub description: Option<String>,
     pub comments: Vec<IssueComment>,
+    /// Every status this issue's own team offers, in workflow order — what the
+    /// header's status menu draws.
+    ///
+    /// On the detail rather than read by a command of its own, because it rides
+    /// the read the panel already makes: a menu that has to fetch before it can
+    /// open is a menu that opens empty. Per *team*, so an issue moved between
+    /// teams offers the states of wherever it now lives.
+    pub states: Vec<IssueState>,
 }
 
 /// Whose issues to list.
@@ -259,6 +303,13 @@ pub struct IssueQuery {
 pub struct IssueFilters {
     pub teams: Vec<IssueGroup>,
     pub projects: Vec<IssueGroup>,
+    /// Every team's workflow states, keyed by team **key** (`DRA`) — what a
+    /// row carries, where `teams` above is keyed by UUID.
+    ///
+    /// Here rather than on each issue because a workflow belongs to a team: one
+    /// answer serves every row that team owns, so the issues page's status menus
+    /// cost one read per connection instead of a copy per row.
+    pub team_states: HashMap<String, Vec<IssueState>>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -857,6 +908,37 @@ pub async fn get_issue(
     linear::get_issue(&key, &identifier, id.as_deref()).await
 }
 
+/// Moves an issue's status or priority, and answers with the issue as it now
+/// stands.
+///
+/// **The only write this app makes to a tracker.** Everything else here reads:
+/// a link is a fact about the session, and status and priority are the two
+/// things a reader otherwise leaves the app to change. Assignee, labels and
+/// comments stay out — the agent has the tracker's own MCP server for those,
+/// and each is a picker over a workspace-wide list this panel has no room for.
+///
+/// Both fields are optional and `None` means *leave it*, which is why priority
+/// arrives as an `Option<IssuePriority>` rather than as a number: "no priority"
+/// is a level a reader can choose ([`IssuePriority::None`], wire `0`), so a
+/// bare integer could not tell clearing one from not touching it.
+///
+/// Re-read afterwards rather than trusting the mutation's own echo: the panel
+/// draws a whole [`IssueDetail`], and one read is what keeps description,
+/// comments and the new status arriving as one answer.
+#[tauri::command]
+pub async fn update_issue(
+    identifier: String,
+    id: String,
+    state_id: Option<String>,
+    priority: Option<IssuePriority>,
+) -> Result<IssueDetail, IssueUnavailable> {
+    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+
+    linear::update_issue(&key, &id, state_id.as_deref(), priority).await?;
+
+    linear::get_issue(&key, &identifier, Some(&id)).await
+}
+
 /// A file uploaded to an issue, fetched with the stored key.
 ///
 /// **The whole reason this command exists.** Linear's uploads live behind the
@@ -905,8 +987,9 @@ pub async fn list_issue_filters() -> Result<IssueFilters, IssueUnavailable> {
 /// Reads the issue back before recording it, so the link carries the current
 /// title rather than whatever the caller believed — the CLI passes a string a
 /// person typed, and the picker one it read a moment ago.
-/// Untags a session. The issue itself is untouched — this app never writes to
-/// the tracker, so removing a link is a fact about the session alone.
+/// Untags a session. The issue itself is untouched: a link is a fact about the
+/// session, and the only write this app makes to a tracker is [`update_issue`],
+/// which a reader has to ask for by name.
 #[tauri::command]
 pub async fn unlink_issue(
     session_id: String,

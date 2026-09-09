@@ -147,6 +147,15 @@ const GROUPS: { key: IssueStateKind; label: string }[] = [
   { key: "other", label: "Other" },
 ];
 
+/// Whether the work is over, either way it went. The frontend's copy of Rust's
+/// `IssueStateKind::settled`, and it decides the same thing: which half of the
+/// workspace an issue belongs to. Stated twice because neither side can call the
+/// other — the backend splits the two reads, and the frontend has to know when a
+/// status it just wrote moves a row from one to the other.
+export function isSettled(kind: IssueStateKind): boolean {
+  return kind === "completed" || kind === "canceled";
+}
+
 type IssueGrouping = {
   key: IssueStateKind;
   label: string;

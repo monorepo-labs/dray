@@ -51,7 +51,16 @@ const ACTION: Record<NoticeKind, string> = {
   // "Delete worktree" button — the card names the reason and this puts the
   // reader back in front of the control that runs the rest.
   "worktree-failed": "View",
+  // Nowhere to send anybody. The issue is still on screen where the reader
+  // changed it from, and nothing moved — so the only thing this button can
+  // honestly offer is taking the card away.
+  "issue-failed": "Dismiss",
 };
+
+/// The kinds that go somewhere when taken. Everything else is read and
+/// dismissed, and stating the set here is what stops `take` from calling
+/// `onSelect` with something that is not a session id at all.
+const NAVIGATES: NoticeKind[] = ["completed", "asking", "pr", "worktree-failed"];
 
 /// The bar's colour, matching the rail mark the row will be wearing when the
 /// reader gets there.
@@ -74,6 +83,9 @@ const BAR: Record<NoticeKind, string> = {
   // through: the two are the same deletion, and this one is the only place the
   // reader learns it stopped part way.
   "worktree-failed": "bg-destructive/70",
+  // A refusal, so the destructive colour like the other card that reports one.
+  // There is no rail mark to match here at all — no session is involved.
+  "issue-failed": "bg-destructive/70",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to
@@ -338,11 +350,12 @@ export default function NoticeStack({
   //
   // `worktree-failed` navigates like the rest, and has to: it is the one card
   // whose subject is a session the reader is being sent back to, where the
-  // button that tries the removal again still is.
+  // button that tries the removal again still is. `issue-failed` names no
+  // session at all, so it is read and dismissed — see `NAVIGATES`.
   const take = (notice: Notice) => {
     dismissNotice(notice.sessionId, notice.kind);
     if (notice.kind === "pr") onOpenPr(notice.sessionId);
-    else if (notice.kind !== "worktree") onSelect(notice.sessionId);
+    else if (NAVIGATES.includes(notice.kind)) onSelect(notice.sessionId);
   };
 
   // ⌘G takes the navigating kinds — a session, or a session and its PR tab —

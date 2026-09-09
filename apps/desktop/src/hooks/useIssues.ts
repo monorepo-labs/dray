@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { pushNotice } from "@/hooks/useNotices";
 import {
+  isSettled,
   issueGeneration,
   newIssueGeneration,
   subscribeIssueGeneration,
@@ -11,8 +13,10 @@ import type {
   Issue,
   IssueDetail,
   IssueFilters,
+  IssuePriority,
   IssueQuery,
   IssueRef,
+  IssueState,
   IssueUnavailable,
 } from "@/types/events";
 
@@ -44,14 +48,22 @@ const fetchedAt = new Map<string, number>();
 /// Small: a reader works through two or three filter combinations, not twenty.
 const MAX_CACHED = 12;
 
+/// An object rather than a tuple, because the key is read back apart from being
+/// compared: `settledOfKey` below needs one field out of it, and a positional
+/// shape would hand it a different field the day this gains one.
 const keyOf = (query: IssueQuery) =>
-  JSON.stringify([
-    query.text ?? "",
-    query.scope,
-    query.teamId ?? "",
-    query.projectId ?? "",
-    query.settled,
-  ]);
+  JSON.stringify({
+    text: query.text ?? "",
+    scope: query.scope,
+    teamId: query.teamId ?? "",
+    projectId: query.projectId ?? "",
+    settled: query.settled,
+  });
+
+/// Which half of the workspace a cached list asked for, read back out of its own
+/// key. By name, so adding a field to `keyOf` cannot silently change what this
+/// answers.
+const settledOfKey = (key: string) => Boolean((JSON.parse(key) as IssueQuery).settled);
 
 function remember(key: string, issues: Issue[], generation: number) {
   // A read issued before the connection changed must not put its answer back
@@ -134,6 +146,130 @@ export function forgetIssues() {
   newIssueGeneration();
 }
 
+/// What a menu picked. The **whole** state, not its id, and that is what makes
+/// the optimistic paint below possible: the menu already held the name, the kind
+/// and the colour the row has to draw, so nothing has to be read back to show
+/// the change.
+export type IssuePatch = { state?: IssueState; priority?: IssuePriority };
+
+/// One issue with the patch applied. Serves `Issue` and `IssueDetail` alike,
+/// since both carry exactly these two fields.
+function patched<T extends { state: IssueState; priority: IssuePriority }>(
+  issue: T,
+  patch: IssuePatch,
+): T {
+  return {
+    ...issue,
+    state: patch.state ?? issue.state,
+    priority: patch.priority ?? issue.priority,
+  };
+}
+
+/// Writes the patch into every cached answer holding this issue, **without**
+/// touching a freshness stamp.
+///
+/// That omission is the whole trick. Every mounted list and panel re-reads its
+/// own cache on a generation bump and asks the network only for what is stale —
+/// so patching in place and bumping repaints on the next frame and sends no
+/// request at all. Clearing the stamps here instead would fire a read that
+/// leaves *before* the mutation lands and write the old status straight back
+/// over the one the reader just picked.
+function patchCachedIssue(identifier: string, patch: IssuePatch) {
+  const detail = detailCache.get(identifier);
+  if (detail) detailCache.set(identifier, patched(detail, patch));
+
+  for (const [key, issues] of cache) {
+    if (!issues.some((issue) => issue.identifier === identifier)) continue;
+
+    // A status write can move a row out of the half its list asked for — Done
+    // belongs to the settled read, not the open one. Patched in place it would
+    // draw a second "Done" heading inside the open groups until the re-read
+    // dropped it, so the row leaves here instead, which is what the answer will
+    // say anyway.
+    const wantsSettled = settledOfKey(key);
+
+    cache.set(
+      key,
+      issues.flatMap((issue) => {
+        if (issue.identifier !== identifier) return [issue];
+        const moved = patched(issue, patch);
+        return isSettled(moved.state.kind) === wantsSettled ? [moved] : [];
+      }),
+    );
+  }
+
+  // Repaint, not invalidate: the stamps above are deliberately untouched, so
+  // every reader takes the patched copy and nothing goes out.
+  newIssueGeneration();
+}
+
+/// Moves an issue's status or priority — the one write this app makes to a
+/// tracker.
+///
+/// A module function rather than something a hook hands down, because both
+/// surfaces that offer it are far from the hook that reads for them: the panel's
+/// row header and the issues page's list rows. Threading a callback from `App`
+/// through both would be two props for one function with no state behind it.
+///
+/// **Painted first, sent second.** The write is three Linear round trips deep —
+/// the mutation, the read-back, and then every list re-reading — and a glyph
+/// that does not move until all three land reads as a menu that ignored the
+/// click. The reader picked a state this app already holds in full, so there is
+/// nothing to wait for before showing it.
+///
+/// **Reconciled by `forgetIssues`, which is the moment every cached answer about
+/// issues really does stop being true** — the row, the group it is filed under,
+/// the body in the pane. The freshly-read detail goes back *after* that bump,
+/// since a write stamped with the old generation is refused by the very guard
+/// that makes the clearing stick.
+///
+/// Failure raises a notice and is not thrown, and clears the optimistic paint
+/// with it: `forgetIssues` there is what puts the tracker's own answer back on
+/// screen rather than leaving a status the reader picked and never got.
+export async function updateIssue(issue: { identifier: string; id: string }, patch: IssuePatch) {
+  patchCachedIssue(issue.identifier, patch);
+
+  try {
+    const next = await invoke<IssueDetail>("update_issue", {
+      identifier: issue.identifier,
+      id: issue.id,
+      stateId: patch.state?.id ?? null,
+      // `null` is "leave it" and `"none"` is a level in its own right, which is
+      // why this cannot be a number: Linear spells no-priority `0`.
+      priority: patch.priority ?? null,
+    });
+
+    forgetIssues();
+    rememberDetail(next.identifier, next, issueGeneration());
+  } catch (e) {
+    forgetIssues();
+    pushNotice({
+      sessionId: issue.identifier,
+      kind: "issue-failed",
+      label: "Could not update",
+      subject: issue.identifier,
+      // The tracker's own words. A rejected key, an unreachable workspace and a
+      // state belonging to another team each need a different thing done about
+      // them, and only the sentence tells them apart.
+      detail: issueErrorText(asUnavailable(e)),
+    });
+  }
+}
+
+/// A failed write in one line, in terms of what the reader would do about it.
+function issueErrorText(error: IssueUnavailable): string {
+  switch (error.kind) {
+    case "unauthorized":
+      return "Linear rejected the saved key. Disconnect it in Settings, then paste a new one.";
+    case "offline":
+      return "Could not reach Linear.";
+    case "not_connected":
+      return "No issue tracker connected.";
+    default:
+      return error.detail;
+  }
+}
+
 /// What `invoke` rejected with, as the backend meant it.
 ///
 /// Tauri hands the serialized `Err` back, so this is already the right shape —
@@ -160,6 +296,12 @@ const DEFAULT_QUERY: IssueQuery = {
 /// with no round trip behind them until somebody opens one.
 function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
   const key = keyOf(query);
+
+  // Subscribed, not merely read — the same bargain `useSessionIssues` makes.
+  // A connection changing under the page, or a status written in the pane
+  // beside this list, both land as a generation bump, and without this the row
+  // keeps saying "Backlog" under a heading the issue has just left.
+  const connection = useSyncExternalStore(subscribeIssueGeneration, issueGeneration);
 
   const [issues, setIssues] = useState<Issue[]>(() => cache.get(key) ?? []);
   const [loading, setLoading] = useState(false);
@@ -237,7 +379,7 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [enabled, key, query, generation]);
+  }, [enabled, key, query, generation, connection]);
 
   return { issues, loading, unavailable, loaded: answered };
 }

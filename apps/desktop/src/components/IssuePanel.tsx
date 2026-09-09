@@ -5,6 +5,7 @@ import { ChevronRight, ExternalLink, Unlink } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import { IssueFile, IssueImage } from "@/components/IssueAsset";
+import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
@@ -154,18 +155,36 @@ function IssueRow({
   const open = !collapsible || !collapsed;
   const toggle = () => setCollapsed((prev) => !prev);
 
+  /// ⌘-click leaves for the tracker, the same bargain [LinkDialog] makes with
+  /// a link in the transcript — the modifier is how this app spells "not here,
+  /// out there". Bound whether or not the row collapses, since it is a
+  /// shortcut rather than the affordance: the row's own button is that.
+  ///
+  /// [LinkDialog]: ./chat/LinkDialog.tsx
+  const activate = (e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      void openUrl(issue.url);
+      return;
+    }
+    if (collapsible) toggle();
+  };
+
   return (
     <div className="border-b border-border last:border-b-0">
       {/* A div behaving as a button, because the buttons inside it are real
           ones and a button cannot nest a button — the same shape `PrRow` and
           `SessionRow` use. */}
       <div
+        onClick={activate}
         {...(collapsible
           ? {
               role: "button",
               tabIndex: 0,
-              onClick: toggle,
               onKeyDown: (e: React.KeyboardEvent) => {
+                // A control inside the row answers its own keys. Without this
+                // Enter on the status menu opens it and collapses the row it
+                // was opened from, in one press.
+                if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   toggle();
@@ -190,19 +209,23 @@ function IssueRow({
 
         {/* Always drawn, "no priority" included — the slot is reserved so the
             row does not reflow when the read lands. `none` until it does,
-            which is the honest resting value rather than a guess. */}
-        <IssuePriorityIcon priority={detail?.priority ?? "none"} />
+            which is the honest resting value rather than a guess.
+
+            A menu only once the read has landed: before that there is nothing
+            to check against and no id to write with, and a menu that opens on
+            a guess is worse than a glyph that waits. */}
+        {detail ? (
+          <PriorityMenu issue={detail} priority={detail.priority} />
+        ) : (
+          <IssuePriorityIcon priority="none" />
+        )}
 
         <span className="shrink-0 font-medium tabular-nums">{issue.identifier}</span>
 
         {/* From the read where it has landed, and a resting glyph until then —
             so the row never jumps between two heights as detail arrives. */}
         {detail ? (
-          <IssueStateIcon
-            kind={detail.state.kind}
-            color={detail.state.color}
-            label={detail.state.name}
-          />
+          <StatusMenu issue={detail} state={detail.state} states={detail.states} />
         ) : (
           <IssueStateIcon kind="other" label={loading ? "Loading" : "Unknown"} />
         )}
