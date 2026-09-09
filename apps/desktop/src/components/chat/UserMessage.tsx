@@ -4,6 +4,7 @@ import { Image } from "lucide-react";
 import SessionAvatar from "@/components/SessionAvatar";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
@@ -128,6 +129,13 @@ export default function UserMessage({
                 is most of a line and says little the filename doesn't. The
                 composer can't do this — see `splitMention`. */}
             {segments.map((segment, i) => {
+              // Bold, italic, code, strikethrough and links, drawn without
+              // their delimiters. First, so the marks are read before the
+              // coloured runs — they share no character, so the order is only
+              // about keeping the coloured cases below reading as they did.
+              const mark = inlineMark(segment, i);
+              if (mark) return mark;
+
               if (segment.kind === "mention") {
                 const { name } = splitMention(segment.text);
                 const raw = segment.text.slice(1);

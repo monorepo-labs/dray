@@ -200,6 +200,71 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  it("marks the inline runs, delimiters kept on the segment", () => {
+    expect(highlightSegments("make it **bold** now")).toEqual([
+      { kind: "text", text: "make it " },
+      { kind: "strong", text: "**bold**", inner: "bold" },
+      { kind: "text", text: " now" },
+    ]);
+    expect(highlightSegments("run `pnpm test` first")).toEqual([
+      { kind: "text", text: "run " },
+      { kind: "code", text: "`pnpm test`", inner: "pnpm test" },
+      { kind: "text", text: " first" },
+    ]);
+    expect(highlightSegments("*maybe* and ~~not~~ and __also__")).toEqual([
+      { kind: "em", text: "*maybe*", inner: "maybe" },
+      { kind: "text", text: " and " },
+      { kind: "strike", text: "~~not~~", inner: "not" },
+      { kind: "text", text: " and " },
+      { kind: "strong", text: "__also__", inner: "also" },
+    ]);
+  });
+
+  it("marks a link and keeps its href off the label", () => {
+    expect(highlightSegments("see [the docs](https://example.com/a) here")).toEqual([
+      { kind: "text", text: "see " },
+      {
+        kind: "link",
+        text: "[the docs](https://example.com/a)",
+        inner: "the docs",
+        href: "https://example.com/a",
+      },
+      { kind: "text", text: " here" },
+    ]);
+  });
+
+  /// Every one of these is an ordinary thing to type into a prompt, and each was
+  /// emphasis under a rule one notch looser.
+  it("leaves prose that only looks like markup alone", () => {
+    const plain = (text: string) =>
+      expect(highlightSegments(text)).toEqual([{ kind: "text", text }]);
+
+    plain("read snake_case_name closely");
+    plain("2 * 3 * 4");
+    plain("a * b and c * d");
+    plain("* first\n* second");
+    plain("half of an *emphasis");
+    plain("one *line\nnext* line");
+    plain("[label](mailto:me@example.com)");
+    plain("```\nfenced\n```");
+
+    // A space between the two halves is not a link. The URL inside is still a
+    // URL — that rule is older than this one and unchanged by it.
+    expect(highlightSegments("[label] (https://example.com)")).toEqual([
+      { kind: "text", text: "[label] (" },
+      { kind: "url", text: "https://example.com" },
+      { kind: "text", text: ")" },
+    ]);
+  });
+
+  /// A prompt bubble draws inline marks and nothing else, so a heading and a
+  /// bullet stay the characters they were typed as.
+  it("leaves block constructs literal", () => {
+    expect(highlightSegments("# Heading\n- one\n- two")).toEqual([
+      { kind: "text", text: "# Heading\n- one\n- two" },
+    ]);
+  });
+
   it("concatenates back to the original", () => {
     roundTrips("/review @src/lib/slash.ts and @src/lib/mention.ts please");
     roundTrips("ping me@example.com");
@@ -209,6 +274,10 @@ describe("highlightSegments", () => {
     roundTrips("/review #DRA-53 @src/lib/issue.ts");
     roundTrips("see (#DRA-53), and #fff, and #DRA-9.");
     roundTrips("#");
+    roundTrips("**bold** and *em* and `code` and ~~gone~~");
+    roundTrips("see [docs](https://example.com) and #DRA-53 in @src/a.ts");
+    roundTrips("2 * 3 * 4 and snake_case_name and ```fence```");
+    roundTrips("*unclosed and **also");
   });
 });
 

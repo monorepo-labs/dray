@@ -1,4 +1,5 @@
 import ImageRow from "@/components/chat/ImageRow";
+import { inlineMark } from "@/components/chat/InlineMark";
 import { imagesOf, type QueuedPrompt } from "@/hooks/useSessions";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -40,6 +41,11 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
                   {/* Same bubble, same break rule — see `UserMessage`. */}
                   <span className="whitespace-pre-wrap wrap-anywhere">
                     {highlightSegments(body).map((segment, s) => {
+                      // Same marks the delivered bubble draws — see `inlineMark`
+                      // for why a queued prompt cannot read differently.
+                      const mark = inlineMark(segment, s);
+                      if (mark) return mark;
+
                       if (segment.kind === "mention") {
                         const { dir, name } = splitMention(segment.text);
                         return (
