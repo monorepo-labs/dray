@@ -165,18 +165,29 @@ function patched<T extends { state: IssueState; priority: IssuePriority }>(
   };
 }
 
-/// Writes the patch into every cached answer holding this issue, **without**
-/// touching a freshness stamp.
+/// Writes the patch into every cached answer holding this issue, and **stamps
+/// each one fresh**.
 ///
-/// That omission is the whole trick. Every mounted list and panel re-reads its
-/// own cache on a generation bump and asks the network only for what is stale —
-/// so patching in place and bumping repaints on the next frame and sends no
-/// request at all. Clearing the stamps here instead would fire a read that
-/// leaves *before* the mutation lands and write the old status straight back
-/// over the one the reader just picked.
+/// The stamp is the load-bearing half, and getting it wrong is visible. Every
+/// mounted reader re-reads its own cache on a generation bump and then asks the
+/// network for whatever is stale — so an entry left with its old stamp fires a
+/// read *immediately*, that read leaves before the mutation lands, and Linear
+/// answers with the status the reader has just moved away from. It then writes
+/// that answer back over the patch. On screen: the new status, then the old one,
+/// then the new one again once the reconcile lands.
+///
+/// It was tempting to read the stamp as "when the tracker last told us", which
+/// this is not — but `FRESH_MS` is a minute, so on any list older than that the
+/// race is not a race at all, it happens every time. Stamped, nothing goes out
+/// until `forgetIssues` says so, which is after the write.
 function patchCachedIssue(identifier: string, patch: IssuePatch) {
+  const now = Date.now();
   const detail = detailCache.get(identifier);
-  if (detail) detailCache.set(identifier, patched(detail, patch));
+
+  if (detail) {
+    detailCache.set(identifier, patched(detail, patch));
+    detailFetchedAt.set(identifier, now);
+  }
 
   for (const [key, issues] of cache) {
     if (!issues.some((issue) => issue.identifier === identifier)) continue;
@@ -185,7 +196,8 @@ function patchCachedIssue(identifier: string, patch: IssuePatch) {
     // belongs to the settled read, not the open one. Patched in place it would
     // draw a second "Done" heading inside the open groups until the re-read
     // dropped it, so the row leaves here instead, which is what the answer will
-    // say anyway.
+    // say anyway. The half it moves *into* is left to the reconcile: it is a
+    // row appearing late, never a wrong one on screen.
     const wantsSettled = settledOfKey(key);
 
     cache.set(
@@ -196,10 +208,12 @@ function patchCachedIssue(identifier: string, patch: IssuePatch) {
         return isSettled(moved.state.kind) === wantsSettled ? [moved] : [];
       }),
     );
+    fetchedAt.set(key, now);
   }
 
-  // Repaint, not invalidate: the stamps above are deliberately untouched, so
-  // every reader takes the patched copy and nothing goes out.
+  // Repaint, not invalidate. The bump is also what refuses any read already in
+  // flight, which is holding the generation it started under and would put the
+  // pre-write answer back for the same reason.
   newIssueGeneration();
 }
 
