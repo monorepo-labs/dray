@@ -22,6 +22,7 @@ import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
 import { applyIssue, issueSpan } from "@/lib/issue";
 import { registerComposer } from "@/lib/composerFocus";
+import { continueList } from "@/lib/list";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import {
   applyCommand,
@@ -870,9 +871,23 @@ export default function ChatInput({
                     // works with the composer unfocused too.
 
                     // Shift+Enter is the only way to get a newline; plain Enter sends.
-                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                      if (!e.shiftKey) {
+                        e.preventDefault();
+                        submit();
+                        return;
+                      }
+
+                      // A newline inside a list carries the marker with it. Only
+                      // with the selection collapsed: over a range the native
+                      // newline replaces the selection, which this cannot.
+                      const el = e.currentTarget;
+                      if (el.selectionStart !== el.selectionEnd) return;
+                      const next = continueList(message, el.selectionStart);
+                      if (!next) return;
                       e.preventDefault();
-                      submit();
+                      pendingCaretRef.current = next.caret;
+                      setMessage(next.text);
                     }
                   }}
                   // `py-1` puts one line at 28px — the buttons' own height — so the
