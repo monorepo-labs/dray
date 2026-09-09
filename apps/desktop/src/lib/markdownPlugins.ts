@@ -1,6 +1,6 @@
 import { defaultRehypePlugins, type StreamdownProps } from "streamdown";
 
-import { findFilePaths, isFilePath } from "@/lib/filePath";
+import { findPromptPaths, isFilePath, isRelativePath } from "@/lib/filePath";
 
 // `rehype-harden` drops the href of any link it cannot resolve, which is right,
 // and then writes " [blocked]" into the prose beside it, which is not: two
@@ -142,7 +142,7 @@ function anchorToFile(node: HastNode): HastNode | null {
   // form is the shape to expect, and it names no file left as it is. Decoding
   // cannot smuggle anything past `isFilePath`, which still runs on the result.
   const path = decodePath(href);
-  if (!isFilePath(path)) return null;
+  if (!isFilePath(path) && !isRelativePath(path)) return null;
 
   return marked(path, node.children ?? [], true);
 }
@@ -157,7 +157,7 @@ function decodePath(href: string): string {
   }
 }
 
-/// Marks every absolute path in the prose so `Markdown` can draw it as a link.
+/// Marks every path in the prose so `Markdown` can draw it as a link.
 ///
 /// Runs after sanitize, which would otherwise strip what this adds, and
 /// **before** harden, which rewrites or unwraps an href before this could read
@@ -193,7 +193,10 @@ export function walk(node: HastNode) {
     }
 
     const value = child.type === "text" ? child.value : undefined;
-    const matches = value ? findFilePaths(value) : [];
+    // Relative paths too, the bubble's own reading. The pass has no working
+    // directory to resolve one against, so the span carries it as written and
+    // `FilePathSpan` resolves it against the chat's cwd, as a mention is.
+    const matches = value ? findPromptPaths(value) : [];
     if (!value || matches.length === 0) {
       next?.push(child);
       continue;

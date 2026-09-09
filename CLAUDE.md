@@ -355,7 +355,8 @@ Linear puts uploads *in* the description's markdown, pointing at `uploads.linear
 
 **Paths in prose are a rehype pass, after sanitize and before harden** (`rehypeFilePaths` in [markdownPlugins.ts](apps/desktop/src/lib/markdownPlugins.ts)). After sanitize or it strips what the pass adds; before harden or the href is already rewritten. **Second plugin list, not a flag** — an issue description or PR comment names paths from somebody else's checkout, so `linkFilePaths` is on `AssistantMessage` alone.
 
-- **A markdown link whose href names a file is *converted*, not descended into** (`anchorToFile`), keeping the anchor's children, and checked **before** `NOT_PROSE` — a link that is not converted is left whole, so a path inside a real link's label stays plain rather than nesting two links.
+- **Relative paths are marked too, as written, and resolved in `FilePathSpan` against the chat session's cwd** — the pass has no working directory, and resolving against wherever the app runs opens the wrong file. Same `findPromptPaths` the bubble reads, so the two surfaces link the same words; no cwd leaves the run inert mention-coloured text, a mention's own resting state.
+- **A markdown link whose href names a file, absolute or relative, is *converted*, not descended into** (`anchorToFile`), keeping the anchor's children, and checked **before** `NOT_PROSE` — a link that is not converted is left whole, so a path inside a real link's label stays plain rather than nesting two links.
 
 **The match rule is written to under-match** ([findFilePaths](apps/desktop/src/lib/filePath.ts)). A path must *open* a word, hold two segments, and carry no `//` — the letter-then-slash rule keeps `https://host/a/b` and `and/or` out, the two-segment rule keeps `/compact` out. `pre` and `a` are skipped in the walk. Nothing asks whether the file exists, so an over-match costs a dead click, not an error.
 

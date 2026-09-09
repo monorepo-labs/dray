@@ -6,7 +6,8 @@ import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
-import { isFilePath } from "@/lib/filePath";
+import { useChatSession } from "@/hooks/useChatSession";
+import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
 import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
@@ -230,7 +231,12 @@ function FilePathSpan({
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
   const classes = className?.split(" ") ?? [];
-  if (classes.includes(FILE_PATH_CLASS) && title && isFilePath(title)) {
+  // A relative path resolves against the session's own working directory, the
+  // one thing the prose does not carry; inert without one, since a path
+  // resolved against wherever the app happens to run opens the wrong file.
+  const { cwd } = useChatSession();
+  if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
+    const path = absolutePath(title, cwd);
     const line = Number(dataLine);
     const written = classes.includes(FILE_LINK_CLASS);
     // A bare path is drawn the way the reader's own mention is — `@`, the
@@ -241,14 +247,22 @@ function FilePathSpan({
     const label = textOf(children);
     const locator = label?.startsWith(title) ? label.slice(title.length) : "";
     const name = title.split("/").filter(Boolean).at(-1) ?? title;
+    const body = written ? children : `@${name}${locator}`;
+    if (!path) {
+      return (
+        <span className={written ? undefined : SEGMENT_COLOR.mention} title={title}>
+          {body}
+        </span>
+      );
+    }
     return (
       <FileLink
-        path={title}
+        path={path}
         line={Number.isInteger(line) && line > 0 ? line : undefined}
         writtenAsLink={written}
         className={written ? undefined : SEGMENT_COLOR.mention}
       >
-        {written ? children : `@${name}${locator}`}
+        {body}
       </FileLink>
     );
   }

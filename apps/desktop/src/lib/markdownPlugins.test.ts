@@ -123,6 +123,33 @@ describe("rehypeFilePaths", () => {
     expect(tree.children?.[0].children?.at(-1)).toEqual({ type: "text", value: " there" });
   });
 
+  /// A relative path is marked as written — the pass has no cwd — and prose
+  /// that only shares its shape is not. The bubble's own rule, so the two
+  /// surfaces link the same words.
+  it("marks a relative path as written and leaves prose alone", () => {
+    const tree = paragraph([{ type: "text", value: "edit src/lib/a.ts:12 and/or 24/7" }]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(marked(tree)).toHaveLength(1);
+    expect(span.properties).toMatchObject({ title: "src/lib/a.ts", dataLine: "12" });
+    expect(span.children).toEqual([{ type: "text", value: "src/lib/a.ts:12" }]);
+  });
+
+  it("converts a markdown link whose href is a relative path", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "src/a.ts" },
+        children: [{ type: "text", value: "a.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("src/a.ts");
+  });
+
   /// The shape an agent writes most readily. Left as an anchor it raised the
   /// external-link confirmation for something that is not a URL, and then had
   /// nowhere to go.
