@@ -106,6 +106,11 @@ export function isRelativePath(path: string): boolean {
   const parts = path.split("/");
   if (parts.length < 2 || parts.some((part) => !part)) return false;
   if (namesAHost(parts[0])) return false;
+  // A scoped package import — `@scope/pkg/index.js` — is the shape agent prose
+  // carries most that this rule would otherwise resolve against the reader's
+  // own checkout. A directory is not named with a leading `@` here, and the
+  // reader's own `@mention` is read before this and never reaches it.
+  if (parts[0].startsWith("@")) return false;
 
   return NAMES_FILE.test(parts.at(-1) ?? "");
 }
@@ -129,6 +134,24 @@ function trimTail(
   if (!locator) return { end, pathEnd: end };
 
   return { end, pathEnd: end - locator[0].length, line: Number(locator[1] ?? locator[2]) };
+}
+
+/// A path and the line its locator names, split apart.
+///
+/// For a caller already holding a path outright rather than looking for one in
+/// prose — a markdown link's href. The prose scans cannot serve here: they trim
+/// sentence punctuation, which an href is not surrounded by, and they refuse a
+/// run holding a space, which `[x](/Users/me/My Project/x.ts)` legitimately is.
+/// An href has no ambiguity about where the path ends, so only the locator
+/// comes off.
+export function splitLocator(raw: string): { path: string; line?: number } {
+  const locator = LOCATOR.exec(raw);
+  if (!locator) return { path: raw };
+
+  return {
+    path: raw.slice(0, raw.length - locator[0].length),
+    line: Number(locator[1] ?? locator[2]),
+  };
 }
 
 /// Every relative path in `text`, in order.

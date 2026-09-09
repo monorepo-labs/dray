@@ -1,6 +1,6 @@
 import { defaultRehypePlugins, type StreamdownProps } from "streamdown";
 
-import { findPromptPaths, isFilePath, isRelativePath } from "@/lib/filePath";
+import { findPromptPaths, isFilePath, isRelativePath, splitLocator } from "@/lib/filePath";
 
 // `rehype-harden` drops the href of any link it cannot resolve, which is right,
 // and then writes " [blocked]" into the prose beside it, which is not: two
@@ -140,11 +140,18 @@ function anchorToFile(node: HastNode): HastNode | null {
   // `[x](/Users/me/My%20Project/x.ts)` is the one way to write a path holding a
   // space as a markdown link — a bare one there ends the href — so the encoded
   // form is the shape to expect, and it names no file left as it is. Decoding
-  // cannot smuggle anything past `isFilePath`, which still runs on the result.
-  const path = decodePath(href);
+  // cannot smuggle anything past the two rules below, which still run on the
+  // result.
+  //
+  // The locator comes off first, or `[x](/a/b.ts:12)` links to a file literally
+  // named `b.ts:12` and `[x](src/a.ts:12)` is refused outright, the relative
+  // rule wanting a filename at the end where `a.ts:12` is not one. Split by
+  // hand rather than by the prose scan, which trims sentence punctuation an
+  // href is not surrounded by and refuses the run holding a space above.
+  const { path, line } = splitLocator(decodePath(href));
   if (!isFilePath(path) && !isRelativePath(path)) return null;
 
-  return marked(path, node.children ?? [], true);
+  return marked(path, node.children ?? [], true, line);
 }
 
 /// `href` with its escapes resolved, or unchanged where they do not resolve.
