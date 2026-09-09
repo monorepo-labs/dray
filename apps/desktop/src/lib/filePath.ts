@@ -25,14 +25,20 @@ const TRAILING = new Set([...".,;:!?)]}>\"'"]);
 /// A line break stays the bound, since a path does not span one.
 const GAP = /[^\S\r\n]/;
 
-/// A trailing `:12`, `:12:5` or `#L12`.
+/// A trailing `:12`, `:12:5`, `:L12` or `#L12`.
 ///
 /// The app's own harness prompt asks for `file_path:line_number`, so this is
 /// the commonest shape an absolute path takes in a transcript. `open -a` cannot
 /// be handed a line, so the number stays prose and the path is what opens —
 /// left on, the link named a file that does not exist and the click did
 /// nothing.
-const LOCATOR = /(?::\d+(?::\d+)?|#L\d+)$/;
+///
+/// `:L12` is the shape agents reach for most after the bare number — it is what
+/// this repo's own review comments use — and it failed *silently*: the run kept
+/// the suffix, so the last segment stopped ending in a filename and the path
+/// was not picked out at all. The `L` is optional rather than a fourth
+/// alternative, since `:12` and `:L12` are one idea spelled two ways.
+const LOCATOR = /(?::L?\d+(?::\d+)?|#L\d+)$/;
 
 type FilePathMatch = { start: number; end: number; path: string };
 

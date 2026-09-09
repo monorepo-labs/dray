@@ -401,6 +401,29 @@ describe("withPaths", () => {
     expect(pathsIn("(src/lib/highlight.ts:126)")).toEqual(["src/lib/highlight.ts"]);
   });
 
+  /// Every locator shape, since one missing spelling costs the path its link
+  /// entirely rather than just its number — the suffix stays on the run, the
+  /// last segment stops ending in a filename, and nothing is picked out.
+  it("strips every locator spelling", () => {
+    expect(pathsIn("apps/desktop/src/lib/highlight.ts:L2")).toEqual([
+      "apps/desktop/src/lib/highlight.ts",
+    ]);
+    expect(pathsIn("see src/a.ts:12 and src/b.ts:12:5 and src/c.ts#L9 now")).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "src/c.ts",
+    ]);
+    // Mid-sentence, since a leading `/` is a slash command and reads as one.
+    expect(pathsIn("open /Users/me/app/Footer.js:L188 there")).toEqual([
+      "/Users/me/app/Footer.js",
+    ]);
+  });
+
+  /// `:L` and a word is not a line number, so the run keeps it and stays prose.
+  it("leaves a colon that is not a locator alone", () => {
+    expect(pathsIn("src/a.ts:Login")).toEqual([]);
+  });
+
   /// The same invariant the segmenter holds, since the bubble paints these in
   /// sequence over the message.
   it("concatenates back to the original", () => {
