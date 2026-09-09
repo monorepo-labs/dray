@@ -282,9 +282,23 @@ function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
   // reads `i`, so caching it suppressed the openers between here and the label
   // — whose runs are shorter and may hold no break at all — and
   // `[bad⏎newline [good](https://example.com)` lost its real link.
+  //
+  // Scanned by hand rather than with `indexOf` and a bound checked after: the
+  // built-in reads the whole remaining text before answering, so a message of
+  // unclosed openers on their own lines stayed quadratic while the argument
+  // above claimed otherwise. One line's worth of work per line, and the memo
+  // below covers the rest of that line.
   const bound = lineEnd(text, i);
-  const label = text.indexOf("]", i + 1);
-  if (label === -1 || label > bound) {
+
+  let label = -1;
+  for (let j = i + 1; j < bound; j += 1) {
+    if (text[j] === "]") {
+      label = j;
+      break;
+    }
+  }
+
+  if (label === -1) {
     exhausted.set("]", bound);
     return null;
   }

@@ -80,7 +80,12 @@ const HOST_PORT = /:\d+$/;
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 /// Whether a path's first segment names a host rather than a directory.
+///
+/// `localhost` is named outright because it is the one host with no dot, no
+/// port and no digits — it matches none of the shapes above and is written more
+/// than any of them.
 function namesAHost(segment: string): boolean {
+  if (segment.toLowerCase() === "localhost") return true;
   return HOSTNAME.test(segment) || IPV4.test(segment) || HOST_PORT.test(segment);
 }
 

@@ -532,11 +532,15 @@ describe("linkAt line bounds", () => {
     roundTrip(text);
   });
 
+  /// 400k characters, because the first version of this test used 100k and
+  /// passed at 25ms while the scan was still quadratic — `indexOf` read the
+  /// whole remaining text before the line bound was applied. The same input
+  /// cost 395ms then.
   it("stays linear across many lines of unclosed openers", () => {
-    const text = "[bad\n".repeat(20_000);
+    const text = "[bad\n".repeat(80_000);
     const started = performance.now();
     roundTrip(text);
-    expect(performance.now() - started).toBeLessThan(200);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });
 
@@ -548,6 +552,10 @@ describe("scheme-less hosts", () => {
     expect(isRelativePath("localhost:3000/api/schema.json")).toBe(false);
     expect(isRelativePath("127.0.0.1/api/schema.json")).toBe(false);
     expect(isRelativePath("192.168.1.10:8080/a/b.json")).toBe(false);
+    // The one host with no dot, no port and no digits, so it matches none of
+    // the shapes above and has to be named.
+    expect(isRelativePath("localhost/api/schema.json")).toBe(false);
+    expect(isRelativePath("LocalHost/api/schema.json")).toBe(false);
   });
 
   it("still reads an ordinary relative path", () => {
