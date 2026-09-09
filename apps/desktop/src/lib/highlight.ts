@@ -279,25 +279,30 @@ function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
     return null;
   }
 
-  if (text[label + 1] !== "(") {
-    // Every opener before this one finds the *same* bracket and fails on the
-    // same character, so the whole span up to it is spent rather than only this
-    // position. Without it `[[[[…]x` re-scans to that one bracket from every
-    // `[`, which is the quadratic the memo exists to stop.
+  // Every rejection from here on is decided by the label and the href alone,
+  // both of which any earlier opener resolves to identically — so the whole
+  // span up to this bracket is spent, not just this position. Without it
+  // `[[[[…](mailto:x)` re-scans from every `[`. The one exception is the empty
+  // label below, which is the only test that reads `i` itself.
+  const spent = () => {
     exhausted.set("]", label + 1);
     return null;
-  }
+  };
 
-  if (label === i + 1) return null;
+  if (text[label + 1] !== "(") return spent();
 
   const close = hrefEnd(text, label + 2);
-  if (close === -1 || close === label + 2) return null;
-
-  const run = text.slice(i, close + 1);
-  if (run.includes("\n")) return null;
+  if (close === -1 || close === label + 2) return spent();
 
   const href = text.slice(label + 2, close);
-  if (!/^https?:\/\//i.test(href)) return null;
+  if (!/^https?:\/\//i.test(href)) return spent();
+
+  // A longer run is what an earlier opener gets, so one holding a break means
+  // every opener before it holds that break too.
+  const run = text.slice(i, close + 1);
+  if (run.includes("\n")) return spent();
+
+  if (label === i + 1) return null;
 
   return { kind: "link", text: run, inner: text.slice(i + 1, label), href };
 }

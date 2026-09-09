@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { findPromptPaths, isRelativePath } from "./filePath";
 import { highlightSegments, splitMention, withLineBreaks, withPaths } from "./highlight";
 import { applyMention, mentionSpan } from "./mention";
 
@@ -437,5 +438,67 @@ describe("withPaths", () => {
     round("open apps/desktop/src/lib/highlight.ts and /Users/me/a.ts now");
     round("read and/or write, rated 3.5/5.0");
     round("/review @src/a.ts #DRA-53 src/b.ts");
+  });
+});
+
+
+describe("findPromptPaths overlap", () => {
+  const round = (text: string) =>
+    expect(
+      withPaths(highlightSegments(text))
+        .map((s) => s.text)
+        .join(""),
+    ).toBe(text);
+
+  /// An absolute path holding an opener starts a relative candidate *inside*
+  /// itself, so the same characters were found twice and the run stopped
+  /// concatenating back to what the reader wrote.
+  it("never returns overlapping ranges", () => {
+    for (const text of [
+      "open /tmp/(src/a.ts) now",
+      "open (/tmp/src/a.ts) now",
+      "see /tmp/[src/a.ts] and src/b.ts",
+      'open /tmp/"src/a.ts" now',
+    ]) {
+      const found = findPromptPaths(text);
+      for (let i = 1; i < found.length; i += 1) {
+        expect(found[i].start).toBeGreaterThanOrEqual(found[i - 1].end);
+      }
+      round(text);
+    }
+  });
+
+  /// The reported shape, spelled out: it produced `/tmp/(src/a.tssrc/a.ts`.
+  it("keeps the absolute reading of a path holding an opener", () => {
+    expect(findPromptPaths("open /tmp/(src/a.ts) now").map((m) => m.path)).toEqual([
+      "/tmp/(src/a.ts",
+    ]);
+  });
+
+  it("reads a bracketed relative path without its bracket", () => {
+    expect(findPromptPaths("open(src/a.ts) now").map((m) => m.path)).toEqual(["src/a.ts"]);
+  });
+
+  /// A URL with the scheme left off is not a directory in this checkout.
+  it("refuses a hostname-shaped first segment", () => {
+    expect(isRelativePath("github.com/org/repo/a.ts")).toBe(false);
+    expect(isRelativePath("example.co.uk/a/b.ts")).toBe(false);
+    // A leading dot is not a hostname, so this stays the path it is.
+    expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
+    expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
+  });
+
+  it("stays linear on openers sharing a closed non-http link", () => {
+    const text = `${"[".repeat(40_000)}](mailto:x)`;
+    const started = performance.now();
+    round(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it("stays linear on a token full of internal openers", () => {
+    const text = `${"(a".repeat(20_000)}/x`;
+    const started = performance.now();
+    round(text);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

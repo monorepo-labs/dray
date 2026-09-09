@@ -62,6 +62,14 @@ export function isFilePath(path: string): boolean {
 /// which a bare `\\.\\w+` would have taken.
 const NAMES_FILE = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
 
+/// A first segment shaped like a hostname.
+///
+/// `github.com/org/repo/a.ts` is a URL somebody left the scheme off, not a
+/// directory in this checkout, and it is the commonest thing to type that this
+/// rule would otherwise resolve against the working directory. A leading dot is
+/// not matched, so `.github/workflows/ci.yml` stays the path it is.
+const HOSTNAME = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,24}$/i;
+
 /// Whether `path` is a relative path worth resolving against a working
 /// directory.
 ///
@@ -74,6 +82,7 @@ export function isRelativePath(path: string): boolean {
 
   const parts = path.split("/");
   if (parts.length < 2 || parts.some((part) => !part)) return false;
+  if (HOSTNAME.test(parts[0])) return false;
 
   return NAMES_FILE.test(parts.at(-1) ?? "");
 }
@@ -108,8 +117,12 @@ export function findRelativePaths(text: string): FilePathMatch[] {
     // this one has no such anchor and has to say it.
     if (OPENS_PATH.test(text[i])) continue;
 
+    // The run ends at the next opener as well as at whitespace, so `open(src/a.ts)`
+    // is read as `open` and then as `src/a.ts` rather than as one candidate
+    // spelled `open(src/a.ts`. It is also what keeps this linear: a token full
+    // of internal openers would otherwise be rescanned whole from each of them.
     let stop = i;
-    while (stop < text.length && !/\s/.test(text[stop])) stop += 1;
+    while (stop < text.length && !OPENS_PATH.test(text[stop])) stop += 1;
 
     const end = trimTail(text, i, stop);
     const path = text.slice(i, end);
@@ -122,15 +135,35 @@ export function findRelativePaths(text: string): FilePathMatch[] {
   return found;
 }
 
-/// Every path in a prompt the reader wrote, absolute or relative, in order.
+/// Every path in a prompt the reader wrote, absolute or relative, in order and
+/// never overlapping.
 ///
 /// Two scans rather than one rule, because the two shapes are told from prose
-/// by different evidence — see [isRelativePath]. They cannot overlap: one
-/// requires a leading slash and the other refuses it.
+/// by different evidence — see [isRelativePath]. The ranges *can* overlap
+/// though, and the claim that they could not was wrong: an absolute path
+/// holding an opener starts a relative candidate inside itself, so
+/// `/tmp/(src/a.ts)` is found twice. The caller slices a string by these, so an
+/// overlap does not cost a duplicate link — it duplicates the *characters*, and
+/// the run stops concatenating back to what the reader wrote.
+///
+/// Resolved by taking the earliest match and skipping anything that starts
+/// before it ends. Longer wins a tie, so the absolute reading is kept where
+/// both begin at the same character.
 export function findPromptPaths(text: string): FilePathMatch[] {
-  return [...findFilePaths(text), ...findRelativePaths(text)].sort(
-    (a, b) => a.start - b.start,
+  const all = [...findFilePaths(text), ...findRelativePaths(text)].sort(
+    (a, b) => a.start - b.start || b.end - a.end,
   );
+
+  const kept: FilePathMatch[] = [];
+  let at = 0;
+
+  for (const match of all) {
+    if (match.start < at) continue;
+    kept.push(match);
+    at = match.end;
+  }
+
+  return kept;
 }
 
 /// Every absolute path in `text`, in order.
