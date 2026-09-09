@@ -273,17 +273,22 @@ function inlineAt(text: string, i: number, exhausted: Exhausted): Segment | null
 function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
   if (i < (exhausted.get("]") ?? -1)) return null;
 
+  // A link does not span a line, so the label is looked for on this one only.
+  // That bound is also what makes the memo below sound: every rejection past it
+  // is settled by the label and the href, and an opener sharing this line
+  // resolves both to exactly the same pair.
+  //
+  // Testing the *run* for a break instead was the bug this replaces. That test
+  // reads `i`, so caching it suppressed the openers between here and the label
+  // — whose runs are shorter and may hold no break at all — and
+  // `[bad⏎newline [good](https://example.com)` lost its real link.
+  const bound = lineEnd(text, i);
   const label = text.indexOf("]", i + 1);
-  if (label === -1) {
-    exhausted.set("]", text.length);
+  if (label === -1 || label > bound) {
+    exhausted.set("]", bound);
     return null;
   }
 
-  // Every rejection from here on is decided by the label and the href alone,
-  // both of which any earlier opener resolves to identically — so the whole
-  // span up to this bracket is spent, not just this position. Without it
-  // `[[[[…](mailto:x)` re-scans from every `[`. The one exception is the empty
-  // label below, which is the only test that reads `i` itself.
   const spent = () => {
     exhausted.set("]", label + 1);
     return null;
@@ -297,14 +302,16 @@ function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
   const href = text.slice(label + 2, close);
   if (!/^https?:\/\//i.test(href)) return spent();
 
-  // A longer run is what an earlier opener gets, so one holding a break means
-  // every opener before it holds that break too.
-  const run = text.slice(i, close + 1);
-  if (run.includes("\n")) return spent();
-
+  // Last, and never memoized: the empty label is the one test that reads the
+  // opener's own position rather than the label and href both.
   if (label === i + 1) return null;
 
-  return { kind: "link", text: run, inner: text.slice(i + 1, label), href };
+  return {
+    kind: "link",
+    text: text.slice(i, close + 1),
+    inner: text.slice(i + 1, label),
+    href,
+  };
 }
 
 /// The `)` closing an href opened at `from`, or `-1`.

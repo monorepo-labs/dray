@@ -70,6 +70,20 @@ const NAMES_FILE = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
 /// not matched, so `.github/workflows/ci.yml` stays the path it is.
 const HOSTNAME = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,24}$/i;
 
+/// A host with a port, and an IPv4 address.
+///
+/// Neither carries a dotted TLD, so [HOSTNAME] misses both — and they are the
+/// two an agent writes most while a dev server is up. `localhost:3000/api/x.json`
+/// and `127.0.0.1/api/x.json` were being resolved against the working directory
+/// and drawn as files in this checkout.
+const HOST_PORT = /:\d+$/;
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/// Whether a path's first segment names a host rather than a directory.
+function namesAHost(segment: string): boolean {
+  return HOSTNAME.test(segment) || IPV4.test(segment) || HOST_PORT.test(segment);
+}
+
 /// Whether `path` is a relative path worth resolving against a working
 /// directory.
 ///
@@ -82,7 +96,7 @@ export function isRelativePath(path: string): boolean {
 
   const parts = path.split("/");
   if (parts.length < 2 || parts.some((part) => !part)) return false;
-  if (HOSTNAME.test(parts[0])) return false;
+  if (namesAHost(parts[0])) return false;
 
   return NAMES_FILE.test(parts.at(-1) ?? "");
 }

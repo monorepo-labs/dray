@@ -502,3 +502,57 @@ describe("findPromptPaths overlap", () => {
     expect(performance.now() - started).toBeLessThan(200);
   });
 });
+
+
+describe("linkAt line bounds", () => {
+  const roundTrip = (text: string) =>
+    expect(
+      highlightSegments(text)
+        .map((s) => s.text)
+        .join(""),
+    ).toBe(text);
+
+  /// Caching the *run* newline test suppressed the openers between the failed
+  /// one and the label, whose runs are shorter and may hold no break at all.
+  it("does not let an opener on one line eat a link on the next", () => {
+    const text = "[bad\nnewline [good](https://example.com)";
+    const link = highlightSegments(text).find((s) => s.kind === "link");
+
+    expect(link?.text).toBe("[good](https://example.com)");
+    expect(link?.href).toBe("https://example.com");
+    roundTrip(text);
+  });
+
+  /// A link does not span a line, so a label on the next one is no label.
+  it("refuses a label that only appears on a later line", () => {
+    const text = "[open\nlabel](https://example.com)";
+    expect(highlightSegments(text).some((s) => s.kind === "link" && s.text.includes("\n"))).toBe(
+      false,
+    );
+    roundTrip(text);
+  });
+
+  it("stays linear across many lines of unclosed openers", () => {
+    const text = "[bad\n".repeat(20_000);
+    const started = performance.now();
+    roundTrip(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});
+
+describe("scheme-less hosts", () => {
+  /// The two an agent writes most while a dev server is up. Neither carries a
+  /// dotted TLD, so the hostname rule alone missed both and they were drawn as
+  /// files in this checkout.
+  it("refuses a host with a port and an IPv4 address", () => {
+    expect(isRelativePath("localhost:3000/api/schema.json")).toBe(false);
+    expect(isRelativePath("127.0.0.1/api/schema.json")).toBe(false);
+    expect(isRelativePath("192.168.1.10:8080/a/b.json")).toBe(false);
+  });
+
+  it("still reads an ordinary relative path", () => {
+    expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
+    expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
+    expect(isRelativePath("src/lib/filePath.ts")).toBe(true);
+  });
+});
