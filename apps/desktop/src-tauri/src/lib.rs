@@ -658,6 +658,7 @@ pub fn run() {
             issues::fetch_issue_asset,
             issues::list_issue_filters,
             issues::unlink_issue,
+            issues::update_issue,
             github::prs_for_branch,
             github::pr_marks,
             github::merge_pr,

@@ -110,7 +110,7 @@ const ISSUES: &str = r#"
 query($filter:IssueFilter,$first:Int!){
  issues(filter:$filter,first:$first,orderBy:updatedAt){nodes{
   id identifier title url priority updatedAt
-  state{name type color}
+  state{id name type color}
   assignee{name avatarUrl}
   labels(first:10){nodes{name color}}
   team{key}
@@ -128,10 +128,10 @@ const ISSUE_BY_ID: &str = r#"
 query($id:String!){
  issue(id:$id){
   id identifier title url priority updatedAt description
-  state{name type color}
+  state{id name type color}
   assignee{name avatarUrl}
   labels(first:10){nodes{name color}}
-  team{key}
+  team{key states(first:50){nodes{id name type color position}}}
   project{name}
   comments(first:50){nodes{body createdAt url user{name avatarUrl}}}
  }}
@@ -147,10 +147,10 @@ const ISSUE: &str = r#"
 query($key:String!,$number:Float!){
  issues(filter:{team:{key:{eq:$key}},number:{eq:$number}},first:1){nodes{
   id identifier title url priority updatedAt description
-  state{name type color}
+  state{id name type color}
   assignee{name avatarUrl}
   labels(first:10){nodes{name color}}
-  team{key}
+  team{key states(first:50){nodes{id name type color position}}}
   project{name}
   comments(first:50){nodes{body createdAt url user{name avatarUrl}}}
  }}}
@@ -257,12 +257,18 @@ pub async fn fetch_asset(
     })
 }
 
-/// The filter row's options. Archived teams and projects are left out by
-/// Linear's own defaults, which is the right way round — a filter offering a
-/// team nobody works in is a row to skip past.
+/// The filter row's options, and every team's workflow with them. Archived
+/// teams and projects are left out by Linear's own defaults, which is the right
+/// way round — a filter offering a team nobody works in is a row to skip past.
+///
+/// The states ride this read rather than the list read, and that is the whole
+/// reason the issues page's rows can offer a status menu at all: a workflow is
+/// per *team*, so asking for it on every issue would repeat one team's answer a
+/// hundred times down the wire. Read once per connection, keyed by team key —
+/// which is what a row carries, `DRA` and not a UUID.
 const FILTERS: &str = r#"
 query{
- teams(first:100){nodes{id name}}
+ teams(first:100){nodes{id key name states(first:50){nodes{id name type color position}}}}
  projects(first:100){nodes{id name}}}
 "#;
 
@@ -386,7 +392,64 @@ fn read_detail(node: &Value, identifier: &str) -> Result<IssueDetail, IssueUnava
             .filter(|body| !body.is_empty())
             .map(str::to_string),
         comments: map_comments(node),
+        states: map_team_states(node),
     })
+}
+
+/// Moves an issue's status, its priority, or both.
+///
+/// One mutation for the pair, so a reader changing both in one go could never
+/// land half of it — and `issueUpdate` takes them in one input anyway. An
+/// input with neither field is refused before the request goes out: Linear
+/// answers `success` for it, which reads as a write that happened.
+///
+/// The mutation's own `issue` echo is deliberately not read. The panel draws a
+/// whole [`IssueDetail`] — description, comments, the team's states — and
+/// asking for that field set back here would be a fourth copy of it in this
+/// file, free to drift from the three above. The caller re-reads instead.
+const UPDATE: &str = r#"
+mutation($id:String!,$input:IssueUpdateInput!){
+ issueUpdate(id:$id,input:$input){success}}
+"#;
+
+/// The mutation's input, or `None` where the caller asked for no change.
+///
+/// Split out so the one thing worth pinning here is testable with nothing
+/// spawned: `Some(IssuePriority::None)` is a write of wire `0` and *not* the
+/// same as `None`, which is "leave it". Collapsing the two would make clearing
+/// a priority silently do nothing.
+fn update_input(state_id: Option<&str>, priority: Option<IssuePriority>) -> Option<Value> {
+    let mut input = serde_json::Map::new();
+
+    if let Some(state_id) = state_id {
+        input.insert("stateId".into(), json!(state_id));
+    }
+    if let Some(priority) = priority {
+        input.insert("priority".into(), json!(priority.to_wire()));
+    }
+
+    (!input.is_empty()).then(|| Value::Object(input))
+}
+
+pub async fn update_issue(
+    key: &str,
+    id: &str,
+    state_id: Option<&str>,
+    priority: Option<IssuePriority>,
+) -> Result<(), IssueUnavailable> {
+    let input = update_input(state_id, priority)
+        .ok_or_else(|| IssueUnavailable::Other("Nothing to change".into()))?;
+
+    let data = query(key, UPDATE, json!({ "id": id, "input": input })).await?;
+
+    // `success: false` is how Linear refuses a write it understood — a state
+    // belonging to another team, most likely. It comes back at 200 with no
+    // `errors`, so without this the panel re-reads, finds nothing moved, and
+    // silently redraws what the reader was already looking at.
+    match data.pointer("/issueUpdate/success").and_then(Value::as_bool) {
+        Some(true) => Ok(()),
+        _ => Err(IssueUnavailable::Other("Linear refused the change".into())),
+    }
 }
 
 pub async fn list_filters(key: &str) -> Result<IssueFilters, IssueUnavailable> {
@@ -395,6 +458,16 @@ pub async fn list_filters(key: &str) -> Result<IssueFilters, IssueUnavailable> {
     Ok(IssueFilters {
         teams: map_groups(&data, "teams"),
         projects: map_groups(&data, "projects"),
+        // A team with no key names nothing a row could join on, so it is left
+        // out rather than filed under an empty string — where it would answer
+        // for every row whose own team came back blank.
+        team_states: nodes(&data, "teams")
+            .iter()
+            .filter_map(|team| {
+                let key = optional(team, "key")?;
+                Some((key, map_states(team)))
+            })
+            .collect(),
     })
 }
 
@@ -543,6 +616,7 @@ fn map_issue(node: &Value) -> Option<Issue> {
 fn map_state(value: Option<&Value>) -> IssueState {
     let Some(value) = value.filter(|v| !v.is_null()) else {
         return IssueState {
+            id: String::new(),
             name: "Unknown".into(),
             kind: IssueStateKind::Other,
             color: String::new(),
@@ -550,6 +624,7 @@ fn map_state(value: Option<&Value>) -> IssueState {
     };
 
     IssueState {
+        id: text(value, "id"),
         name: text(value, "name"),
         kind: match value
             .get("type")
@@ -566,6 +641,43 @@ fn map_state(value: Option<&Value>) -> IssueState {
         },
         color: text(value, "color"),
     }
+}
+
+/// The team's own workflow states, in the order Linear draws them.
+///
+/// Sorted by kind and then by `position`, which is the two-level ordering
+/// Linear itself uses: `position` is only meaningful *within* a type, so a
+/// single sort on it interleaves Done with Todo. A state with no id is dropped
+/// — it names nothing a write could set.
+fn map_team_states(node: &Value) -> Vec<IssueState> {
+    let Some(team) = node.get("team").filter(|team| !team.is_null()) else {
+        return Vec::new();
+    };
+
+    map_states(team)
+}
+
+/// The same, from a team node itself — what the filters read hands back.
+fn map_states(team: &Value) -> Vec<IssueState> {
+    let mut states: Vec<(f64, IssueState)> = nodes(team, "states")
+        .iter()
+        .filter(|state| !text(state, "id").is_empty())
+        .map(|state| {
+            (
+                state.get("position").and_then(Value::as_f64).unwrap_or(0.0),
+                map_state(Some(state)),
+            )
+        })
+        .collect();
+
+    states.sort_by(|(a_pos, a), (b_pos, b)| {
+        a.kind
+            .flow_rank()
+            .cmp(&b.kind.flow_rank())
+            .then(a_pos.total_cmp(b_pos))
+    });
+
+    states.into_iter().map(|(_, state)| state).collect()
 }
 
 fn map_person(value: &Value) -> Option<IssuePerson> {
@@ -842,6 +954,70 @@ mod tests {
         assert!(first_error(&json!({ "data": { "viewer": {} } })).is_none());
         // An error array with an unfamiliar shape still reads as an error.
         assert!(first_error(&json!({ "errors": [{}] })).is_some());
+    }
+
+    /// `position` alone is not an ordering across a workflow — Linear only
+    /// makes it meaningful *within* one state type, so a team whose states were
+    /// reordered lists Done above Todo unless the kind is sorted on first.
+    #[test]
+    fn team_states_read_in_workflow_order() {
+        let node = json!({ "team": { "key": "DRA", "states": { "nodes": [
+            { "id": "d", "name": "Done", "type": "completed", "color": "#0a0", "position": 0.0 },
+            { "id": "r", "name": "In Review", "type": "started", "color": "#fc0", "position": 2.0 },
+            { "id": "p", "name": "In Progress", "type": "started", "color": "#fc0", "position": 1.0 },
+            { "id": "t", "name": "Todo", "type": "unstarted", "color": "#eee", "position": 9.0 },
+            // No id: nothing a write could name, so it is dropped rather than
+            // offered as a status that cannot be set.
+            { "name": "Ghost", "type": "started", "color": "#000", "position": 0.0 }
+        ]}}});
+
+        let names: Vec<_> = map_team_states(&node)
+            .iter()
+            .map(|state| state.name.clone())
+            .collect();
+
+        assert_eq!(names, ["Todo", "In Progress", "In Review", "Done"]);
+    }
+
+    /// An issue with no team on it must not fail the read — the panel simply
+    /// draws its status as a glyph with no menu behind it.
+    #[test]
+    fn a_teamless_issue_offers_no_states() {
+        assert!(map_team_states(&json!({ "team": Value::Null })).is_empty());
+        assert!(map_team_states(&json!({})).is_empty());
+    }
+
+    /// "No priority" is a level a reader can pick, so it has to reach the wire
+    /// as `0` — and an absent priority has to reach it not at all.
+    #[test]
+    fn clearing_a_priority_is_not_the_same_as_leaving_it() {
+        assert_eq!(
+            update_input(None, Some(IssuePriority::None)),
+            Some(json!({ "priority": 0 }))
+        );
+        assert_eq!(
+            update_input(Some("state-1"), None),
+            Some(json!({ "stateId": "state-1" }))
+        );
+        // Linear answers `success` for an empty input, which would read as a
+        // write that happened.
+        assert_eq!(update_input(None, None), None);
+    }
+
+    /// Every level survives the trip out and back. The two tables are written
+    /// separately and a typo in either is invisible until a priority set here
+    /// reads back as a different one.
+    #[test]
+    fn priority_round_trips_through_the_wire() {
+        for level in [
+            IssuePriority::Urgent,
+            IssuePriority::High,
+            IssuePriority::Medium,
+            IssuePriority::Low,
+            IssuePriority::None,
+        ] {
+            assert_eq!(IssuePriority::from_wire(level.to_wire()), level);
+        }
     }
 
     #[test]

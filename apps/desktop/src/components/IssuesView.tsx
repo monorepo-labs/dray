@@ -4,7 +4,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
-import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
+import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
+import IssueStateIcon from "@/components/IssueStateIcon";
 import LinearIcon from "@/components/LinearIcon";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IS_MAC } from "@/lib/platform";
+import { useHotkey } from "@/hooks/useHotkey";
 import { useIssues } from "@/hooks/useIssues";
 import { groupIssues } from "@/lib/issue";
 import { calendarDay } from "@/lib/format";
@@ -28,9 +30,20 @@ import type {
   IssueGroup,
   IssueQuery,
   IssueScope,
+  IssueState,
   IssueStateKind,
   IssueUnavailable,
 } from "@/types/events";
+
+/// The page's search field. Named so ⌘⇧F can reach it — the same trick the
+/// sidebar's own field uses, and for the same reason: the chord has to be able
+/// to *re-focus* a field already on screen, which a `ref` threaded up through
+/// the page would do no better.
+///
+/// **Shifted, where the sidebar's is not.** ⌘F belongs to the sidebar and is
+/// bound app-wide, so a second field claiming it would take the one search that
+/// works from anywhere and make it depend on which view is up.
+const ISSUE_SEARCH_INPUT_ID = "issues-search";
 
 /// Where a personal API key is made. Linked rather than described, because the
 /// path through Linear's own settings is theirs to change and a stale sentence
@@ -79,9 +92,10 @@ const SETTLED_KINDS: { key: IssueStateKind; label: string }[] = [
 /// session about", and this answers "what is there to work on" — which has no
 /// session to hang off and is the thing you look at before there is one.
 ///
-/// It reads. Clicking a row opens the issue in the tracker, which is where its
-/// text, its status and its people can actually be changed — a second place to
-/// edit them is a second place to be wrong about them.
+/// Clicking a row opens it in the pane beside the list, where its status and
+/// its priority can be moved. Everything else about an issue — its text, its
+/// people, its conversation — is still the tracker's to edit, and ⌘-clicking a
+/// row is the shortcut there.
 export default function IssuesView({
   active,
   connected,
@@ -128,6 +142,25 @@ export default function IssuesView({
   }, [refreshRef, refresh]);
 
   const set = (patch: Partial<IssueQuery>) => setQuery({ ...query, ...patch });
+
+  // Bound here rather than in `App`, unlike ⌘F: this field only exists while
+  // the page does, and `enabled` unregisters the listener outright rather than
+  // leaving a chord claimed — `useHotkey` calls `preventDefault` on every match,
+  // so a binding left standing would eat ⌘⇧F from whatever *is* on screen.
+  // `select` rather than `focus`, so pressing it on a query replaces it.
+  useHotkey(
+    "f",
+    () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
+    { shift: true, enabled: active && connected },
+  );
+
+  /// The workflow a row's status menu offers, which belongs to the issue's own
+  /// team. Read once per connection with the filter options rather than per
+  /// issue — a team's states are the same answer for every row it owns, so
+  /// asking for them on the list read would repeat one workflow a hundred times
+  /// down the wire. Empty until that read lands, which draws a plain glyph.
+  const statesFor = (issue: Issue) =>
+    (issue.team && filters?.teamStates[issue.team]) || [];
   const groups = useMemo(() => groupIssues(issues), [issues]);
   const settledGroups = useMemo(() => groupIssues(settled.issues), [settled.issues]);
 
@@ -191,9 +224,10 @@ export default function IssuesView({
           filled field above a borderless list draws a box round the least
           interesting third of the page. The glyph does the work the border
           was doing: it says "type here" without enclosing anything. */}
-      <div className="flex h-11 shrink-0 items-center gap-2 px-3">
+      <div className="group flex h-11 shrink-0 items-center gap-2 px-3">
         <Search className="size-4 shrink-0 text-muted-foreground" />
         <Input
+          id={ISSUE_SEARCH_INPUT_ID}
           value={query.text ?? ""}
           placeholder="Search issues"
           spellCheck={false}
@@ -203,7 +237,30 @@ export default function IssuesView({
           // fill on screen.
           className="h-full rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
           onChange={(e) => set({ text: e.currentTarget.value || null })}
+          // Escape drops the query, the sidebar's rule. It does *not* blur:
+          // this field is always drawn, so there is nothing to close and a
+          // caret left where it was is a second search ready to be typed.
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || !query.text) return;
+            e.preventDefault();
+            set({ text: null });
+          }}
         />
+
+        {/* The slot names whichever key does something here, and which one that
+            is turns on focus alone — the sidebar's rule, and the two fields
+            should not need learning twice. Escape reaches this input and
+            nothing else; ⌘⇧F is what brings focus back to a field left holding
+            a query. Esc is withheld over an empty field, the one state neither
+            key has anything to do in. */}
+        {query.text && <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>}
+        <KbdGroup className="group-focus-within:hidden">
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+          {/* Spelled out, not ⇧. Beside a single glyph the arrow reads as part
+              of the key next to it; the word cannot be mistaken for one. */}
+          <Kbd>Shift</Kbd>
+          <Kbd>F</Kbd>
+        </KbdGroup>
       </div>
 
       {/* Under the header rather than over the rows: a failed refresh leaves
@@ -240,6 +297,7 @@ export default function IssuesView({
                   key={issue.id}
                   issue={issue}
                   picked={issue.identifier === picked}
+                  states={statesFor(issue)}
                   onPick={onPick}
                   onWorkOn={onWorkOn}
                 />
@@ -274,6 +332,7 @@ export default function IssuesView({
                       key={issue.id}
                       issue={issue}
                       picked={issue.identifier === picked}
+                      states={statesFor(issue)}
                       onPick={onPick}
                       onWorkOn={onWorkOn}
                     />
@@ -315,10 +374,14 @@ function Connect({
             <LinearIcon />
             Connect Linear
           </p>
-          {/* Read access is the whole ask, and saying so is what makes pasting
-              a key into a desktop app a smaller decision than it looks. */}
+          {/* The smaller ask is still offered, and second: read alone is what
+              somebody wary of pasting a credential into a desktop app can give,
+              and naming it is what keeps that a small decision. Write is named
+              first because it is what the app now does, and leaving it out
+              would have the reader find out from a status menu that fails. */}
           <p className="text-ui text-muted-foreground">
-            Paste a personal API key with read access. Dray only reads — it never changes an issue.
+            Paste a personal API key with read and write access. A read-only key works too — you
+            just cannot change a status or priority.
           </p>
         </div>
 
@@ -364,8 +427,8 @@ function Connect({
             model working off a one-line title, finds it out the expensive way.
             Said here, while they are already setting this up, and said once. */}
         <p className="border-t border-border pt-3 text-ui text-muted-foreground">
-          This key is read-only, and it is for Dray. To let the agent read and manage issues in
-          chat, add{" "}
+          Dray reads your issues with this key, and writes only the status or priority you pick.
+          To let the agent read and manage issues in chat, add{" "}
           <button
             type="button"
             className="text-foreground underline underline-offset-2 hover:text-foreground/80"
@@ -541,11 +604,15 @@ function FilterMenu({
 function IssueRow({
   issue,
   picked,
+  states,
   onPick,
   onWorkOn,
 }: {
   issue: Issue;
   picked: boolean;
+  /// The statuses this issue's team offers. Empty until the filters read lands,
+  /// which leaves the glyph a plain one.
+  states: IssueState[];
   onPick: (issue: Issue) => void;
   onWorkOn: (issue: Issue) => void;
 }) {
@@ -555,26 +622,55 @@ function IssueRow({
   };
 
   return (
-    <button
-      type="button"
-      onClick={() => onPick(issue)}
+    // A div behaving as a button, the shape `IssuePanel`'s own row uses. This
+    // was a real `button` back when the only thing inside it was one span
+    // pretending to be one; it now carries two menu triggers as well, and three
+    // focusable controls nested in a `button` is invalid markup whose keyboard
+    // behaviour assistive tech is free to collapse into the row's own action.
+    <div
+      role="button"
+      tabIndex={0}
+      // ⌘-click leaves for the tracker, the same modifier the transcript's link
+      // dialog uses to mean "out there, not here". An ordinary click still opens
+      // the pane, which is what this row is for — Linear is the shortcut.
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey) {
+          void openUrl(issue.url);
+          return;
+        }
+        onPick(issue);
+      }}
+      // A control inside the row answers its own keys, or Enter on a status menu
+      // opens it and picks the row underneath in one press.
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        onPick(issue);
+      }}
       className={cn(
-        "group flex w-full items-center gap-2 px-3 py-2 text-left text-ui transition-colors",
+        "group flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-ui transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         picked ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
       )}
     >
       {/* Always drawn, "no priority" included. A glyph that appears on only
           some rows shifts every title beside it, and a ragged left edge reads
           as disorder rather than as information. */}
-      <IssuePriorityIcon priority={issue.priority} />
+      <PriorityMenu issue={issue} priority={issue.priority} />
 
       <span className="w-16 shrink-0 truncate text-muted-foreground tabular-nums">
         {issue.identifier}
       </span>
 
-      {/* No status glyph here. The rows are already gathered under a heading
-          that carries one, so a second copy on every row says what the row's
-          own position has just said. */}
+      {/* The status glyph repeats the heading the row is already gathered
+          under, and it earns that repetition by being a *control*: moving an
+          issue to In Progress is the commonest thing anybody does on this page,
+          and sending them into the pane to do it made the list a place you only
+          read from. Same order as the panel's own header — priority, then the
+          identifier, then status — so the two surfaces read as one. */}
+      <StatusMenu issue={issue} state={issue.state} states={states} />
+
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
 
       {issue.project && (
@@ -583,11 +679,14 @@ function IssueRow({
         </span>
       )}
 
-      {/* A span carrying `buttonVariants` rather than a `Button`, because the
-          row itself is a button and a nested one is invalid markup — the click
-          would open the pane instead. Same bargain `FileLink` makes, and
-          `stopPropagation` on the key as well as the click is what keeps them
-          apart.
+      {/* A span carrying `buttonVariants` rather than a `Button`. The row is a
+          div with `role="button"` and this stays a span with it: the row's
+          accessible role is what a nested control conflicts with, not the tag
+          it happens to use, so promoting either to a real `button` would put
+          the invalid nesting straight back. Same bargain `FileLink` makes, and
+          `stopPropagation` on the key as well as the click is what keeps the
+          two apart — the row's own `target === currentTarget` guard is the
+          other half.
 
           Its slot is reserved whether or not it is drawn: revealed by adding
           width, the whole row would shift under the cursor that revealed it.
@@ -627,6 +726,6 @@ function IssueRow({
       <span className="hidden w-16 shrink-0 text-right text-muted-foreground sm:inline">
         {calendarDay(issue.updatedAt)}
       </span>
-    </button>
+    </div>
   );
 }

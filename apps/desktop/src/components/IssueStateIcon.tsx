@@ -1,3 +1,5 @@
+import { useTheme } from "@/hooks/useTheme";
+import { readableStateColor } from "@/lib/issueColor";
 import { cn } from "@/lib/utils";
 import type { IssuePriority, IssueStateKind } from "@/types/events";
 
@@ -25,6 +27,7 @@ const KIND_COLOR: Record<IssueStateKind, string> = {
   canceled: "#95a2b3",
   other: "#bec2c8",
 };
+
 
 /// How far round the ring is filled. Linear draws progress as a pie wedge
 /// inside an outlined circle, and the fraction is the whole of what separates
@@ -68,7 +71,11 @@ export default function IssueStateIcon({
   label?: string;
   className?: string;
 }) {
-  const fill = color || KIND_COLOR[kind];
+  // Read rather than taken as a prop: every row in a long list draws one of
+  // these, and the theme store is what keeps them from disagreeing about the
+  // mode mid-render. Same bargain `useCodeTheme` makes across mounted diffs.
+  const { resolvedMode } = useTheme();
+  const fill = readableStateColor(color || KIND_COLOR[kind], resolvedMode === "light");
   const shared = {
     width: 14,
     height: 14,
@@ -136,7 +143,7 @@ const BARS: Record<Exclude<IssuePriority, "urgent" | "none">, number> = {
   low: 1,
 };
 
-const PRIORITY_LABEL: Record<IssuePriority, string> = {
+export const PRIORITY_LABEL: Record<IssuePriority, string> = {
   none: "No priority",
   low: "Low priority",
   medium: "Medium priority",
@@ -163,7 +170,18 @@ export function IssuePriorityIcon({
     return (
       // The one that is not bars at all. Urgent is a filled square with a bang
       // in it, so it reads as an alarm rather than as "one bar more than high".
-      <svg {...shared} className={cn("size-4 shrink-0 text-destructive", className)} fill="currentColor">
+      //
+      // Painted, not inherited — the same reason `IssueStateIcon` above sets a
+      // `fill` rather than a text colour. A menu row recolours every descendant
+      // on focus (`focus:**:text-accent-foreground`), which beats a class on
+      // this element and turned the one glyph whose colour *is* the signal
+      // white on hover. An inline style outranks the selector; the bars below
+      // are neutral and are meant to follow the row.
+      <svg
+        {...shared}
+        className={cn("size-4 shrink-0", className)}
+        style={{ fill: "var(--destructive)" }}
+      >
         <path d="M3 1C1.91067 1 1 1.91067 1 3V13C1 14.0893 1.91067 15 3 15H13C14.0893 15 15 14.0893 15 13V3C15 1.91067 14.0893 1 13 1H3ZM7 4L9 4L8.75391 8.99836H7.25L7 4ZM9 11C9 11.5523 8.55228 12 8 12C7.44772 12 7 11.5523 7 11C7 10.4477 7.44772 10 8 10C8.55228 10 9 10.4477 9 11Z" />
       </svg>
     );

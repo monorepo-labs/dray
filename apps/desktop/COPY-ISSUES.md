@@ -30,13 +30,17 @@ it until connected would hide its own entrance.
 
 **Subtext, under the heading**
 
-> Paste a personal API key with read access. Dray only reads — it never changes an issue.
+> Paste a personal API key with read and write access. A read-only key works too — you just cannot change a status or priority.
 
-Two sentences, the shape the analytics row uses: what it needs, and what it will
-never do. "Read access" is the whole point of the first — it is the smallest
-thing that works, and saying so makes pasting a credential into a desktop app a
-smaller decision. The second is what stops anyone expecting their issue to move
-to In Progress on its own.
+Two sentences: what it needs, and what the smaller version of that costs. Write
+is named first because the app now does it — the status and priority menus in an
+opened issue's header — and a reader who found that out from a menu that failed
+would rightly read it as the app being broken.
+
+Read-only is still offered, and second, because it is what somebody wary of
+pasting a credential into a desktop app can give. Naming the cost exactly, rather
+than warning them off, is what keeps that a small decision: everything on this
+page works, and two menus do not.
 
 **Key field placeholder**
 
@@ -53,7 +57,7 @@ to In Progress on its own.
 
 **Note under it**, above a rule — the other half of the setup
 
-> This key is read-only, and it is for Dray. To let the agent read and manage issues in chat, add [Linear's MCP server](https://linear.app/docs/mcp) to your CLI.
+> Dray reads your issues with this key, and writes only the status or priority you pick. To let the agent read and manage issues in chat, add [Linear's MCP server](https://linear.app/docs/mcp) to your CLI.
 
 Said here and only here. The key fills Dray's own screens and gives the agent
 nothing; someone who finds that out later finds it out from a model working off

@@ -336,7 +336,15 @@ Linear puts uploads *in* the description's markdown, pointing at `uploads.linear
 - **Panel tab `issue`, hidden with no link.** Rows are drawn from the session's own `IssueRef`s, so the tab exists the moment something links one. **Linking is the agent's**, through `dray issue link`. The description is drawn here where the PR panel leaves the PR body out, and the difference is who wrote it.
 - **No Start button** — it would create a session, so it must name a project, and the page is workspace-wide. Tagging with `#` in the composer already starts work against an issue from a place that knows the project.
 
-**Dray never writes to the tracker** — no status move, no comment, no attachment. The skill says so out loud, because an agent assuming otherwise tells the user their issue moved when nothing of the sort happened.
+**Dray writes exactly two fields, and only from the opened issue's header** — status and priority, through `update_issue` over Linear's `issueUpdate`. Nothing else: no comment, no attachment, no assignee, no label. **The `dray` CLI writes nothing at all**, and [SKILL.md](apps/cli/skill/SKILL.md) says so out loud, because an agent assuming otherwise tells the user their issue moved when nothing of the sort happened.
+
+The two menus live on `IssueRow`'s header in [IssuePanel](apps/desktop/src/components/IssuePanel.tsx), so the session's Issue tab and the Issues page get them from one component. **A status menu is drawn from `IssueDetail.states`, the issue's own *team* workflow, which rides the read the panel already makes** — a menu that has to fetch before it can open is a menu that opens empty. Sorted by kind and *then* `position`: Linear only makes position meaningful within one state type, so a single sort on it lists Done above Todo. No states means no menu, just the glyph.
+
+**`None` means leave it and `Some(None)` means clear it**, which is why priority crosses as `Option<IssuePriority>` rather than a number — "no priority" is a level a reader can pick and it goes down the wire as `0`. **`issueUpdate` answers `success: false` at 200 with no `errors`** for a write it understood and refused, so that field is checked; without it the panel re-reads, finds nothing moved, and silently redraws what was already there. The mutation's own `issue` echo is deliberately unread — the panel draws a whole `IssueDetail`, and asking for that field set back would be a fourth copy of it in `linear.rs`.
+
+**A write is the one moment every cached answer about issues stops being true**, so `update` calls `forgetIssues()` and then puts the freshly-read detail back — *after* the generation bump, or the guard that makes the clearing stick refuses it. `useIssueList` subscribes to that generation for the same reason: without it the row beside the panel keeps saying "Backlog" under a heading the issue has just left. Failure reports through the panel's existing banner; nothing is optimistic.
+
+**⌘-click on an issue row opens it in the tracker**, on the panel's rows and the page's list alike — the same modifier the transcript's link dialog uses to mean "out there, not here". A shortcut, not the affordance: the row's own button is that.
 
 ## Opening the working directory
 
@@ -825,7 +833,7 @@ Several things are deliberately unfinished — don't mistake them for bugs.
 - **Only *ranged* `Read` renders its code; a whole-file read has no expander at all.** That read is the agent pulling a file into context, not showing it to the reader, and its result is the file itself. A *failed* read still expands, since its error text is the only place the reason lives. A read of an image is the exception.
 - **The PR panel reads and acts, never writes prose.** No commenting, no replying to a review, no requesting review, no closing.
 - **Forks copy the conversation whole and record no lineage.** The CLI exposes no fork-at-message, and `fork_from` is cleared once the CLI carries the fork out, so nothing on disk says which session a fork came from.
-- **Dray never writes to the issue tracker**, and there is **no issue-side project mapping** — the connection is workspace-wide.
+- **Dray writes only status and priority**, from the opened issue's header — no comment, no attachment, no assignee, no label — and there is **no issue-side project mapping**, the connection being workspace-wide. The `dray` CLI writes nothing.
 - **The handoff row has no Revert, Amend or Stash** — each destroys or rewrites work, and a button that sends a prompt for one is a button whose blast radius is decided by the model. No Push either, and that one went on width.
 - **The repo view reads — no fetch, no pull, no discard.** The ahead count is against the *last known* upstream, so a branch someone else pushed to reads as level until the push itself fails.
 - **Sidebar PR marks say open, draft or merged; checks say running or failing.** No number, no per-check detail, no merge readiness, nothing at all for passing.

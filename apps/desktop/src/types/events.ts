@@ -682,7 +682,17 @@ export type IssueDetail = {
  * Markdown, as the tracker holds it. `None` for an issue nobody wrote one
  * for, which the panel says plainly rather than drawing an empty box.
  */
-description: string | null, comments: Array<IssueComment>, tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
+description: string | null, comments: Array<IssueComment>, 
+/**
+ * Every status this issue's own team offers, in workflow order — what the
+ * header's status menu draws.
+ *
+ * On the detail rather than read by a command of its own, because it rides
+ * the read the panel already makes: a menu that has to fetch before it can
+ * open is a menu that opens empty. Per *team*, so an issue moved between
+ * teams offers the states of wherever it now lives.
+ */
+states: Array<IssueState>, tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
 /**
  * Team key (`DRA`) — what the identifier is built from, so a row filtered
  * across teams still says which one it belongs to.
@@ -692,7 +702,16 @@ team: string | null, project: string | null, updatedAt: string, };
 /**
  * The filter row's options, read once per connection rather than per keystroke.
  */
-export type IssueFilters = { teams: Array<IssueGroup>, projects: Array<IssueGroup>, };
+export type IssueFilters = { teams: Array<IssueGroup>, projects: Array<IssueGroup>, 
+/**
+ * Every team's workflow states, keyed by team **key** (`DRA`) — what a
+ * row carries, where `teams` above is keyed by UUID.
+ *
+ * Here rather than on each issue because a workflow belongs to a team: one
+ * answer serves every row that team owns, so the issues page's status menus
+ * cost one read per connection instead of a copy per row.
+ */
+teamStates: { [key in string]: Array<IssueState> }, };
 
 export type IssueGroup = { id: string, name: string, };
 
@@ -767,7 +786,12 @@ identifier: string, title: string, url: string, };
  */
 export type IssueScope = "assigned" | "created" | "all";
 
-export type IssueState = { name: string, kind: IssueStateKind, 
+export type IssueState = { 
+/**
+ * The tracker's own id. What a status write names — a state is addressed
+ * by id and never by name, since two teams can both call one "In Review".
+ */
+id: string, name: string, kind: IssueStateKind, 
 /**
  * The tracker's own colour, so a status reads the same here as it does in
  * the app the reader also has open.

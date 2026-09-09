@@ -315,10 +315,11 @@ the cure is safe.
 
 ## Limits
 
-- **Dray does not write to the tracker.** Tagging records the link on the
+- **`dray` does not write to the tracker.** Tagging records the link on the
   session and nothing else: no status change, no comment, no attachment. If the
   user wants the issue moved or commented on, do it through the tracker's own
-  MCP server.
+  MCP server. (The app's own issue panel has status and priority menus, but they
+  are the user's to click — nothing here reaches them.)
 - **The browser is the session's own.** `dray browser` reaches the tabs of the
   session running it and nothing else; downloads, file pickers and native
   dialogs are out of reach.
