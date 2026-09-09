@@ -57,6 +57,10 @@ describe("continueList renumbering", () => {
     );
   });
 
+  it("steps over a nested bullet under a numbered parent", () => {
+    expect(continueList("1. a\n  - child\n2. b", 4)?.text).toBe("1. a\n2. \n  - child\n3. b");
+  });
+
   it("leaves bullets below alone", () => {
     expect(continueList("- a\n- b", 3)?.text).toBe("- a\n- \n- b");
   });

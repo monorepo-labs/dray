@@ -22,10 +22,14 @@ const ORDERED = /^([ \t]*)(\d+)[.)][ \t]+/;
 function renumber(text: string, from: number, indent: string, next: number): string {
   const lines = text.slice(from).split("\n");
   for (let i = 0; i < lines.length; i += 1) {
+    // Any item deeper in is nested, bullet or number — judged on `ITEM`
+    // first, or a `- child` under a numbered parent ends the walk early and
+    // leaves the parent below it unrenumbered.
+    const item = ITEM.exec(lines[i]);
+    if (!item) break;
+    if (item[1].length > indent.length) continue;
     const match = ORDERED.exec(lines[i]);
-    if (!match) break;
-    if (match[1].length > indent.length) continue;
-    if (match[1] !== indent) break;
+    if (!match || match[1] !== indent) break;
     lines[i] = `${indent}${next}${lines[i].slice(match[1].length + match[2].length)}`;
     next += 1;
   }
