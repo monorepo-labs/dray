@@ -1,7 +1,12 @@
 import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
 import { imagesOf, type QueuedPrompt } from "@/hooks/useSessions";
-import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import {
+  SEGMENT_COLOR,
+  highlightSegments,
+  splitMention,
+  withLineBreaks,
+} from "@/lib/highlight";
 import { stripSenderPrefix } from "@/lib/relay";
 
 /// Prompts typed into the running turn that the app is still holding.
@@ -24,7 +29,7 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
         // Same strip the delivered bubble makes: a relayed prompt waits here
         // carrying the line written for the receiving agent, and it must not
         // read one way queued and another way sent.
-        const body = stripSenderPrefix(message.text, message.from);
+        const body = withLineBreaks(stripSenderPrefix(message.text, message.from));
 
         return (
           <div key={message.id} className="flex w-full flex-col items-end gap-1">

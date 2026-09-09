@@ -46,6 +46,87 @@ export function isFilePath(path: string): boolean {
   return path.split("/").filter(Boolean).length >= 2;
 }
 
+/// A relative path's last segment has to name a file, and the extension has to
+/// open with a letter.
+///
+/// This is the whole of what separates `apps/desktop/src/lib/highlight.ts` from
+/// the prose that shares its shape, and every part of it is load-bearing:
+/// `and/or`, `TCP/IP`, `24/7` and `9/9/2026` all hold a slash between two words
+/// and none of them names a file. The letter rule is what keeps `3.5/5.0` out,
+/// which a bare `\\.\\w+` would have taken.
+const NAMES_FILE = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
+
+/// Whether `path` is a relative path worth resolving against a working
+/// directory.
+///
+/// Stricter than [isFilePath] on purpose. An absolute path announces itself
+/// with its leading slash, so two segments are enough to tell it from prose; a
+/// relative one announces nothing, so it has to earn the reading by ending in a
+/// filename.
+export function isRelativePath(path: string): boolean {
+  if (path.startsWith("/") || path.includes("//")) return false;
+
+  const parts = path.split("/");
+  if (parts.length < 2 || parts.some((part) => !part)) return false;
+
+  return NAMES_FILE.test(parts.at(-1) ?? "");
+}
+
+/// `stop` pulled back past the punctuation a sentence puts after a path.
+///
+/// Shared by both scans so a path picked out either way loses its bracket and
+/// its `:12` the same way. Order matters: the punctuation strip runs first, so
+/// `(src/a.ts:12)` loses the bracket before the locator is looked for.
+function trimTail(text: string, from: number, stop: number): number {
+  let end = stop;
+  while (end > from && TRAILING.has(text[end - 1])) end -= 1;
+
+  const locator = LOCATOR.exec(text.slice(from, end));
+  return locator ? end - locator[0].length : end;
+}
+
+/// Every relative path in `text`, in order.
+///
+/// A run holding a space is never read as one. The absolute scan reaches across
+/// a break because the half it would otherwise keep is itself a real path that
+/// opens the wrong directory; a relative half resolves to nothing and costs a
+/// dead click, so the cheaper rule is the right one here.
+export function findRelativePaths(text: string): FilePathMatch[] {
+  const found: FilePathMatch[] = [];
+
+  for (let i = 0; i < text.length; i += 1) {
+    // Word-opening only, so `see and/or` is never read from partway in.
+    if (i > 0 && !OPENS_PATH.test(text[i - 1])) continue;
+    // ...and never *on* the opener itself, or `(src/a.ts)` keeps its bracket:
+    // the absolute scan gets this free by keying on the leading slash, where
+    // this one has no such anchor and has to say it.
+    if (OPENS_PATH.test(text[i])) continue;
+
+    let stop = i;
+    while (stop < text.length && !/\s/.test(text[stop])) stop += 1;
+
+    const end = trimTail(text, i, stop);
+    const path = text.slice(i, end);
+    if (!isRelativePath(path)) continue;
+
+    found.push({ start: i, end, path });
+    i = end - 1;
+  }
+
+  return found;
+}
+
+/// Every path in a prompt the reader wrote, absolute or relative, in order.
+///
+/// Two scans rather than one rule, because the two shapes are told from prose
+/// by different evidence — see [isRelativePath]. They cannot overlap: one
+/// requires a leading slash and the other refuses it.
+export function findPromptPaths(text: string): FilePathMatch[] {
+  return [...findFilePaths(text), ...findRelativePaths(text)].sort(
+    (a, b) => a.start - b.start,
+  );
+}
+
 /// Every absolute path in `text`, in order.
 ///
 /// Nothing here asks whether the file exists. It cannot, being synchronous and

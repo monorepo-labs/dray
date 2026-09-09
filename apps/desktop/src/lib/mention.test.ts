@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { highlightSegments, splitMention } from "./highlight";
+import { highlightSegments, splitMention, withLineBreaks, withPaths } from "./highlight";
 import { applyMention, mentionSpan } from "./mention";
 
 /// Written against caret positions rather than "the text looks right", because
@@ -296,6 +296,15 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  /// The reported shape: many openers before one bracket that cannot form a
+  /// link. Each re-scanned to that same bracket before the memo covered it.
+  it("stays linear on openers before an unusable bracket", () => {
+    const text = `${"[".repeat(40_000)}]x`;
+    const started = performance.now();
+    roundTrips(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
   it("concatenates back to the original", () => {
     roundTrips("/review @src/lib/slash.ts and @src/lib/mention.ts please");
     roundTrips("ping me@example.com");
@@ -344,5 +353,66 @@ describe("splitMention", () => {
       const { dir, name } = splitMention(mention);
       expect(dir + name).toBe(mention);
     }
+  });
+});
+
+
+describe("withLineBreaks", () => {
+  /// An agent relaying through `dray send` writes its message inside a shell
+  /// string, where the escape is left uninterpreted, so the two characters
+  /// arrive verbatim and the whole report drew as one paragraph.
+  it("turns a literal backslash-n into a break", () => {
+    expect(withLineBreaks("one\\ntwo")).toBe("one\ntwo");
+    expect(withLineBreaks("a.\\n\\nThe next bit")).toBe("a.\n\nThe next bit");
+  });
+
+  it("leaves a real newline alone", () => {
+    expect(withLineBreaks("one\ntwo")).toBe("one\ntwo");
+  });
+});
+
+describe("withPaths", () => {
+  const pathsIn = (text: string) =>
+    withPaths(highlightSegments(text))
+      .filter((s) => s.kind === "path")
+      .map((s) => s.text);
+
+  it("finds a relative path and an absolute one", () => {
+    expect(pathsIn("open apps/desktop/src/lib/highlight.ts now")).toEqual([
+      "apps/desktop/src/lib/highlight.ts",
+    ]);
+    expect(pathsIn("see /Users/me/app/Footer.js please")).toEqual(["/Users/me/app/Footer.js"]);
+  });
+
+  /// Every one of these holds a slash between two words and names no file.
+  it("leaves prose that only looks like a path alone", () => {
+    expect(pathsIn("read and/or write")).toEqual([]);
+    expect(pathsIn("TCP/IP and 24/7 and 9/9/2026")).toEqual([]);
+    expect(pathsIn("rated 3.5/5.0 overall")).toEqual([]);
+  });
+
+  /// A path already inside another run keeps whatever that run made of it.
+  it("does not reach into a mention or a URL", () => {
+    expect(pathsIn("@src/lib/issue.ts")).toEqual([]);
+    expect(pathsIn("see https://example.com/a/b.ts")).toEqual([]);
+  });
+
+  it("strips a trailing locator and bracket", () => {
+    expect(pathsIn("(src/lib/highlight.ts:126)")).toEqual(["src/lib/highlight.ts"]);
+  });
+
+  /// The same invariant the segmenter holds, since the bubble paints these in
+  /// sequence over the message.
+  it("concatenates back to the original", () => {
+    const round = (text: string) =>
+      expect(
+        withPaths(highlightSegments(text))
+          .map((s) => s.text)
+          .join(""),
+      ).toBe(text);
+
+    round("open apps/desktop/src/lib/highlight.ts and /Users/me/a.ts now");
+    round("read and/or write, rated 3.5/5.0");
+    round("/review @src/a.ts #DRA-53 src/b.ts");
   });
 });

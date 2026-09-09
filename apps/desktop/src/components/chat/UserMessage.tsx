@@ -7,7 +7,13 @@ import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
-import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import {
+  SEGMENT_COLOR,
+  highlightSegments,
+  splitMention,
+  withLineBreaks,
+  withPaths,
+} from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -74,8 +80,8 @@ export default function UserMessage({
   // the one this message named.
   const { cwd: sessionCwd } = useChatSession();
   const cwd = writtenIn ?? sessionCwd;
-  const body = stripSenderPrefix(text, from);
-  const segments = highlightSegments(body);
+  const body = withLineBreaks(stripSenderPrefix(text, from));
+  const segments = withPaths(highlightSegments(body));
 
   // An image with neither an archived copy nor bytes of its own — the file was
   // cleared out from under a transcript that still names it. `ImageRow` drops
@@ -154,6 +160,34 @@ export default function UserMessage({
 
                 return (
                   <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
+                    @{name}
+                  </FileLink>
+                );
+              }
+
+              // A path the reader typed rather than mentioned. Drawn the way a
+              // mention is — `@` and the filename, the directory on the tooltip
+              // — since the two name the same thing and a deep path is most of
+              // a line. Relative resolves against the same cwd a mention does.
+              if (segment.kind === "path") {
+                const name = segment.text.split("/").filter(Boolean).at(-1) ?? segment.text;
+                const path = absolutePath(segment.text, cwd);
+
+                if (!path) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.path} title={segment.text}>
+                      @{name}
+                    </span>
+                  );
+                }
+
+                return (
+                  <FileLink
+                    key={i}
+                    path={path}
+                    title={segment.text}
+                    className={SEGMENT_COLOR.path}
+                  >
                     @{name}
                   </FileLink>
                 );

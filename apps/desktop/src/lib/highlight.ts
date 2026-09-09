@@ -15,6 +15,7 @@
 /// textarea, and the same text echoed back into the transcript. Colouring a word
 /// while typing that goes plain once sent — or the reverse — reads as a bug in
 /// whichever surface the reader noticed second.
+import { findPromptPaths } from "@/lib/filePath";
 import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseSlashCommand } from "@/lib/slash";
 
@@ -29,7 +30,8 @@ export type Segment = {
     | "em"
     | "code"
     | "strike"
-    | "link";
+    | "link"
+    | "path";
   text: string;
   /// What sits between an inline mark's delimiters, for the surface that draws
   /// the mark rather than the markup. `text` keeps the delimiters, which is what
@@ -61,6 +63,9 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   code: "",
   strike: "",
   link: "",
+  // A bare path is the same thing a mention is — a file to open — so it takes
+  // the same colour rather than inventing a second one for one idea.
+  path: "text-accent-mention",
 };
 
 /// Punctuation a sentence puts after a URL, not in it. A closing paren stays
@@ -99,6 +104,56 @@ export function splitMention(text: string): { dir: string; name: string } {
   if (cut === -1) return { dir: "@", name: text.slice(1) };
 
   return { dir: text.slice(0, cut + 1), name: text.slice(cut + 1) };
+}
+
+/// A literal `\n` — the backslash and the letter, not a line break — turned
+/// into the break it was meant to be.
+///
+/// A **render** concern, and the composer must never reach it: an overlay that
+/// dropped a character would slide every glyph after it out of register, and
+/// what the reader typed is what the textarea has to keep holding.
+///
+/// The sender is why this exists. An agent relaying through `dray send` writes
+/// its message inside a shell string, where `\n` is left uninterpreted, so the
+/// two characters arrive verbatim and the whole report drew as one paragraph.
+/// Applied before anything is segmented, so a mark cannot span the break and a
+/// path scan sees the same whitespace the reader does.
+export function withLineBreaks(text: string): string {
+  return text.replace(/\\n/g, "\n");
+}
+
+/// The same runs with every bare path in the plain text pulled out as its own.
+///
+/// A pass over the finished segments rather than another case in the scanner,
+/// for two reasons. A path has no opening character to key on — it is known by
+/// its shape, which `findPromptPaths` decides — and this must not reach the
+/// composer, where a path colouring itself mid-word while the reader is still
+/// typing it is noise rather than help.
+///
+/// Only `text` runs are searched, so a path already inside a mention, a URL or
+/// a code span is left exactly where it is. Slices come off the run itself
+/// rather than from the match's own `path`, which is what keeps the round trip
+/// exact even where the two could differ.
+export function withPaths(segments: Segment[]): Segment[] {
+  const out: Segment[] = [];
+
+  for (const segment of segments) {
+    if (segment.kind !== "text") {
+      out.push(segment);
+      continue;
+    }
+
+    let at = 0;
+    for (const { start, end } of findPromptPaths(segment.text)) {
+      if (start > at) out.push({ kind: "text", text: segment.text.slice(at, start) });
+      out.push({ kind: "path", text: segment.text.slice(start, end) });
+      at = end;
+    }
+
+    if (at < segment.text.length) out.push({ kind: "text", text: segment.text.slice(at) });
+  }
+
+  return out;
 }
 
 const SPACE = /\s/;
@@ -223,7 +278,17 @@ function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
     exhausted.set("]", text.length);
     return null;
   }
-  if (label === i + 1 || text[label + 1] !== "(") return null;
+
+  if (text[label + 1] !== "(") {
+    // Every opener before this one finds the *same* bracket and fails on the
+    // same character, so the whole span up to it is spent rather than only this
+    // position. Without it `[[[[…]x` re-scans to that one bracket from every
+    // `[`, which is the quadratic the memo exists to stop.
+    exhausted.set("]", label + 1);
+    return null;
+  }
+
+  if (label === i + 1) return null;
 
   const close = hrefEnd(text, label + 2);
   if (close === -1 || close === label + 2) return null;
