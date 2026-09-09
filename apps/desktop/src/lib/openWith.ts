@@ -100,13 +100,13 @@ export function pickFileOpener(
 /// reveal, so the worst this click can do is what it did before the setting
 /// existed. A transcript row has nowhere to put an error sentence, so the
 /// failure has to be a working link rather than a message.
-export async function openFile(path: string): Promise<void> {
+export async function openFile(path: string, line?: number): Promise<void> {
   const stored = readLocalStorage<string | null>(OPEN_FILE_KEY, null);
   const app = pickFileOpener(await load(), stored);
 
   if (app && app.kind !== "files") {
     try {
-      await invoke("open_in_app", { appPath: app.path, path });
+      await invoke("open_in_app", { appPath: app.path, path: lineUrl(app, path, line) ?? path });
       return;
     } catch (err) {
       console.error(`failed to open ${path} in ${app.name}`, err);
@@ -114,4 +114,33 @@ export async function openFile(path: string): Promise<void> {
   }
 
   await revealItemInDir(path).catch(() => {});
+}
+
+/// How each editor is asked for a file *and a line*, by bundle file name.
+///
+/// `open -a` takes a URL as readily as a path and still hands it to the bundle
+/// named, so a line rides the editor's own scheme and `open_in_app` needs no
+/// second shape. Only editors whose scheme is documented are here; any other
+/// opens the file and lands wherever it lands, which is what every click did
+/// before. Finder never reaches this — a reveal can only select the file.
+const LINE_URLS: Record<string, (path: string, line: number) => string> = {
+  "Visual Studio Code.app": (p, l) => `vscode://file${p}:${l}`,
+  "Visual Studio Code - Insiders.app": (p, l) => `vscode-insiders://file${p}:${l}`,
+  "Cursor.app": (p, l) => `cursor://file${p}:${l}`,
+  "Windsurf.app": (p, l) => `windsurf://file${p}:${l}`,
+  "Zed.app": (p, l) => `zed://file${p}:${l}`,
+  "Zed Preview.app": (p, l) => `zed-preview://file${p}:${l}`,
+  "MacVim.app": (p, l) => `mvim://open?url=file://${p}&line=${l}`,
+  "BBEdit.app": (p, l) => `x-bbedit://open?url=file://${p}&line=${l}`,
+};
+
+/// The URL that opens `path` at `line` in `app`, or `null` where there is no
+/// line to ask for or no known way to ask this app.
+export function lineUrl(app: ExternalApp, path: string, line?: number): string | null {
+  if (!line) return null;
+  const build = LINE_URLS[app.path.split("/").at(-1) ?? ""];
+  if (!build) return null;
+  // Per segment, so a space or a `#` in a directory name survives the trip and
+  // the slashes do not.
+  return build(path.split("/").map(encodeURIComponent).join("/"), line);
 }

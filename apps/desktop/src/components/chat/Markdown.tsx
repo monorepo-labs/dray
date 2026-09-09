@@ -218,14 +218,25 @@ function MarkdownImpl({
 /// A pass-through rather than a narrow override, because `span` is an ordinary
 /// element in markdown output and taking it over wholesale would swallow
 /// whatever else put one there.
-function FilePathSpan({ className, title, children, ...props }: React.ComponentProps<"span">) {
+function FilePathSpan({
+  className,
+  title,
+  children,
+  "data-line": dataLine,
+  ...props
+}: React.ComponentProps<"span"> & { "data-line"?: string }) {
   // The path rides `title`, since a converted markdown link's text is its own
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
   const classes = className?.split(" ") ?? [];
   if (classes.includes(FILE_PATH_CLASS) && title && isFilePath(title)) {
+    const line = Number(dataLine);
     return (
-      <FileLink path={title} writtenAsLink={classes.includes(FILE_LINK_CLASS)}>
+      <FileLink
+        path={title}
+        line={Number.isInteger(line) && line > 0 ? line : undefined}
+        writtenAsLink={classes.includes(FILE_LINK_CLASS)}
+      >
         {children}
       </FileLink>
     );

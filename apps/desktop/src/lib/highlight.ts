@@ -39,6 +39,10 @@ export type Segment = {
   inner?: string;
   /// Where a markdown link points. `http(s)` only, the same bar `urlAt` takes.
   href?: string;
+  /// The line a path's locator names. Only on a `path`, whose `inner` is the
+  /// file without it and whose `text` keeps it, so the whole reference is one
+  /// link and the click can land on the line.
+  line?: number;
 };
 
 /// What each run is painted, kept here with the rule that produces it so the
@@ -133,7 +137,8 @@ export function withLineBreaks(text: string): string {
 /// Only `text` runs are searched, so a path already inside a mention, a URL or
 /// a code span is left exactly where it is. Slices come off the run itself
 /// rather than from the match's own `path`, which is what keeps the round trip
-/// exact even where the two could differ.
+/// exact even where the two differ — and they do wherever a locator is on: the
+/// run keeps `:12`, the path in `inner` does not.
 export function withPaths(segments: Segment[]): Segment[] {
   const out: Segment[] = [];
 
@@ -144,9 +149,9 @@ export function withPaths(segments: Segment[]): Segment[] {
     }
 
     let at = 0;
-    for (const { start, end } of findPromptPaths(segment.text)) {
+    for (const { start, end, path, line } of findPromptPaths(segment.text)) {
       if (start > at) out.push({ kind: "text", text: segment.text.slice(at, start) });
-      out.push({ kind: "path", text: segment.text.slice(start, end) });
+      out.push({ kind: "path", text: segment.text.slice(start, end), inner: path, line });
       at = end;
     }
 

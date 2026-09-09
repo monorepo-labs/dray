@@ -398,26 +398,42 @@ describe("withPaths", () => {
     expect(pathsIn("see https://example.com/a/b.ts")).toEqual([]);
   });
 
-  it("strips a trailing locator and bracket", () => {
-    expect(pathsIn("(src/lib/highlight.ts:126)")).toEqual(["src/lib/highlight.ts"]);
+  /// The run keeps the locator and drops the bracket, so the whole reference
+  /// is one link; the file in `inner` carries neither.
+  it("keeps a trailing locator on the run and off the file", () => {
+    const [segment] = withPaths(highlightSegments("(src/lib/highlight.ts:126)")).filter(
+      (s) => s.kind === "path",
+    );
+    expect(segment).toEqual({
+      kind: "path",
+      text: "src/lib/highlight.ts:126",
+      inner: "src/lib/highlight.ts",
+      line: 126,
+    });
   });
 
   /// Every locator shape, since one missing spelling costs the path its link
   /// entirely rather than just its number — the suffix stays on the run, the
   /// last segment stops ending in a filename, and nothing is picked out.
-  it("strips every locator spelling", () => {
-    expect(pathsIn("apps/desktop/src/lib/highlight.ts:L2")).toEqual([
-      "apps/desktop/src/lib/highlight.ts",
+  it("reads every locator spelling", () => {
+    const linksIn = (text: string) =>
+      withPaths(highlightSegments(text))
+        .filter((s) => s.kind === "path")
+        .map((s) => [s.text, s.inner, s.line]);
+
+    expect(linksIn("apps/desktop/src/lib/highlight.ts:L2")).toEqual([
+      ["apps/desktop/src/lib/highlight.ts:L2", "apps/desktop/src/lib/highlight.ts", 2],
     ]);
-    expect(pathsIn("see src/a.ts:12 and src/b.ts:12:5 and src/c.ts#L9 now")).toEqual([
-      "src/a.ts",
-      "src/b.ts",
-      "src/c.ts",
+    expect(linksIn("see src/a.ts:12 and src/b.ts:12:5 and src/c.ts#L9 now")).toEqual([
+      ["src/a.ts:12", "src/a.ts", 12],
+      ["src/b.ts:12:5", "src/b.ts", 12],
+      ["src/c.ts#L9", "src/c.ts", 9],
     ]);
     // Mid-sentence, since a leading `/` is a slash command and reads as one.
-    expect(pathsIn("open /Users/me/app/Footer.js:L188 there")).toEqual([
-      "/Users/me/app/Footer.js",
+    expect(linksIn("open /Users/me/app/Footer.js:L188 there")).toEqual([
+      ["/Users/me/app/Footer.js:L188", "/Users/me/app/Footer.js", 188],
     ]);
+    expect(linksIn("open src/a.ts now")).toEqual([["src/a.ts", "src/a.ts", undefined]]);
   });
 
   /// `:L` and a word is not a line number, so the run keeps it and stays prose.
@@ -436,6 +452,7 @@ describe("withPaths", () => {
       ).toBe(text);
 
     round("open apps/desktop/src/lib/highlight.ts and /Users/me/a.ts now");
+    round("see (apps/desktop/src/lib/highlight.ts:L2) and /Users/me/a.ts:12:5.");
     round("read and/or write, rated 3.5/5.0");
     round("/review @src/a.ts #DRA-53 src/b.ts");
   });

@@ -169,9 +169,14 @@ export default function UserMessage({
               // mention is — `@` and the filename, the directory on the tooltip
               // — since the two name the same thing and a deep path is most of
               // a line. Relative resolves against the same cwd a mention does.
+              // A locator stays on the name, inside the link: `@a.ts:12` is one
+              // reference, and a link stopping short of it read as broken.
               if (segment.kind === "path") {
-                const name = segment.text.split("/").filter(Boolean).at(-1) ?? segment.text;
-                const path = absolutePath(segment.text, cwd);
+                const file = segment.inner ?? segment.text;
+                const name =
+                  (file.split("/").filter(Boolean).at(-1) ?? file) +
+                  segment.text.slice(file.length);
+                const path = absolutePath(file, cwd);
 
                 if (!path) {
                   return (
@@ -185,6 +190,7 @@ export default function UserMessage({
                   <FileLink
                     key={i}
                     path={path}
+                    line={segment.line}
                     title={segment.text}
                     className={SEGMENT_COLOR.path}
                   >
