@@ -5,6 +5,35 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.15.0
+
+### Added
+
+- **An issue's status and priority change from Dray.** Menus on the opened
+  issue's header and on the Issues page's rows — the first thing Dray
+  writes back to a tracker. The glyph moves as you click and the write
+  reconciles behind it; a refused write puts the old value back and shows
+  what Linear said. ⌘⇧F focuses the Issues search, ⌘-click opens a row in
+  Linear.
+- **Markdown in your own messages renders.** `**bold**`, `` `code` `` and
+  `[links](https://example.com)` draw as themselves in the prompt bubble
+  instead of showing their delimiters. Inline marks only — a prompt is a
+  sentence, not a document, so headings and bullets stay the characters you
+  typed.
+- **Paths in a message are clickable and open at their line.** `src/a.ts:12`
+  in your own message or the agent's opens the file there. Relative paths
+  resolve against the session's directory.
+- **Shift+Enter continues a markdown list.** A new `- ` or the next number,
+  with the items below renumbered; on an empty item it takes the marker off
+  instead.
+
+### Fixed
+
+- **A message relayed with `dray send` no longer arrives as one paragraph.**
+  A literal `\n` written into a shell string now draws as a line break.
+- **Opening a menu no longer killed every keyboard shortcut for the rest of
+  the session.**
+
 ## 0.14.0
 
 ### Added
