@@ -221,18 +221,22 @@ function patched<T extends { state: IssueState; priority: IssuePriority }>(
 /// race is not a race at all, it happens every time. Stamped, nothing goes out
 /// until the write says so.
 ///
-/// **Rows are matched on the stable id; only the detail cache is keyed by the
-/// identifier**, because that is the slot `useSessionIssues` files a body under
-/// — the link's spelling, which after a team move is not the one the list holds.
+/// **Everything is matched on the stable id, bodies included** — the identifier
+/// is a cache *slot*, never an identity. One issue can occupy two slots at once
+/// after a team move: a session panel files it under the link's `DRA-53` while
+/// the issues page files the same issue under `ENG-12`. Looking the body up by
+/// the caller's spelling patched one of them and left the other drawing the old
+/// status until the reconcile landed.
 function patchCachedIssue(target: { identifier: string; id: string }, patch: IssuePatch): Rollback {
   const now = Date.now();
   const undo: (() => void)[] = [];
-  const detail = detailCache.get(target.identifier);
 
-  if (detail) {
-    undo.push(() => detailCache.set(target.identifier, detail));
-    detailCache.set(target.identifier, patched(detail, patch));
-    detailFetchedAt.set(target.identifier, now);
+  for (const [slot, detail] of detailCache) {
+    if (detail.id !== target.id) continue;
+
+    undo.push(() => detailCache.set(slot, detail));
+    detailCache.set(slot, patched(detail, patch));
+    detailFetchedAt.set(slot, now);
   }
 
   for (const [key, issues] of cache) {

@@ -679,11 +679,14 @@ function IssueRow({
         </span>
       )}
 
-      {/* A span carrying `buttonVariants` rather than a `Button`, because the
-          row itself is a button and a nested one is invalid markup — the click
-          would open the pane instead. Same bargain `FileLink` makes, and
-          `stopPropagation` on the key as well as the click is what keeps them
-          apart.
+      {/* A span carrying `buttonVariants` rather than a `Button`. The row is a
+          div with `role="button"` and this stays a span with it: the row's
+          accessible role is what a nested control conflicts with, not the tag
+          it happens to use, so promoting either to a real `button` would put
+          the invalid nesting straight back. Same bargain `FileLink` makes, and
+          `stopPropagation` on the key as well as the click is what keeps the
+          two apart — the row's own `target === currentTarget` guard is the
+          other half.
 
           Its slot is reserved whether or not it is drawn: revealed by adding
           width, the whole row would shift under the cursor that revealed it.
