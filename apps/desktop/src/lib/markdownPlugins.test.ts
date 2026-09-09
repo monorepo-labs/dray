@@ -8,6 +8,7 @@ import {
   walk,
   wrapCells,
 } from "./markdownPlugins";
+import { isRelativePath } from "./filePath";
 
 type Hast = {
   type: string;
@@ -107,6 +108,47 @@ describe("rehypeFilePaths", () => {
 
     expect(marked(tree)[0].properties?.title).toBe("/a/b.ts");
     expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
+  });
+
+  /// A locator stays in the label and off the path, and rides `data-line` so
+  /// the click can land on it. Left out of the label it dangled beside the
+  /// link as plain text and read as half-converted; left on the path it named
+  /// a file that does not exist.
+  it("keeps a locator in the label and on data-line, off the path", () => {
+    const tree = paragraph([{ type: "text", value: "see /a/b.ts:12 there" }]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(span.properties).toMatchObject({ title: "/a/b.ts", dataLine: "12" });
+    expect(span.children).toEqual([{ type: "text", value: "/a/b.ts:12" }]);
+    expect(tree.children?.[0].children?.at(-1)).toEqual({ type: "text", value: " there" });
+  });
+
+  /// A relative path is marked as written — the pass has no cwd — and prose
+  /// that only shares its shape is not. The bubble's own rule, so the two
+  /// surfaces link the same words.
+  it("marks a relative path as written and leaves prose alone", () => {
+    const tree = paragraph([{ type: "text", value: "edit src/lib/a.ts:12 and/or 24/7" }]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(marked(tree)).toHaveLength(1);
+    expect(span.properties).toMatchObject({ title: "src/lib/a.ts", dataLine: "12" });
+    expect(span.children).toEqual([{ type: "text", value: "src/lib/a.ts:12" }]);
+  });
+
+  it("converts a markdown link whose href is a relative path", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "a",
+        properties: { href: "src/a.ts" },
+        children: [{ type: "text", value: "a.ts" }],
+      },
+    ]);
+    walk(tree);
+
+    expect(marked(tree)[0].properties?.title).toBe("src/a.ts");
   });
 
   /// The shape an agent writes most readily. Left as an anchor it raised the
@@ -292,5 +334,71 @@ describe("rehypeTableCells", () => {
     wrapCells(tree);
 
     expect(prose.children).toEqual([{ type: "text", value: "no table here" }]);
+  });
+});
+
+
+describe("anchorToFile locators", () => {
+  const convert = (href: string) => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "element",
+          tagName: "p",
+          children: [
+            {
+              type: "element",
+              tagName: "a",
+              properties: { href },
+              children: [{ type: "text", value: "x" }],
+            },
+          ],
+        },
+      ],
+    };
+    walk(tree);
+    const span = tree.children[0].children[0];
+    return span.tagName === "span" ? span.properties : null;
+  };
+
+  /// Asking whether the whole href is a path skips the locator split, so this
+  /// linked to a file literally named `b.ts:12`.
+  it("splits a locator off an absolute href", () => {
+    expect(convert("/a/b.ts:12")).toMatchObject({ title: "/a/b.ts", dataLine: "12" });
+  });
+
+  /// The relative rule wants a filename at the end, and `a.ts:12` is not one,
+  /// so this was refused outright rather than converted.
+  it("splits a locator off a relative href", () => {
+    expect(convert("src/a.ts:12")).toMatchObject({ title: "src/a.ts", dataLine: "12" });
+    expect(convert("src/a.ts:L12")).toMatchObject({ title: "src/a.ts", dataLine: "12" });
+  });
+
+  it("still converts an href with no locator", () => {
+    expect(convert("/a/b.ts")).toMatchObject({ title: "/a/b.ts" });
+    expect(convert("src/a.ts")).toMatchObject({ title: "src/a.ts" });
+  });
+
+  /// A partial match would mean the author wrote something merely containing a
+  /// path, and linking the recognised part names a file nobody typed.
+  it("refuses an href the match does not span whole", () => {
+    expect(convert("see src/a.ts here")).toBeNull();
+    expect(convert("https://example.com/a/b")).toBeNull();
+    expect(convert("#anchor")).toBeNull();
+  });
+});
+
+describe("scoped package imports", () => {
+  /// The shape agent prose carries most that this rule would otherwise resolve
+  /// against the reader's own checkout.
+  it("are not checkout paths", () => {
+    expect(isRelativePath("@scope/pkg/index.js")).toBe(false);
+    expect(isRelativePath("@anthropic-ai/sdk/index.js")).toBe(false);
+  });
+
+  it("does not disturb an ordinary relative path", () => {
+    expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
+    expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
   });
 });

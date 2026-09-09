@@ -4,9 +4,16 @@ import { Image } from "lucide-react";
 import SessionAvatar from "@/components/SessionAvatar";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
-import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
+import {
+  SEGMENT_COLOR,
+  highlightSegments,
+  splitMention,
+  withLineBreaks,
+  withPaths,
+} from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -73,8 +80,8 @@ export default function UserMessage({
   // the one this message named.
   const { cwd: sessionCwd } = useChatSession();
   const cwd = writtenIn ?? sessionCwd;
-  const body = stripSenderPrefix(text, from);
-  const segments = highlightSegments(body);
+  const body = withLineBreaks(stripSenderPrefix(text, from));
+  const segments = withPaths(highlightSegments(body));
 
   // An image with neither an archived copy nor bytes of its own — the file was
   // cleared out from under a transcript that still names it. `ImageRow` drops
@@ -128,6 +135,13 @@ export default function UserMessage({
                 is most of a line and says little the filename doesn't. The
                 composer can't do this — see `splitMention`. */}
             {segments.map((segment, i) => {
+              // Bold, italic, code, strikethrough and links, drawn without
+              // their delimiters. First, so the marks are read before the
+              // coloured runs — they share no character, so the order is only
+              // about keeping the coloured cases below reading as they did.
+              const mark = inlineMark(segment, i);
+              if (mark) return mark;
+
               if (segment.kind === "mention") {
                 const { name } = splitMention(segment.text);
                 const raw = segment.text.slice(1);
@@ -146,6 +160,40 @@ export default function UserMessage({
 
                 return (
                   <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
+                    @{name}
+                  </FileLink>
+                );
+              }
+
+              // A path the reader typed rather than mentioned. Drawn the way a
+              // mention is — `@` and the filename, the directory on the tooltip
+              // — since the two name the same thing and a deep path is most of
+              // a line. Relative resolves against the same cwd a mention does.
+              // A locator stays on the name, inside the link: `@a.ts:12` is one
+              // reference, and a link stopping short of it read as broken.
+              if (segment.kind === "path") {
+                const file = segment.inner ?? segment.text;
+                const name =
+                  (file.split("/").filter(Boolean).at(-1) ?? file) +
+                  segment.text.slice(file.length);
+                const path = absolutePath(file, cwd);
+
+                if (!path) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.path} title={segment.text}>
+                      @{name}
+                    </span>
+                  );
+                }
+
+                return (
+                  <FileLink
+                    key={i}
+                    path={path}
+                    line={segment.line}
+                    title={segment.text}
+                    className={SEGMENT_COLOR.path}
+                  >
                     @{name}
                   </FileLink>
                 );

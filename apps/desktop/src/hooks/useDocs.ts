@@ -195,9 +195,9 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
 /// store would put the docs feature's own rule somewhere it cannot be read from.
-export function openPath(sid: string | null, path: string): void {
+export function openPath(sid: string | null, path: string, line?: number): void {
   if (isMarkdownPath(path)) return openDoc(sid, path);
-  void openFile(path);
+  void openFile(path, line);
 }
 
 /// Opens a markdown file in the panel, reading it if it is not already open.

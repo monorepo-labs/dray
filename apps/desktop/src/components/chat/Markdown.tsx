@@ -6,7 +6,9 @@ import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
-import { isFilePath } from "@/lib/filePath";
+import { useChatSession } from "@/hooks/useChatSession";
+import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
+import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
   FILE_LINK_CLASS,
@@ -218,15 +220,49 @@ function MarkdownImpl({
 /// A pass-through rather than a narrow override, because `span` is an ordinary
 /// element in markdown output and taking it over wholesale would swallow
 /// whatever else put one there.
-function FilePathSpan({ className, title, children, ...props }: React.ComponentProps<"span">) {
+function FilePathSpan({
+  className,
+  title,
+  children,
+  "data-line": dataLine,
+  ...props
+}: React.ComponentProps<"span"> & { "data-line"?: string }) {
   // The path rides `title`, since a converted markdown link's text is its own
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
   const classes = className?.split(" ") ?? [];
-  if (classes.includes(FILE_PATH_CLASS) && title && isFilePath(title)) {
+  // A relative path resolves against the session's own working directory, the
+  // one thing the prose does not carry; inert without one, since a path
+  // resolved against wherever the app happens to run opens the wrong file.
+  const { cwd } = useChatSession();
+  if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
+    const path = absolutePath(title, cwd);
+    const line = Number(dataLine);
+    const written = classes.includes(FILE_LINK_CLASS);
+    // A bare path is drawn the way the reader's own mention is — `@`, the
+    // filename and its locator, the directory on the tooltip — since the two
+    // name the same thing and a deep path is most of a line. A link the agent
+    // *wrote* keeps the label it wrote. The locator is what is left of the
+    // marked text past the path, so `:12` and `#L12` come through as typed.
+    const label = textOf(children);
+    const locator = label?.startsWith(title) ? label.slice(title.length) : "";
+    const name = title.split("/").filter(Boolean).at(-1) ?? title;
+    const body = written ? children : `@${name}${locator}`;
+    if (!path) {
+      return (
+        <span className={written ? undefined : SEGMENT_COLOR.mention} title={title}>
+          {body}
+        </span>
+      );
+    }
     return (
-      <FileLink path={title} writtenAsLink={classes.includes(FILE_LINK_CLASS)}>
-        {children}
+      <FileLink
+        path={path}
+        line={Number.isInteger(line) && line > 0 ? line : undefined}
+        writtenAsLink={written}
+        className={written ? undefined : SEGMENT_COLOR.mention}
+      >
+        {body}
       </FileLink>
     );
   }
@@ -236,6 +272,15 @@ function FilePathSpan({ className, title, children, ...props }: React.ComponentP
       {children}
     </span>
   );
+}
+
+/// The one text node a marked span holds, or `null` where it holds anything
+/// else. A single child reaches a component bare and several reach it as an
+/// array, so both shapes are read.
+function textOf(node: React.ReactNode): string | null {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node) && node.length === 1) return textOf(node[0]);
+  return null;
 }
 
 // Every delta re-renders the transcript, so identical text must not re-parse.

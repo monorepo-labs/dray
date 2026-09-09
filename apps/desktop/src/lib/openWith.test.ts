@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fileOpenerChoices, pickFileOpener } from "@/lib/openWith";
+import { fileOpenerChoices, lineUrl, pickFileOpener } from "@/lib/openWith";
 import type { ExternalApp } from "@/types/events";
 
 function app(name: string, kind: ExternalApp["kind"]): ExternalApp {
@@ -45,5 +45,27 @@ describe("pickFileOpener", () => {
   /// Off macOS the scan detects nothing at all, Finder included.
   it("answers null when nothing was detected", () => {
     expect(pickFileOpener([], ZED.path)).toBeNull();
+  });
+});
+
+describe("lineUrl", () => {
+  it("asks a known editor through its own scheme", () => {
+    expect(lineUrl(CURSOR, "/Users/me/a.ts", 12)).toBe("cursor://file/Users/me/a.ts:12");
+    expect(lineUrl(ZED, "/Users/me/a.ts", 12)).toBe("zed://file/Users/me/a.ts:12");
+  });
+
+  /// A space or a `#` in a directory would end the URL early or start a
+  /// fragment; the slashes have to stay slashes.
+  it("escapes each segment and leaves the slashes", () => {
+    expect(lineUrl(CURSOR, "/Users/me/My Project/#1/a.ts", 3)).toBe(
+      "cursor://file/Users/me/My%20Project/%231/a.ts:3",
+    );
+  });
+
+  /// No line, or an app with no known scheme, is the plain open of before.
+  it("answers null with no line or no known scheme", () => {
+    expect(lineUrl(CURSOR, "/Users/me/a.ts")).toBeNull();
+    expect(lineUrl(app("Nova", "editor"), "/Users/me/a.ts", 12)).toBeNull();
+    expect(lineUrl(FINDER, "/Users/me/a.ts", 12)).toBeNull();
   });
 });

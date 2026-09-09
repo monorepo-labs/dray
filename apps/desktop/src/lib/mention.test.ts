@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { highlightSegments, splitMention } from "./highlight";
+import { findPromptPaths, isRelativePath } from "./filePath";
+import { highlightSegments, splitMention, withLineBreaks, withPaths } from "./highlight";
 import { applyMention, mentionSpan } from "./mention";
 
 /// Written against caret positions rather than "the text looks right", because
@@ -200,6 +201,111 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  it("marks the inline runs, delimiters kept on the segment", () => {
+    expect(highlightSegments("make it **bold** now")).toEqual([
+      { kind: "text", text: "make it " },
+      { kind: "strong", text: "**bold**", inner: "bold" },
+      { kind: "text", text: " now" },
+    ]);
+    expect(highlightSegments("run `pnpm test` first")).toEqual([
+      { kind: "text", text: "run " },
+      { kind: "code", text: "`pnpm test`", inner: "pnpm test" },
+      { kind: "text", text: " first" },
+    ]);
+    expect(highlightSegments("*maybe* and ~~not~~ and __also__")).toEqual([
+      { kind: "em", text: "*maybe*", inner: "maybe" },
+      { kind: "text", text: " and " },
+      { kind: "strike", text: "~~not~~", inner: "not" },
+      { kind: "text", text: " and " },
+      { kind: "strong", text: "__also__", inner: "also" },
+    ]);
+  });
+
+  /// Wikipedia's own links carry a pair, and stopping at the first `)` links to
+  /// a truncated URL while leaving the rest as prose — a wrong link that reads
+  /// exactly like a right one.
+  it("balances parens inside a link href", () => {
+    expect(highlightSegments("[the page](https://en.wikipedia.org/wiki/Foo_(bar))")).toEqual([
+      {
+        kind: "link",
+        text: "[the page](https://en.wikipedia.org/wiki/Foo_(bar))",
+        inner: "the page",
+        href: "https://en.wikipedia.org/wiki/Foo_(bar)",
+      },
+    ]);
+  });
+
+  /// An ordinary thing to type, and emphasis under a rule that let a one-
+  /// character delimiter close on half of a doubled one.
+  it("does not close a single delimiter on half of a doubled one", () => {
+    expect(highlightSegments("Use *args, **kwargs")).toEqual([
+      { kind: "text", text: "Use *args, **kwargs" },
+    ]);
+  });
+
+  /// Every unpaired opener used to re-scan the whole remainder, which is
+  /// quadratic — and this runs on each keystroke in the composer.
+  it("stays linear on a long run of unpaired openers", () => {
+    const text = "*a ".repeat(24_000);
+    const started = performance.now();
+    roundTrips(text);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it("marks a link and keeps its href off the label", () => {
+    expect(highlightSegments("see [the docs](https://example.com/a) here")).toEqual([
+      { kind: "text", text: "see " },
+      {
+        kind: "link",
+        text: "[the docs](https://example.com/a)",
+        inner: "the docs",
+        href: "https://example.com/a",
+      },
+      { kind: "text", text: " here" },
+    ]);
+  });
+
+  /// Every one of these is an ordinary thing to type into a prompt, and each was
+  /// emphasis under a rule one notch looser.
+  it("leaves prose that only looks like markup alone", () => {
+    const plain = (text: string) =>
+      expect(highlightSegments(text)).toEqual([{ kind: "text", text }]);
+
+    plain("read snake_case_name closely");
+    plain("2 * 3 * 4");
+    plain("a * b and c * d");
+    plain("* first\n* second");
+    plain("half of an *emphasis");
+    plain("one *line\nnext* line");
+    plain("[label](mailto:me@example.com)");
+    plain("```\nfenced\n```");
+
+    // A space between the two halves is not a link. The URL inside is still a
+    // URL — that rule is older than this one and unchanged by it.
+    expect(highlightSegments("[label] (https://example.com)")).toEqual([
+      { kind: "text", text: "[label] (" },
+      { kind: "url", text: "https://example.com" },
+      { kind: "text", text: ")" },
+    ]);
+  });
+
+  /// A prompt bubble draws inline marks and nothing else, so a heading and a
+  /// bullet stay the characters they were typed as.
+  it("leaves block constructs literal", () => {
+    expect(highlightSegments("# Heading\n- one\n- two")).toEqual([
+      { kind: "text", text: "# Heading\n- one\n- two" },
+    ]);
+  });
+
+  /// The reported shape: many openers before one bracket that cannot form a
+  /// link. Each re-scanned to that same bracket before the memo covered it.
+  it("stays linear on openers before an unusable bracket", () => {
+    const text = `${"[".repeat(40_000)}]x`;
+    const started = performance.now();
+    roundTrips(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
   it("concatenates back to the original", () => {
     roundTrips("/review @src/lib/slash.ts and @src/lib/mention.ts please");
     roundTrips("ping me@example.com");
@@ -209,6 +315,10 @@ describe("highlightSegments", () => {
     roundTrips("/review #DRA-53 @src/lib/issue.ts");
     roundTrips("see (#DRA-53), and #fff, and #DRA-9.");
     roundTrips("#");
+    roundTrips("**bold** and *em* and `code` and ~~gone~~");
+    roundTrips("see [docs](https://example.com) and #DRA-53 in @src/a.ts");
+    roundTrips("2 * 3 * 4 and snake_case_name and ```fence```");
+    roundTrips("*unclosed and **also");
   });
 });
 
@@ -244,5 +354,230 @@ describe("splitMention", () => {
       const { dir, name } = splitMention(mention);
       expect(dir + name).toBe(mention);
     }
+  });
+});
+
+
+describe("withLineBreaks", () => {
+  /// An agent relaying through `dray send` writes its message inside a shell
+  /// string, where the escape is left uninterpreted, so the two characters
+  /// arrive verbatim and the whole report drew as one paragraph.
+  it("turns a literal backslash-n into a break", () => {
+    expect(withLineBreaks("one\\ntwo")).toBe("one\ntwo");
+    expect(withLineBreaks("a.\\n\\nThe next bit")).toBe("a.\n\nThe next bit");
+  });
+
+  it("leaves a real newline alone", () => {
+    expect(withLineBreaks("one\ntwo")).toBe("one\ntwo");
+  });
+});
+
+describe("withPaths", () => {
+  const pathsIn = (text: string) =>
+    withPaths(highlightSegments(text))
+      .filter((s) => s.kind === "path")
+      .map((s) => s.text);
+
+  it("finds a relative path and an absolute one", () => {
+    expect(pathsIn("open apps/desktop/src/lib/highlight.ts now")).toEqual([
+      "apps/desktop/src/lib/highlight.ts",
+    ]);
+    expect(pathsIn("see /Users/me/app/Footer.js please")).toEqual(["/Users/me/app/Footer.js"]);
+  });
+
+  /// Every one of these holds a slash between two words and names no file.
+  it("leaves prose that only looks like a path alone", () => {
+    expect(pathsIn("read and/or write")).toEqual([]);
+    expect(pathsIn("TCP/IP and 24/7 and 9/9/2026")).toEqual([]);
+    expect(pathsIn("rated 3.5/5.0 overall")).toEqual([]);
+  });
+
+  /// A path already inside another run keeps whatever that run made of it.
+  it("does not reach into a mention or a URL", () => {
+    expect(pathsIn("@src/lib/issue.ts")).toEqual([]);
+    expect(pathsIn("see https://example.com/a/b.ts")).toEqual([]);
+  });
+
+  /// The run keeps the locator and drops the bracket, so the whole reference
+  /// is one link; the file in `inner` carries neither.
+  it("keeps a trailing locator on the run and off the file", () => {
+    const [segment] = withPaths(highlightSegments("(src/lib/highlight.ts:126)")).filter(
+      (s) => s.kind === "path",
+    );
+    expect(segment).toEqual({
+      kind: "path",
+      text: "src/lib/highlight.ts:126",
+      inner: "src/lib/highlight.ts",
+      line: 126,
+    });
+  });
+
+  /// Every locator shape, since one missing spelling costs the path its link
+  /// entirely rather than just its number — the suffix stays on the run, the
+  /// last segment stops ending in a filename, and nothing is picked out.
+  it("reads every locator spelling", () => {
+    const linksIn = (text: string) =>
+      withPaths(highlightSegments(text))
+        .filter((s) => s.kind === "path")
+        .map((s) => [s.text, s.inner, s.line]);
+
+    expect(linksIn("apps/desktop/src/lib/highlight.ts:L2")).toEqual([
+      ["apps/desktop/src/lib/highlight.ts:L2", "apps/desktop/src/lib/highlight.ts", 2],
+    ]);
+    expect(linksIn("see src/a.ts:12 and src/b.ts:12:5 and src/c.ts#L9 now")).toEqual([
+      ["src/a.ts:12", "src/a.ts", 12],
+      ["src/b.ts:12:5", "src/b.ts", 12],
+      ["src/c.ts#L9", "src/c.ts", 9],
+    ]);
+    // Mid-sentence, since a leading `/` is a slash command and reads as one.
+    expect(linksIn("open /Users/me/app/Footer.js:L188 there")).toEqual([
+      ["/Users/me/app/Footer.js:L188", "/Users/me/app/Footer.js", 188],
+    ]);
+    expect(linksIn("open src/a.ts now")).toEqual([["src/a.ts", "src/a.ts", undefined]]);
+  });
+
+  /// `:L` and a word is not a line number, so the run keeps it and stays prose.
+  it("leaves a colon that is not a locator alone", () => {
+    expect(pathsIn("src/a.ts:Login")).toEqual([]);
+  });
+
+  /// The same invariant the segmenter holds, since the bubble paints these in
+  /// sequence over the message.
+  it("concatenates back to the original", () => {
+    const round = (text: string) =>
+      expect(
+        withPaths(highlightSegments(text))
+          .map((s) => s.text)
+          .join(""),
+      ).toBe(text);
+
+    round("open apps/desktop/src/lib/highlight.ts and /Users/me/a.ts now");
+    round("see (apps/desktop/src/lib/highlight.ts:L2) and /Users/me/a.ts:12:5.");
+    round("read and/or write, rated 3.5/5.0");
+    round("/review @src/a.ts #DRA-53 src/b.ts");
+  });
+});
+
+
+describe("findPromptPaths overlap", () => {
+  const round = (text: string) =>
+    expect(
+      withPaths(highlightSegments(text))
+        .map((s) => s.text)
+        .join(""),
+    ).toBe(text);
+
+  /// An absolute path holding an opener starts a relative candidate *inside*
+  /// itself, so the same characters were found twice and the run stopped
+  /// concatenating back to what the reader wrote.
+  it("never returns overlapping ranges", () => {
+    for (const text of [
+      "open /tmp/(src/a.ts) now",
+      "open (/tmp/src/a.ts) now",
+      "see /tmp/[src/a.ts] and src/b.ts",
+      'open /tmp/"src/a.ts" now',
+    ]) {
+      const found = findPromptPaths(text);
+      for (let i = 1; i < found.length; i += 1) {
+        expect(found[i].start).toBeGreaterThanOrEqual(found[i - 1].end);
+      }
+      round(text);
+    }
+  });
+
+  /// The reported shape, spelled out: it produced `/tmp/(src/a.tssrc/a.ts`.
+  it("keeps the absolute reading of a path holding an opener", () => {
+    expect(findPromptPaths("open /tmp/(src/a.ts) now").map((m) => m.path)).toEqual([
+      "/tmp/(src/a.ts",
+    ]);
+  });
+
+  it("reads a bracketed relative path without its bracket", () => {
+    expect(findPromptPaths("open(src/a.ts) now").map((m) => m.path)).toEqual(["src/a.ts"]);
+  });
+
+  /// A URL with the scheme left off is not a directory in this checkout.
+  it("refuses a hostname-shaped first segment", () => {
+    expect(isRelativePath("github.com/org/repo/a.ts")).toBe(false);
+    expect(isRelativePath("example.co.uk/a/b.ts")).toBe(false);
+    // A leading dot is not a hostname, so this stays the path it is.
+    expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
+    expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
+  });
+
+  it("stays linear on openers sharing a closed non-http link", () => {
+    const text = `${"[".repeat(40_000)}](mailto:x)`;
+    const started = performance.now();
+    round(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it("stays linear on a token full of internal openers", () => {
+    const text = `${"(a".repeat(20_000)}/x`;
+    const started = performance.now();
+    round(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});
+
+
+describe("linkAt line bounds", () => {
+  const roundTrip = (text: string) =>
+    expect(
+      highlightSegments(text)
+        .map((s) => s.text)
+        .join(""),
+    ).toBe(text);
+
+  /// Caching the *run* newline test suppressed the openers between the failed
+  /// one and the label, whose runs are shorter and may hold no break at all.
+  it("does not let an opener on one line eat a link on the next", () => {
+    const text = "[bad\nnewline [good](https://example.com)";
+    const link = highlightSegments(text).find((s) => s.kind === "link");
+
+    expect(link?.text).toBe("[good](https://example.com)");
+    expect(link?.href).toBe("https://example.com");
+    roundTrip(text);
+  });
+
+  /// A link does not span a line, so a label on the next one is no label.
+  it("refuses a label that only appears on a later line", () => {
+    const text = "[open\nlabel](https://example.com)";
+    expect(highlightSegments(text).some((s) => s.kind === "link" && s.text.includes("\n"))).toBe(
+      false,
+    );
+    roundTrip(text);
+  });
+
+  /// 400k characters, because the first version of this test used 100k and
+  /// passed at 25ms while the scan was still quadratic — `indexOf` read the
+  /// whole remaining text before the line bound was applied. The same input
+  /// cost 395ms then.
+  it("stays linear across many lines of unclosed openers", () => {
+    const text = "[bad\n".repeat(80_000);
+    const started = performance.now();
+    roundTrip(text);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+});
+
+describe("scheme-less hosts", () => {
+  /// The two an agent writes most while a dev server is up. Neither carries a
+  /// dotted TLD, so the hostname rule alone missed both and they were drawn as
+  /// files in this checkout.
+  it("refuses a host with a port and an IPv4 address", () => {
+    expect(isRelativePath("localhost:3000/api/schema.json")).toBe(false);
+    expect(isRelativePath("127.0.0.1/api/schema.json")).toBe(false);
+    expect(isRelativePath("192.168.1.10:8080/a/b.json")).toBe(false);
+    // The one host with no dot, no port and no digits, so it matches none of
+    // the shapes above and has to be named.
+    expect(isRelativePath("localhost/api/schema.json")).toBe(false);
+    expect(isRelativePath("LocalHost/api/schema.json")).toBe(false);
+  });
+
+  it("still reads an ordinary relative path", () => {
+    expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
+    expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
+    expect(isRelativePath("src/lib/filePath.ts")).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { defaultRehypePlugins, type StreamdownProps } from "streamdown";
 
-import { findFilePaths, isFilePath } from "@/lib/filePath";
+import { findPromptPaths, isFilePath, isRelativePath, splitLocator } from "@/lib/filePath";
 
 // `rehype-harden` drops the href of any link it cannot resolve, which is right,
 // and then writes " [blocked]" into the prose beside it, which is not: two
@@ -108,13 +108,15 @@ type HastNode = {
 /// would fire both on one click.
 const NOT_PROSE = new Set(["pre", "a", "script", "style"]);
 
-function marked(path: string, children: HastNode[], wasLink = false): HastNode {
+function marked(path: string, children: HastNode[], wasLink = false, line?: number): HastNode {
   return {
     type: "element",
     tagName: "span",
     properties: {
       className: wasLink ? [FILE_PATH_CLASS, FILE_LINK_CLASS] : [FILE_PATH_CLASS],
       title: path,
+      // Only where a locator was on, so a span with none carries no attribute.
+      ...(line ? { dataLine: String(line) } : {}),
     },
     children,
   };
@@ -138,11 +140,18 @@ function anchorToFile(node: HastNode): HastNode | null {
   // `[x](/Users/me/My%20Project/x.ts)` is the one way to write a path holding a
   // space as a markdown link — a bare one there ends the href — so the encoded
   // form is the shape to expect, and it names no file left as it is. Decoding
-  // cannot smuggle anything past `isFilePath`, which still runs on the result.
-  const path = decodePath(href);
-  if (!isFilePath(path)) return null;
+  // cannot smuggle anything past the two rules below, which still run on the
+  // result.
+  //
+  // The locator comes off first, or `[x](/a/b.ts:12)` links to a file literally
+  // named `b.ts:12` and `[x](src/a.ts:12)` is refused outright, the relative
+  // rule wanting a filename at the end where `a.ts:12` is not one. Split by
+  // hand rather than by the prose scan, which trims sentence punctuation an
+  // href is not surrounded by and refuses the run holding a space above.
+  const { path, line } = splitLocator(decodePath(href));
+  if (!isFilePath(path) && !isRelativePath(path)) return null;
 
-  return marked(path, node.children ?? [], true);
+  return marked(path, node.children ?? [], true, line);
 }
 
 /// `href` with its escapes resolved, or unchanged where they do not resolve.
@@ -155,7 +164,7 @@ function decodePath(href: string): string {
   }
 }
 
-/// Marks every absolute path in the prose so `Markdown` can draw it as a link.
+/// Marks every path in the prose so `Markdown` can draw it as a link.
 ///
 /// Runs after sanitize, which would otherwise strip what this adds, and
 /// **before** harden, which rewrites or unwraps an href before this could read
@@ -191,7 +200,10 @@ export function walk(node: HastNode) {
     }
 
     const value = child.type === "text" ? child.value : undefined;
-    const matches = value ? findFilePaths(value) : [];
+    // Relative paths too, the bubble's own reading. The pass has no working
+    // directory to resolve one against, so the span carries it as written and
+    // `FilePathSpan` resolves it against the chat's cwd, as a mention is.
+    const matches = value ? findPromptPaths(value) : [];
     if (!value || matches.length === 0) {
       next?.push(child);
       continue;
@@ -200,9 +212,11 @@ export function walk(node: HastNode) {
     next ??= children.slice(0, i);
 
     let at = 0;
-    for (const { start, end, path } of matches) {
+    // The label is the match and not `path`: the two differ by the locator,
+    // which the link keeps on screen and leaves out of what it opens.
+    for (const { start, end, path, line } of matches) {
       if (start > at) next.push({ type: "text", value: value.slice(at, start) });
-      next.push(marked(path, [{ type: "text", value: path }]));
+      next.push(marked(path, [{ type: "text", value: value.slice(start, end) }], false, line));
       at = end;
     }
     if (at < value.length) next.push({ type: "text", value: value.slice(at) });

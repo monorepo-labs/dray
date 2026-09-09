@@ -117,6 +117,18 @@ describe("findFilePaths", () => {
     expect(paths("fix (/a/b.ts:12).")).toEqual(["/a/b.ts"]);
   });
 
+  /// The match reaches past the locator and reports its line, so a link can
+  /// cover the whole reference and still open the file. The column is read
+  /// past and not reported: no opener here takes one.
+  it("keeps the locator in the match and reads its line", () => {
+    const text = "fix (/a/b.ts:12:5).";
+    const [match] = findFilePaths(text);
+    expect(text.slice(match.start, match.end)).toBe("/a/b.ts:12:5");
+    expect(match).toMatchObject({ path: "/a/b.ts", line: 12 });
+    expect(findFilePaths("fix /a/b.ts#L7")[0].line).toBe(7);
+    expect(findFilePaths("fix /a/b.ts now")[0].line).toBeUndefined();
+  });
+
   /// The locator strip runs before the path is judged, so what is left of a
   /// one-segment path is still refused.
   it("does not let a locator strip conjure a path", () => {
