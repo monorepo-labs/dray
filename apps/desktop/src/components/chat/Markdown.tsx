@@ -7,6 +7,7 @@ import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
 import { isFilePath } from "@/lib/filePath";
+import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
   FILE_LINK_CLASS,
@@ -231,13 +232,23 @@ function FilePathSpan({
   const classes = className?.split(" ") ?? [];
   if (classes.includes(FILE_PATH_CLASS) && title && isFilePath(title)) {
     const line = Number(dataLine);
+    const written = classes.includes(FILE_LINK_CLASS);
+    // A bare path is drawn the way the reader's own mention is — `@`, the
+    // filename and its locator, the directory on the tooltip — since the two
+    // name the same thing and a deep path is most of a line. A link the agent
+    // *wrote* keeps the label it wrote. The locator is what is left of the
+    // marked text past the path, so `:12` and `#L12` come through as typed.
+    const label = textOf(children);
+    const locator = label?.startsWith(title) ? label.slice(title.length) : "";
+    const name = title.split("/").filter(Boolean).at(-1) ?? title;
     return (
       <FileLink
         path={title}
         line={Number.isInteger(line) && line > 0 ? line : undefined}
-        writtenAsLink={classes.includes(FILE_LINK_CLASS)}
+        writtenAsLink={written}
+        className={written ? undefined : SEGMENT_COLOR.mention}
       >
-        {children}
+        {written ? children : `@${name}${locator}`}
       </FileLink>
     );
   }
@@ -247,6 +258,15 @@ function FilePathSpan({
       {children}
     </span>
   );
+}
+
+/// The one text node a marked span holds, or `null` where it holds anything
+/// else. A single child reaches a component bare and several reach it as an
+/// array, so both shapes are read.
+function textOf(node: React.ReactNode): string | null {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node) && node.length === 1) return textOf(node[0]);
+  return null;
 }
 
 // Every delta re-renders the transcript, so identical text must not re-parse.
