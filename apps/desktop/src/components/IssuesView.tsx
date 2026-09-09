@@ -622,8 +622,14 @@ function IssueRow({
   };
 
   return (
-    <button
-      type="button"
+    // A div behaving as a button, the shape `IssuePanel`'s own row uses. This
+    // was a real `button` back when the only thing inside it was one span
+    // pretending to be one; it now carries two menu triggers as well, and three
+    // focusable controls nested in a `button` is invalid markup whose keyboard
+    // behaviour assistive tech is free to collapse into the row's own action.
+    <div
+      role="button"
+      tabIndex={0}
       // ⌘-click leaves for the tracker, the same modifier the transcript's link
       // dialog uses to mean "out there, not here". An ordinary click still opens
       // the pane, which is what this row is for — Linear is the shortcut.
@@ -634,8 +640,17 @@ function IssueRow({
         }
         onPick(issue);
       }}
+      // A control inside the row answers its own keys, or Enter on a status menu
+      // opens it and picks the row underneath in one press.
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        onPick(issue);
+      }}
       className={cn(
-        "group flex w-full items-center gap-2 px-3 py-2 text-left text-ui transition-colors",
+        "group flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-ui transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         picked ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
       )}
     >
@@ -708,6 +723,6 @@ function IssueRow({
       <span className="hidden w-16 shrink-0 text-right text-muted-foreground sm:inline">
         {calendarDay(issue.updatedAt)}
       </span>
-    </button>
+    </div>
   );
 }

@@ -33,6 +33,19 @@ function errorText(error: IssueUnavailable): string {
   return UNAVAILABLE[error.kind] || (error.kind === "other" ? error.detail : "");
 }
 
+/// What a status or priority write names, taken from **both** halves the row
+/// holds — and taking either from one alone is a bug.
+///
+/// The identifier comes from the *link*, because that is the key
+/// `useSessionIssues` caches this body under; the id comes from the *detail*,
+/// because that is the tracker's own and what the write is looked up by. The two
+/// spellings differ after a team move, where a session linked to `DRA-53` reads
+/// back an issue that now calls itself `ENG-12` — and a write keyed off the
+/// response then patches a cache entry nobody reads.
+function target(link: IssueRef, detail: IssueDetail) {
+  return { id: detail.id, identifier: link.identifier };
+}
+
 /// Uploads inside a description, drawn rather than linked.
 ///
 /// Linear puts both in the description's markdown — an image as `![](…)`, a
@@ -215,7 +228,7 @@ function IssueRow({
             to check against and no id to write with, and a menu that opens on
             a guess is worse than a glyph that waits. */}
         {detail ? (
-          <PriorityMenu issue={detail} priority={detail.priority} />
+          <PriorityMenu issue={target(issue, detail)} priority={detail.priority} />
         ) : (
           <IssuePriorityIcon priority="none" />
         )}
@@ -225,7 +238,7 @@ function IssueRow({
         {/* From the read where it has landed, and a resting glyph until then —
             so the row never jumps between two heights as detail arrives. */}
         {detail ? (
-          <StatusMenu issue={detail} state={detail.state} states={detail.states} />
+          <StatusMenu issue={target(issue, detail)} state={detail.state} states={detail.states} />
         ) : (
           <IssueStateIcon kind="other" label={loading ? "Loading" : "Unknown"} />
         )}

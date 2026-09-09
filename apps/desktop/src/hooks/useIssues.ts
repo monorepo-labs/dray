@@ -152,6 +152,26 @@ export function forgetIssues() {
 /// the change.
 export type IssuePatch = { state?: IssueState; priority?: IssuePriority };
 
+/// Puts back what the caches held before an optimistic patch, and leaves what it
+/// restored **stale**.
+///
+/// Stale rather than re-stamped, because a failed command does not prove the
+/// write failed: `update_issue` mutates and then re-reads, so a mutation that
+/// landed under a read that did not comes back as an error. Restoring the old
+/// value keeps an unconfirmed status off the screen; clearing the stamp is what
+/// then sends one read to find out which of the two actually happened.
+type Rollback = () => void;
+
+/// The newest write per issue, so a response that has been superseded can be
+/// dropped rather than applied.
+///
+/// Two picks on one issue can complete out of order, and the older completing
+/// last is the damaging one: it would run `forgetIssues` over the newer pick's
+/// paint and then stamp its own stale detail fresh for a minute. Both still go
+/// out — the reconcile reads whatever the tracker ended up with, so a wire that
+/// applies them out of order costs a correction rather than a lie.
+const writes = new Map<string, number>();
+
 /// One issue with the patch applied. Serves `Issue` and `IssueDetail` alike,
 /// since both carry exactly these two fields.
 function patched<T extends { state: IssueState; priority: IssuePriority }>(
@@ -180,17 +200,27 @@ function patched<T extends { state: IssueState; priority: IssuePriority }>(
 /// this is not — but `FRESH_MS` is a minute, so on any list older than that the
 /// race is not a race at all, it happens every time. Stamped, nothing goes out
 /// until `forgetIssues` says so, which is after the write.
-function patchCachedIssue(identifier: string, patch: IssuePatch) {
+function patchCachedIssue(identifier: string, patch: IssuePatch): Rollback {
   const now = Date.now();
+  const undo: (() => void)[] = [];
   const detail = detailCache.get(identifier);
 
   if (detail) {
+    undo.push(() => {
+      detailCache.set(identifier, detail);
+      detailFetchedAt.delete(identifier);
+    });
     detailCache.set(identifier, patched(detail, patch));
     detailFetchedAt.set(identifier, now);
   }
 
   for (const [key, issues] of cache) {
     if (!issues.some((issue) => issue.identifier === identifier)) continue;
+
+    undo.push(() => {
+      cache.set(key, issues);
+      fetchedAt.delete(key);
+    });
 
     // A status write can move a row out of the half its list asked for — Done
     // belongs to the settled read, not the open one. Patched in place it would
@@ -215,6 +245,11 @@ function patchCachedIssue(identifier: string, patch: IssuePatch) {
   // flight, which is holding the generation it started under and would put the
   // pre-write answer back for the same reason.
   newIssueGeneration();
+
+  return () => {
+    for (const step of undo) step();
+    newIssueGeneration();
+  };
 }
 
 /// Moves an issue's status or priority — the one write this app makes to a
@@ -237,11 +272,27 @@ function patchCachedIssue(identifier: string, patch: IssuePatch) {
 /// since a write stamped with the old generation is refused by the very guard
 /// that makes the clearing stick.
 ///
-/// Failure raises a notice and is not thrown, and clears the optimistic paint
-/// with it: `forgetIssues` there is what puts the tracker's own answer back on
-/// screen rather than leaving a status the reader picked and never got.
+/// Failure rolls the paint back rather than clearing the caches. `forgetIssues`
+/// there was not enough and read as though it were: a list keeps its own rows
+/// when a forced re-read fails, and the write failing offline is exactly the
+/// case where that re-read fails too — so the rejected status stayed on screen
+/// under an error banner.
+///
+/// **`issue.identifier` is the cache key throughout, and the response's own is
+/// never used for one.** They differ after a team move: a session linked to
+/// `DRA-53` reads a detail that now calls itself `ENG-12`, and `useSessionIssues`
+/// caches it under the link's spelling. Keying the write off the response would
+/// patch an entry nobody reads and file the answer where nobody asks. The wire
+/// gets `issue.id`, the stable half, which is what Rust looks up first anyway.
 export async function updateIssue(issue: { identifier: string; id: string }, patch: IssuePatch) {
-  patchCachedIssue(issue.identifier, patch);
+  const ticket = (writes.get(issue.identifier) ?? 0) + 1;
+  writes.set(issue.identifier, ticket);
+
+  const rollback = patchCachedIssue(issue.identifier, patch);
+  /// Whether this write is still the newest for its issue. A superseded one
+  /// touches nothing — neither the caches nor the notice, since a card for a
+  /// pick the reader has already replaced names a decision they moved on from.
+  const current = () => writes.get(issue.identifier) === ticket;
 
   try {
     const next = await invoke<IssueDetail>("update_issue", {
@@ -253,10 +304,16 @@ export async function updateIssue(issue: { identifier: string; id: string }, pat
       priority: patch.priority ?? null,
     });
 
+    if (!current()) return;
+    writes.delete(issue.identifier);
+
     forgetIssues();
-    rememberDetail(next.identifier, next, issueGeneration());
+    rememberDetail(issue.identifier, next, issueGeneration());
   } catch (e) {
-    forgetIssues();
+    if (!current()) return;
+    writes.delete(issue.identifier);
+
+    rollback();
     pushNotice({
       sessionId: issue.identifier,
       kind: "issue-failed",
