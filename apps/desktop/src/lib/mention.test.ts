@@ -220,6 +220,37 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  /// Wikipedia's own links carry a pair, and stopping at the first `)` links to
+  /// a truncated URL while leaving the rest as prose — a wrong link that reads
+  /// exactly like a right one.
+  it("balances parens inside a link href", () => {
+    expect(highlightSegments("[the page](https://en.wikipedia.org/wiki/Foo_(bar))")).toEqual([
+      {
+        kind: "link",
+        text: "[the page](https://en.wikipedia.org/wiki/Foo_(bar))",
+        inner: "the page",
+        href: "https://en.wikipedia.org/wiki/Foo_(bar)",
+      },
+    ]);
+  });
+
+  /// An ordinary thing to type, and emphasis under a rule that let a one-
+  /// character delimiter close on half of a doubled one.
+  it("does not close a single delimiter on half of a doubled one", () => {
+    expect(highlightSegments("Use *args, **kwargs")).toEqual([
+      { kind: "text", text: "Use *args, **kwargs" },
+    ]);
+  });
+
+  /// Every unpaired opener used to re-scan the whole remainder, which is
+  /// quadratic — and this runs on each keystroke in the composer.
+  it("stays linear on a long run of unpaired openers", () => {
+    const text = "*a ".repeat(24_000);
+    const started = performance.now();
+    roundTrips(text);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it("marks a link and keeps its href off the label", () => {
     expect(highlightSegments("see [the docs](https://example.com/a) here")).toEqual([
       { kind: "text", text: "see " },

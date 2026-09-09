@@ -117,6 +117,23 @@ const MARKS: [string, Segment["kind"]][] = [
 /// ordinary ones in a single test.
 const MARK_OPENERS = new Set(["*", "_", "~", "`", "["]);
 
+/// What the scanner has already proved absent, keyed by the delimiter it looked
+/// for and holding the index its failed search reached.
+///
+/// Every one of these searches runs forward to the end of the line or the end of
+/// the text, so a search that found nothing before that point cannot be helped
+/// by starting later — a later opener's span is a subset of the one that already
+/// failed. Without the memo each unpaired opener re-scans the whole remainder:
+/// 72k characters shaped as `*a *a *a` took 8.1s, and this runs on every
+/// keystroke in the composer.
+type Exhausted = Map<string, number>;
+
+/// Where the line holding `from` ends, which is how far a mark may reach.
+function lineEnd(text: string, from: number): number {
+  const nl = text.indexOf("\n", from);
+  return nl === -1 ? text.length : nl;
+}
+
 /// Where `mark` closes the run opened at `from`, or `-1`.
 ///
 /// Written to under-match, the reading `findFilePaths` takes: a closing
@@ -126,7 +143,14 @@ const MARK_OPENERS = new Set(["*", "_", "~", "`", "["]);
 function closeIndex(text: string, mark: string, from: number): number {
   for (let j = from + 1; j < text.length; j += 1) {
     if (text[j] === "\n") return -1;
-    if (text.startsWith(mark, j) && !SPACE.test(text[j - 1])) return j;
+    if (!text.startsWith(mark, j) || SPACE.test(text[j - 1])) continue;
+
+    // A one-character delimiter must not close on half of a doubled one, or
+    // `Use *args, **kwargs` — an ordinary thing to type — reads as an italic
+    // `args, *` with `kwargs` left outside it.
+    if (mark.length === 1 && (text[j - 1] === mark || text[j + 1] === mark)) continue;
+
+    return j;
   }
   return -1;
 }
@@ -137,7 +161,7 @@ function closeIndex(text: string, mark: string, from: number): number {
 /// construct is deliberately not read: a heading, a bullet or a fence stays the
 /// literal text it was typed as, because a prompt is one person's sentence and
 /// the bubble drawing it is not a document.
-function inlineAt(text: string, i: number): Segment | null {
+function inlineAt(text: string, i: number, exhausted: Exhausted): Segment | null {
   // Must open a word, the rule an issue tag already takes. Without it
   // `snake_case_name` is an italic and so is `2 * 3 * 4`, and both are ordinary
   // things to type into a prompt.
@@ -145,11 +169,17 @@ function inlineAt(text: string, i: number): Segment | null {
   if (!SPACE.test(previous) && !OPENERS.includes(previous)) return null;
 
   if (text[i] === "`") {
+    if (i < (exhausted.get("`") ?? -1)) return null;
+
     // A single-backtick span only, which is also what keeps a fence literal:
     // the ``` opening one closes against its own second backtick and is
     // refused for holding nothing.
     const close = text.indexOf("`", i + 1);
-    if (close === -1 || close === i + 1) return null;
+    if (close === -1) {
+      exhausted.set("`", text.length);
+      return null;
+    }
+    if (close === i + 1) return null;
 
     const inner = text.slice(i + 1, close);
     if (inner.includes("\n")) return null;
@@ -157,10 +187,11 @@ function inlineAt(text: string, i: number): Segment | null {
     return { kind: "code", text: text.slice(i, close + 1), inner };
   }
 
-  if (text[i] === "[") return linkAt(text, i);
+  if (text[i] === "[") return linkAt(text, i, exhausted);
 
   for (const [mark, kind] of MARKS) {
     if (!text.startsWith(mark, i)) continue;
+    if (i < (exhausted.get(mark) ?? -1)) continue;
 
     const from = i + mark.length;
     // The content has to start straight away, or a list bullet — `* ` at the
@@ -168,7 +199,10 @@ function inlineAt(text: string, i: number): Segment | null {
     if (from >= text.length || SPACE.test(text[from])) continue;
 
     const close = closeIndex(text, mark, from);
-    if (close === -1) continue;
+    if (close === -1) {
+      exhausted.set(mark, lineEnd(text, from));
+      continue;
+    }
 
     return { kind, text: text.slice(i, close + mark.length), inner: text.slice(from, close) };
   }
@@ -181,11 +215,17 @@ function inlineAt(text: string, i: number): Segment | null {
 /// `http(s)` only, the bar `urlAt` holds: a link is a thing that opens in a
 /// browser, so a `mailto:` or a relative path stays the text it was typed as
 /// rather than becoming a button that goes nowhere.
-function linkAt(text: string, i: number): Segment | null {
-  const label = text.indexOf("]", i + 1);
-  if (label === -1 || label === i + 1 || text[label + 1] !== "(") return null;
+function linkAt(text: string, i: number, exhausted: Exhausted): Segment | null {
+  if (i < (exhausted.get("]") ?? -1)) return null;
 
-  const close = text.indexOf(")", label + 2);
+  const label = text.indexOf("]", i + 1);
+  if (label === -1) {
+    exhausted.set("]", text.length);
+    return null;
+  }
+  if (label === i + 1 || text[label + 1] !== "(") return null;
+
+  const close = hrefEnd(text, label + 2);
   if (close === -1 || close === label + 2) return null;
 
   const run = text.slice(i, close + 1);
@@ -197,11 +237,35 @@ function linkAt(text: string, i: number): Segment | null {
   return { kind: "link", text: run, inner: text.slice(i + 1, label), href };
 }
 
+/// The `)` closing an href opened at `from`, or `-1`.
+///
+/// Parens inside the URL are balanced rather than stopped at, the same reading
+/// `urlAt` takes of a bare one: Wikipedia's own links carry a pair, and stopping
+/// at the first `)` links to a truncated URL while leaving the rest as prose —
+/// a wrong link that looks exactly like a right one.
+function hrefEnd(text: string, from: number): number {
+  let depth = 0;
+
+  for (let j = from; j < text.length; j += 1) {
+    const c = text[j];
+    if (c === "\n") return -1;
+    if (c === "(") depth += 1;
+    else if (c === ")") {
+      if (depth === 0) return j;
+      depth -= 1;
+    }
+  }
+
+  return -1;
+}
+
 /// The runs of `text` in order. Concatenating them returns `text` exactly —
 /// which is what lets the overlay use this without the glyphs drifting out of
 /// register with the textarea underneath.
 export function highlightSegments(text: string): Segment[] {
   const segments: Segment[] = [];
+  // Per call, not module-level: it describes this string and nothing else.
+  const exhausted: Exhausted = new Map();
   let plainFrom = 0;
   let i = 0;
 
@@ -226,7 +290,7 @@ export function highlightSegments(text: string): Segment[] {
       continue;
     }
     if (MARK_OPENERS.has(opener)) {
-      const mark = inlineAt(text, i);
+      const mark = inlineAt(text, i, exhausted);
       if (!mark) continue;
 
       if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
