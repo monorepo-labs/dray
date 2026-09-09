@@ -109,6 +109,20 @@ describe("rehypeFilePaths", () => {
     expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
   });
 
+  /// A locator stays in the label and off the path, and rides `data-line` so
+  /// the click can land on it. Left out of the label it dangled beside the
+  /// link as plain text and read as half-converted; left on the path it named
+  /// a file that does not exist.
+  it("keeps a locator in the label and on data-line, off the path", () => {
+    const tree = paragraph([{ type: "text", value: "see /a/b.ts:12 there" }]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(span.properties).toMatchObject({ title: "/a/b.ts", dataLine: "12" });
+    expect(span.children).toEqual([{ type: "text", value: "/a/b.ts:12" }]);
+    expect(tree.children?.[0].children?.at(-1)).toEqual({ type: "text", value: " there" });
+  });
+
   /// The shape an agent writes most readily. Left as an anchor it raised the
   /// external-link confirmation for something that is not a URL, and then had
   /// nowhere to go.

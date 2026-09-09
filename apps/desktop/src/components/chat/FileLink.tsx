@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 /// half-converted.
 export default function FileLink({
   path,
+  line,
   title,
   writtenAsLink = false,
   className,
@@ -33,6 +34,9 @@ export default function FileLink({
   /// nothing opens a doc whose panel says so, and every other one falls through
   /// to a reveal, where revealing something gone is a click that does nothing.
   path: string;
+  /// The line the reference named, where it named one. Honoured by an editor
+  /// and ignored by a reveal, which can only select the file.
+  line?: number;
   title?: string;
   /// This was a markdown link before it was a file link, so draw it as one.
   writtenAsLink?: boolean;
@@ -49,7 +53,7 @@ export default function FileLink({
     e.stopPropagation();
     // Markdown opens in the Docs panel and everything else in the reader's
     // editor. A file this app can already render is not one to leave Dray for.
-    openPath(sessionId, path);
+    openPath(sessionId, path, line);
   };
 
   return (

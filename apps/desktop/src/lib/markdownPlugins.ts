@@ -108,13 +108,15 @@ type HastNode = {
 /// would fire both on one click.
 const NOT_PROSE = new Set(["pre", "a", "script", "style"]);
 
-function marked(path: string, children: HastNode[], wasLink = false): HastNode {
+function marked(path: string, children: HastNode[], wasLink = false, line?: number): HastNode {
   return {
     type: "element",
     tagName: "span",
     properties: {
       className: wasLink ? [FILE_PATH_CLASS, FILE_LINK_CLASS] : [FILE_PATH_CLASS],
       title: path,
+      // Only where a locator was on, so a span with none carries no attribute.
+      ...(line ? { dataLine: String(line) } : {}),
     },
     children,
   };
@@ -200,9 +202,11 @@ export function walk(node: HastNode) {
     next ??= children.slice(0, i);
 
     let at = 0;
-    for (const { start, end, path } of matches) {
+    // The label is the match and not `path`: the two differ by the locator,
+    // which the link keeps on screen and leaves out of what it opens.
+    for (const { start, end, path, line } of matches) {
       if (start > at) next.push({ type: "text", value: value.slice(at, start) });
-      next.push(marked(path, [{ type: "text", value: path }]));
+      next.push(marked(path, [{ type: "text", value: value.slice(start, end) }], false, line));
       at = end;
     }
     if (at < value.length) next.push({ type: "text", value: value.slice(at) });

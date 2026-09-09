@@ -25,22 +25,26 @@ const TRAILING = new Set([...".,;:!?)]}>\"'"]);
 /// A line break stays the bound, since a path does not span one.
 const GAP = /[^\S\r\n]/;
 
-/// A trailing `:12`, `:12:5`, `:L12` or `#L12`.
+/// A trailing `:12`, `:12:5`, `:L12` or `#L12`, its line in the first group
+/// that matched.
 ///
 /// The app's own harness prompt asks for `file_path:line_number`, so this is
-/// the commonest shape an absolute path takes in a transcript. `open -a` cannot
-/// be handed a line, so the number stays prose and the path is what opens —
-/// left on, the link named a file that does not exist and the click did
-/// nothing.
+/// the commonest shape an absolute path takes in a transcript. The locator is
+/// no part of the file, so `path` is read without it — left on, the link named
+/// a file that does not exist and the click did nothing — but the match keeps
+/// it, so the link the reader sees is the whole reference and not a filename
+/// with `:12` dangling beside it in plain text, which read as half-converted.
 ///
 /// `:L12` is the shape agents reach for most after the bare number — it is what
 /// this repo's own review comments use — and it failed *silently*: the run kept
 /// the suffix, so the last segment stopped ending in a filename and the path
 /// was not picked out at all. The `L` is optional rather than a fourth
 /// alternative, since `:12` and `:L12` are one idea spelled two ways.
-const LOCATOR = /(?::L?\d+(?::\d+)?|#L\d+)$/;
+const LOCATOR = /(?::L?(\d+)(?::\d+)?|#L(\d+))$/;
 
-type FilePathMatch = { start: number; end: number; path: string };
+/// `end` reaches past the locator where there is one, so the whole reference is
+/// the link; `path` never holds it, so what opens is the file.
+type FilePathMatch = { start: number; end: number; path: string; line?: number };
 
 /// Whether `path` is an absolute path worth offering to open.
 ///
@@ -106,17 +110,25 @@ export function isRelativePath(path: string): boolean {
   return NAMES_FILE.test(parts.at(-1) ?? "");
 }
 
-/// `stop` pulled back past the punctuation a sentence puts after a path.
+/// `stop` pulled back past the punctuation a sentence puts after a path: `end`
+/// is where the match ends, `pathEnd` where the file's own name does, and the
+/// two differ by exactly the locator.
 ///
 /// Shared by both scans so a path picked out either way loses its bracket and
 /// its `:12` the same way. Order matters: the punctuation strip runs first, so
 /// `(src/a.ts:12)` loses the bracket before the locator is looked for.
-function trimTail(text: string, from: number, stop: number): number {
+function trimTail(
+  text: string,
+  from: number,
+  stop: number,
+): { end: number; pathEnd: number; line?: number } {
   let end = stop;
   while (end > from && TRAILING.has(text[end - 1])) end -= 1;
 
   const locator = LOCATOR.exec(text.slice(from, end));
-  return locator ? end - locator[0].length : end;
+  if (!locator) return { end, pathEnd: end };
+
+  return { end, pathEnd: end - locator[0].length, line: Number(locator[1] ?? locator[2]) };
 }
 
 /// Every relative path in `text`, in order.
@@ -143,11 +155,11 @@ export function findRelativePaths(text: string): FilePathMatch[] {
     let stop = i;
     while (stop < text.length && !OPENS_PATH.test(text[stop])) stop += 1;
 
-    const end = trimTail(text, i, stop);
-    const path = text.slice(i, end);
+    const { end, pathEnd, line } = trimTail(text, i, stop);
+    const path = text.slice(i, pathEnd);
     if (!isRelativePath(path)) continue;
 
-    found.push({ start: i, end, path });
+    found.push({ start: i, end, path, line });
     i = end - 1;
   }
 
@@ -202,15 +214,8 @@ export function findFilePaths(text: string): FilePathMatch[] {
     let stop = i;
     while (stop < text.length && !/\s/.test(text[stop])) stop += 1;
 
-    let end = stop;
-    while (end > i && TRAILING.has(text[end - 1])) end -= 1;
-
-    // After the punctuation strip, so `(/a/b.ts:12)` loses the bracket first
-    // and the locator second.
-    const locator = LOCATOR.exec(text.slice(i, end));
-    if (locator) end -= locator[0].length;
-
-    const path = text.slice(i, end);
+    const { end, pathEnd, line } = trimTail(text, i, stop);
+    const path = text.slice(i, pathEnd);
     if (!isFilePath(path)) continue;
     // A scan that stops at whitespace cuts `/Users/me/My Project/a.ts` in half,
     // and the half is a real path — one that can exist and open the wrong
@@ -218,7 +223,7 @@ export function findFilePaths(text: string): FilePathMatch[] {
     // run is dropped rather than guessed at.
     if (continuesPath(text, stop, path)) continue;
 
-    found.push({ start: i, end, path });
+    found.push({ start: i, end, path, line });
     i = end - 1;
   }
 
