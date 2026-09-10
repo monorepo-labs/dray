@@ -28,6 +28,15 @@ export const groupName = (group: { id: number }) => `Group ${group.id}`;
 /// Grid order: left to right, top to bottom. The sidebar's run reads the same.
 export const members = (group: SplitGroup): string[] => group.columns.flat();
 
+/// What the ⌘ digits walk: clockwise from the top left — the top row left to
+/// right, then the bottom row right to left. `members`' reading order puts ⌘2
+/// *under* ⌘1 in a 2×2, where the eye walks round the grid rather than down a
+/// column.
+export const paneOrder = (group: SplitGroup): string[] => [
+  ...group.columns.map((c) => c[0]),
+  ...[...group.columns].reverse().flatMap((c) => c.slice(1)),
+];
+
 export function groupOf(
   groups: SplitGroup[],
   sessionId: string | null,
