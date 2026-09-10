@@ -1040,6 +1040,10 @@ function App() {
   const renameSpace = async (from: string, to: string) => {
     if (!(await retagSpace(from, to))) return;
     setDeclaredSpaces((prev) => [...new Set(prev.map((s) => (s === from ? to : s)))]);
+    // Groups are filed by the space's name, so they follow it — left tagged
+    // with the old one they would vanish, and come back under a later space
+    // that happened to take the name.
+    setGroups((prev) => prev.map((g) => (g.space === from ? { ...g, space: to } : g)));
     if (storedSpace === from) setStoredSpace(to);
   };
 
@@ -1049,6 +1053,8 @@ function App() {
   const removeSpace = async (name: string) => {
     if (!(await retagSpace(name, null))) return;
     setDeclaredSpaces((prev) => prev.filter((s) => s !== name));
+    // Its groups go where its projects go: under none, which is every project.
+    setGroups((prev) => prev.map((g) => (g.space === name ? { ...g, space: null } : g)));
     if (storedSpace === name) changeSpace(null);
   };
 
@@ -1217,20 +1223,23 @@ function App() {
   useHotkey("ArrowDown", () => goToSession(() => stepGroup(1)), { alt: true });
   // The bare ⌘ digits go to the panes, since focus is what moves most inside
   // a grid; the view tabs take ⌘⌥ below. Not ⌘⇧, which macOS spends on
-  // screenshots for exactly these digits. Bound only while a grid is up: ⌘1
-  // with none has nothing to point at, and must not eat the key.
+  // screenshots for exactly these digits. Bound only while a grid is *on
+  // screen*: with none ⌘1 has nothing to point at and must not eat the key,
+  // and under the Diff tab or the issues page ⌘⌥W would close a pane the
+  // reader cannot see.
+  const gridShown = !!activeGroup && !issuesOpen && viewTab === "chat";
   const paneIds = activeGroup ? members(activeGroup) : [];
   const focusPane = (n: number) => {
     const id = paneIds[n - 1];
     if (id) void handleSelectSessionIndexItem(id);
   };
-  useHotkey("1", () => focusPane(1), { enabled: !!activeGroup });
-  useHotkey("2", () => focusPane(2), { enabled: !!activeGroup });
-  useHotkey("3", () => focusPane(3), { enabled: !!activeGroup });
-  useHotkey("4", () => focusPane(4), { enabled: !!activeGroup });
+  useHotkey("1", () => focusPane(1), { enabled: gridShown });
+  useHotkey("2", () => focusPane(2), { enabled: gridShown });
+  useHotkey("3", () => focusPane(3), { enabled: gridShown });
+  useHotkey("4", () => focusPane(4), { enabled: gridShown });
   useHotkey("w", () => selectedSessionId && closeSessionPane(selectedSessionId), {
     alt: true,
-    enabled: !!activeGroup,
+    enabled: gridShown,
   });
   // ⌘E for the right pane against ⌘B for the left.
   //

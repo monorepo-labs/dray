@@ -591,6 +591,9 @@ export default function Chat({
                   key={ask.requestId}
                   questions={ask.questions}
                   onAnswer={(answers) => onAnswerQuestions(ask.requestId, answers)}
+                  // The pane the composer serves is the one whose card may
+                  // take the caret.
+                  autoFocus={active}
                 />
               ) : (
                 <PermissionRequest
