@@ -170,6 +170,9 @@ export function useSessions() {
     // Which side of the archived split the sidebar is showing. Not persisted:
     // archived is the exception view, so every launch starts on the active list.
     const [showArchived, setShowArchived] = useState(false);
+    /// Which archived side `sessionIndexItems` was read for; `null` until the
+    /// first read lands. See the fetch effect for why `showArchived` cannot serve.
+    const [indexSide, setIndexSide] = useState<boolean | null>(null);
     // One entry per harness, never one list plus a note saying whose it is.
     //
     // A single list held the *previous* harness's answer until the next landed,
@@ -1311,9 +1314,18 @@ const deleteSession = async (sessionId: string) => {
 // Refetched on every toggle rather than filtered from one cached list: the two
 // views are disjoint, so holding both would mean tracking which of them a flag
 // write belongs to.
+//
+// `indexSide` says which side the loaded list belongs to, written in the same
+// batch as the list. `showArchived` alone lies for the read's duration: the
+// toggle flips it at once while the list still holds the other side, and a
+// reader pruning "sessions no longer listed" against that would prune them
+// all.
 useEffect(() => {
   invoke<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
-    .then(setSessionIndexItems)
+    .then((items) => {
+      setSessionIndexItems(items);
+      setIndexSide(showArchived);
+    })
     .catch((e) => setError(String(e)));
 }, [showArchived])
 
@@ -2136,6 +2148,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

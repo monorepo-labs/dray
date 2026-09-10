@@ -173,6 +173,7 @@ function App() {
     ensureLoaded,
     setOnScreen,
     paneState,
+    indexSide,
   } = useSessions();
 
   // Whether the agent the composer is pointed at can actually be run. Null
@@ -495,14 +496,16 @@ function App() {
       .filter((g) => members(g).length >= 2);
   }, [groups, space, projects, sessionIndexItems]);
 
-  // A deleted or archived member leaves its group. Gated on the live list
-  // having loaded: the index is empty for a moment at launch, and pruning
-  // against that would drop every group.
+  // A deleted or archived member leaves its group. Gated on the *loaded* list
+  // being the live one — not on `showArchived`, which flips before the live
+  // list lands, so a switch back from Settled would prune every group against
+  // the archived list still on screen. `null` covers launch, where the index
+  // is empty for a moment.
   useEffect(() => {
-    if (showArchived || sessionIndexItems.length === 0) return;
+    if (indexSide !== false) return;
     const present = new Set(sessionIndexItems.map((i) => i.sessionId));
     setGroups((prev) => pruneGroups(prev, present));
-  }, [sessionIndexItems, showArchived, setGroups]);
+  }, [sessionIndexItems, indexSide, setGroups]);
 
   // Selecting a member is what activates a group; the selected session is the
   // focused pane, so every control that serves one session keeps doing so.
