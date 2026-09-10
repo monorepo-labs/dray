@@ -59,6 +59,12 @@ describe("openBeside", () => {
     expect(openBeside([], "a", "b", "center", "work")).toEqual([]);
   });
 
+  it("replacing a single view leaves the dropped session's own group standing", () => {
+    // Opening a session is not taking it out of its grid.
+    const groups = [group(1, ["b"], ["c"])];
+    expect(openBeside(groups, "a", "b", "center", null)).toBe(groups);
+  });
+
   it("builds on the anchor's group", () => {
     expect(openBeside([group(1, ["a"], ["b"])], "b", "c", "bottom", null)[0].columns).toEqual([
       ["a"],

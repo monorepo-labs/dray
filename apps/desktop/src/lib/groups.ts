@@ -122,6 +122,11 @@ export function openBeside(
   if (!dropLabel(groups.filter(here), anchor, dropped, region)) return groups;
 
   const target = groups.find((g) => here(g) && members(g).includes(anchor));
+  // A single view replaced is a navigation, not a group — and decided before
+  // anything leaves a group, or opening a session this way would quietly
+  // take it out of the grid it lives in.
+  if (!target && region === "center") return groups;
+
   let rest = groups;
   for (const id of [dropped, anchor]) {
     const old = groupOf(rest, id);
@@ -135,8 +140,6 @@ export function openBeside(
       .map((g) => (g === target ? { ...g, columns } : g))
       .filter((g) => members(g).length >= 2);
   }
-  // A single view replaced is a navigation, not a group.
-  if (region === "center") return rest;
   const id = Math.max(0, ...rest.map((g) => g.id)) + 1;
   return [...rest, { id, columns, space }];
 }

@@ -58,17 +58,33 @@ export default function SplitView({
     // A top border, since the main header draws none of its own and the pane
     // headers under it would otherwise read as a second line of the same row.
     <div className="flex h-full min-h-0 border-t border-hairline">
-      {columns.map((column, ci) => (
+      {columns.map((column, ci) => {
+        // A left or right drop makes a column, so its preview is drawn on the
+        // column at full height rather than inside the pane the pointer is on
+        // — in a stacked column that box would be half the height of what
+        // the drop makes.
+        const hintFor = (item: SessionIndexItem) =>
+          drag && drag.over?.sessionId === item.sessionId
+            ? {
+                region: drag.over.region,
+                label: dropLabel(groups, item.sessionId, drag.sessionId, drag.over.region),
+              }
+            : null;
+        const sideways = column
+          .map(hintFor)
+          .find((h) => h && (h.region === "left" || h.region === "right"));
+        return (
         <div
           key={column.map((i) => i.sessionId).join()}
-          className={cn("flex min-w-0 flex-1 flex-col", ci > 0 && "border-l border-hairline-strong")}
+          className={cn(
+            "relative flex min-w-0 flex-1 flex-col",
+            ci > 0 && "border-l border-hairline-strong",
+          )}
         >
+          {sideways && <DropZone region={sideways.region} label={sideways.label} />}
           {column.map((item, ri) => {
             const focused = item.sessionId === focusedId;
-            const hint =
-              drag && drag.over?.sessionId === item.sessionId
-                ? { region: drag.over.region, label: dropLabel(groups, item.sessionId, drag.sessionId, drag.over.region) }
-                : null;
+            const hint = hintFor(item);
             return (
               <div
                 key={item.sessionId}
@@ -102,12 +118,15 @@ export default function SplitView({
                     active={active && focused}
                   />
                 </div>
-                {hint && <DropZone region={hint.region} label={hint.label} />}
+                {hint && hint !== sideways && (
+                  <DropZone region={hint.region} label={hint.label} />
+                )}
               </div>
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
