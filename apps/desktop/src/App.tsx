@@ -582,7 +582,7 @@ function App() {
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
   const browserTabs = useBrowserTabs(selectedSessionId);
-  const hasBrowserTabs = browserTabs.length > 0;
+  const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, every time and whatever tab the pane was on: the
   // reader came for the full width. Nothing keeps it closed — ⌘E brings it
@@ -858,16 +858,20 @@ function App() {
 
   // The first browser tab appearing — an agent opening a page — brings the
   // pane up on Browser, once. Not while the full view is up, where the same
-  // page is already the whole column.
-  const lastHadTabs = useRef(hasBrowserTabs);
+  // page is already the whole column. Only a change within one session
+  // counts, and only from a *known* empty list: arriving at a session that
+  // already holds a tab, or its first read landing, is the reader looking,
+  // not the agent acting, and both used to pop the pane open (DRA-184).
+  const lastTabs = useRef({ id: selectedSessionId, had: hasBrowserTabs });
   useEffect(() => {
-    const was = lastHadTabs.current;
-    lastHadTabs.current = hasBrowserTabs;
-    if (!was && hasBrowserTabs && !fullBrowserOpen) {
+    const was = lastTabs.current;
+    lastTabs.current = { id: selectedSessionId, had: hasBrowserTabs };
+    if (was.id !== selectedSessionId || was.had !== false) return;
+    if (hasBrowserTabs && !fullBrowserOpen) {
       setPanelTab("browser");
       setPanelOpen(true);
     }
-  }, [hasBrowserTabs, fullBrowserOpen, setPanelTab, setPanelOpen]);
+  }, [selectedSessionId, hasBrowserTabs, fullBrowserOpen, setPanelTab, setPanelOpen]);
 
   // Every way of arriving at a session, so none of them can forget to leave the
   // issues page. The two sidebar buttons closed it and the chords beside them
