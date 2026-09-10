@@ -79,6 +79,9 @@ export function startSessionDrag(
       if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < THRESHOLD_PX) return;
       live = true;
       el.setPointerCapture(pointerId);
+      // Every element under the pointer carries its own cursor, so the drag's
+      // is forced from a body class rather than set on one element.
+      document.body.classList.add("session-drag");
     }
     drag = { sessionId, title, x: ev.clientX, y: ev.clientY, over: targetAt(ev.clientX, ev.clientY) };
     changed.emit();
@@ -91,6 +94,7 @@ export function startSessionDrag(
     if (!live) return;
 
     el.releasePointerCapture(pointerId);
+    document.body.classList.remove("session-drag");
     // The click that follows a captured pointerup would select the row that
     // was dragged. Swallowed at capture, and the listener retired on the next
     // task so a later real click is not eaten.

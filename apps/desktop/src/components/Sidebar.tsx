@@ -104,6 +104,8 @@ type SidebarProps = {
   /// A row dropped on the transcript column: `anchor` is the session it landed
   /// beside. Absent in the settled list, where nothing is dragged.
   onDropSession?: (target: DropTarget, dropped: string) => void;
+  /// The reader has made a group at some point, so the drag needs no teaching.
+  splitLearned: boolean;
   onNewSession: () => void;
   /// Opens the issues page in the main column. It is not a session, so it does
   /// not move the selection — coming back from it lands on the session that was
@@ -814,6 +816,7 @@ export default function Sidebar({
   onSelect,
   groups: splits,
   onDropSession,
+  splitLearned,
   onNewSession,
   onOpenIssues,
   issuesOpen,
@@ -1243,6 +1246,7 @@ export default function Sidebar({
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!showArchived && splits.length > 0}
+            splittable={!!onDropSession && !showArchived && !splitLearned}
           />
         )}
       </div>
@@ -1270,7 +1274,18 @@ export default function Sidebar({
 /// With nothing selected both arrows land on the same place — the newest session
 /// — so showing the pair would offer a choice that isn't one. One arrow, and the
 /// verb changes with it: entering the list is a jump, walking it is a switch.
-function ShortcutHint({ selected, grouped }: { selected: boolean; grouped: boolean }) {
+function ShortcutHint({
+  selected,
+  grouped,
+  splittable,
+}: {
+  selected: boolean;
+  grouped: boolean;
+  /// Whether to teach the drag: the live list, and the reader has never made
+  /// a group. Off for good after the first one — a tip for something already
+  /// learned is chrome.
+  splittable: boolean;
+}) {
   return (
     <>
       <HintRow label={selected ? "Switch tasks" : "Jump to task"}>
@@ -1290,20 +1305,41 @@ function ShortcutHint({ selected, grouped }: { selected: boolean; grouped: boole
           <Kbd>↑↓</Kbd>
         </HintRow>
       )}
+      {/* Needs a session selected, since that is what a drop lands beside. */}
+      {splittable && selected && (
+        // At full strength, unlike the chords above it: those are reminders
+        // of something already learned, this is an invitation to try a thing.
+        <HintRow label="Drag a task onto the chat to open in split view" className="text-muted-foreground" />
+      )}
     </>
   );
 }
 
-function HintRow({ label, children }: { label: string; children: React.ReactNode }) {
+function HintRow({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children?: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div className="flex min-h-7 items-center justify-between pr-0.5 pl-2 text-ui text-muted-foreground/60">
+    <div
+      className={cn(
+        "flex min-h-7 items-center justify-between pr-0.5 pl-2 text-ui text-muted-foreground/60",
+        className,
+      )}
+    >
       {label}
       {/* Held back from the stock keycap: everywhere else a `Kbd` labels a
           control the eye is already on, but this one is the row, so the default
           fill makes a hint the loudest thing in the list. */}
-      <KbdGroup className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60">
-        {children}
-      </KbdGroup>
+      {children && (
+        <KbdGroup className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60">
+          {children}
+        </KbdGroup>
+      )}
     </div>
   );
 }

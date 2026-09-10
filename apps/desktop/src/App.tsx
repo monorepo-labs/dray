@@ -90,6 +90,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft } from "@/hooks/useDraft";
 import { issueTag } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
+import { basename } from "@/lib/format";
 import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
@@ -507,6 +508,14 @@ function App() {
     setGroups((prev) => pruneGroups(prev, present));
   }, [sessionIndexItems, indexSide, setGroups]);
 
+  // Whether the reader has ever made a group. Written once and never cleared:
+  // the sidebar's drag tip retires on it, and a group dissolving later does
+  // not make the drag un-learned.
+  const [splitLearned, setSplitLearned] = useLocalStorage("ade.splitLearned", false);
+  useEffect(() => {
+    if (groups.length > 0 && !splitLearned) setSplitLearned(true);
+  }, [groups, splitLearned, setSplitLearned]);
+
   // Selecting a member is what activates a group; the selected session is the
   // focused pane, so every control that serves one session keeps doing so.
   const activeGroup = groupOf(spaceGroups, selectedSessionId);
@@ -518,6 +527,17 @@ function App() {
       ),
     [activeGroup, sessionIndexItems],
   );
+
+  // What the composer names as its target in a grid: the focused session's
+  // title, with its project in front where the panes span projects and a
+  // title alone could belong to either.
+  const composerTarget = (() => {
+    if (!activeGroup || !selectedSession) return null;
+    const projects = new Set(paneColumns.flat().map((i) => i.projectPath));
+    return projects.size > 1
+      ? `${basename(selectedSession.projectPath)} / ${selectedSession.title}`
+      : selectedSession.title;
+  })();
 
   // Every pane loaded and held: eviction and read-marking treat the whole grid
   // as on screen.
@@ -1417,6 +1437,7 @@ function App() {
           }
           groups={spaceGroups}
           onDropSession={dropSession}
+          splitLearned={splitLearned}
           onNewSession={() => goToSession(handleNewSession)}
           onNewSessionInProject={(path) =>
             goToSession(() => {
@@ -1649,7 +1670,7 @@ function App() {
           busy={busy}
           sessionId={selectedSessionId}
           isNewTask={!selectedSession}
-          target={activeGroup ? selectedSession?.title ?? null : null}
+          target={composerTarget}
           issuesConnected={issuesConnected}
           modelTakesImages={modelTakesImages}
           error={error}

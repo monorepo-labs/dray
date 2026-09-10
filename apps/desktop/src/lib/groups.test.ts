@@ -42,7 +42,7 @@ describe("dropLabel", () => {
   it("names each outcome and says nothing where there is no room", () => {
     const groups = [group(1, ["a", "b"], ["c"])];
     expect(dropLabel(groups, "x", "y", "right")).toBe("Open on the right");
-    expect(dropLabel(groups, "x", "y", "center")).toBe("Open here");
+    expect(dropLabel(groups, "x", "y", "center")).toBeNull();
     expect(dropLabel(groups, "c", "y", "center")).toBe("Replace");
     expect(dropLabel(groups, "c", "y", "top")).toBe("Open above");
     expect(dropLabel(groups, "a", "y", "bottom")).toBeNull();
@@ -52,15 +52,12 @@ describe("dropLabel", () => {
 });
 
 describe("openBeside", () => {
-  it("makes a group of two from a single view, and a replaced single view makes none", () => {
+  it("makes a group of two from a single view, and a centre drop there is no drop", () => {
     expect(openBeside([], "a", "b", "right", "work")).toEqual([
       { id: 1, columns: [["a"], ["b"]], space: "work" },
     ]);
-    expect(openBeside([], "a", "b", "center", "work")).toEqual([]);
-  });
-
-  it("replacing a single view leaves the dropped session's own group standing", () => {
-    // Opening a session is not taking it out of its grid.
+    // Replacing a single view is a click; refused whole, so the dropped
+    // session's own group stands.
     const groups = [group(1, ["b"], ["c"])];
     expect(openBeside(groups, "a", "b", "center", null)).toBe(groups);
   });

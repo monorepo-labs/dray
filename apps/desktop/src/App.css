@@ -1245,3 +1245,10 @@
     background: radial-gradient(circle at 100% 0, transparent 8px, var(--card) 8.5px);
   }
 }
+
+/* A sidebar row being dragged. Forced on everything, since the rows, links
+   and buttons the pointer crosses each carry a cursor of their own. */
+body.session-drag,
+body.session-drag * {
+  cursor: grabbing !important;
+}

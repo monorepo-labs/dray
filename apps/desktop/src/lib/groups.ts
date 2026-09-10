@@ -101,9 +101,11 @@ export function dropLabel(
   region: Region,
 ): string | null {
   const target = groupOf(groups, anchor);
+  // Replacing a single view is opening the session, which a click already
+  // does — so it is no drop at all.
+  if (!target && region === "center") return null;
   if (!place(target?.columns ?? [[anchor]], anchor, dropped, region)) return null;
-  // Replacing a single view is opening the session, which a click already does.
-  return region === "center" && !target ? "Open here" : REGION_LABELS[region];
+  return REGION_LABELS[region];
 }
 
 /// Puts `dropped` on `anchor`'s pane at `region`: into the anchor's group in
@@ -122,11 +124,6 @@ export function openBeside(
   if (!dropLabel(groups.filter(here), anchor, dropped, region)) return groups;
 
   const target = groups.find((g) => here(g) && members(g).includes(anchor));
-  // A single view replaced is a navigation, not a group — and decided before
-  // anything leaves a group, or opening a session this way would quietly
-  // take it out of the grid it lives in.
-  if (!target && region === "center") return groups;
-
   let rest = groups;
   for (const id of [dropped, anchor]) {
     const old = groupOf(rest, id);
