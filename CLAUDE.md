@@ -765,7 +765,7 @@ The `github` fixture sits outside that tree at `src-tauri/src/fixtures/pr_graphq
 
 Every surface showing code — `Edit` diffs, ranged `Read` slices, markdown fences — go through **one** Shiki highlighter, the shared instance inside `@pierre/diffs`: [DiffView](apps/desktop/src/components/chat/DiffView.tsx), [CodeView](apps/desktop/src/components/chat/CodeView.tsx), and [codePlugin.ts](apps/desktop/src/lib/codePlugin.ts) replacing `@streamdown/code`'s runtime. Sharing is not just deduplication: the stock Streamdown plugin build a *second* Shiki with its own registries, which cannot see `pierre-*` at all.
 
-**Themes are `{light, dark}` pairs, never one name** ([codeTheme.ts](apps/desktop/src/lib/codeTheme.ts)) — the app's mode can change under a mounted view. [useCodeTheme](apps/desktop/src/hooks/useCodeTheme.ts) is `useSyncExternalStore`, not `useLocalStorage`, because several diffs are mounted at once and per-component state desync them.
+**Themes are `{light, dark}` pairs, never one name** ([codeTheme.ts](apps/desktop/src/lib/codeTheme.ts)) — the app's mode can change under a mounted view. **The shipped default is `auto`, which mean the app theme, so `codeThemePair` take one** — resolving without it drew every palette's code in Pierre's colours and switched on mode alone (DRA-183). `AUTO_THEMES` hold the map; a palette with no Shiki counterpart take the nearest, never a grey. [useCodeTheme](apps/desktop/src/hooks/useCodeTheme.ts) is `useSyncExternalStore`, not `useLocalStorage`, because several diffs are mounted at once and per-component state desync them.
 
 Three failure modes, all presenting as _code that renders but is blank or grey_ rather than as an error:
 
