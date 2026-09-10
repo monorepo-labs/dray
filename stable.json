@@ -1,23 +1,23 @@
 {
-  "version": "0.16.0",
-  "notes": "### Added\n\n- **Up to four sessions side by side.** Drag a sidebar row onto the\n  transcript to open it beside, above or below the one you are on, or to\n  drop it on top to replace it. The panes make a group, which lives under\n  the space you made it in and draws as its own run at the top of the\n  sidebar; it dissolves when one session is left. One composer serves the\n  focused pane and names it in the placeholder. ⌘1–4 focus a pane, ⌘⌥W\n  closes one, ⌘⌥↑/↓ step groups as a single row. **The view tabs moved to\n  ⌘⌥1–3.**\n\n### Fixed\n\n- **Stop no longer kills your dev server.** It interrupted the turn and\n  then stopped every background task with it — Monitors, subagents and any\n  server you had asked to keep running. Backgrounding a task is a request\n  for it to outlive the turn, so Stop now ends the turn and leaves them be.\n  The subagent panel still stops one on its own.\n- **Code takes its colours from the app's palette.** Every diff and fence\n  drew Pierre's theme whatever you had picked, since the default only ever\n  resolved the light or dark half. Catppuccin, Gruvbox and One Dark Pro now\n  reach the themes they were ported from.\n- **Switching to a session with browser tabs no longer opens the right\n  pane.** Only an agent opening the first tab does that, which is what it\n  was for.",
-  "pub_date": "2026-09-10T06:15:09.679Z",
+  "version": "0.16.1",
+  "notes": "### Changed\n\n- **Each theme sets its own glass.** How much desktop shows through the\n  window was one number for every palette, so it was tuned for none of\n  them. Every shipping theme now names its own, light and dark apart.",
+  "pub_date": "2026-09-10T06:36:43.237Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCMUF1TGRCWTQvM3lqMk9HVDA0S3RQTG5LbUlESnpxWjFlMldNWEpyOVJpOW80N083ckhDSFhXclIvNTYrTHZWeE1ueDBUbWp3Uk83aGFrR1NueGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIwOTAxCWZpbGU6RHJheS5hcHAudGFyLmd6CkY3T0ttUWJiQSsvZW9wR05hUk5iZE5wOWtlNjlqbUJ0VEMwNTNTQlF0NFVCOWRoMkhtU2pycXFBa0dIM01KR0JCSlVreFNOWTNlc0hFY1ROLzAvYUNBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg3NlNycFVISlRLSTVkOVRsN0o3eWp2OHEvVXBUcnJCR0QyRkw1TXpsNjU2ZzVab0x6STJqSVJSMDZ3NU1JY0pyVllPNk1UbHFmc3pYeEF6OVljV3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIyMTk2CWZpbGU6RHJheS5hcHAudGFyLmd6ClAyV20zV0ZnK3l0eEYzNUJ4QkN1dGM5a05QS1FqTWIzdlB2aHdwdTBXTlVJTkJGdWpoRmt5VVkxdVN0NUtpL0NrcDlkU1JtTlVTWTl6M3NFVmRLVUFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCMUF1TGRCWTQvM3lqMk9HVDA0S3RQTG5LbUlESnpxWjFlMldNWEpyOVJpOW80N083ckhDSFhXclIvNTYrTHZWeE1ueDBUbWp3Uk83aGFrR1NueGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIwOTAxCWZpbGU6RHJheS5hcHAudGFyLmd6CkY3T0ttUWJiQSsvZW9wR05hUk5iZE5wOWtlNjlqbUJ0VEMwNTNTQlF0NFVCOWRoMkhtU2pycXFBa0dIM01KR0JCSlVreFNOWTNlc0hFY1ROLzAvYUNBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg3NlNycFVISlRLSTVkOVRsN0o3eWp2OHEvVXBUcnJCR0QyRkw1TXpsNjU2ZzVab0x6STJqSVJSMDZ3NU1JY0pyVllPNk1UbHFmc3pYeEF6OVljV3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIyMTk2CWZpbGU6RHJheS5hcHAudGFyLmd6ClAyV20zV0ZnK3l0eEYzNUJ4QkN1dGM5a05QS1FqTWIzdlB2aHdwdTBXTlVJTkJGdWpoRmt5VVkxdVN0NUtpL0NrcDlkU1JtTlVTWTl6M3NFVmRLVUFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.1/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCMUF1TGRCWTQvM3lqMk9HVDA0S3RQTG5LbUlESnpxWjFlMldNWEpyOVJpOW80N083ckhDSFhXclIvNTYrTHZWeE1ueDBUbWp3Uk83aGFrR1NueGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIwOTAxCWZpbGU6RHJheS5hcHAudGFyLmd6CkY3T0ttUWJiQSsvZW9wR05hUk5iZE5wOWtlNjlqbUJ0VEMwNTNTQlF0NFVCOWRoMkhtU2pycXFBa0dIM01KR0JCSlVreFNOWTNlc0hFY1ROLzAvYUNBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg3NlNycFVISlRLSTVkOVRsN0o3eWp2OHEvVXBUcnJCR0QyRkw1TXpsNjU2ZzVab0x6STJqSVJSMDZ3NU1JY0pyVllPNk1UbHFmc3pYeEF6OVljV3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIyMTk2CWZpbGU6RHJheS5hcHAudGFyLmd6ClAyV20zV0ZnK3l0eEYzNUJ4QkN1dGM5a05QS1FqTWIzdlB2aHdwdTBXTlVJTkJGdWpoRmt5VVkxdVN0NUtpL0NrcDlkU1JtTlVTWTl6M3NFVmRLVUFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCMUF1TGRCWTQvM3lqMk9HVDA0S3RQTG5LbUlESnpxWjFlMldNWEpyOVJpOW80N083ckhDSFhXclIvNTYrTHZWeE1ueDBUbWp3Uk83aGFrR1NueGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIwOTAxCWZpbGU6RHJheS5hcHAudGFyLmd6CkY3T0ttUWJiQSsvZW9wR05hUk5iZE5wOWtlNjlqbUJ0VEMwNTNTQlF0NFVCOWRoMkhtU2pycXFBa0dIM01KR0JCSlVreFNOWTNlc0hFY1ROLzAvYUNBPT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg3NlNycFVISlRLSTVkOVRsN0o3eWp2OHEvVXBUcnJCR0QyRkw1TXpsNjU2ZzVab0x6STJqSVJSMDZ3NU1JY0pyVllPNk1UbHFmc3pYeEF6OVljV3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIyMTk2CWZpbGU6RHJheS5hcHAudGFyLmd6ClAyV20zV0ZnK3l0eEYzNUJ4QkN1dGM5a05QS1FqTWIzdlB2aHdwdTBXTlVJTkJGdWpoRmt5VVkxdVN0NUtpL0NrcDlkU1JtTlVTWTl6M3NFVmRLVUFnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.16.1/Dray_universal.app.tar.gz"
     }
   }
 }
