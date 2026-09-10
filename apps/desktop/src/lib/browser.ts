@@ -126,11 +126,13 @@ function fetchTabs(sessionId: string) {
     .catch(() => fetched.delete(sessionId));
 }
 
-export function useBrowserTabs(sessionId: string | null): BrowserTab[] {
+/// `null` until the session's first read answers, so a caller acting on a
+/// tab *appearing* can tell one from the list just being learned.
+export function useBrowserTabs(sessionId: string | null): BrowserTab[] | null {
   start();
   if (sessionId) fetchTabs(sessionId);
   return useSyncExternalStore(subscribe, () =>
-    sessionId ? (tabsBySession.get(sessionId) ?? EMPTY) : EMPTY,
+    sessionId ? (tabsBySession.get(sessionId) ?? null) : EMPTY,
   );
 }
 

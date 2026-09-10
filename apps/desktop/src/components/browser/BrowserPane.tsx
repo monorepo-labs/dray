@@ -87,7 +87,7 @@ export default function BrowserPane({
   onExpand?: () => void;
   onCollapse?: () => void;
 }) {
-  const tabs = useBrowserTabs(sessionId);
+  const tabs = useBrowserTabs(sessionId) ?? [];
   const pending = usePendingTab(sessionId);
   const current = pending ? null : (tabs.find((t) => t.active) ?? null);
   const viewport = useViewport(sessionId);
