@@ -5,6 +5,14 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.16.2
+
+### Fixed
+
+- **⌘1–4 run clockwise round the split.** They followed the order panes
+  were added, so in a 2×2 ⌘2 landed under ⌘1 rather than beside it. Now
+  top row left to right, then bottom row right to left.
+
 ## 0.16.1
 
 ### Changed
