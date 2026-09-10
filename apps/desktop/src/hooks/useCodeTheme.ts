@@ -37,11 +37,16 @@ function setCodeTheme(id: CodeThemeId) {
 ///
 /// `pair` is what both consumers want: Shiki takes light and dark together and
 /// picks a side by the mode it's told, so neither has to branch on it.
+///
+/// The app theme is read here rather than at each call site because the default
+/// choice is `auto`, which *is* the app theme — resolving without it left every
+/// palette's code blocks in Pierre's colours, switching on mode alone.
 export function useCodeTheme(): {
   id: CodeThemeId;
   pair: CodeThemePair;
   setCodeTheme: (id: CodeThemeId) => void;
 } {
+  const { theme } = useTheme();
   const id = useSyncExternalStore(
     changed.subscribe,
     () => current,
@@ -50,7 +55,7 @@ export function useCodeTheme(): {
 
   return {
     id,
-    pair: codeThemePair(id),
+    pair: codeThemePair(id, theme),
     setCodeTheme: useCallback(setCodeTheme, []),
   };
 }
