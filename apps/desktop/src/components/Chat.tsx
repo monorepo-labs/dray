@@ -43,10 +43,14 @@ type ChatProps = {
   /// Answers a permission request. The agent is blocked until this fires, so it
   /// is the one callback here whose absence stalls a session rather than
   /// degrading a view.
-  onRespondPermission: (requestId: string, optionId: string) => void;
+  onRespondPermission: (sessionId: string, requestId: string, optionId: string) => void;
   /// Answers an `AskUserQuestion`. Blocks the agent the same way, and an empty
   /// map is a real answer — the reader skipped every question.
-  onAnswerQuestions: (requestId: string, answers: Record<string, string>) => void;
+  onAnswerQuestions: (
+    sessionId: string,
+    requestId: string,
+    answers: Record<string, string>,
+  ) => void;
   /// Whether this session has a turn in flight, so the transcript can show the
   /// agent is still working.
   busy?: boolean;
@@ -590,7 +594,9 @@ export default function Chat({
                 <QuestionRequest
                   key={ask.requestId}
                   questions={ask.questions}
-                  onAnswer={(answers) => onAnswerQuestions(ask.requestId, answers)}
+                  onAnswer={(answers) =>
+                    onAnswerQuestions(session.sessionId, ask.requestId, answers)
+                  }
                   // The pane the composer serves is the one whose card may
                   // take the caret.
                   autoFocus={active}
@@ -605,7 +611,9 @@ export default function Chat({
                   }
                   argument={toolArgument(ask.input)}
                   options={ask.options}
-                  onRespond={(optionId) => onRespondPermission(ask.requestId, optionId)}
+                  onRespond={(optionId) =>
+                    onRespondPermission(session.sessionId, ask.requestId, optionId)
+                  }
                 />
               ),
             )}

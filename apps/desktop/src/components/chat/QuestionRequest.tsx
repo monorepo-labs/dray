@@ -77,8 +77,12 @@ export default function QuestionRequest({
   // Only for the transcript that has the focus: in a split view every pane
   // draws its own cards, and one in a pane the composer is not serving would
   // pull the caret out of the reader's typing.
+  // Once, on the first render where it may: a card mounted in an unfocused
+  // pane takes the caret when that pane is focused, and never again after.
+  const tookFocus = useRef(false);
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || tookFocus.current) return;
+    tookFocus.current = true;
     const form = formRef.current;
     const target =
       form?.querySelector<HTMLInputElement>(
@@ -86,9 +90,7 @@ export default function QuestionRequest({
       ) ?? form?.querySelector<HTMLTextAreaElement>("[data-slot=questionnaire-input]");
 
     target?.focus();
-    // Once per mount, deliberately — see above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [autoFocus]);
 
   return (
     // Narrower than the transcript it sits in. Options are a few words each, so

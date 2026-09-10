@@ -817,30 +817,28 @@ const handleStopTask = async (taskId: string) => {
 //
 // `optionId` is opaque on purpose: the standing rule behind it lives in the
 // backend, so the frontend can neither widen a grant nor invent one.
-const handleRespondPermission = async (requestId: string, optionId: string) => {
-  if (!selectedSessionId) return;
+// Both take the session that drew the card, never the selection: in a split
+// view a card in one pane can be answered while another pane is selected,
+// and a reply filed under the wrong session leaves the asking one blocked.
+const handleRespondPermission = async (
+  sessionId: string,
+  requestId: string,
+  optionId: string,
+) => {
   try {
-    await invoke("respond_permission", {
-      sessionId: selectedSessionId,
-      requestId,
-      optionId,
-    });
+    await invoke("respond_permission", { sessionId, requestId, optionId });
   } catch (e) {
     setError(String(e));
   }
 };
 
 const handleAnswerQuestions = async (
+  sessionId: string,
   requestId: string,
   answers: Record<string, string>,
 ) => {
-  if (!selectedSessionId) return;
   try {
-    await invoke("answer_questions", {
-      sessionId: selectedSessionId,
-      requestId,
-      answers,
-    });
+    await invoke("answer_questions", { sessionId, requestId, answers });
   } catch (e) {
     setError(String(e));
   }
