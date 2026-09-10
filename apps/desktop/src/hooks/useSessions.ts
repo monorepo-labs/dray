@@ -735,11 +735,11 @@ const handleInterrupt = async () => {
 
 // Stops one background task. Nothing is written to local state: the CLI
 // republishes the task set and files a `task_notification` of its own, which is
-// what settles the panel row and lets the status machine finish the session.
+// what settles the panel row.
 //
-// Not covered by `handleInterrupt` — an interrupt with no turn in flight is
-// acked and changes nothing, which is precisely the state a background task
-// leaves a session in.
+// Not covered by `handleInterrupt`, which ends the turn and leaves every
+// running task alone — a task is backgrounded to outlive its turn, so killing
+// one is its own ask.
 const handleStopTask = async (taskId: string) => {
   if (!selectedSessionId) return;
   try {

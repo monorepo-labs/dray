@@ -135,9 +135,12 @@ pub struct StatusTracker {
     status: SessionStatus,
     /// An `init` opened a model call that no `result` has closed yet.
     model_call_open: bool,
-    /// Ids of the outstanding background tasks, not just how many. The count is
-    /// all the status machine needs; the ids are what the subagent panel's
-    /// per-task stop names, and what a dying child reports as stranded.
+    /// The outstanding background tasks. Only whether the set is empty is read
+    /// in anger — by `has_outstanding_work` and by the stranded-task sweep a
+    /// dying child runs — and the ids are kept rather than a count because the
+    /// set arrives whole on every `background_tasks_changed` and the tests pin
+    /// that it is recorded as sent. The panel's per-task stop names an id off
+    /// those same events, not off here.
     background_tasks: Vec<String>,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
@@ -220,10 +223,8 @@ impl StatusTracker {
         self.status
     }
 
-    /// The outstanding background tasks, for the panel's per-task stop.
-    ///
-    /// The set is republished whole on every change, so this is simply the
-    /// latest reading rather than anything accumulated.
+    /// The outstanding background tasks — the latest reading, since the set is
+    /// republished whole on every change rather than accumulated here.
     pub fn background_task_ids(&self) -> Vec<String> {
         self.background_tasks.clone()
     }
@@ -1036,8 +1037,8 @@ impl SessionManager {
         // more: the optimistic row the composer draws for a new session puts
         // Stop on screen while the backend `Session` is still a local inside
         // `send_msg`, so reaching for the map here answered "no running session"
-        // over a blocked agent. pi has no background tasks either, so the desk
-        // does the whole job and the fan-out below is Claude Code's alone.
+        // over a blocked agent. Claude Code and Codex go on through
+        // `Session::interrupt` below.
         if let Some(desk) = crate::harness::pi::desk::find(session_id) {
             return desk.stop(app).await;
         }
@@ -1600,14 +1601,14 @@ impl Session {
     /// Stops one background task by id.
     ///
     /// Separate from [`interrupt`](Self::interrupt) because the CLI keeps them
-    /// separate: an interrupt with no turn in flight acks and leaves every
-    /// running task alone, so it is no answer at all to the one state where the
-    /// user is stuck — main thread idle, a task still holding the session open.
+    /// separate, and because they are asked for separately: Stop ends the turn
+    /// and leaves every running task alone, so this is the only way to name one.
     ///
     /// Nothing is emitted here. The CLI republishes the task set and files a
     /// `task_notification` with `status: "stopped"` on its own, which is what
-    /// settles the panel row and drives the status machine to completion — so
-    /// minting anything would be a second source for what already arrives.
+    /// settles the panel row — so minting anything would be a second source for
+    /// what already arrives. The session's status is not among the things it
+    /// settles: that followed the turn, which ended without waiting for this.
     ///
     /// The model is not told, and that is Claude Code's own behaviour rather
     /// than a gap left here. It notifies on a task *completing* — a
@@ -2489,7 +2490,7 @@ mod tests {
         assert_eq!(
             tracker.background_task_ids(),
             vec!["b0n57ez9b".to_string()],
-            "the panel's per-task stop names it; Stop deliberately does not"
+            "recorded as sent — Stop deliberately leaves it running"
         );
 
         assert_eq!(
