@@ -508,8 +508,17 @@
    leaves alone, so Latte and Gruvbox light would have taken a cool veil and a cool
    selected row neither theme asked for. A block keeps all of it here.
 
-   Dark stays derived and has no block. The ramp is untouched in both modes, so it
-   is still what a ported theme falls through to. */
+   Dark's block carries one token and nothing else — the ramp is untouched in both
+   modes, so it is still what a ported theme falls through to. */
+[data-theme="default"][data-mode="dark"] {
+  /* Every dark palette now names its own, and that is the point rather than the
+     value: how much wallpaper a page can give up before it stops reading as a
+     page depends on the page, so one number for all five is a number tuned for
+     none of them. The ramp's 80% stays as what a *ported* palette falls through
+     to, and every shipping palette names a value here instead. */
+  --vibrancy-alpha: 70%;
+}
+
 [data-theme="default"][data-mode="light"] {
   --background: oklch(0.965 0.012 250);
   --surface-raised: oklch(0.94 0.01 250);
@@ -542,6 +551,7 @@
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
   --surface-selected: oklch(0.9 0.012 250);
+  --vibrancy-alpha: 50%;
   /* Matched to `--surface-card` above, and clipped the same way before it: this
      is what the card *becomes* under transparency, so the two have to composite
      to one colour or a card changes hue when the window goes fullscreen. */
@@ -626,6 +636,7 @@
   --accent-command: #f9e2af; /* yellow */
   --accent-mention: #89b4fa; /* blue */
   --accent-thinking: #9399b2; /* overlay2 */
+  --vibrancy-alpha: 70%;
 }
 
 /* Latte's ladder runs the other way — `base` is its *lightest* token and
@@ -650,6 +661,7 @@
   --accent-command: #df8e1d; /* yellow */
   --accent-mention: #1e66f5; /* blue */
   --accent-thinking: #8c8fa1; /* overlay1 */
+  --vibrancy-alpha: 50%;
 }
 
 /* Gruvbox — https://github.com/morhetz/gruvbox, MIT. The distinct one in the
@@ -678,6 +690,7 @@
   --accent-command: #fabd2f; /* bright yellow */
   --accent-mention: #83a598; /* bright blue */
   --accent-thinking: #928374; /* gray */
+  --vibrancy-alpha: 70%;
 }
 
 /* The same three background tokens as the dark side, re-dealt: `bg0_h` is
@@ -698,6 +711,7 @@
   --accent-command: #b57614; /* faded yellow */
   --accent-mention: #076678; /* faded blue */
   --accent-thinking: #928374; /* gray */
+  --vibrancy-alpha: 50%;
 }
 
 /* One Dark Pro — https://github.com/Binaryify/OneDark-Pro, MIT. Atom's One Dark by
@@ -740,6 +754,7 @@
   --accent-command: #e5c07b; /* yellow */
   --accent-mention: #61afef; /* blue */
   --accent-thinking: #7f848e;
+  --vibrancy-alpha: 80%;
 }
 
 /* Cobalt2 — https://github.com/wesbos/cobalt2-vscode, MIT. The one theme here with
@@ -783,6 +798,7 @@
   --accent-command: #ffc600; /* yellow, and the colour the theme is known by */
   --accent-mention: #9effff; /* light blue */
   --accent-thinking: #0088ff; /* comment */
+  --vibrancy-alpha: 65%;
 }
 
 @theme inline {
