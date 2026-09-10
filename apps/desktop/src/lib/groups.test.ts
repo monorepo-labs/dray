@@ -5,6 +5,7 @@ import {
   dropLabel,
   members,
   openBeside,
+  paneOrder,
   place,
   pruneGroups,
   stepUnits,
@@ -127,5 +128,20 @@ describe("stepUnits", () => {
 describe("members", () => {
   it("reads left to right, top to bottom", () => {
     expect(members(group(1, ["a", "c"], ["b", "d"]))).toEqual(["a", "c", "b", "d"]);
+  });
+});
+
+describe("paneOrder", () => {
+  it("runs clockwise from the top left", () => {
+    expect(paneOrder(group(1, ["a", "b"], ["c", "d"]))).toEqual(["a", "c", "d", "b"]);
+  });
+
+  it("puts the lone right pane second and the bottom left third", () => {
+    expect(paneOrder(group(1, ["a", "b"], ["c"]))).toEqual(["a", "c", "b"]);
+  });
+
+  it("reads top to bottom in one column and left to right in one row", () => {
+    expect(paneOrder(group(1, ["a", "b"]))).toEqual(["a", "b"]);
+    expect(paneOrder(group(1, ["a"], ["b"]))).toEqual(["a", "b"]);
   });
 });

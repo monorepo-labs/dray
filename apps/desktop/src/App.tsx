@@ -55,6 +55,7 @@ import {
   members,
   groupOf,
   openBeside,
+  paneOrder,
   pruneGroups,
   stepUnits,
   type SplitGroup,
@@ -1252,7 +1253,7 @@ function App() {
   // and under the Diff tab or the issues page ⌘⌥W would close a pane the
   // reader cannot see.
   const gridShown = !!activeGroup && !issuesOpen && viewTab === "chat";
-  const paneIds = activeGroup ? members(activeGroup) : [];
+  const paneIds = activeGroup ? paneOrder(activeGroup) : [];
   // Keyboard focus moves with the pane. A click moves it by itself, but a
   // chord left it on whatever the old pane held — a link, a subagent control
   // — and Enter there then acted through the *selected* session, since every
