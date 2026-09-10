@@ -118,7 +118,7 @@ export default function SplitView({
                     active={active && focused}
                   />
                 </div>
-                {hint && hint !== sideways && (
+                {hint && hint.region !== "left" && hint.region !== "right" && (
                   <DropZone region={hint.region} label={hint.label} />
                 )}
               </div>

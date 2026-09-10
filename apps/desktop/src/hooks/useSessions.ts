@@ -1725,8 +1725,24 @@ asksBySessionRef.current = asksBySession;
 /// the listeners below, which are registered once — so a ref, written by `App`
 /// whenever the active group changes.
 const onScreenRef = useRef<Set<string>>(new Set());
+/// Panes arriving get what selecting a session gets — a finished one is read
+/// the moment it is looked at, window focus permitting — and every pane
+/// entering or leaving is stamped, so a peer's idle clock starts when it
+/// leaves the screen rather than reading as never viewed.
 const setOnScreen = (ids: string[]) => {
-  onScreenRef.current = new Set(ids);
+  const next = new Set(ids);
+  const prev = onScreenRef.current;
+  const now = Date.now();
+  for (const id of prev) if (!next.has(id)) lastViewedRef.current.set(id, now);
+  for (const id of next) {
+    if (prev.has(id)) continue;
+    lastViewedRef.current.set(id, now);
+    const status =
+      statusBySessionRef.current[id]
+      ?? sessionIndexItemsRef.current.find((i) => i.sessionId === id)?.status;
+    if (isWindowFocused() && status === "completed") markSessionRead(id);
+  }
+  onScreenRef.current = next;
 };
 const onScreen = (sessionId: string) =>
   sessionId === selectedSessionIdRef.current || onScreenRef.current.has(sessionId);
