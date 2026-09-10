@@ -5,6 +5,14 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.16.1
+
+### Changed
+
+- **Each theme sets its own glass.** How much desktop shows through the
+  window was one number for every palette, so it was tuned for none of
+  them. Every shipping theme now names its own, light and dark apart.
+
 ## 0.16.0
 
 ### Added
