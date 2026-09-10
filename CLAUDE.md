@@ -243,7 +243,7 @@ A pinned id is the only way to reach a previous generation, since **the CLI list
 
 ## The repo view
 
-**The main column has tabs, and Chat is one of them.** [ViewTabs](apps/desktop/src/components/layout/ViewTabs.tsx); `VIEW_TABS` is set *and* order, so Terminal later is one array entry plus one body, and accelerators (⌘1, ⌘2) read off array position rather than being stored per tab. Bodies use `TabBody`, so the transcript **hides, not unmounts** — scroll position, follow pin and highlighted diffs survive the flip. The tab is per session and **not persisted**. The composer is hidden off Chat, safe to unmount because `useDraft`/`useAttachments` are module-level.
+**The main column has tabs, and Chat is one of them.** [ViewTabs](apps/desktop/src/components/layout/ViewTabs.tsx); `VIEW_TABS` is set *and* order, so Terminal later is one array entry plus one body, and accelerators (⌘⌥1, ⌘⌥2) read off array position rather than being stored per tab — the bare ⌘ digits belong to the split view's panes. Bodies use `TabBody`, so the transcript **hides, not unmounts** — scroll position, follow pin and highlighted diffs survive the flip. The tab is per session and **not persisted**. The composer is hidden off Chat, safe to unmount because `useDraft`/`useAttachments` are module-level.
 
 The right panel's Changes tab stays and answers a different question: the panel is "what did this turn do", the view is the whole repository.
 
@@ -332,7 +332,7 @@ Linear puts uploads *in* the description's markdown, pointing at `uploads.linear
 - **`SessionHeader` takes `standIn`** and `App` passes `"Issues"`, or the header sits at "New session" over a list of issues.
 - **Clicking a row opens it in the pane beside the list**, off the same key the list was read with, in the same `RightPanel` frame. The picked issue is held as a whole row, not an identifier, so the pane is complete before its own detail read lands. `useSessionIssues` serves both, since a page pick is a one-element link list.
 - **Every route to a session goes through `goToSession`**, which closes the page then navigates. Two buttons closed the page and the chords beside them did not, which made ⌘N and ⌘⇧↑/↓ read as inert.
-- **⌘E only ever closes there**, and the guard lives on the chord, not only in `handleTogglePanel` — ⌘E binds **raw** `togglePanel`, so a guard in that function alone lets the chord sail past into a pane not on screen. Same for ⌘1/⌘2.
+- **⌘E only ever closes there**, and the guard lives on the chord, not only in `handleTogglePanel` — ⌘E binds **raw** `togglePanel`, so a guard in that function alone lets the chord sail past into a pane not on screen. Same for ⌘⌥1/⌘⌥2.
 - **Panel tab `issue`, hidden with no link.** Rows are drawn from the session's own `IssueRef`s, so the tab exists the moment something links one. **Linking is the agent's**, through `dray issue link`. The description is drawn here where the PR panel leaves the PR body out, and the difference is who wrote it.
 - **No Start button** — it would create a session, so it must name a project, and the page is workspace-wide. Tagging with `#` in the composer already starts work against an issue from a place that knows the project.
 

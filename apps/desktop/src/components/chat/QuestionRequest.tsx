@@ -26,12 +26,16 @@ import type { Question } from "@/types/events";
 export default function QuestionRequest({
   questions,
   onAnswer,
+  autoFocus = true,
 }: {
   questions: Question[];
   /// Keyed by each question's verbatim text, because that is the key the
   /// harness matches on. A question the user skipped is absent rather than
   /// empty.
   onAnswer: (answers: Record<string, string>) => void;
+  /// Whether the card takes focus on mount. False for a split pane that is
+  /// not the focused one — see the effect below.
+  autoFocus?: boolean;
 }) {
   // One-shot, like the permission card: the reply can only be consumed once, so
   // a second submit during the round trip has nothing to answer.
@@ -69,7 +73,16 @@ export default function QuestionRequest({
   // `editor` dialogs carry no choices at all, so a choice-only query found
   // nothing and left focus in the composer. Typing then edited a prompt while
   // the agent sat blocked behind the card, and Enter sent it.
+  //
+  // Only for the transcript that has the focus: in a split view every pane
+  // draws its own cards, and one in a pane the composer is not serving would
+  // pull the caret out of the reader's typing.
+  // Once, on the first render where it may: a card mounted in an unfocused
+  // pane takes the caret when that pane is focused, and never again after.
+  const tookFocus = useRef(false);
   useEffect(() => {
+    if (!autoFocus || tookFocus.current) return;
+    tookFocus.current = true;
     const form = formRef.current;
     const target =
       form?.querySelector<HTMLInputElement>(
@@ -77,7 +90,7 @@ export default function QuestionRequest({
       ) ?? form?.querySelector<HTMLTextAreaElement>("[data-slot=questionnaire-input]");
 
     target?.focus();
-  }, []);
+  }, [autoFocus]);
 
   return (
     // Narrower than the transcript it sits in. Options are a few words each, so
