@@ -113,6 +113,13 @@ type ChatInputProps = {
   /// padding, the toolbar moves above — reading order runs settings first, then
   /// the box they apply to — and the send button gives way to a keyboard hint.
   isNewTask?: boolean;
+  /// The title of the session this box sends into, named in the placeholder.
+  /// Only while a split view is up: one composer under four transcripts is
+  /// one box that can send into the wrong session, so the box says where
+  /// before anything is typed — and in the placeholder rather than a row of
+  /// its own, which grew the card. Single view leaves it unset; the header
+  /// above already names the session.
+  target?: string | null;
   /// A backend failure, shown above the composer. Lives here rather than in the
   /// shell so it inherits the form's `max-w-3xl` column and lines up with the
   /// input; the transcript is the wrong home for it, since most of these fail
@@ -192,6 +199,7 @@ export default function ChatInput({
   busy = false,
   sessionId = null,
   isNewTask = false,
+  target = null,
   error = null,
   onDismissError,
   archived = false,
@@ -836,7 +844,9 @@ export default function ChatInput({
                       ? issuesConnected
                         ? "Describe a task. #issues. @files. /skills and commands."
                         : "Describe a task. @files. /skills and commands."
-                      : "Send follow-up"
+                      : target
+                        ? target
+                        : "Send follow-up"
                   }
                   onChange={(e) => {
                     setMessage(e.currentTarget.value);

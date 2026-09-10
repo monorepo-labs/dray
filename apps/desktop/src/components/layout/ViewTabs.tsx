@@ -46,6 +46,7 @@ export default function ViewTabs({
           <TooltipContent side="bottom" className="px-1.5">
             <KbdGroup>
               <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+              <Kbd>{IS_MAC ? "⌥" : "Alt"}</Kbd>
               <Kbd>{i + 1}</Kbd>
             </KbdGroup>
           </TooltipContent>

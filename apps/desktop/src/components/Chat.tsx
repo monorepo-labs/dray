@@ -74,6 +74,9 @@ type ChatProps = {
   /// two toggles, and the rail overlays the transcript at every width anyway — so
   /// this is about how crowded the pane *is*, not whether the rail fits.
   crowded?: boolean;
+  /// Whether the checkpoint rail may draw at all. Off for a split pane that
+  /// shares its column: at half height the rail sits over the text.
+  rail?: boolean;
   /// Whether the chat tab is the one on screen. The transcript is hidden rather
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
@@ -155,6 +158,7 @@ export default function Chat({
   apiRetry = null,
   queuedMessages = [],
   crowded = false,
+  rail = true,
   active = true,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -199,7 +203,7 @@ export default function Chat({
     [turns],
   );
 
-  const showRail = checkpoints.length >= RAIL_MIN;
+  const showRail = rail && checkpoints.length >= RAIL_MIN;
   const [activeTurn, setActiveTurn] = useState<string | null>(null);
 
   // Told apart by the type `block_start` declared, not by content — thinking

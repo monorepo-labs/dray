@@ -97,6 +97,65 @@ export type StreamingBlock = {
 /// composer remounting under a session switch while git is still working.
 const removingWorktrees = new Set<string>();
 
+/// One shared empty set, so a session with no tasks keeps its transcript memo.
+const NO_TASKS: ReadonlySet<string> = new Set();
+
+/// What a transcript pane draws for one session. The selected session's fields
+/// on the hook's return are this, spread.
+export type PaneState = {
+  session: SessionSnapshot | null;
+  streamingBlock: StreamingBlock | null;
+  busy: boolean;
+  working: Working | null;
+  backgroundTaskCount: number;
+  liveTaskIds: ReadonlySet<string>;
+  compacting: boolean;
+  apiRetry: ApiRetryState | null;
+  queuedMessages: QueuedPrompt[];
+};
+
+// Two events with nothing between them, so whichever came last says whether a
+// compaction is still running. Gated on `busy` for the same reason as the task
+// set: a `started` with no `completed` after it is the shape a killed session
+// leaves in the log forever.
+function compactingOf(session: SessionSnapshot | null, busy: boolean): boolean {
+  if (!busy || !session) return false;
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const p = session.events[i].payload;
+    if (p.type === "context_compacted") return false;
+    if (p.type === "context_compaction_started") return true;
+  }
+  return false;
+}
+
+// The retry in flight, if the last thing that happened was one. Derived by
+// walking back rather than tracked, for the reason `compactingOf` is: the event
+// is persisted, so the log already answers it.
+//
+// The rule is "an `api_retry` is the newest thing here", which self-clears
+// against every way a retry can end without naming them. The harness gives no
+// closing event — a retry that works is just the request going through — so
+// anything else arriving is the proof it went through. `usage_update` is
+// skipped as the one payload that fires without meaning progress.
+//
+// Gated on `busy` like the one above: an `api_retry` at the tail of a log is
+// exactly what a session killed mid-retry leaves behind forever.
+function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetryState | null {
+  if (!busy || !session) return null;
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const p = session.events[i].payload;
+    if (p.type === "usage_update") continue;
+    if (p.type !== "api_retry") return null;
+    return {
+      attempt: p.attempt,
+      maxRetries: p.maxRetries,
+      status: p.status,
+      reason: p.reason,
+    };
+  }
+  return null;
+}
+
 export function useSessions() {
 
     // The sticky defaults. Live state below seeds from these and writes back on
@@ -1652,6 +1711,33 @@ sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
 
+/// Every session a split view has on screen beside the selected one. Read by
+/// the listeners below, which are registered once — so a ref, written by `App`
+/// whenever the active group changes.
+const onScreenRef = useRef<Set<string>>(new Set());
+const setOnScreen = (ids: string[]) => {
+  onScreenRef.current = new Set(ids);
+};
+const onScreen = (sessionId: string) =>
+  sessionId === selectedSessionIdRef.current || onScreenRef.current.has(sessionId);
+
+/// Loads a transcript without selecting it, for a split pane. Guarded so the
+/// panes re-rendering mid-read don't issue a second one.
+const loadingRef = useRef(new Set<string>());
+const ensureLoaded = async (sessionId: string) => {
+  if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  if (loadingRef.current.has(sessionId)) return;
+  loadingRef.current.add(sessionId);
+  try {
+    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
+    if (snapshot) upsertSession(withEarlyEvents(snapshot));
+  } catch (e) {
+    console.error("failed to load a split pane", e);
+  } finally {
+    loadingRef.current.delete(sessionId);
+  }
+};
+
 // When each loaded transcript was last on screen. Stamped on arrival and on
 // leaving, so the idle clock starts the moment the reader looks away.
 const lastViewedRef = useRef(new Map<string, number>());
@@ -1687,8 +1773,7 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
     const kept = prev.filter((s) => {
       const forced = s.sessionId === force?.sessionId;
       const selected =
-        s.sessionId === selectedSessionIdRef.current ||
-        s.sessionId === selectionRequestRef.current;
+        onScreen(s.sessionId) || s.sessionId === selectionRequestRef.current;
       const status =
         forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
       const asking = (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0;
@@ -1779,7 +1864,7 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     notifyOS(sessionId, kind, label, item?.title ?? "");
     return false;
   }
-  if (sessionId === selectedSessionIdRef.current) return true;
+  if (onScreen(sessionId)) return true;
 
   // The sound is the signal; the card is a thing to click. Fired side by side
   // rather than one from the other, so dropping either leaves the other
@@ -1796,10 +1881,12 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
 useEffect(
   () =>
     onFocusChange((focused) => {
-      const sessionId = selectedSessionIdRef.current;
-      if (!focused || !sessionId) return;
-      if (statusBySessionRef.current[sessionId] === "completed") {
-        markSessionRead(sessionId);
+      if (!focused) return;
+      const shown = [selectedSessionIdRef.current, ...onScreenRef.current];
+      for (const sessionId of shown) {
+        if (sessionId && statusBySessionRef.current[sessionId] === "completed") {
+          markSessionRead(sessionId);
+        }
       }
     }),
   [],
@@ -1969,53 +2056,44 @@ const backgroundTasks: BackgroundTask[] = useMemo(
   [tasksBySession, selectedSessionId],
 );
 // The join the transcript uses to keep a task's spawning call pending after
-// the turn ends. Memoised so the transcript memo holds while nothing changed.
-const liveTaskIds = useMemo(
-  () => new Set(backgroundTasks.map((t) => t.taskId)),
-  [backgroundTasks],
+// the turn ends. One set per session, memoised together so every pane's
+// transcript memo holds while nothing changed.
+const liveTaskIdsBySession = useMemo(
+  () =>
+    Object.fromEntries(
+      Object.entries(tasksBySession).map(([id, tasks]) => [
+        id,
+        new Set(tasks.map((t) => t.taskId)),
+      ]),
+    ) as Record<string, Set<string>>,
+  [tasksBySession],
 );
+const liveTaskIds = liveTaskIdsBySession[selectedSessionId ?? ""] ?? NO_TASKS;
 
-// Two events with nothing between them, so whichever came last says whether a
-// compaction is still running. Gated on `busy` for the same reason as the task
-// set above: a `started` with no `completed` after it is the shape a killed
-// session leaves in the log forever.
-const compacting: boolean = (() => {
-  if (!busy || !selectedSession) return false;
-  for (let i = selectedSession.events.length - 1; i >= 0; i--) {
-    const p = selectedSession.events[i].payload;
-    if (p.type === "context_compacted") return false;
-    if (p.type === "context_compaction_started") return true;
-  }
-  return false;
-})();
+const compacting = compactingOf(selectedSession, busy);
+const apiRetry = apiRetryOf(selectedSession, busy);
 
-// The retry in flight, if the last thing that happened was one. Derived by
-// walking back rather than tracked, for the reason `compacting` is: the event
-// is persisted, so the log already answers it.
-//
-// The rule is "an `api_retry` is the newest thing here", which self-clears
-// against every way a retry can end without naming them. The harness gives no
-// closing event — a retry that works is just the request going through — so
-// anything else arriving is the proof it went through. `usage_update` is
-// skipped as the one payload that fires without meaning progress.
-//
-// Gated on `busy` like the two above: an `api_retry` at the tail of a log is
-// exactly what a session killed mid-retry leaves behind forever.
-const apiRetry: ApiRetryState | null = (() => {
-  if (!busy || !selectedSession) return null;
-  for (let i = selectedSession.events.length - 1; i >= 0; i--) {
-    const p = selectedSession.events[i].payload;
-    if (p.type === "usage_update") continue;
-    if (p.type !== "api_retry") return null;
-    return {
-      attempt: p.attempt,
-      maxRetries: p.maxRetries,
-      status: p.status,
-      reason: p.reason,
-    };
-  }
-  return null;
-})();
+/// The live state one split pane draws — what the selected session's own
+/// fields above answer, for any loaded session.
+const paneState = (sessionId: string): PaneState => {
+  const session = sessions.find((s) => s.sessionId === sessionId) ?? null;
+  const status =
+    statusBySession[sessionId]
+    ?? sessionIndexItems.find((i) => i.sessionId === sessionId)?.status
+    ?? "idle";
+  const paneBusy = status === "in_progress";
+  return {
+    session,
+    streamingBlock: streamingContentBlock[sessionId] ?? null,
+    busy: paneBusy,
+    working: paneBusy ? workingBySession[sessionId] ?? null : null,
+    backgroundTaskCount: tasksBySession[sessionId]?.length ?? 0,
+    liveTaskIds: liveTaskIdsBySession[sessionId] ?? NO_TASKS,
+    compacting: compactingOf(session, paneBusy),
+    apiRetry: apiRetryOf(session, paneBusy),
+    queuedMessages: queuedBySession[sessionId] ?? [],
+  };
+};
 
 // How full the model's context is. Derived from the log rather than tracked,
 // because both things that move it are already persisted there — a turn's own
@@ -2058,6 +2136,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState};
 
 }

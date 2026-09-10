@@ -46,7 +46,9 @@ import {
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
+import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { isToday, relativeTime } from "@/lib/format";
+import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -96,6 +98,12 @@ type SidebarProps = {
   onToggleCollapsed: () => void;
   onOpenSettings: () => void;
   onSelect: (sessionId: string) => void;
+  /// The split groups of the active space, drawn as runs of their own ahead
+  /// of everything else. Each holds only sessions in `items`.
+  groups: SplitGroup[];
+  /// A row dropped on the transcript column: `anchor` is the session it landed
+  /// beside. Absent in the settled list, where nothing is dragged.
+  onDropSession?: (target: DropTarget, dropped: string) => void;
   onNewSession: () => void;
   /// Opens the issues page in the main column. It is not a session, so it does
   /// not move the selection — coming back from it lands on the session that was
@@ -243,6 +251,7 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
 /// either leaves the render guessing which sort of group it is holding.
 type SessionGroup =
   | { kind: "pinned"; rows: SessionListRow[] }
+  | { kind: "group"; id: number; rows: SessionListRow[] }
   | {
       kind: "project";
       projectPath: string;
@@ -374,11 +383,28 @@ export function sessionGroups(
   projects: Project[] = [],
   live?: LiveSessions,
   settled = false,
+  splits: SplitGroup[] = [],
 ): SessionGroup[] {
+  // A split group is drawn as its own run, in grid order, and its members
+  // nowhere else — not under their project, not under Pinned. Rows only, no
+  // rails: a member's children stay under the project, since dragging a parent
+  // into a grid did not open its children there. Pulled out first, so a pinned
+  // member draws in its group rather than twice.
+  const byId = new Map(items.map((i) => [i.sessionId, i]));
+  const inSplit = new Set(splits.flatMap((g) => members(g)));
+  const splitRuns: SessionGroup[] = splits.flatMap((g) => {
+    const rows = members(g)
+      .map((id) => byId.get(id))
+      .filter((i): i is SessionIndexItem => Boolean(i))
+      .map((item) => ({ item, depth: 0, guides: [], opens: false }));
+    return rows.length ? [{ kind: "group" as const, id: g.id, rows }] : [];
+  });
+  const ungrouped = items.filter((i) => !inSplit.has(i.sessionId));
+
   // A pin is what the reader keeps in reach while they work, so it says nothing
   // in a history — every row there is already done with. Settled draws its pins
   // under their own projects like any other row.
-  const [pinned, rest] = settled ? [[], items] : splitPinned(items);
+  const [pinned, rest] = settled ? [[], ungrouped] : splitPinned(ungrouped);
 
   // Every subtree the walk emits opens with its own root, so a depth-0 row is
   // where one nest ends and the next begins.
@@ -472,9 +498,11 @@ export function sessionGroups(
   );
 
   const pinnedRows = sessionRows(pinned);
-  return pinnedRows.length
-    ? [{ kind: "pinned", rows: pinnedRows }, ...groups]
-    : groups;
+  return [
+    ...splitRuns,
+    ...(pinnedRows.length ? [{ kind: "pinned" as const, rows: pinnedRows }] : []),
+    ...groups,
+  ];
 }
 
 /// The order alone, for callers that only step through it.
@@ -493,8 +521,9 @@ export function sortSessions(
   projects: Project[] = [],
   live?: LiveSessions,
   settled = false,
+  splits: SplitGroup[] = [],
 ): SessionIndexItem[] {
-  return sessionGroups(items, projects, live, settled).flatMap((group) =>
+  return sessionGroups(items, projects, live, settled, splits).flatMap((group) =>
     group.rows.map((row) => row.item),
   );
 }
@@ -783,6 +812,8 @@ export default function Sidebar({
   collapsed,
   onToggleCollapsed,
   onSelect,
+  groups: splits,
+  onDropSession,
   onNewSession,
   onOpenIssues,
   issuesOpen,
@@ -828,9 +859,10 @@ export default function Sidebar({
         : { statusBySession, asking: askingSessions },
     [showArchived, statusBySession, askingSessions],
   );
+  // No split runs in the settled list, for the reason it draws no Pinned group.
   const groups = useMemo(
-    () => sessionGroups(items, projects, live, showArchived),
-    [items, projects, live, showArchived],
+    () => sessionGroups(items, projects, live, showArchived, showArchived ? [] : splits),
+    [items, projects, live, showArchived, splits],
   );
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
@@ -847,6 +879,7 @@ export default function Sidebar({
     const drawn = new Map<string, number>();
     return groups.map((group) => {
       if (group.kind === "pinned") return "pinned";
+      if (group.kind === "group") return `group ${group.id}`;
       const nth = drawn.get(group.projectPath) ?? 0;
       drawn.set(group.projectPath, nth + 1);
       return `${group.projectPath} ${nth}`;
@@ -1108,7 +1141,9 @@ export default function Sidebar({
             const heading =
               group.kind === "pinned"
                 ? "Pinned"
-                : opensProject && projectFilter === null
+                : group.kind === "group"
+                  ? groupName(group)
+                  : opensProject && projectFilter === null
                   ? projectName(group.projectPath)
                   : null;
 
@@ -1131,7 +1166,7 @@ export default function Sidebar({
                     aria-hidden
                     className={cn(
                       "shrink-0",
-                      group.kind === "pinned" || opensProject ? "h-4" : "h-3",
+                      group.kind !== "project" || opensProject ? "h-4" : "h-3",
                     )}
                   />
                 )}
@@ -1183,6 +1218,11 @@ export default function Sidebar({
                       group.kind === "pinned" && depth > 0 && !item.pinned
                     }
                     onSelect={onSelect}
+                    onDragStart={
+                      onDropSession && !showArchived
+                        ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
+                        : undefined
+                    }
                     onSetFlags={onSetFlags}
                     onFork={onFork}
                     onDelete={onDelete}
@@ -1199,7 +1239,12 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {rowCount > 1 && <ShortcutHint selected={selectedSessionId !== null} />}
+        {rowCount > 1 && (
+          <ShortcutHint
+            selected={selectedSessionId !== null}
+            grouped={!showArchived && splits.length > 0}
+          />
+        )}
       </div>
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that
@@ -1225,20 +1270,39 @@ export default function Sidebar({
 /// With nothing selected both arrows land on the same place — the newest session
 /// — so showing the pair would offer a choice that isn't one. One arrow, and the
 /// verb changes with it: entering the list is a jump, walking it is a switch.
-function ShortcutHint({ selected }: { selected: boolean }) {
+function ShortcutHint({ selected, grouped }: { selected: boolean; grouped: boolean }) {
   return (
-    <div className="flex min-h-7 items-center justify-between pr-0.5 pl-2 text-ui text-muted-foreground/60">
-      {selected ? "Switch tasks" : "Jump to task"}
-      {/* Held back from the stock keycap: everywhere else a `Kbd` labels a
-          control the eye is already on, but this one is the row, so the default
-          fill makes a hint the loudest thing in the list. */}
-      <KbdGroup className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60">
+    <>
+      <HintRow label={selected ? "Switch tasks" : "Jump to task"}>
         <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
         {/* Spelled out on every platform, unlike the ⌘ beside it. ⇧ is the one
             modifier glyph that doesn't read as itself — an arrow, in a hint
             that ends in arrow keys — so no keycap in the app draws it. */}
         <Kbd>Shift</Kbd>
         <Kbd>{selected ? "↑↓" : "↓"}</Kbd>
+      </HintRow>
+      {/* Only while a group exists: the chord steps groups as one row each,
+          and with none it is ⌘⇧ under another name. */}
+      {grouped && (
+        <HintRow label="Switch groups">
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+          <Kbd>{IS_MAC ? "⌥" : "Alt"}</Kbd>
+          <Kbd>↑↓</Kbd>
+        </HintRow>
+      )}
+    </>
+  );
+}
+
+function HintRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-7 items-center justify-between pr-0.5 pl-2 text-ui text-muted-foreground/60">
+      {label}
+      {/* Held back from the stock keycap: everywhere else a `Kbd` labels a
+          control the eye is already on, but this one is the row, so the default
+          fill makes a hint the loudest thing in the list. */}
+      <KbdGroup className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60">
+        {children}
       </KbdGroup>
     </div>
   );
@@ -1703,6 +1767,7 @@ function SessionRow({
   faded = false,
   marksLive = true,
   onSelect,
+  onDragStart,
   nested = false,
   inheritsPin = false,
   onSetFlags,
@@ -1728,6 +1793,8 @@ function SessionRow({
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
   onSelect: (sessionId: string) => void;
+  /// Wires the row for dragging onto the transcript column. See `startSessionDrag`.
+  onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   /// This row has a parent in the same list, so 'Detach from parent' is a real
   /// offer. Kept apart from `depth` only because a cyclic index draws a row at
   /// the top level that still has a link worth cutting.
@@ -1773,6 +1840,7 @@ function SessionRow({
         role="button"
         tabIndex={0}
         onClick={() => void onSelect(item.sessionId)}
+        onPointerDown={onDragStart}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();

@@ -48,7 +48,11 @@ const project = (path: string) => ({ path }) as unknown as Project;
 /// What the heading over each run says — the project's own path, or the one
 /// word the pinned group is drawn under.
 const label = (group: ReturnType<typeof sessionGroups>[number]) =>
-  group.kind === "pinned" ? "Pinned" : group.projectPath;
+  group.kind === "pinned"
+    ? "Pinned"
+    : group.kind === "group"
+      ? `Group ${group.id}`
+      : group.projectPath;
 
 /// Each run as its heading and the rows drawn under it.
 const shape = (groups: ReturnType<typeof sessionGroups>) =>
@@ -486,7 +490,7 @@ describe("sessionGroups by state", () => {
     groups.map(
       (g) =>
         [
-          g.kind === "pinned" ? "Pinned" : g.state,
+          g.kind === "project" ? g.state : label(g),
           g.rows.map((r) => r.item.sessionId),
         ] as const,
     );
@@ -866,5 +870,43 @@ describe("filterSessions", () => {
     const found = filterSessions(items, "parser");
 
     expect(ids(sortSessions(found))).toEqual(["first", "second"]);
+  });
+});
+
+describe("split groups", () => {
+  it("draws a group as its own run first, in grid order, with its members nowhere else", () => {
+    const items = [
+      pin("pinned-member", "2026-01-03T00:00:00Z"),
+      item("newer", "2026-01-02T00:00:00Z", null, "/other"),
+      item("older", "2026-01-01T00:00:00Z"),
+      item("child", "2026-01-04T00:00:00Z", "older"),
+    ];
+    const splits = [{ id: 2, columns: [["older"], ["pinned-member"]], space: null }];
+
+    // The pinned member sits in its group rather than under Pinned; the child
+    // of a member stays under the project, since dragging a parent into the
+    // grid did not open it there.
+    expect(shape(sessionGroups(items, [], undefined, false, splits))).toEqual([
+      ["Group 2", ["older", "pinned-member"]],
+      ["/repo", ["child"]],
+      ["/other", ["newer"]],
+    ]);
+    expect(ids(sortSessions(items, [], undefined, false, splits))).toEqual([
+      "older",
+      "pinned-member",
+      "child",
+      "newer",
+    ]);
+  });
+
+  it("skips a member the list no longer holds and a group left with none", () => {
+    const items = [item("a", "2026-01-01T00:00:00Z")];
+    const splits = [
+      { id: 1, columns: [["gone"], ["a"]], space: null },
+      { id: 2, columns: [["x"], ["y"]], space: null },
+    ];
+    expect(shape(sessionGroups(items, [], undefined, false, splits))).toEqual([
+      ["Group 1", ["a"]],
+    ]);
   });
 });

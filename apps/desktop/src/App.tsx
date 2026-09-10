@@ -44,7 +44,21 @@ import Sidebar, {
   filterSessions,
   sortSessions,
 } from "@/components/Sidebar";
+import SplitView, { DragGhost, DropZone } from "@/components/SplitView";
 import SubagentPanel from "@/components/SubagentPanel";
+import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
+import {
+  closePane,
+  dropLabel,
+  GROUPS_KEY,
+  groupName,
+  members,
+  groupOf,
+  openBeside,
+  pruneGroups,
+  stepUnits,
+  type SplitGroup,
+} from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
@@ -69,7 +83,7 @@ import { useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
-import type { Issue, WorktreeDisposition } from "@/types/events";
+import type { Issue, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -156,6 +170,9 @@ function App() {
     detachSession,
     deleteSession,
     removeWorktree,
+    ensureLoaded,
+    setOnScreen,
+    paneState,
   } = useSessions();
 
   // Whether the agent the composer is pointed at can actually be run. Null
@@ -456,6 +473,84 @@ function App() {
       ),
     [sessionIndexItems, projects, space, projectFilter],
   );
+
+  // Split groups: frontend-only, filed under the space they were made in. A
+  // member whose project has since left the space is not drawn, and a group
+  // that leaves fewer than two is no group here. Not narrowed by the project
+  // filter — the grid shows the whole group, and the sidebar's run narrows
+  // itself to the rows it draws.
+  const [groups, setGroups] = useLocalStorage<SplitGroup[]>(GROUPS_KEY, []);
+  const spaceGroups = useMemo(() => {
+    const shown = new Set(
+      sessionIndexItems
+        .filter((i) => sessionInSpace(projects, space, i.projectPath))
+        .map((i) => i.sessionId),
+    );
+    return groups
+      .filter((g) => g.space === space)
+      .map((g) => ({
+        ...g,
+        columns: g.columns.map((c) => c.filter((id) => shown.has(id))).filter((c) => c.length),
+      }))
+      .filter((g) => members(g).length >= 2);
+  }, [groups, space, projects, sessionIndexItems]);
+
+  // A deleted or archived member leaves its group. Gated on the live list
+  // having loaded: the index is empty for a moment at launch, and pruning
+  // against that would drop every group.
+  useEffect(() => {
+    if (showArchived || sessionIndexItems.length === 0) return;
+    const present = new Set(sessionIndexItems.map((i) => i.sessionId));
+    setGroups((prev) => pruneGroups(prev, present));
+  }, [sessionIndexItems, showArchived, setGroups]);
+
+  // Selecting a member is what activates a group; the selected session is the
+  // focused pane, so every control that serves one session keeps doing so.
+  const activeGroup = groupOf(spaceGroups, selectedSessionId);
+  const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
+  const paneColumns = useMemo(
+    () =>
+      (activeGroup?.columns ?? []).map((column) =>
+        column.flatMap((id) => sessionIndexItems.find((i) => i.sessionId === id) ?? []),
+      ),
+    [activeGroup, sessionIndexItems],
+  );
+
+  // Every pane loaded and held: eviction and read-marking treat the whole grid
+  // as on screen.
+  useEffect(() => {
+    const ids = memberKey ? memberKey.split("\n") : [];
+    setOnScreen(ids);
+    ids.forEach((id) => void ensureLoaded(id));
+    // Both are rebuilt every render; the key is what changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memberKey]);
+
+  // The dropped session is the one just opened, so it takes the focus. Only
+  // on a drop that opens something: selecting after a refused one would swap
+  // the grid for that session's single view.
+  const dropSession = ({ sessionId: anchor, region }: DropTarget, dropped: string) => {
+    if (!dropLabel(spaceGroups, anchor, dropped, region)) return;
+    setGroups((prev) => openBeside(prev, anchor, dropped, region, space));
+    void handleSelectSessionIndexItem(dropped);
+  };
+
+  const closeSessionPane = (sessionId: string) => {
+    setGroups((prev) => closePane(prev, sessionId));
+    if (sessionId !== selectedSessionId || !activeGroup) return;
+    const next = members(activeGroup).find((id) => id !== sessionId);
+    if (next) void handleSelectSessionIndexItem(next);
+  };
+
+  // The single view's own drop zone; a grid's panes draw theirs.
+  const drag = useSessionDrag();
+  const singleDrop =
+    drag?.over && !activeGroup && drag.over.sessionId === selectedSessionId
+      ? {
+          region: drag.over.region,
+          label: dropLabel(spaceGroups, drag.over.sessionId, drag.sessionId, drag.over.region),
+        }
+      : null;
 
   // The search narrows what is drawn, and only that — the sidebar's own row is
   // where it is typed, but the list it filters is this one, so the ⌘⇧↑/↓ walk
@@ -765,29 +860,39 @@ function App() {
         // — the walk has to step the runs the eye is looking at.
         showArchived ? undefined : { statusBySession, asking: askingSessions },
         showArchived,
+        showArchived ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, showArchived, statusBySession, askingSessions],
+    [searchedSessions, projects, showArchived, statusBySession, askingSessions, spaceGroups],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
   // which is where a walk through the whole list wants to end up; the top holds
   // instead, since arriving at the oldest session by pressing *up* past the
   // newest one reads as a mistake rather than as a wrap.
-  const stepSession = (delta: number) => {
-    if (ordered.length === 0) return;
-    const from = ordered.findIndex((i) => i.sessionId === selectedSessionId);
+  //
+  // Two chords walk it at two grains. ⌘⇧ steps every row; ⌘⌥ steps `units`,
+  // where a group's run is one step — so from inside a group it lands on the
+  // next group, or on the row past the last one, and enters a group on its
+  // first pane.
+  const stepThrough = (units: SessionIndexItem[][], delta: number) => {
+    if (units.length === 0) return;
+    const from = units.findIndex((u) => u.some((i) => i.sessionId === selectedSessionId));
     // No selection is the empty composer — either direction enters at the top.
     const next =
       from === -1
         ? 0
         : delta > 0
-          ? (from + 1) % ordered.length
+          ? (from + 1) % units.length
           : Math.max(from - 1, 0);
-    const item = ordered[next];
+    const item = units[next][0];
     if (item.sessionId !== selectedSessionId) {
       void handleSelectSessionIndexItem(item.sessionId);
     }
   };
+  const stepSession = (delta: number) =>
+    stepThrough(ordered.map((i) => [i]), delta);
+  const stepGroup = (delta: number) =>
+    stepThrough(stepUnits(ordered, spaceGroups, (i) => i.sessionId), delta);
 
   // A click on a markdown path in the transcript, which is the one route in.
   // Off the counter rather than off `docs.length`, since reopening a file that
@@ -1105,6 +1210,25 @@ function App() {
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
   useHotkey("ArrowUp", () => goToSession(() => stepSession(-1)), { shift: true });
   useHotkey("ArrowDown", () => goToSession(() => stepSession(1)), { shift: true });
+  useHotkey("ArrowUp", () => goToSession(() => stepGroup(-1)), { alt: true });
+  useHotkey("ArrowDown", () => goToSession(() => stepGroup(1)), { alt: true });
+  // The bare ⌘ digits go to the panes, since focus is what moves most inside
+  // a grid; the view tabs take ⌘⌥ below. Not ⌘⇧, which macOS spends on
+  // screenshots for exactly these digits. Bound only while a grid is up: ⌘1
+  // with none has nothing to point at, and must not eat the key.
+  const paneIds = activeGroup ? members(activeGroup) : [];
+  const focusPane = (n: number) => {
+    const id = paneIds[n - 1];
+    if (id) void handleSelectSessionIndexItem(id);
+  };
+  useHotkey("1", () => focusPane(1), { enabled: !!activeGroup });
+  useHotkey("2", () => focusPane(2), { enabled: !!activeGroup });
+  useHotkey("3", () => focusPane(3), { enabled: !!activeGroup });
+  useHotkey("4", () => focusPane(4), { enabled: !!activeGroup });
+  useHotkey("w", () => selectedSessionId && closeSessionPane(selectedSessionId), {
+    alt: true,
+    enabled: !!activeGroup,
+  });
   // ⌘E for the right pane against ⌘B for the left.
   //
   // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:
@@ -1152,9 +1276,13 @@ function App() {
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks
   // like nothing happening and then shows up as the wrong view on the way back.
-  useHotkey("1", () => !issuesOpen && setViewTab("chat"));
-  useHotkey("2", () => !issuesOpen && setViewTab("changes"));
-  useHotkey("3", () => !issuesOpen && setViewTab("browser"));
+  //
+  // Under ⌘⌥, with the bare ⌘ digits given to the panes: inside a grid the
+  // focus moves many times a minute, where a view is a mode changed a few
+  // times a session. `code`, since Option turns a digit's `key` into a symbol.
+  useHotkey("1", () => !issuesOpen && setViewTab("chat"), { alt: true, code: "Digit1" });
+  useHotkey("2", () => !issuesOpen && setViewTab("changes"), { alt: true, code: "Digit2" });
+  useHotkey("3", () => !issuesOpen && setViewTab("browser"), { alt: true, code: "Digit3" });
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
@@ -1268,6 +1396,8 @@ function App() {
           onSelect={(sessionId) =>
             goToSession(() => void handleSelectSessionIndexItem(sessionId))
           }
+          groups={spaceGroups}
+          onDropSession={dropSession}
           onNewSession={() => goToSession(handleNewSession)}
           onNewSessionInProject={(path) =>
             goToSession(() => {
@@ -1321,7 +1451,10 @@ function App() {
           <SessionHeader
             session={selectedSession}
             branch={prBranch}
-            standIn={issuesOpen ? "Issues" : null}
+            // The group's name over a grid: each pane's header already names
+            // its session, and the focused one's repeated up here read as a
+            // second line of the same row.
+            standIn={issuesOpen ? "Issues" : activeGroup ? groupName(activeGroup) : null}
             className="flex-1"
           />
 
@@ -1497,6 +1630,7 @@ function App() {
           busy={busy}
           sessionId={selectedSessionId}
           isNewTask={!selectedSession}
+          target={activeGroup ? selectedSession?.title ?? null : null}
           issuesConnected={issuesConnected}
           modelTakesImages={modelTakesImages}
           error={error}
@@ -1596,6 +1730,30 @@ function App() {
           make: the transcript keeps its scroll position and its highlighted
           diffs, and the repo view keeps its selection and its reads. */}
       <TabBody active={!issuesOpen && viewTab === "chat"}>
+      {activeGroup ? (
+        <SplitView
+          columns={paneColumns}
+          focusedId={selectedSessionId}
+          paneState={paneState}
+          groups={spaceGroups}
+          onFocus={(id) => void handleSelectSessionIndexItem(id)}
+          onClose={closeSessionPane}
+          active={!issuesOpen && viewTab === "chat"}
+          chat={{
+            onOpenSubagent: openSubagent,
+            onOpenSession: (id) => void handleSelectSessionIndexItem(id),
+            onOpenSubagentPanel: openSubagentPanel,
+            onRespondPermission: handleRespondPermission,
+            onAnswerQuestions: handleAnswerQuestions,
+          }}
+        />
+      ) : (
+      // The single view is one drop target: a row let go here opens beside
+      // the selected session, on whichever side it was let go.
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        {...{ [DROP_ATTR]: selectedSessionId ?? undefined }}
+      >
       <Chat
         session={selectedSession}
         streamingBlock={
@@ -1616,6 +1774,9 @@ function App() {
         crowded={!collapsed && (panelShown || (issuesOpen && !!pickedIssue))}
         active={!issuesOpen && viewTab === "chat"}
       />
+      {singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
+      </div>
+      )}
       </TabBody>
 
       {selectedSession && (
@@ -1658,6 +1819,7 @@ function App() {
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
+    <DragGhost />
     <QuitDialog />
     <LinkDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
