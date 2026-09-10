@@ -5,6 +5,34 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.16.0
+
+### Added
+
+- **Up to four sessions side by side.** Drag a sidebar row onto the
+  transcript to open it beside, above or below the one you are on, or to
+  drop it on top to replace it. The panes make a group, which lives under
+  the space you made it in and draws as its own run at the top of the
+  sidebar; it dissolves when one session is left. One composer serves the
+  focused pane and names it in the placeholder. ⌘1–4 focus a pane, ⌘⌥W
+  closes one, ⌘⌥↑/↓ step groups as a single row. **The view tabs moved to
+  ⌘⌥1–3.**
+
+### Fixed
+
+- **Stop no longer kills your dev server.** It interrupted the turn and
+  then stopped every background task with it — Monitors, subagents and any
+  server you had asked to keep running. Backgrounding a task is a request
+  for it to outlive the turn, so Stop now ends the turn and leaves them be.
+  The subagent panel still stops one on its own.
+- **Code takes its colours from the app's palette.** Every diff and fence
+  drew Pierre's theme whatever you had picked, since the default only ever
+  resolved the light or dark half. Catppuccin, Gruvbox and One Dark Pro now
+  reach the themes they were ported from.
+- **Switching to a session with browser tabs no longer opens the right
+  pane.** Only an agent opening the first tab does that, which is what it
+  was for.
+
 ## 0.15.0
 
 ### Added
