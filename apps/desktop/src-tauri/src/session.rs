@@ -136,8 +136,8 @@ pub struct StatusTracker {
     /// An `init` opened a model call that no `result` has closed yet.
     model_call_open: bool,
     /// Ids of the outstanding background tasks, not just how many. The count is
-    /// all the status machine needs, but Stop has to name each one to the CLI —
-    /// an interrupt does not touch them.
+    /// all the status machine needs; the ids are what the subagent panel's
+    /// per-task stop names, and what a dying child reports as stranded.
     background_tasks: Vec<String>,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
@@ -220,7 +220,7 @@ impl StatusTracker {
         self.status
     }
 
-    /// The outstanding background tasks, for a Stop that has to name each one.
+    /// The outstanding background tasks, for the panel's per-task stop.
     ///
     /// The set is republished whole on every change, so this is simply the
     /// latest reading rather than anything accumulated.
@@ -1022,15 +1022,14 @@ impl SessionManager {
         })
     }
 
-    /// Stops everything the session is doing: the turn in flight, and every
-    /// background task still outstanding. Errors when no live child holds the
-    /// id — nothing is running, so there is nothing to stop.
+    /// Stops the turn in flight and nothing else. Errors when no live child
+    /// holds the id — nothing is running, so there is nothing to stop.
     ///
-    /// The second half is not something the CLI's own interrupt does. Verified
-    /// against v2.1.232: an interrupt aborts the turn's tools and streaming and
-    /// leaves backgrounded tasks running, which is what backgrounding one means
-    /// — so a session held open by a task alone had a Stop button that acked and
-    /// changed nothing. Naming the tasks here is what makes one Stop mean stop.
+    /// Background tasks are deliberately left alone: backgrounding one asks for
+    /// it to outlive the turn, and the CLI's own interrupt honours that. Stop
+    /// used to fan `stop_task` out over the whole set, from when an outstanding
+    /// task held the session `in_progress` — the status follows the turn alone
+    /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
     pub async fn interrupt(&self, session_id: &str, app: &AppHandle) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
@@ -1048,22 +1047,7 @@ impl SessionManager {
             bail!("no running session {session_id}");
         };
 
-        session.interrupt().await?;
-
-        // Read after the interrupt, so a task the CLI did stop on its own is
-        // already gone from the set rather than stopped twice. Harmless either
-        // way — the CLI answers success for a task it no longer holds.
-        let task_ids = session.status.lock().await.background_task_ids();
-        for task_id in task_ids {
-            // Logged, not propagated: the interrupt above already went out, and
-            // one task refusing to stop must not hide that from the caller or
-            // stop the tasks behind it in the list from being asked.
-            if let Err(err) = session.stop_task(&task_id).await {
-                eprintln!("[stop task err] {task_id}: {err}");
-            }
-        }
-
-        Ok(())
+        session.interrupt().await
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
@@ -2505,7 +2489,7 @@ mod tests {
         assert_eq!(
             tracker.background_task_ids(),
             vec!["b0n57ez9b".to_string()],
-            "Stop has to name it — the CLI's interrupt leaves it running"
+            "the panel's per-task stop names it; Stop deliberately does not"
         );
 
         assert_eq!(
