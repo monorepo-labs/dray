@@ -430,10 +430,10 @@ async fn interrupt_session(
 
 /// Stops one background task without touching the rest of the session.
 ///
-/// Not reachable through `interrupt_session`: an interrupt with no turn in
-/// flight acks and leaves running tasks alone, which is exactly the state a
-/// background task holds a session in. Idempotent — the CLI answers success for
-/// a task it no longer holds.
+/// Not reachable through `interrupt_session`, which ends the turn and leaves
+/// every running task alone — a task is backgrounded to outlive its turn, so
+/// killing one is its own ask. Idempotent — the CLI answers success for a task
+/// it no longer holds.
 #[tauri::command]
 async fn stop_task(
     session_id: &str,

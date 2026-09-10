@@ -135,9 +135,12 @@ pub struct StatusTracker {
     status: SessionStatus,
     /// An `init` opened a model call that no `result` has closed yet.
     model_call_open: bool,
-    /// Ids of the outstanding background tasks, not just how many. The count is
-    /// all the status machine needs, but Stop has to name each one to the CLI —
-    /// an interrupt does not touch them.
+    /// The outstanding background tasks. Only whether the set is empty is read
+    /// in anger — by `has_outstanding_work` and by the stranded-task sweep a
+    /// dying child runs — and the ids are kept rather than a count because the
+    /// set arrives whole on every `background_tasks_changed` and the tests pin
+    /// that it is recorded as sent. The panel's per-task stop names an id off
+    /// those same events, not off here.
     background_tasks: Vec<String>,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
@@ -220,10 +223,8 @@ impl StatusTracker {
         self.status
     }
 
-    /// The outstanding background tasks, for a Stop that has to name each one.
-    ///
-    /// The set is republished whole on every change, so this is simply the
-    /// latest reading rather than anything accumulated.
+    /// The outstanding background tasks — the latest reading, since the set is
+    /// republished whole on every change rather than accumulated here.
     pub fn background_task_ids(&self) -> Vec<String> {
         self.background_tasks.clone()
     }
@@ -1022,23 +1023,22 @@ impl SessionManager {
         })
     }
 
-    /// Stops everything the session is doing: the turn in flight, and every
-    /// background task still outstanding. Errors when no live child holds the
-    /// id — nothing is running, so there is nothing to stop.
+    /// Stops the turn in flight and nothing else. Errors when no live child
+    /// holds the id — nothing is running, so there is nothing to stop.
     ///
-    /// The second half is not something the CLI's own interrupt does. Verified
-    /// against v2.1.232: an interrupt aborts the turn's tools and streaming and
-    /// leaves backgrounded tasks running, which is what backgrounding one means
-    /// — so a session held open by a task alone had a Stop button that acked and
-    /// changed nothing. Naming the tasks here is what makes one Stop mean stop.
+    /// Background tasks are deliberately left alone: backgrounding one asks for
+    /// it to outlive the turn, and the CLI's own interrupt honours that. Stop
+    /// used to fan `stop_task` out over the whole set, from when an outstanding
+    /// task held the session `in_progress` — the status follows the turn alone
+    /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
     pub async fn interrupt(&self, session_id: &str, app: &AppHandle) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts
         // Stop on screen while the backend `Session` is still a local inside
         // `send_msg`, so reaching for the map here answered "no running session"
-        // over a blocked agent. pi has no background tasks either, so the desk
-        // does the whole job and the fan-out below is Claude Code's alone.
+        // over a blocked agent. Claude Code and Codex go on through
+        // `Session::interrupt` below.
         if let Some(desk) = crate::harness::pi::desk::find(session_id) {
             return desk.stop(app).await;
         }
@@ -1048,22 +1048,7 @@ impl SessionManager {
             bail!("no running session {session_id}");
         };
 
-        session.interrupt().await?;
-
-        // Read after the interrupt, so a task the CLI did stop on its own is
-        // already gone from the set rather than stopped twice. Harmless either
-        // way — the CLI answers success for a task it no longer holds.
-        let task_ids = session.status.lock().await.background_task_ids();
-        for task_id in task_ids {
-            // Logged, not propagated: the interrupt above already went out, and
-            // one task refusing to stop must not hide that from the caller or
-            // stop the tasks behind it in the list from being asked.
-            if let Err(err) = session.stop_task(&task_id).await {
-                eprintln!("[stop task err] {task_id}: {err}");
-            }
-        }
-
-        Ok(())
+        session.interrupt().await
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
@@ -1616,14 +1601,14 @@ impl Session {
     /// Stops one background task by id.
     ///
     /// Separate from [`interrupt`](Self::interrupt) because the CLI keeps them
-    /// separate: an interrupt with no turn in flight acks and leaves every
-    /// running task alone, so it is no answer at all to the one state where the
-    /// user is stuck — main thread idle, a task still holding the session open.
+    /// separate, and because they are asked for separately: Stop ends the turn
+    /// and leaves every running task alone, so this is the only way to name one.
     ///
     /// Nothing is emitted here. The CLI republishes the task set and files a
     /// `task_notification` with `status: "stopped"` on its own, which is what
-    /// settles the panel row and drives the status machine to completion — so
-    /// minting anything would be a second source for what already arrives.
+    /// settles the panel row — so minting anything would be a second source for
+    /// what already arrives. The session's status is not among the things it
+    /// settles: that followed the turn, which ended without waiting for this.
     ///
     /// The model is not told, and that is Claude Code's own behaviour rather
     /// than a gap left here. It notifies on a task *completing* — a
@@ -2505,7 +2490,7 @@ mod tests {
         assert_eq!(
             tracker.background_task_ids(),
             vec!["b0n57ez9b".to_string()],
-            "Stop has to name it — the CLI's interrupt leaves it running"
+            "recorded as sent — Stop deliberately leaves it running"
         );
 
         assert_eq!(
