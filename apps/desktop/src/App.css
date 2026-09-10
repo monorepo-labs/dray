@@ -516,7 +516,7 @@
      page depends on the page, so one number for all five is a number tuned for
      none of them. The ramp's 80% stays as what a *ported* palette falls through
      to, and every shipping palette names a value here instead. */
-  --vibrancy-alpha: 65%;
+  --vibrancy-alpha: 70%;
 }
 
 [data-theme="default"][data-mode="light"] {
@@ -690,7 +690,7 @@
   --accent-command: #fabd2f; /* bright yellow */
   --accent-mention: #83a598; /* bright blue */
   --accent-thinking: #928374; /* gray */
-  --vibrancy-alpha: 65%;
+  --vibrancy-alpha: 70%;
 }
 
 /* The same three background tokens as the dark side, re-dealt: `bg0_h` is
