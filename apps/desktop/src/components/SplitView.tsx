@@ -94,6 +94,10 @@ export default function SplitView({
                 // Close stops it: closing a pane must not first make it the one
                 // the composer serves.
                 onPointerDown={() => !focused && onFocus(item.sessionId)}
+                // Keyboard focus entering a pane is the same claim: Tab onto
+                // a link here, then Enter, must act through this session.
+                // React's onFocus bubbles, so any control inside answers.
+                onFocus={() => !focused && onFocus(item.sessionId)}
                 className={cn(
                   "relative flex min-h-0 flex-1 flex-col",
                   ri > 0 && "border-t border-hairline-strong",
