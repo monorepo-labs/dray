@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -248,18 +248,12 @@ function App() {
     Object.values(statusBySession).some((s) => s === "in_progress") ||
     Object.values(tasksBySession).some((tasks) => tasks.length > 0);
 
-  const [panelOpen, setPanelOpen] = useState(false);
-  // `null` is "never picked", and it is the whole of the default-tab rule.
-  // Storing `"changes"` as the initial value made a fresh install
-  // indistinguishable from a reader who had chosen Changes, so an open PR could
-  // never lead — see `activeTab`.
-  const [panelTab, setPanelTab] = useLocalStorage<PanelTab | null>("ade.panelTab", null);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
 
-  // Per session, and deliberately not persisted the way `panelTab` is: which
-  // view you were last on is working context for one session rather than a
-  // standing preference, and reopening the app onto a repo view for every
-  // session would be wrong more often than right.
+  // Per session and not persisted: which view you were last on is working
+  // context for one session rather than a standing preference, and reopening
+  // the app onto a repo view for every session would be wrong more often than
+  // right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
@@ -281,18 +275,7 @@ function App() {
   /// session's links.
   const [pickedIssue, setPickedIssue] = useState<Issue | null>(null);
 
-  /// Whether the right pane is actually on screen, as against whether the
-  /// reader has asked for it.
-  ///
-  /// Two different questions, and conflating them was a bug worth naming: the
-  /// issues page fills the main column, so a pane left open beside it went on
-  /// describing the session the reader had *left* — its changes, its pull
-  /// request, its issue — with nothing on screen to say whose they were. The
-  /// preference is kept, so coming back restores the pane exactly as it was;
-  /// everything that draws or reads reads this instead.
-  ///
   const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
-  const panelShown = panelOpen && !issuesOpen;
 
   /// The picked issue as a link, which is the shape the panel reads.
   ///
@@ -520,6 +503,78 @@ function App() {
   // Selecting a member is what activates a group; the selected session is the
   // focused pane, so every control that serves one session keeps doing so.
   const activeGroup = groupOf(spaceGroups, selectedSessionId);
+
+  // The pane's open flag and tab pick are held per session, like `viewTabs`
+  // above and for the same reason: app-wide, a pane opened on one session's
+  // PR sat blank beside the next session, which had none, and was gone again
+  // on the way back. Not persisted, and a session never opened holds no entry,
+  // which is also what keeps a new task from inheriting whichever pane the
+  // last session left up — the reads there have nothing to answer from until
+  // the first turn lands.
+  //
+  // The open flag alone is keyed by the *group* while the session sits in one.
+  // The pane stands beside the whole grid, and the selected session is
+  // whichever pane has focus, so a per-session flag snapped it open and shut
+  // as focus moved between panes. Open is a question about the column's
+  // layout; the tab is a question about the focused session's content, and
+  // so stays with the session. The two keys hand state across: a group
+  // forming takes the focused session's flag, and every write lands on both,
+  // so a group dissolving leaves each session holding the last state it saw.
+  //
+  // The pick's `null` is "never picked", and it is the whole of the default-tab
+  // rule: seeding `"changes"` would make a fresh session indistinguishable from
+  // one where the reader chose Changes, so an open PR could never lead — see
+  // `activeTab`.
+  const [panelOpens, setPanelOpens] = useState<Record<string, boolean>>({});
+  const [panelTabs, setPanelTabs] = useState<Record<string, PanelTab | null>>({});
+  const openKey = useCallback(
+    (id: string) => {
+      const group = groupOf(spaceGroups, id);
+      return group ? `group:${group.id}` : id;
+    },
+    [spaceGroups],
+  );
+  const panelOpen = selectedSessionId
+    ? (panelOpens[openKey(selectedSessionId)] ?? panelOpens[selectedSessionId] ?? false)
+    : false;
+  useEffect(() => {
+    if (!activeGroup || !selectedSessionId) return;
+    const key = `group:${activeGroup.id}`;
+    setPanelOpens((prev) =>
+      key in prev ? prev : { ...prev, [key]: prev[selectedSessionId] ?? false },
+    );
+  }, [activeGroup, selectedSessionId]);
+  const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
+  // Both take the session because one caller opens a session and its pane in
+  // the same breath, before the selection has moved.
+  const setPanelOpen = useCallback(
+    (open: boolean | ((prev: boolean) => boolean), id = selectedSessionId) => {
+      if (!id) return;
+      const key = openKey(id);
+      setPanelOpens((prev) => {
+        const next = typeof open === "function" ? open(prev[key] ?? prev[id] ?? false) : open;
+        return { ...prev, [key]: next, [id]: next };
+      });
+    },
+    [selectedSessionId, openKey],
+  );
+  const setPanelTab = useCallback(
+    (tab: PanelTab | null, id = selectedSessionId) => {
+      if (id) setPanelTabs((prev) => ({ ...prev, [id]: tab }));
+    },
+    [selectedSessionId],
+  );
+
+  /// Whether the right pane is actually on screen, as against whether the
+  /// reader has asked for it.
+  ///
+  /// Two different questions, and conflating them was a bug worth naming: the
+  /// issues page fills the main column, so a pane left open beside it went on
+  /// describing the session the reader had *left* — its changes, its pull
+  /// request, its issue — with nothing on screen to say whose they were. The
+  /// preference is kept, so coming back restores the pane exactly as it was;
+  /// everything that draws or reads reads this instead.
+  const panelShown = panelOpen && !issuesOpen;
   const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
   const paneColumns = useMemo(
     () =>
@@ -935,18 +990,6 @@ function App() {
     setPanelOpen(true);
   }, [docsOpened, setPanelTab, setPanelOpen]);
 
-  // The pane is one piece of app-wide state, so a new task would otherwise
-  // inherit whichever pane the last session left open — invisibly, since the
-  // empty composer draws none, and then mounted open the moment the first
-  // prompt creates the session. That is the one moment its reads have nothing
-  // to answer from: the repo isn't resolved yet, so the tab draws an error for
-  // a second or three before the first read lands. Keyed on the selection
-  // rather than on `handleNewSession`, so every route to the empty composer is
-  // covered — ⌘N, the sidebar's +, settling the open session, deleting it.
-  useEffect(() => {
-    if (!selectedSessionId) setPanelOpen(false);
-  }, [selectedSessionId]);
-
   // A link in the transcript opens as a new tab in the session's browser and
   // brings the pane up on it, unless the full view already has it. ⌘-click,
   // or no session to hold one, goes to the system browser.
@@ -956,11 +999,13 @@ function App() {
         void openUrl(url).catch(console.error);
         return;
       }
+      // The session is named outright: the read lands after an await, and by
+      // then the reader may be on another session whose pane must stay put.
       void openInBrowser(selectedSessionId, url, true)
         .then(() => {
           if (fullBrowserOpen) return;
-          setPanelTab("browser");
-          setPanelOpen(true);
+          setPanelTab("browser", selectedSessionId);
+          setPanelOpen(true, selectedSessionId);
         })
         .catch(() => {
           // Answered by the system browser, so the pane has nothing to say.
@@ -1847,8 +1892,8 @@ function App() {
       // standing pick, and opening the pane stores "changes" on its own.
       onOpenPr={(id) => {
         void handleSelectSessionIndexItem(id);
-        setPanelTab("pr");
-        setPanelOpen(true);
+        setPanelTab("pr", id);
+        setPanelOpen(true, id);
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
