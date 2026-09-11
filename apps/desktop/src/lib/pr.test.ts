@@ -363,6 +363,30 @@ describe("firstLine, markup", () => {
   it("drops emphasis marks that render as nothing in a plain preview", () => {
     expect(firstLine("**Deploy** failed on `main`")).toBe("Deploy failed on main");
   });
+
+  it("keeps the words out of a bot's HTML and none of the tags", () => {
+    expect(firstLine("<h2>Greptile overview</h2>")).toBe("Greptile overview");
+  });
+
+  it("skips a heading that is only a bot's own link and shows what it said", () => {
+    expect(
+      firstLine(
+        '<h2><a href="https://app.greptile.com/api/retrigger?id=1">Greptile</a></h2>\n<p>2 issues found.</p>',
+      ),
+    ).toBe("2 issues found.");
+  });
+
+  it("falls back to a link where the body is nothing else", () => {
+    expect(firstLine("[Open the run](https://ci.test/1)")).toBe("Open the run");
+  });
+
+  it("decodes the entities that HTML body carries", () => {
+    expect(firstLine("<p>Ann &amp; Bob said &quot;ship&quot;</p>")).toBe('Ann & Bob said "ship"');
+  });
+
+  it("skips a line that was only a tag", () => {
+    expect(firstLine("<details>\n<summary>Findings</summary>")).toBe("Findings");
+  });
 });
 
 describe("prBadgeCount", () => {
