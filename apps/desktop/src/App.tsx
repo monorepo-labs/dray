@@ -517,8 +517,9 @@ function App() {
   // whichever pane has focus, so a per-session flag snapped it open and shut
   // as focus moved between panes. Open is a question about the column's
   // layout; the tab is a question about the focused session's content, and
-  // so stays with the session. A session keeps its own flag for once the
-  // group dissolves.
+  // so stays with the session. The two keys hand state across: a group
+  // forming takes the focused session's flag, and every write lands on both,
+  // so a group dissolving leaves each session holding the last state it saw.
   //
   // The pick's `null` is "never picked", and it is the whole of the default-tab
   // rule: seeding `"changes"` would make a fresh session indistinguishable from
@@ -533,7 +534,16 @@ function App() {
     },
     [spaceGroups],
   );
-  const panelOpen = selectedSessionId ? (panelOpens[openKey(selectedSessionId)] ?? false) : false;
+  const panelOpen = selectedSessionId
+    ? (panelOpens[openKey(selectedSessionId)] ?? panelOpens[selectedSessionId] ?? false)
+    : false;
+  useEffect(() => {
+    if (!activeGroup || !selectedSessionId) return;
+    const key = `group:${activeGroup.id}`;
+    setPanelOpens((prev) =>
+      key in prev ? prev : { ...prev, [key]: prev[selectedSessionId] ?? false },
+    );
+  }, [activeGroup, selectedSessionId]);
   const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
   // Both take the session because one caller opens a session and its pane in
   // the same breath, before the selection has moved.
@@ -541,10 +551,10 @@ function App() {
     (open: boolean | ((prev: boolean) => boolean), id = selectedSessionId) => {
       if (!id) return;
       const key = openKey(id);
-      setPanelOpens((prev) => ({
-        ...prev,
-        [key]: typeof open === "function" ? open(prev[key] ?? false) : open,
-      }));
+      setPanelOpens((prev) => {
+        const next = typeof open === "function" ? open(prev[key] ?? prev[id] ?? false) : open;
+        return { ...prev, [key]: next, [id]: next };
+      });
     },
     [selectedSessionId, openKey],
   );
