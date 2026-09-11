@@ -1,7 +1,7 @@
+import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { IS_MAC } from "@/lib/platform";
+import type { ShortcutId } from "@/lib/shortcuts";
 
 /// Which view fills the main column. Set and order in one, unlike the right
 /// panel's tabs: none of these are conditional, so a Terminal view joins by
@@ -16,12 +16,18 @@ const LABELS: Record<ViewTab, string> = {
   browser: "Browser",
 };
 
+/// Per tab rather than by position, since a rebinding names the view and not
+/// its slot in the row.
+const VIEW_SHORTCUTS: Record<ViewTab, ShortcutId> = {
+  chat: "view.chat",
+  changes: "view.changes",
+  browser: "view.browser",
+};
+
 /// The main column's tab row, drawn in the titlebar beside the session's name.
 ///
 /// Styled as the right panel's tab row rather than as buttons, because they are
-/// the same control: one row where exactly one entry is on. The accelerator is
-/// the tab's position, so it is read off the array rather than stored per tab —
-/// reordering `VIEW_TABS` moves the keys with it.
+/// the same control: one row where exactly one entry is on.
 export default function ViewTabs({
   tab,
   onChange,
@@ -31,7 +37,7 @@ export default function ViewTabs({
 }) {
   return (
     <div className="flex items-center gap-0.5">
-      {VIEW_TABS.map((value, i) => (
+      {VIEW_TABS.map((value) => (
         <Tooltip key={value}>
           <TooltipTrigger asChild>
             <TabButton active={tab === value} onClick={() => onChange(value)}>
@@ -44,11 +50,7 @@ export default function ViewTabs({
               base style already tightens the *right* side for a trailing
               keycap; this matches the left to it. */}
           <TooltipContent side="bottom" className="px-1.5">
-            <KbdGroup>
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>{IS_MAC ? "⌥" : "Alt"}</Kbd>
-              <Kbd>{i + 1}</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={[VIEW_SHORTCUTS[value]]} />
           </TooltipContent>
         </Tooltip>
       ))}

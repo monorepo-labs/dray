@@ -9,7 +9,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -73,11 +73,7 @@ export default function ProjectSelector({
         {projects.length > 1 && (
           <TooltipContent side="top" className="max-w-none whitespace-nowrap">
             Next project
-            <KbdGroup>
-              <Kbd>⌘</Kbd>
-              <Kbd>Shift</Kbd>
-              <Kbd>P</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["project.next"]} />
           </TooltipContent>
         )}
       </Tooltip>

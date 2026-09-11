@@ -4,13 +4,12 @@ import CommitMessage from "@/components/changes/CommitMessage";
 import DiffPane from "@/components/changes/DiffPane";
 import FileList from "@/components/changes/FileList";
 import HistoryList from "@/components/changes/HistoryList";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChanges } from "@/hooks/useChanges";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useCommitLog, useHeadTree } from "@/hooks/useRepo";
 import { commitBase, defaultSubTab, type SubTab } from "@/lib/commit";
-import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type { ChangedFile, Commit } from "@/types/events";
 
@@ -172,9 +171,9 @@ export default function ChangesView({
   // right panel sits beside this view, so a doc open in edit mode over there is
   // a textarea on screen at the same time as this row — and ⌘⇧← is
   // select-to-line-start in it.
-  const chord = { shift: true, enabled: active, skipInTextField: true };
-  useHotkey("ArrowLeft", () => stepSubTab(-1), chord);
-  useHotkey("ArrowRight", () => stepSubTab(1), chord);
+  const chord = { enabled: active, skipInTextField: true };
+  useHotkey("subtab.prev", () => stepSubTab(-1), chord);
+  useHotkey("subtab.next", () => stepSubTab(1), chord);
 
   // A directory that isn't a repository has nothing to diff. Said plainly
   // rather than drawn as an empty change list, which would read as a clean
@@ -229,14 +228,7 @@ export default function ChangesView({
                   tabs had to work out they were the same shortcut. It names the
                   chord, not the trip from the tab under the cursor. */}
               <TooltipContent side="bottom" className="px-1.5">
-                <KbdGroup>
-                  <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                  {/* Spelled out, the sidebar's rule: ⇧ is an arrow, and this
-                      cap ends in arrow keys, so the glyph reads as a third one.
-                      */}
-                  <Kbd>Shift</Kbd>
-                  <Kbd>←→</Kbd>
-                </KbdGroup>
+                <ShortcutKeys ids={["subtab.prev", "subtab.next"]} />
               </TooltipContent>
             </Tooltip>
           ))}

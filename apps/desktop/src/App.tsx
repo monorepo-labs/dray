@@ -369,7 +369,7 @@ function App() {
   // assigns to delete-forward in every text field — including the composer this
   // shortcut is for. Enabled always: pressed with nothing downloaded it opens
   // settings, which is the answer the reader needs rather than a dead key.
-  useHotkey("d", () => void recorder.toggle(), { platformOnly: true });
+  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -1206,17 +1206,17 @@ function App() {
   };
 
   const toggleSidebar = () => setCollapsed((prev) => !prev);
-  useHotkey("b", toggleSidebar);
+  useHotkey("sidebar.toggle", toggleSidebar);
   // Takes the sidebar with it: the field lives there, and a chord that opened a
   // search nobody can see would be worse than no chord. `autoFocus` covers the
   // field this press mounts; the select covers the one already on screen, which
   // is also what makes ⌘F on a query a replace rather than an append.
-  useHotkey("f", () => {
+  useHotkey("search", () => {
     setCollapsed(false);
     setSearchOpen(true);
     document.querySelector<HTMLInputElement>(`#${SEARCH_INPUT_ID}`)?.select();
   });
-  useHotkey("n", () => goToSession(handleNewSession));
+  useHotkey("session.new", () => goToSession(handleNewSession));
   // Steps the composer's project picker, and only while that picker is on
   // screen: it is drawn for a new task alone, and `enabled` unregisters rather
   // than no-opping, so a session's composer doesn't have ⌘⇧P eaten from it.
@@ -1224,7 +1224,7 @@ function App() {
   // back. Nothing picked yet finds no index and lands on the first, which is
   // also the answer for a project detached out from under the pick.
   useHotkey(
-    "p",
+    "project.next",
     () => {
       const next =
         spaceProjects[
@@ -1233,7 +1233,6 @@ function App() {
       if (next) handleSelectProject(next.path);
     },
     {
-      shift: true,
       // The chord steps exactly what the picker draws, which under a space is
       // that space's projects — a chord landing on one the menu never offered
       // is a session started somewhere the reader cannot see.
@@ -1242,10 +1241,10 @@ function App() {
   );
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("ArrowUp", () => goToSession(() => stepSession(-1)), { shift: true });
-  useHotkey("ArrowDown", () => goToSession(() => stepSession(1)), { shift: true });
-  useHotkey("ArrowUp", () => goToSession(() => stepGroup(-1)), { alt: true });
-  useHotkey("ArrowDown", () => goToSession(() => stepGroup(1)), { alt: true });
+  useHotkey("session.prev", () => goToSession(() => stepSession(-1)));
+  useHotkey("session.next", () => goToSession(() => stepSession(1)));
+  useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
+  useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // The bare ⌘ digits go to the panes, since focus is what moves most inside
   // a grid; the view tabs take ⌘⌥ below. Not ⌘⇧, which macOS spends on
   // screenshots for exactly these digits. Bound only while a grid is *on
@@ -1265,12 +1264,11 @@ function App() {
     void handleSelectSessionIndexItem(id);
     focusComposer();
   };
-  useHotkey("1", () => focusPane(1), { enabled: gridShown });
-  useHotkey("2", () => focusPane(2), { enabled: gridShown });
-  useHotkey("3", () => focusPane(3), { enabled: gridShown });
-  useHotkey("4", () => focusPane(4), { enabled: gridShown });
-  useHotkey("w", () => selectedSessionId && closeSessionPane(selectedSessionId), {
-    alt: true,
+  useHotkey("pane.1", () => focusPane(1), { enabled: gridShown });
+  useHotkey("pane.2", () => focusPane(2), { enabled: gridShown });
+  useHotkey("pane.3", () => focusPane(3), { enabled: gridShown });
+  useHotkey("pane.4", () => focusPane(4), { enabled: gridShown });
+  useHotkey("pane.close", () => selectedSessionId && closeSessionPane(selectedSessionId), {
     enabled: gridShown,
   });
   // ⌘E for the right pane against ⌘B for the left.
@@ -1281,7 +1279,7 @@ function App() {
   // nothing. Which means the issues-page guard has to be repeated here — it
   // lived only in `handleTogglePanel` at first, so the button honoured it and
   // the chord went straight past it to a pane that is not on screen.
-  useHotkey("e", () => {
+  useHotkey("panel.toggle", () => {
     if (issuesOpen) return setPickedIssue(null);
     togglePanel();
   });
@@ -1289,8 +1287,8 @@ function App() {
   // arrives already known. The shift layout reaches `key`, so the character is
   // `{` rather than `[`; the physical key rides along for the engines that
   // report the unshifted one — see `code`.
-  useHotkey("{", () => stepTab(-1), { shift: true, code: "BracketLeft" });
-  useHotkey("}", () => stepTab(1), { shift: true, code: "BracketRight" });
+  useHotkey("panel.tab.prev", () => stepTab(-1));
+  useHotkey("panel.tab.next", () => stepTab(1));
   // ⌘R re-reads whatever the panel is showing — the same one button in the tab
   // row, so the chord means "refresh this" and never "refresh a specific
   // thing". `panelRefresh` is null on Subagents, which has nothing to fetch,
@@ -1301,7 +1299,7 @@ function App() {
   // Safe to take despite being the webview's reload, because `useHotkey` claims
   // every chord it matches — and the app has no Reload menu item, which on
   // macOS would swallow the key before the webview ever saw it.
-  useHotkey("r", () => {
+  useHotkey("panel.refresh", () => {
     // "Re-read what I am looking at", the same rule the session case follows:
     // the pane wins where one is open, and the list has it otherwise.
     if (issuesOpen) {
@@ -1313,7 +1311,7 @@ function App() {
   // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
   // `useHotkey` claims every chord it matches, and ⌘S is the browser's own save
   // — left bound everywhere it would eat the key from nothing at all.
-  useHotkey("s", () => saveActiveDoc(selectedSessionId), {
+  useHotkey("doc.save", () => saveActiveDoc(selectedSessionId), {
     enabled: panelShown && activeTab === "docs",
   });
   // By position in the tab row, so a third view needs only a third line here.
@@ -1324,14 +1322,14 @@ function App() {
   // Under ⌘⌥, with the bare ⌘ digits given to the panes: inside a grid the
   // focus moves many times a minute, where a view is a mode changed a few
   // times a session. `code`, since Option turns a digit's `key` into a symbol.
-  useHotkey("1", () => !issuesOpen && setViewTab("chat"), { alt: true, code: "Digit1" });
-  useHotkey("2", () => !issuesOpen && setViewTab("changes"), { alt: true, code: "Digit2" });
-  useHotkey("3", () => !issuesOpen && setViewTab("browser"), { alt: true, code: "Digit3" });
+  useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
+  useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
+  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
   // custom menu carries no Settings item to swallow the key first.
-  useHotkey(",", () => setSettingsOpen(true));
+  useHotkey("settings", () => setSettingsOpen(true));
   // Both only mean anything before a session exists — the agent *is* the child
   // process and the worktree is where it starts — so they are unregistered
   // rather than no-ops there. `useHotkey` claims every chord it matches, and
@@ -1340,12 +1338,10 @@ function App() {
   const composingNewSession = !selectedSessionId && !issuesOpen;
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
-  useHotkey("a", () => setHarness(nextHarness(harness)), {
-    shift: true,
+  useHotkey("harness.next", () => setHarness(nextHarness(harness)), {
     enabled: composingNewSession,
   });
-  useHotkey("t", () => setUseWorktree((v) => !v), {
-    shift: true,
+  useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
     enabled: composingNewSession && projectPath !== null,
@@ -1370,36 +1366,28 @@ function App() {
   // A session already on a model outside the list enters the cycle at its
   // start, the same convention `nextEffort` takes for a level it doesn't
   // cycle.
-  useHotkey(
-    "Tab",
-    () => {
-      const cycle = cycledModels(models, harness, modelId);
-      if (cycle.length < 2) return;
-      const index = cycle.findIndex((m) => m.id === modelId);
-      const next = cycle[(index + 1) % cycle.length];
-      handleModelChange(next.id, null);
-    },
-    { meta: false, shift: true },
-  );
+  useHotkey("model.next", () => {
+    const cycle = cycledModels(models, harness, modelId);
+    if (cycle.length < 2) return;
+    const index = cycle.findIndex((m) => m.id === modelId);
+    const next = cycle[(index + 1) % cycle.length];
+    handleModelChange(next.id, null);
+  });
   // ⌘⇧E for effort, beside ⌘E for the right pane — near enough to remember and
   // no collision, since `useHotkey` matches Shift exactly and neither listener
   // answers the other's chord. No `code`: that option is for a chord whose
   // character *changes* under Shift, and Shift+E is still an E — the matcher
   // lowercases both sides.
-  useHotkey(
-    "e",
-    () => {
-      const next = nextEffort(models.find((m) => m.id === modelId), effort);
-      if (next) handleModelChange(modelId, next);
-    },
-    { shift: true },
-  );
+  useHotkey("effort.next", () => {
+    const next = nextEffort(models.find((m) => m.id === modelId), effort);
+    if (next) handleModelChange(modelId, next);
+  });
   // Opens, and does nothing where the page is already up — the same answer the
   // sidebar row gives, since that is the only other route in. Not a toggle:
   // nothing on that page opens the pane either (⌘E closes only there), and a
   // chord that closed it would have to pick somewhere to land, which is the
   // guess `goToSession` exists so nothing has to make.
-  useHotkey("i", () => setIssuesOpen(true));
+  useHotkey("issues.open", () => setIssuesOpen(true));
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
 

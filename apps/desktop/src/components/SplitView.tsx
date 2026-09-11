@@ -4,7 +4,8 @@ import { X } from "lucide-react";
 import Chat from "@/components/Chat";
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { PaneState } from "@/hooks/useSessions";
 import { DROP_ATTR, useSessionDrag } from "@/lib/dragSession";
@@ -249,11 +250,7 @@ function PaneHeader({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <KbdGroup>
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>{IS_MAC ? "⌥" : "Alt"}</Kbd>
-              <Kbd>W</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["pane.close"]} />
           </TooltipContent>
         </Tooltip>
       )}

@@ -4,7 +4,7 @@ import { Check } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { useHotkey } from "@/hooks/useHotkey";
 import {
   dismissNotice,
@@ -19,7 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { IS_MAC } from "@/lib/platform";
+import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
 type NoticeStackProps = {
@@ -100,30 +100,25 @@ const CONFIRM_MS = 800;
 /// the sentence above it, and a card meant to sit in a corner stopped fitting
 /// in one. A tooltip is where this app puts shortcuts anyway.
 ///
-/// `keys` empty means no tooltip at all rather than an empty one: only the top
+/// `ids` empty means no tooltip at all rather than an empty one: only the top
 /// card answers to the keys, and everywhere else the tooltip would repeat the
 /// button's own visible label back at the reader — the one thing this app's
 /// tooltip rule says a tooltip must not do.
 function WithShortcut({
-  keys,
+  ids,
   children,
 }: {
-  keys: string[];
+  ids: ShortcutId[];
   children: React.ReactNode;
 }) {
-  if (keys.length === 0) return children;
+  if (ids.length === 0) return children;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       {/* One line, so it stays a tooltip rather than a menu of shortcuts. */}
       <TooltipContent side="bottom" className="max-w-none whitespace-nowrap">
-        <KbdGroup>
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          {keys.map((key) => (
-            <Kbd key={key}>{key}</Kbd>
-          ))}
-        </KbdGroup>
+        <ShortcutKeys ids={ids} />
       </TooltipContent>
     </Tooltip>
   );
@@ -244,7 +239,7 @@ function NoticeCard({
             skip, and a live button beside "Deleted" invites a second thought
             about a directory that is already gone. */}
         {worktree && !done && (
-          <WithShortcut keys={isNext ? ["G"] : []}>
+          <WithShortcut ids={isNext ? ["notice.take"] : []}>
             <Button
               variant="ghost"
               size="xs"
@@ -261,7 +256,7 @@ function NoticeCard({
             it sits on and stops reading as a control at all. `pr-1` because the
             keycaps carry their own inset, which turns the size's own right
             padding into a gap. */}
-        <WithShortcut keys={isNext ? (worktree ? ["⇧", "D"] : ["G"]) : []}>
+        <WithShortcut ids={isNext ? [worktree ? "notice.delete" : "notice.take"] : []}>
         <Button
           size="xs"
           className={cn(
@@ -366,7 +361,7 @@ export default function NoticeStack({
   //
   // Registered here rather than in `App` so it exists only while a card does —
   // ⌘G with nothing raised should stay free for whatever wants it later.
-  useHotkey("g", () => {
+  useHotkey("notice.take", () => {
     if (!next) return;
     take(next);
   });
@@ -393,13 +388,9 @@ export default function NoticeStack({
   // and marked itself acted, `next` moved to B before B's listener ran, and B
   // fired too, down the whole stack on one press. One listener reads `next`
   // once, so one press is one card by construction.
-  useHotkey(
-    "d",
-    () => {
-      if (next?.kind === "worktree") remove(next);
-    },
-    { shift: true },
-  );
+  useHotkey("notice.delete", () => {
+    if (next?.kind === "worktree") remove(next);
+  });
 
   if (notices.length === 0) return null;
 

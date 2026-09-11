@@ -17,9 +17,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { IS_MAC } from "@/lib/platform";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useIssues } from "@/hooks/useIssues";
 import { groupIssues } from "@/lib/issue";
@@ -149,9 +149,9 @@ export default function IssuesView({
   // so a binding left standing would eat ⌘⇧F from whatever *is* on screen.
   // `select` rather than `focus`, so pressing it on a query replaces it.
   useHotkey(
-    "f",
+    "issues.search",
     () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
-    { shift: true, enabled: active && connected },
+    { enabled: active && connected },
   );
 
   /// The workflow a row's status menu offers, which belongs to the issue's own
@@ -211,10 +211,7 @@ export default function IssuesView({
           </TooltipTrigger>
           <TooltipContent side="left">
             Refresh
-            <KbdGroup>
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>R</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["panel.refresh"]} />
           </TooltipContent>
         </Tooltip>
       </div>
@@ -254,13 +251,7 @@ export default function IssuesView({
             a query. Esc is withheld over an empty field, the one state neither
             key has anything to do in. */}
         {query.text && <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>}
-        <KbdGroup className="group-focus-within:hidden">
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          {/* Spelled out, not ⇧. Beside a single glyph the arrow reads as part
-              of the key next to it; the word cannot be mistaken for one. */}
-          <Kbd>Shift</Kbd>
-          <Kbd>F</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["issues.search"]} className="group-focus-within:hidden" />
       </div>
 
       {/* Under the header rather than over the rows: a failed refresh leaves

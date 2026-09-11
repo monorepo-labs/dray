@@ -21,7 +21,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -159,11 +159,7 @@ export default function ModelSelector({
               below say what it cycles, and a separator would draw a box round
               a hint. */}
           <div className="flex px-1.5 py-1">
-            <KbdGroup>
-              <Kbd>⌘</Kbd>
-              <Kbd>Shift</Kbd>
-              <Kbd>E</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["effort.next"]} />
           </div>
           {model.efforts.map((level) => (
             <DropdownMenuItem
@@ -223,10 +219,7 @@ export default function ModelSelector({
             `max-w-xs` would wrap. */}
         <TooltipContent side="top" className="max-w-none whitespace-nowrap">
           Switch model
-          <KbdGroup>
-            <Kbd>Shift</Kbd>
-            <Kbd>Tab</Kbd>
-          </KbdGroup>
+          <ShortcutKeys ids={["model.next"]} />
         </TooltipContent>
       </Tooltip>
 
@@ -301,11 +294,7 @@ export default function ModelSelector({
             </div>
             {/* Inside the track, in the width the two marks leave: a hint you
                 have to hover to find is one nobody finds. */}
-            <KbdGroup className="ml-auto pr-0.5">
-              <Kbd>⌘</Kbd>
-              <Kbd>Shift</Kbd>
-              <Kbd>A</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
           </div>
         )}
 

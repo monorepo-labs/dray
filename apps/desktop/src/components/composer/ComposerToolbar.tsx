@@ -10,7 +10,7 @@ import PermissionSelector, {
 import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -120,11 +120,7 @@ export default function ComposerToolbar({
         </TooltipTrigger>
         <TooltipContent side="top">
           Attach files
-          <KbdGroup>
-            <Kbd>⌘</Kbd>
-            <Kbd>⌥</Kbd>
-            <Kbd>O</Kbd>
-          </KbdGroup>
+          <ShortcutKeys ids={["attach"]} />
         </TooltipContent>
       </Tooltip>
 

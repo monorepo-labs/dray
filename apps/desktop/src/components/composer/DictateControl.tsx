@@ -2,6 +2,7 @@ import { Check, FolderOpen, Mic, RotateCcw, X } from "lucide-react";
 
 import AudioVisualizer from "@/components/composer/AudioVisualizer";
 import { Button, buttonVariants } from "@/components/ui/button";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -123,10 +124,7 @@ export default function DictateControl({
           </TooltipTrigger>
           <TooltipContent side="top">
             Stop and transcribe
-            <KbdGroup>
-              <Kbd>⌘</Kbd>
-              <Kbd>D</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["dictate"]} />
           </TooltipContent>
         </Tooltip>
       </div>
@@ -149,10 +147,7 @@ export default function DictateControl({
       </TooltipTrigger>
       <TooltipContent side="top">
         Dictate
-        <KbdGroup>
-          <Kbd>⌘</Kbd>
-          <Kbd>D</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["dictate"]} />
       </TooltipContent>
     </Tooltip>
   );

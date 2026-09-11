@@ -4,9 +4,8 @@ import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -106,10 +105,7 @@ export function PanelToggle({
               : "Open pull request"
             : "Last turn's changes"
           : "Toggle Panel"}
-        <KbdGroup>
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          <Kbd>E</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["panel.toggle"]} />
       </TooltipContent>
     </Tooltip>
   );
@@ -345,11 +341,7 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <KbdGroup className="ml-1.5 h-full shrink-0 dark:opacity-50">
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>⇧</Kbd>
-              <Kbd>[ ]</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
           </div>
         )}
 
@@ -387,10 +379,7 @@ export default function RightPanel({
               </TooltipTrigger>
               <TooltipContent side="left">
                 Refresh
-                <KbdGroup>
-                  <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                  <Kbd>R</Kbd>
-                </KbdGroup>
+                <ShortcutKeys ids={["panel.refresh"]} />
               </TooltipContent>
             </Tooltip>
           )}

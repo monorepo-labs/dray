@@ -14,7 +14,7 @@ import WorkingIndicator from "@/components/chat/WorkingIndicator";
 import StreamingToolCall from "@/components/chat/StreamingToolCall";
 import TurnBlock from "@/components/chat/TurnBlock";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -23,7 +23,6 @@ import {
 import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, QueuedPrompt, StreamingBlock, Working } from "@/hooks/useSessions";
-import { IS_MAC } from "@/lib/platform";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
@@ -524,7 +523,7 @@ export default function Chat({
   // Bound whether or not the button is drawn: the button is the affordance for
   // this, not its gate, and pressing it while already at the bottom re-arms the
   // pin — which is the useful half when a turn has scrolled you off it.
-  useHotkey("ArrowDown", () => {
+  useHotkey("chat.bottom", () => {
     if (active && session) scrollToBottom();
   });
 
@@ -664,10 +663,7 @@ export default function Chat({
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-none whitespace-nowrap">
               Scroll to bottom
-              <KbdGroup>
-                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                <Kbd>↓</Kbd>
-              </KbdGroup>
+              <ShortcutKeys ids={["chat.bottom"]} />
             </TooltipContent>
           </Tooltip>
         )}

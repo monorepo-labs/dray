@@ -31,6 +31,20 @@
         // against the theme's own backdrop instead of going flat.
         if (/Mac/.test(navigator.platform)) el.dataset.vibrancy = "";
       } catch (e) {}
+      // Same bargain for text sizes, mirrored from src/lib/fontSize.ts: a
+      // stored size never shows as a flash of the default. Clamped exactly as
+      // `coerceFontSizes` clamps, or an out-of-range value paints at the CSS
+      // default here and jumps to the clamped size once React takes over.
+      try {
+        var sizes = JSON.parse(localStorage.getItem("ade.fontSizes") || "{}");
+        ["chat", "code", "ui"].forEach(function (slot) {
+          var px = sizes[slot];
+          if (typeof px === "number" && isFinite(px)) {
+            px = Math.min(24, Math.max(10, Math.round(px)));
+            document.documentElement.style.setProperty("--fs-" + slot, px + "px");
+          }
+        });
+      } catch (e) {}
     </script>
   </head>
 
