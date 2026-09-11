@@ -388,9 +388,23 @@ const ENTITIES: Record<string, string> = {
   nbsp: " ",
 };
 
+/// A tag's attributes. Quoted, so a tag does not end at the first `>` — an
+/// `alt="Build > tests"` would otherwise leave the rest of the tag on screen.
+const ATTRS = String.raw`[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*`;
+
+/// A tag. It must open with a letter, `/` or `!`, so a bare `<` in prose
+/// ("if x < y") stays the word it is rather than eating the sentence to the
+/// next `>`.
+const TAG = new RegExp(`<[a-zA-Z/!]${ATTRS}>`, "g");
+
 /// A markdown or HTML link, whole. An image is deliberately not one: its alt
 /// text is a badge's state (`Ready`, `Failed`), which is the comment's news.
-const LINKS = /<a\b[^>]*>[\s\S]*?<\/a>|(?<!!)\[[^\]]*\]\([^)]*\)/gi;
+const LINKS = new RegExp(`<a\\b${ATTRS}>[\\s\\S]*?</a>|(?<!!)\\[[^\\]]*\\]\\([^)]*\\)`, "gi");
+
+/// How much of a body the preview reads. It draws one truncated line, so the
+/// tail of a long comment can say nothing — and a cap bounds the scanning these
+/// patterns do over text somebody else wrote.
+const PREVIEW_LIMIT = 4000;
 
 /// One line of a comment body as plain text.
 ///
@@ -404,7 +418,7 @@ function plain(line: string): string {
   return (
     line
       // A tag becomes a space, or the words either side of it run together.
-      .replace(/<[^>]+>/g, " ")
+      .replace(TAG, " ")
       .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, name: string) => ENTITIES[name])
       .replace(/\s+/g, " ")
       .trim()
@@ -423,9 +437,14 @@ function plain(line: string): string {
 /// stays, since there the words are the sentence. A body that is *only* links
 /// falls back to them, a name being better than a blank row.
 export function firstLine(body: string): string {
-  const lines = body.split("\n").map((line) => ({
+  const head = body.slice(0, PREVIEW_LIMIT);
+  // Links are blanked where they stand, newlines kept, rather than each line
+  // being searched on its own — an anchor wrapped across lines would otherwise
+  // leave its text on a line of its own looking like prose.
+  const blanked = head.replace(LINKS, (m) => m.replace(/[^\n]/g, " ")).split("\n");
+  const lines = head.split("\n").map((line, i) => ({
     text: plain(line),
-    prose: plain(line.replace(LINKS, " ")),
+    prose: plain(blanked[i]),
   }));
   return (
     lines.find((l) => l.prose.length > 0)?.text ?? lines.find((l) => l.text.length > 0)?.text ?? ""

@@ -380,6 +380,30 @@ describe("firstLine, markup", () => {
     expect(firstLine("[Open the run](https://ci.test/1)")).toBe("Open the run");
   });
 
+  it("skips a link the bot wrote across several lines", () => {
+    expect(firstLine('<a href="https://x.test">\nGreptile\n</a>\n2 issues found.')).toBe(
+      "2 issues found.",
+    );
+  });
+
+  it("ends a tag at the real `>`, not one inside an attribute", () => {
+    expect(firstLine('<img alt="Build > tests" src="x.svg"> passed')).toBe("passed");
+  });
+
+  // Greptile's own summary, the body this was written against: a retrigger
+  // badge wrapped in an anchor, then the one thing worth reading.
+  it("finds the score under a bot's badge", () => {
+    expect(
+      firstLine(
+        '<h2><a href="https://app.greptile.com/api/retrigger?id=1"><img alt="Retrigger" src="r.svg" align="right"></a>Confidence Score: 4/5</h2>',
+      ),
+    ).toBe("Confidence Score: 4/5");
+  });
+
+  it("leaves a bare `<` in prose alone", () => {
+    expect(firstLine("fails when x < y and y > z")).toBe("fails when x < y and y > z");
+  });
+
   it("decodes the entities that HTML body carries", () => {
     expect(firstLine("<p>Ann &amp; Bob said &quot;ship&quot;</p>")).toBe('Ann & Bob said "ship"');
   });
