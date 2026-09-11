@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -248,18 +248,50 @@ function App() {
     Object.values(statusBySession).some((s) => s === "in_progress") ||
     Object.values(tasksBySession).some((tasks) => tasks.length > 0);
 
-  const [panelOpen, setPanelOpen] = useState(false);
-  // `null` is "never picked", and it is the whole of the default-tab rule.
-  // Storing `"changes"` as the initial value made a fresh install
-  // indistinguishable from a reader who had chosen Changes, so an open PR could
-  // never lead — see `activeTab`.
-  const [panelTab, setPanelTab] = useLocalStorage<PanelTab | null>("ade.panelTab", null);
+  // The pane's open flag and tab pick are both per session, like `viewTabs`
+  // below and for the same reason: app-wide, a pane opened on one session's PR
+  // sat blank beside the next session, which had none, and was gone again on
+  // the way back. Not persisted, and a session never opened holds no entry,
+  // which is also what keeps a new task from inheriting whichever pane the
+  // last session left up — the reads there have nothing to answer from until
+  // the first turn lands.
+  //
+  // The pick's `null` is "never picked", and it is the whole of the default-tab
+  // rule: seeding `"changes"` would make a fresh session indistinguishable from
+  // one where the reader chose Changes, so an open PR could never lead — see
+  // `activeTab`.
+  const [panels, setPanels] = useState<Record<string, { open: boolean; tab: PanelTab | null }>>(
+    {},
+  );
+  const panel = (selectedSessionId && panels[selectedSessionId]) || { open: false, tab: null };
+  const panelOpen = panel.open;
+  const panelTab = panel.tab;
+  // Both take the session because one caller opens a session and its pane in
+  // the same breath, before the selection has moved.
+  const setPanelOpen = useCallback(
+    (open: boolean | ((prev: boolean) => boolean), id = selectedSessionId) => {
+      if (!id) return;
+      setPanels((prev) => {
+        const cur = prev[id] ?? { open: false, tab: null };
+        const next = typeof open === "function" ? open(cur.open) : open;
+        return { ...prev, [id]: { ...cur, open: next } };
+      });
+    },
+    [selectedSessionId],
+  );
+  const setPanelTab = useCallback(
+    (tab: PanelTab | null, id = selectedSessionId) => {
+      if (!id) return;
+      setPanels((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { open: false }), tab } }));
+    },
+    [selectedSessionId],
+  );
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
 
-  // Per session, and deliberately not persisted the way `panelTab` is: which
-  // view you were last on is working context for one session rather than a
-  // standing preference, and reopening the app onto a repo view for every
-  // session would be wrong more often than right.
+  // Per session and not persisted: which view you were last on is working
+  // context for one session rather than a standing preference, and reopening
+  // the app onto a repo view for every session would be wrong more often than
+  // right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
@@ -934,18 +966,6 @@ function App() {
     setPanelTab("docs");
     setPanelOpen(true);
   }, [docsOpened, setPanelTab, setPanelOpen]);
-
-  // The pane is one piece of app-wide state, so a new task would otherwise
-  // inherit whichever pane the last session left open — invisibly, since the
-  // empty composer draws none, and then mounted open the moment the first
-  // prompt creates the session. That is the one moment its reads have nothing
-  // to answer from: the repo isn't resolved yet, so the tab draws an error for
-  // a second or three before the first read lands. Keyed on the selection
-  // rather than on `handleNewSession`, so every route to the empty composer is
-  // covered — ⌘N, the sidebar's +, settling the open session, deleting it.
-  useEffect(() => {
-    if (!selectedSessionId) setPanelOpen(false);
-  }, [selectedSessionId]);
 
   // A link in the transcript opens as a new tab in the session's browser and
   // brings the pane up on it, unless the full view already has it. ⌘-click,
@@ -1859,8 +1879,8 @@ function App() {
       // standing pick, and opening the pane stores "changes" on its own.
       onOpenPr={(id) => {
         void handleSelectSessionIndexItem(id);
-        setPanelTab("pr");
-        setPanelOpen(true);
+        setPanelTab("pr", id);
+        setPanelOpen(true, id);
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
