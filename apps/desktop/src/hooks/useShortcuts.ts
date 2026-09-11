@@ -74,10 +74,17 @@ export function setChord(id: ShortcutId, chord: Chord) {
   commit(next);
 }
 
-export function resetChord(id: ShortcutId) {
+/// Puts the default back, unless another shortcut has since been moved onto
+/// it — then nothing changes and the holder is answered, for the row to name.
+/// The same refusal recording makes: a reset that quietly restored ⌘N beside a
+/// search rebound to ⌘N would fire both on one press.
+export function resetChord(id: ShortcutId): ShortcutId | null {
+  const by = holderOf(defaultChord(id), id);
+  if (by) return by;
   const next = { ...store() };
   delete next[id];
   commit(next);
+  return null;
 }
 
 export function resetAllChords() {

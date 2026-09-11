@@ -56,7 +56,12 @@ export default function ShortcutsSettings() {
                           variant="ghost"
                           size="icon-xs"
                           aria-label="Reset to default"
-                          onClick={() => resetChord(id)}
+                          onClick={() => {
+                            const by = resetChord(id);
+                            setRefused(
+                              by ? { id, reason: `Default is used by ${shortcutLabel(by)}.` } : null,
+                            );
+                          }}
                         >
                           <RotateCcw />
                         </Button>
