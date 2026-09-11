@@ -5,6 +5,36 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.17.0
+
+### Added
+
+- **Font size and shortcut rebinding in Settings.** Interface, chat and
+  code each take their own size, applied before the first paint like the
+  theme. Every shortcut in the app can be recorded onto another chord;
+  a chord another action or the system already holds is refused and the
+  row names the holder. Keycaps everywhere draw what the key actually
+  fires.
+
+### Changed
+
+- **A fresh install opens in light mode.** A pick you have already made
+  is untouched.
+- **Unfocused panes dim while you type.** One composer under four
+  transcripts can send into the wrong session, so the panes step back
+  the moment typing takes the placeholder's name away.
+
+### Fixed
+
+- **The right pane remembers itself per session.** One app-wide flag left
+  it opened on a session's PR and blank beside the next, which had none.
+  The tab pick follows the session; in a split, the pane's open state
+  follows the group.
+- **The Subagents tab is hidden where a session has none**, the same rule
+  the PR, Docs and Issue tabs follow.
+- **PR comment previews read as text.** A bot writes HTML as often as
+  markdown, so a collapsed row drew raw `<h2><a href="...">` tags.
+
 ## 0.16.2
 
 ### Fixed
