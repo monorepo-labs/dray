@@ -976,11 +976,13 @@ function App() {
         void openUrl(url).catch(console.error);
         return;
       }
+      // The session is named outright: the read lands after an await, and by
+      // then the reader may be on another session whose pane must stay put.
       void openInBrowser(selectedSessionId, url, true)
         .then(() => {
           if (fullBrowserOpen) return;
-          setPanelTab("browser");
-          setPanelOpen(true);
+          setPanelTab("browser", selectedSessionId);
+          setPanelOpen(true, selectedSessionId);
         })
         .catch(() => {
           // Answered by the system browser, so the pane has nothing to say.
