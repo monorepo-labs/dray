@@ -93,7 +93,7 @@ export const THEMES: Theme[] = [
 ];
 
 export const DEFAULT_THEME: ThemeName = "default";
-const DEFAULT_MODE: ThemeMode = "dark";
+const DEFAULT_MODE: ThemeMode = "light";
 
 function theme(name: ThemeName): Theme | undefined {
   return THEMES.find((t) => t.id === name);

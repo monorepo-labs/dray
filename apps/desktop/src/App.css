@@ -32,8 +32,8 @@
    The ramp lives on `[data-mode]` rather than on `:root` on purpose. Both selectors
    have the same specificity, so a light document matching `:root` too would take any
    dark token the light block happened to miss — a leak that shows up as one dark
-   card on a light page. index.html hard-codes `data-mode="dark"` in the markup as
-   well as stamping it, so there is no unstamped case for `:root` to have to cover. */
+   card on a light page. index.html hard-codes a `data-mode` in the markup as well as
+   stamping it, so there is no unstamped case for `:root` to have to cover. */
 :root {
   --radius: 0.625rem;
 

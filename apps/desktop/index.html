@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="default" data-mode="dark" data-transparency class="dark">
+<html lang="en" data-theme="default" data-mode="light" data-transparency>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,7 +9,7 @@
       // default one. Kept in sync with src/lib/theme.ts by hand — it can't import.
       try {
         var t = localStorage.getItem("ade.theme") || "default";
-        var m = localStorage.getItem("ade.mode") || "dark";
+        var m = localStorage.getItem("ade.mode") || "light";
         var dark =
           m === "dark" ||
           (m === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
