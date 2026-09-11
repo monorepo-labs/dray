@@ -379,26 +379,75 @@ export function isSettling(pr: PullRequest | null): boolean {
   return pr.mergeable === "UNKNOWN" || pr.checks.some((c) => c.state === "pending");
 }
 
-/// The first line worth showing, for a collapsed comment's preview.
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  "#39": "'",
+  nbsp: " ",
+};
+
+/// A tag's attributes. Quoted, so a tag does not end at the first `>` — an
+/// `alt="Build > tests"` would otherwise leave the rest of the tag on screen.
+const ATTRS = String.raw`[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*`;
+
+/// A tag. It must open with a letter, `/` or `!`, so a bare `<` in prose
+/// ("if x < y") stays the word it is rather than eating the sentence to the
+/// next `>`.
+const TAG = new RegExp(`<[a-zA-Z/!]${ATTRS}>`, "g");
+
+/// A markdown or HTML link, whole. An image is deliberately not one: its alt
+/// text is a badge's state (`Ready`, `Failed`), which is the comment's news.
+const LINKS = new RegExp(`<a\\b${ATTRS}>[\\s\\S]*?</a>|(?<!!)\\[[^\\]]*\\]\\([^)]*\\)`, "gi");
+
+/// How much of a body the preview reads. It draws one truncated line, so the
+/// tail of a long comment can say nothing — and a cap bounds the scanning these
+/// patterns do over text somebody else wrote.
+const PREVIEW_LIMIT = 4000;
+
+/// One line of a comment body as plain text.
 ///
 /// The preview is plain text in a truncating span, so the markup that would
-/// have been rendered has to come off first: a heading's `#` marks say nothing
-/// at one line long, and a link's `(https://…)` half is usually longer than the
-/// words around it and is not clickable here anyway.
-export function firstLine(body: string): string {
+/// have been rendered has to come off: a heading's `#` marks say nothing at one
+/// line long, and a link's `(https://…)` half is usually longer than the words
+/// around it and is not clickable here anyway. Bots write HTML as often as
+/// markdown — a Greptile comment opens `<h2><a href="…">` — and a tag drawn
+/// literally spends the whole row saying nothing.
+function plain(line: string): string {
   return (
-    body
-      .split("\n")
-      .map((line) =>
-        line
-          .replace(/^#{1,6}\s+/, "")
-          // `[text](url)` keeps its text; a bare image `![alt](url)` keeps its
-          // alt, which is the only word in it a reader can use.
-          .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-          .replace(/[*_`]/g, "")
-          .trim(),
-      )
-      .find((line) => line.length > 0) ?? ""
+    line
+      // A tag becomes a space, or the words either side of it run together.
+      .replace(TAG, " ")
+      .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, name: string) => ENTITIES[name])
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/[*_`]/g, "")
+      .trim()
+  );
+}
+
+/// The first line worth showing, for a collapsed comment's preview.
+///
+/// A line that is nothing but links is skipped: bots open with a logo or a
+/// "re-run" button, and its words ("Greptile") name the author the row already
+/// names rather than saying what the comment found. Link text inside a sentence
+/// stays, since there the words are the sentence. A body that is *only* links
+/// falls back to them, a name being better than a blank row.
+export function firstLine(body: string): string {
+  const head = body.slice(0, PREVIEW_LIMIT);
+  // Links are blanked where they stand, newlines kept, rather than each line
+  // being searched on its own — an anchor wrapped across lines would otherwise
+  // leave its text on a line of its own looking like prose.
+  const blanked = head.replace(LINKS, (m) => m.replace(/[^\n]/g, " ")).split("\n");
+  const lines = head.split("\n").map((line, i) => ({
+    text: plain(line),
+    prose: plain(blanked[i]),
+  }));
+  return (
+    lines.find((l) => l.prose.length > 0)?.text ?? lines.find((l) => l.text.length > 0)?.text ?? ""
   );
 }
 
