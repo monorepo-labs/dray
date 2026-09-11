@@ -56,6 +56,19 @@ export function appendToDraft(sessionId: string | null, text: string) {
   writeDraft(sessionId, current + join + trimmed);
 }
 
+/// Whether a session's draft holds anything, without subscribing to what it
+/// holds.
+///
+/// A keystroke changes the string on every press, where this answer changes
+/// twice in a whole prompt — so a consumer that only asks "is the box empty"
+/// is not re-rendered by typing. `SplitView` is one, and it holds every
+/// mounted transcript, none of which are memoized.
+export function useHasDraft(sessionId: string | null): boolean {
+  // Safe against `useSyncExternalStore`'s reference check for `useDraft`'s own
+  // reason, one type over: equal booleans compare equal.
+  return useSyncExternalStore(changed.subscribe, () => readDraft(sessionId).length > 0);
+}
+
 /// The composer's text for one session, kept apart from every other session's.
 ///
 /// Switching sessions must not carry a half-typed prompt across, and coming

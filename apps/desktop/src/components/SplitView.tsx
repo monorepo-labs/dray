@@ -6,7 +6,7 @@ import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useDraft } from "@/hooks/useDraft";
+import { useHasDraft } from "@/hooks/useDraft";
 import type { PaneState } from "@/hooks/useSessions";
 import { DROP_ATTR, useSessionDrag } from "@/lib/dragSession";
 import { basename } from "@/lib/format";
@@ -56,9 +56,10 @@ export default function SplitView({
   // Composing into the focused pane, so every other transcript gives way. The
   // draft store is read here directly rather than threaded down from the
   // composer — it is module-level and keyed by session, which is the whole
-  // reason it exists.
-  const [draft] = useDraft(focusedId);
-  const composing = draft.length > 0;
+  // reason it exists. The *emptiness* alone, never the text: this component
+  // holds every mounted transcript, so subscribing to the string would rerender
+  // all four on every keystroke.
+  const composing = useHasDraft(focusedId);
   // Grid order, which is what ⌘1–4 count in.
   const numbers = new Map(columns.flat().map((item, i) => [item.sessionId, i + 1]));
   return (
