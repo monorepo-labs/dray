@@ -155,12 +155,16 @@ export function tabOrder({
   pr,
   docs,
   issue,
+  subagents,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
   /// [useDocs](../hooks/useDocs.ts). Absent otherwise, for the PR tab's reason.
   docs: boolean;
   issue: boolean;
+  /// This session has spawned at least one subagent or background task. Absent
+  /// otherwise, for the PR tab's reason — most sessions never spawn one.
+  subagents: boolean;
 }): readonly PanelTab[] {
   const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
   // After Changes, which is what keeps Issue immediately before Subagents.
@@ -168,7 +172,7 @@ export function tabOrder({
   // Immediately before Subagents wherever it is drawn, so the row's order is
   // the same one ⌘⇧[ steps whether or not a session has an issue on it.
   if (issue) tabs.push("issue");
-  tabs.push("subagents");
+  if (subagents) tabs.push("subagents");
 
   return tabs;
 }
@@ -191,6 +195,9 @@ type RightPanelProps = {
   /// PR tab's reason: a tab whose only content is "there is nothing here" is one
   /// the eye skips past on every session that will never have one.
   issue?: boolean;
+  /// This session has spawned at least one subagent or background task. Absent
+  /// otherwise, for the same reason.
+  subagents?: boolean;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
@@ -256,13 +263,14 @@ export default function RightPanel({
   pr = false,
   docs = false,
   issue = false,
+  subagents = false,
   refresh,
   cwd,
   actions,
   heading,
   children,
 }: RightPanelProps) {
-  const tabs = tabOrder({ pr, docs, issue });
+  const tabs = tabOrder({ pr, docs, issue, subagents });
 
   return (
     <aside

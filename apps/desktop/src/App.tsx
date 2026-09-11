@@ -775,7 +775,16 @@ function App() {
     setPanelOpen(true);
   };
 
-  const tabs = tabOrder({ pr: hasPrTab, docs: hasDocsTab, issue: hasIssueTab });
+  // A live background task counts even where no run is built for it yet, or the
+  // chat's background-tasks indicator offers a tab that isn't in the row.
+  const hasSubagentsTab = subagents.length > 0 || backgroundTasks.length > 0;
+
+  const tabs = tabOrder({
+    pr: hasPrTab,
+    docs: hasDocsTab,
+    issue: hasIssueTab,
+    subagents: hasSubagentsTab,
+  });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
   // still names a tab this session draws, and otherwise the derived default
@@ -1622,6 +1631,7 @@ function App() {
             pr={hasPrTab}
             docs={hasDocsTab}
             issue={hasIssueTab}
+            subagents={hasSubagentsTab}
             refresh={panelRefresh}
             cwd={selectedSession.cwd}
           >
