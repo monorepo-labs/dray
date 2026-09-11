@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useHasDraft } from "@/hooks/useDraft";
 import type { PaneState } from "@/hooks/useSessions";
 import { DROP_ATTR, useSessionDrag } from "@/lib/dragSession";
 import { basename } from "@/lib/format";
@@ -53,6 +54,13 @@ export default function SplitView({
 }: SplitViewProps) {
   const drag = useSessionDrag();
   const metaHeld = useMetaHeld();
+  // Composing into the focused pane, so every other transcript gives way. The
+  // draft store is read here directly rather than threaded down from the
+  // composer — it is module-level and keyed by session, which is the whole
+  // reason it exists. The *emptiness* alone, never the text: this component
+  // holds every mounted transcript, so subscribing to the string would rerender
+  // all four on every keystroke.
+  const composing = useHasDraft(focusedId);
   // Grid order, which is what ⌘1–4 count in.
   const numbers = new Map(columns.flat().map((item, i) => [item.sessionId, i + 1]));
   return (
@@ -111,7 +119,16 @@ export default function SplitView({
                   showNumber={metaHeld && !focused}
                   onClose={() => onClose(item.sessionId)}
                 />
-                <div className="min-h-0 flex-1">
+                {/* Dimmed rather than veiled: a scrim is one more element to
+                    keep in step with the palette, and opacity recedes the
+                    transcript against whatever is behind it. The header keeps
+                    full strength, since it is what names the pane. */}
+                <div
+                  className={cn(
+                    "min-h-0 flex-1 transition-opacity duration-150 ease-out",
+                    composing && !focused && "opacity-35",
+                  )}
+                >
                   <Chat
                     {...paneState(item.sessionId)}
                     {...chat}
