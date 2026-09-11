@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -49,11 +49,7 @@ export default function WorktreeToggle({
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-none whitespace-nowrap">
         Run in a worktree
-        <KbdGroup>
-          <Kbd>⌘</Kbd>
-          <Kbd>Shift</Kbd>
-          <Kbd>T</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["worktree.toggle"]} />
       </TooltipContent>
     </Tooltip>
   );

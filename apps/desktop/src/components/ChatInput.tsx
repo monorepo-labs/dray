@@ -403,7 +403,7 @@ export default function ChatInput({
   }, []);
 
   // ⌥ as well as ⌘, so the chord can't collide with the webview's own ⌘O.
-  useHotkey("o", () => void pickAttachments(sessionId), { alt: true });
+  useHotkey("attach", () => void pickAttachments(sessionId));
 
   // What Esc does, wherever focus is. Held in a ref so the listener below can
   // register once and still read current state. Returns whether it consumed the

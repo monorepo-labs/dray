@@ -37,7 +37,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
   TooltipContent,
@@ -50,7 +51,6 @@ import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
-import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
   PrMark,
@@ -601,10 +601,7 @@ export function SidebarToggle({
       </TooltipTrigger>
       <TooltipContent side="right">
         Toggle Sidebar
-        <KbdGroup>
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          <Kbd>B</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["sidebar.toggle"]} />
       </TooltipContent>
     </Tooltip>
   );
@@ -634,10 +631,7 @@ function SettingsButton({ onOpen }: { onOpen: () => void }) {
       </TooltipTrigger>
       <TooltipContent side="right">
         Settings
-        <KbdGroup>
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          <Kbd>,</Kbd>
-        </KbdGroup>
+        <ShortcutKeys ids={["settings"]} />
       </TooltipContent>
     </Tooltip>
   );
@@ -996,10 +990,7 @@ export default function Sidebar({
         >
           <Plus />
           New Task
-          <KbdGroup className="ml-auto">
-            <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-            <Kbd>N</Kbd>
-          </KbdGroup>
+          <ShortcutKeys ids={["session.new"]} className="ml-auto" />
         </Button>
 
         {/* Under New Task, because it is the other way a task starts — an
@@ -1016,10 +1007,7 @@ export default function Sidebar({
         >
           <CircleDot />
           Issues
-          <KbdGroup className="ml-auto">
-            <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-            <Kbd>I</Kbd>
-          </KbdGroup>
+          <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
         </Button>
 
         {/* The button *becomes* the field, on the same row at the same height:
@@ -1064,10 +1052,7 @@ export default function Sidebar({
             {search && (
               <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>
             )}
-            <KbdGroup className="group-focus-within:hidden">
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>F</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["search"]} className="group-focus-within:hidden" />
           </div>
         ) : (
           <Button
@@ -1078,10 +1063,7 @@ export default function Sidebar({
           >
             <Search />
             Search
-            <KbdGroup className="ml-auto">
-              <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-              <Kbd>F</Kbd>
-            </KbdGroup>
+            <ShortcutKeys ids={["search"]} className="ml-auto" />
           </Button>
         )}
       </div>
@@ -1289,20 +1271,16 @@ function ShortcutHint({
   return (
     <>
       <HintRow label={selected ? "Switch tasks" : "Jump to task"}>
-        <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-        {/* Spelled out on every platform, unlike the ⌘ beside it. ⇧ is the one
-            modifier glyph that doesn't read as itself — an arrow, in a hint
-            that ends in arrow keys — so no keycap in the app draws it. */}
-        <Kbd>Shift</Kbd>
-        <Kbd>{selected ? "↑↓" : "↓"}</Kbd>
+        <ShortcutKeys
+          ids={selected ? ["session.prev", "session.next"] : ["session.next"]}
+          className={HINT_KEYS}
+        />
       </HintRow>
       {/* Only while a group exists: the chord steps groups as one row each,
           and with none it is ⌘⇧ under another name. */}
       {grouped && (
         <HintRow label="Switch groups">
-          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-          <Kbd>{IS_MAC ? "⌥" : "Alt"}</Kbd>
-          <Kbd>↑↓</Kbd>
+          <ShortcutKeys ids={["group.prev", "group.next"]} className={HINT_KEYS} />
         </HintRow>
       )}
       {/* Needs a session selected, since that is what a drop lands beside. */}
@@ -1332,17 +1310,15 @@ function HintRow({
       )}
     >
       {label}
-      {/* Held back from the stock keycap: everywhere else a `Kbd` labels a
-          control the eye is already on, but this one is the row, so the default
-          fill makes a hint the loudest thing in the list. */}
-      {children && (
-        <KbdGroup className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60">
-          {children}
-        </KbdGroup>
-      )}
+      {children}
     </div>
   );
 }
+
+/// Held back from the stock keycap: everywhere else a `Kbd` labels a control
+/// the eye is already on, but in a hint row it is the row, so the default fill
+/// makes a hint the loudest thing in the list.
+const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
 /// From this many projects a tap opens a menu instead of stepping one. Tapping
 /// through a long list is a scrub rather than a pick, and the dots stop being

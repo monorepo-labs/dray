@@ -14,7 +14,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -40,7 +40,6 @@ import {
   SECTION_STEP,
   splitMarkdownSections,
 } from "@/lib/markdown";
-import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// A markdown file from the transcript, rendered and editable.
@@ -93,8 +92,8 @@ export default function DocsPanel({
     if (next) selectDoc(sessionId, next.path);
   };
   const stepping = active && current?.mode === "view";
-  useHotkey("ArrowLeft", () => step(-1), { shift: true, enabled: stepping });
-  useHotkey("ArrowRight", () => step(1), { shift: true, enabled: stepping });
+  useHotkey("subtab.prev", () => step(-1), { enabled: stepping });
+  useHotkey("subtab.next", () => step(1), { enabled: stepping });
 
   const close = (doc: Doc) => {
     // Stated here as well as on the button, which is disabled for it: the
@@ -256,13 +255,7 @@ function Chip({
           rather than drawn holding nothing. */}
       {chord && (
         <TooltipContent side="bottom" className="px-1.5">
-          <KbdGroup>
-            <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-            {/* Spelled out beside arrow keys, the sidebar's rule: ⇧ is an
-                arrow, so the glyph reads as a third one. */}
-            <Kbd>Shift</Kbd>
-            <Kbd>←→</Kbd>
-          </KbdGroup>
+          <ShortcutKeys ids={["subtab.prev", "subtab.next"]} />
         </TooltipContent>
       )}
     </Tooltip>

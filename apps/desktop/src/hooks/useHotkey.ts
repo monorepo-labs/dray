@@ -1,19 +1,10 @@
 import { useEffect, useRef } from "react";
 
+import { useChord } from "@/hooks/useShortcuts";
 import { IS_MAC } from "@/lib/platform";
+import type { ShortcutId } from "@/lib/shortcuts";
 
 type HotkeyOptions = {
-  /// Cmd on macOS, Ctrl elsewhere — the platform's own accelerator.
-  meta?: boolean;
-  shift?: boolean;
-  /// Option on macOS, Alt elsewhere.
-  alt?: boolean;
-  /// A physical key accepted alongside `key`, for a chord whose character moves
-  /// under Shift — ⌘⇧[ arrives as `{`, and which of the two `key` carries is
-  /// the browser's call. Matching the character alone is one engine away from
-  /// silently never firing, and matching position alone would put the chord
-  /// under a different glyph on every non-US layout, so this takes both.
-  code?: string;
   /// False unregisters the listener outright rather than making the handler a
   /// no-op. The difference is `preventDefault`: this claims every chord it
   /// matches, so a binding left registered while its view is hidden would eat
@@ -38,21 +29,23 @@ type HotkeyOptions = {
   platformOnly?: boolean;
 };
 
-/// Binds a document-level shortcut. The handler is held in a ref so passing a
-/// fresh closure each render doesn't re-register the listener.
+/// Binds a document-level shortcut by id. The chord comes from the registry in
+/// `lib/shortcuts.ts` through the reader's overrides, so a rebinding in
+/// settings re-registers every listener that names the id. The handler is
+/// held in a ref so passing a fresh closure each render doesn't re-register.
+///
+/// On the chord itself: `meta` is Cmd on macOS and Ctrl elsewhere; `code` is a
+/// physical key accepted alongside `key`, for a chord whose character moves
+/// under Shift — ⌘⇧[ arrives as `{`, and which of the two `key` carries is
+/// the browser's call. Matching the character alone is one engine away from
+/// silently never firing, and matching position alone would put the chord
+/// under a different glyph on every non-US layout, so this takes both.
 export function useHotkey(
-  key: string,
+  id: ShortcutId,
   handler: () => void,
-  {
-    meta = true,
-    shift = false,
-    alt = false,
-    code,
-    enabled = true,
-    platformOnly = false,
-    skipInTextField = false,
-  }: HotkeyOptions = {},
+  { enabled = true, platformOnly = false, skipInTextField = false }: HotkeyOptions = {},
 ) {
+  const { key, meta, shift, alt, code } = useChord(id);
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
