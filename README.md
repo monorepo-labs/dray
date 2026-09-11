@@ -1,18 +1,27 @@
 # Dray
 
 A desktop home for your coding agents. Tauri 2 app that wraps coding-agent CLIs
-in a native chat UI.
+— Claude Code and Codex — in a native chat UI: many sessions at once, each with
+its own worktree, diff view, PR panel, issue panel and embedded browser.
+
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
 ## Layout
 
-pnpm workspace.
+pnpm workspace for the two JS apps; the CLI and its wire types are plain cargo
+crates beside them, with no root workspace.
 
-| Path           | What                                                        |
-| -------------- | ----------------------------------------------------------- |
-| `apps/desktop` | The Tauri app. React 19 + Vite frontend, Rust backend.       |
-| `apps/web`     | Marketing site. Next.js App Router, deployed to Vercel.      |
+| Path                | What                                                     |
+| ------------------- | -------------------------------------------------------- |
+| `apps/desktop`      | The Tauri app. React 19 + Vite frontend, Rust backend.    |
+| `apps/web`          | Marketing site. Next.js App Router, deployed to Vercel.   |
+| `apps/cli`          | The `dray` CLI agents use to fan work out into sessions.  |
+| `crates/dray-proto` | Wire types shared by the CLI and the app.                |
 
 ## Getting started
+
+You need Node with pnpm, a Rust toolchain, and **cmake** — the local
+transcription engine builds through it.
 
 Install once, from the root — the lockfile covers the whole workspace.
 
@@ -25,6 +34,7 @@ Then run either app from the root:
 ```bash
 pnpm app    # desktop app (Tauri + Vite)
 pnpm web    # marketing site on :3000
+pnpm test   # frontend tests
 ```
 
 Anything beyond starting them wants the package's own directory, because
@@ -36,6 +46,43 @@ cd apps/desktop && pnpm tauri build
 cd apps/desktop/src-tauri && cargo test
 ```
 
+`cargo test` regenerates the TypeScript event types in
+`apps/desktop/src/types/events.ts`, so a filtered run (`cargo test git::`)
+leaves only that module's types behind — always follow one with a bare
+`cargo test`.
+
+## The `dray` CLI
+
+A standalone binary, not part of the app: it has to run on Linux, where no Dray
+app exists. It talks to the running app over a unix socket at `~/.dray/dray.sock`,
+which is how an agent inside one session creates, lists and messages others.
+
+```bash
+curl -fsSL https://www.drayhq.com/install.sh | sh
+```
+
+The install script also writes the CLI's skill into `~/.claude/skills/dray/` and
+`~/.codex/skills/dray/`; `dray update` re-runs it. The app installs nothing —
+it names the command and the agent runs it.
+
+## The embedded browser
+
+Chromium through CEF, behind the `cef` cargo feature and macOS only, so an
+ordinary `cargo check` needs none of it. The bundle ships the five helper apps
+and **not** the framework — ~330MB that would ride every download — which the
+app fetches into `~/.dray/cef/<version>/` a few seconds after first launch.
+
+Working on it wants the CEF SDK plus cmake and ninja, with the dev layout laid
+down beside the debug binary first:
+
+```bash
+cd apps/desktop
+CEF_PATH=~/.local/share/cef ./scripts/cef-dev-bundle.sh
+CEF_PATH=~/.local/share/cef pnpm tauri dev --features cef
+```
+
+Nothing runs that script for you, and a cleaned `target/` takes its work away.
+
 ## Deploying the site
 
 Vercel, with **Root Directory** set to `apps/web`. Vercel reads the workspace
@@ -44,12 +91,17 @@ lockfile at the repo root on its own; no `vercel.json` is needed.
 GitHub Pages on this repo is already taken — it serves the desktop app's
 updater manifests off the `updates` branch. Don't point the site at it.
 
-## Releasing the app
+## Releasing
 
-Tag `vX.Y.Z` for stable, `vX.Y.Z-beta.N` for beta. The version in the tag has
-to match `apps/desktop/src-tauri/tauri.conf.json`, and a stable release needs a
-matching `## X.Y.Z` section in `apps/desktop/CHANGELOG.md` — the workflow fails
-loudly on either.
+The app and the CLI ship on their own schedules, under tags that don't collide.
+
+**App:** `vX.Y.Z` for stable, `vX.Y.Z-beta.N` for beta. The version in the tag
+has to match `apps/desktop/src-tauri/tauri.conf.json`, and a stable release
+needs a matching `## X.Y.Z` section in `apps/desktop/CHANGELOG.md` — the
+workflow fails loudly on either.
+
+**CLI:** `cli-vX.Y.Z`, matching `apps/cli/Cargo.toml`. `install.sh` resolves the
+newest `cli-v*` tag itself, so these are never published as prereleases.
 
 ## Themes
 
