@@ -708,6 +708,17 @@ export function buildTranscript(
     }
   }
 
+  // A second pass, because the spawning call is logged before the `task_started`
+  // that creates the run — the tool_use block lands in the assistant message
+  // first. Before the abandoned marks below, so `background` reads real
+  // results only: a foreground run's call answers when the run ends, so a
+  // result beside an open run is the harness saying it backgrounded the work,
+  // where the abandoned stand-in says nothing answered at all.
+  for (const run of subagentById.values()) {
+    run.spawn = callById.get(run.id) ?? null;
+    run.background = !run.done && resultByCallId.has(run.id);
+  }
+
   // Applied last, and only where no real result exists. A background subagent
   // can report back after the turn that spawned it, so a call marked above must
   // still lose to the result that eventually arrives — and while the child
@@ -718,16 +729,6 @@ export function buildTranscript(
     const taskId = subagentById.get(callId)?.taskId;
     if (taskId !== null && taskId !== undefined && liveTaskIds.has(taskId)) continue;
     resultByCallId.set(callId, ABANDONED);
-  }
-
-  // A second pass, because the spawning call is logged before the `task_started`
-  // that creates the run — the tool_use block lands in the assistant message
-  // first. After the abandoned marks, so `background` reads the final result
-  // map: a foreground run's call answers only when the run ends, so a result
-  // beside an open run is the harness saying it went to the background.
-  for (const run of subagentById.values()) {
-    run.spawn = callById.get(run.id) ?? null;
-    run.background = !run.done && resultByCallId.has(run.id);
   }
 
   const mainThread = events.filter((event) => !event.subagent);
