@@ -188,7 +188,22 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
     let _guard = SETTINGS_LOCK.lock().await;
     let dir = get_home_app_dir().await?;
 
-    let mut settings = read_from(&dir).await?;
+    // The same fail-closed reading [`read`] takes, and for the same reason it
+    // must not be an error here: a file that exists and cannot be parsed would
+    // otherwise block *every* settings write — consent, Linear, transcription —
+    // until somebody deleted it by hand, and nothing in the app says to. What
+    // cannot be parsed cannot be preserved, so the edit lands on
+    // [`opted_out`] and the unreadable file is replaced by a readable one.
+    // Opted *out* and not `Default`: recovering must never be a route to
+    // turning reporting back on for somebody who had turned it off.
+    let mut settings = match read_from(&dir).await {
+        Ok(settings) => settings,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            opted_out()
+        }
+    };
+
     edit(&mut settings);
     write_to(&dir, &settings).await?;
 
@@ -316,6 +331,26 @@ mod tests {
         write_to(&dir, &off).await.unwrap();
 
         assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// A file nobody can parse must not brick the settings dialog. `update` is
+    /// now the only way to change anything, so an error here would leave every
+    /// switch in the app dead until the file was deleted by hand — and nothing
+    /// on screen says to do that.
+    #[tokio::test]
+    async fn an_unparseable_file_does_not_block_writes() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "{ not json").unwrap();
+
+        let mut settings = read_from(&dir).await.unwrap_or_else(|_| opted_out());
+        settings.transcription.mute_while_recording = false;
+        write_to(&dir, &settings).await.unwrap();
+
+        let after = read_from(&dir).await.unwrap();
+        assert!(!after.transcription.mute_while_recording);
+        // Recovering is not a route back to reporting for somebody who had
+        // turned it off: the fallback is `opted_out`, never `Default`.
+        assert!(!after.analytics_enabled);
     }
 
     /// The invariant the whole opt-out rests on: no id is written for an
