@@ -557,6 +557,39 @@ describe("a call whose background task the child still holds", () => {
     expect(resultByCallId.get("c1")).toBeUndefined();
   });
 
+  /// A background task's call answers at once ("running in background with
+  /// ID …") and its run never completes, so the row must read it off the
+  /// result rather than shimmer for the rest of the session.
+  it("reads as background once the spawning call has answered", () => {
+    const answered = (seq: number, callId: string): AgentEvent =>
+      event(seq, {
+        type: "tool_call_completed",
+        callId,
+        result: { text: "", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+      } as AgentEventPayload);
+
+    const { subagentById } = buildTranscript(
+      [callStarted(0, "c1"), spawn(1, "c1", "t1"), answered(2, "c1"), callStarted(3, "c2"), spawn(4, "c2", "t2")],
+      true,
+      new Set(["t1", "t2"]),
+    );
+
+    expect(subagentById.get("c1")?.background).toBe(true);
+    expect(subagentById.get("c2")?.background).toBe(false);
+  });
+
+  /// The abandoned stand-in is a result too, and must not count: nothing
+  /// answered, the child died.
+  it("does not read an abandoned run as background", () => {
+    const { subagentById, resultByCallId } = buildTranscript(
+      [callStarted(0, "c1"), spawn(1, "c1", "t1"), completed(2)],
+      false,
+    );
+
+    expect(resultByCallId.get("c1")?.text).toMatch(ABANDONED);
+    expect(subagentById.get("c1")?.background).toBe(false);
+  });
+
   /// And with the task gone, the ordinary rule is back.
   it("is abandoned once the task drains", () => {
     const { resultByCallId } = buildTranscript(

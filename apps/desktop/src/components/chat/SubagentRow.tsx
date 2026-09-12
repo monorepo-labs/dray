@@ -26,6 +26,10 @@ export default function SubagentRow({
     run.label ??
     "Subagent";
 
+  // A run in the background is not work the reader is waiting on: the tasks
+  // indicator already says it is up, and a dev server would shimmer forever.
+  const running = !run.done && !run.background;
+
   return (
     <button
       type="button"
@@ -36,12 +40,12 @@ export default function SubagentRow({
           than settling into a resting pose — a still orb next to a finished run
           reads as something that stalled. Same size and pinned theme as
           `WorkingIndicator`, which is the other place it appears inline. */}
-      {!run.done && <Orb state="listening" size={20} aria-hidden />}
+      {running && <Orb state="listening" size={20} aria-hidden />}
 
       <span
         className={cn(
           "min-w-0 max-w-fit truncate",
-          run.done ? "text-muted-foreground" : "shimmer-text",
+          running ? "shimmer-text" : "text-muted-foreground",
         )}
       >
         {detail}

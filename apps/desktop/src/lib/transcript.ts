@@ -19,6 +19,10 @@ export type SubagentRun = {
   status: string | null;
   lastTool: string | null;
   done: boolean;
+  /// The spawning call answered while the run was still open, so the harness
+  /// put the work in the background. Not "in flight": a dev server started
+  /// this way never ends, and a row shimmering for it reads as a call stuck.
+  background: boolean;
   usage: Usage | null;
   /// The subagent's own work, excluding its lifecycle events.
   events: AgentEvent[];
@@ -669,6 +673,7 @@ export function buildTranscript(
         status: null,
         lastTool: null,
         done: false,
+        background: false,
         usage: null,
         events: [],
         spawn: null,
@@ -705,9 +710,13 @@ export function buildTranscript(
 
   // A second pass, because the spawning call is logged before the `task_started`
   // that creates the run — the tool_use block lands in the assistant message
-  // first.
+  // first. Before the abandoned marks below, so `background` reads real
+  // results only: a foreground run's call answers when the run ends, so a
+  // result beside an open run is the harness saying it backgrounded the work,
+  // where the abandoned stand-in says nothing answered at all.
   for (const run of subagentById.values()) {
     run.spawn = callById.get(run.id) ?? null;
+    run.background = !run.done && resultByCallId.has(run.id);
   }
 
   // Applied last, and only where no real result exists. A background subagent
