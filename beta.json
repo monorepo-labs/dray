@@ -1,23 +1,23 @@
 {
-  "version": "0.17.0",
-  "notes": "### Added\n\n- **Font size and shortcut rebinding in Settings.** Interface, chat and\n  code each take their own size, applied before the first paint like the\n  theme. Every shortcut in the app can be recorded onto another chord;\n  a chord another action or the system already holds is refused and the\n  row names the holder. Keycaps everywhere draw what the key actually\n  fires.\n\n### Changed\n\n- **A fresh install opens in light mode.** A pick you have already made\n  is untouched.\n- **Unfocused panes dim while you type.** One composer under four\n  transcripts can send into the wrong session, so the panes step back\n  the moment typing takes the placeholder's name away.\n\n### Fixed\n\n- **The right pane remembers itself per session.** One app-wide flag left\n  it opened on a session's PR and blank beside the next, which had none.\n  The tab pick follows the session; in a split, the pane's open state\n  follows the group.\n- **The Subagents tab is hidden where a session has none**, the same rule\n  the PR, Docs and Issue tabs follow.\n- **PR comment previews read as text.** A bot writes HTML as often as\n  markdown, so a collapsed row drew raw `<h2><a href=\"...\">` tags.",
-  "pub_date": "2026-09-11T13:13:09.558Z",
+  "version": "0.17.1",
+  "notes": "### Changed\n\n- **Analytics moved to PostHog, and the settings row now says what is\n  measured.** Three events — a launch, a session starting, a feature\n  being used — and nothing about what you write. Opting out clears the\n  install id, so opting back in reads as a new person. Crashes and\n  wire-format failures report where they happened — a file and line, a\n  harness and stage — and never the message beside it, since those carry\n  prompts, code and paths.\n\n### Fixed\n\n- **Opting out can no longer be undone by an unrelated setting.** A\n  transcription pick or a Linear account written back from a stale read\n  restored analytics to on.\n- **Installing an update waits on the turn, not on background tasks.** A\n  session running a dev server used to block the button for good.\n- **A subagent row stops shimmering once its run goes to background.**\n- **Sidebar dates stay on one line.**",
+  "pub_date": "2026-09-12T12:59:02.017Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXIzdzFIa3VKS3I5NzB6S0UrU01sZkRPb3lSUDlGaXhyMGtSTEIya1lIV1REbHp4YkRXbDBEMzhsZlVqSEZCUlFYMHE4cGo4Sk53Q2F5MFdVUFVHeEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTMyMzgxCWZpbGU6RHJheS5hcHAudGFyLmd6CjF0WnJhTE1IbWRMamZLN2NQQnYrSlFGNFpBOFJIRWVnay82eWIvTUZlTmNZUzZ5ek5rMlBScEJGWFZFQjBNVmlkS3FrWm93b0ZNVEp1aVd6NjhEdUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZKVWpuTlFtbzRSNnpXVjJjTzB5MEMyb2Vvdmh4Q2NaT21NbVgxMm44TmZ5WjVaKzd2S252SFJTbXdXVnVSaTQ2Z3YxYTlzOUdqUklYLzhpSERXY3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MjE3OTM1CWZpbGU6RHJheS5hcHAudGFyLmd6CkZZaXpSK051NG9mbUVLcDhOV0xCRzUvaGM2dWlBZmUrMkk4TG5Eb2ZRUHdSMzIwUFVXSmN5M3JhbGFZYURsLzliM2FUZjcwcVVZTjN3WitCcjJDNkJnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXIzdzFIa3VKS3I5NzB6S0UrU01sZkRPb3lSUDlGaXhyMGtSTEIya1lIV1REbHp4YkRXbDBEMzhsZlVqSEZCUlFYMHE4cGo4Sk53Q2F5MFdVUFVHeEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTMyMzgxCWZpbGU6RHJheS5hcHAudGFyLmd6CjF0WnJhTE1IbWRMamZLN2NQQnYrSlFGNFpBOFJIRWVnay82eWIvTUZlTmNZUzZ5ek5rMlBScEJGWFZFQjBNVmlkS3FrWm93b0ZNVEp1aVd6NjhEdUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZKVWpuTlFtbzRSNnpXVjJjTzB5MEMyb2Vvdmh4Q2NaT21NbVgxMm44TmZ5WjVaKzd2S252SFJTbXdXVnVSaTQ2Z3YxYTlzOUdqUklYLzhpSERXY3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MjE3OTM1CWZpbGU6RHJheS5hcHAudGFyLmd6CkZZaXpSK051NG9mbUVLcDhOV0xCRzUvaGM2dWlBZmUrMkk4TG5Eb2ZRUHdSMzIwUFVXSmN5M3JhbGFZYURsLzliM2FUZjcwcVVZTjN3WitCcjJDNkJnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.1/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXIzdzFIa3VKS3I5NzB6S0UrU01sZkRPb3lSUDlGaXhyMGtSTEIya1lIV1REbHp4YkRXbDBEMzhsZlVqSEZCUlFYMHE4cGo4Sk53Q2F5MFdVUFVHeEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTMyMzgxCWZpbGU6RHJheS5hcHAudGFyLmd6CjF0WnJhTE1IbWRMamZLN2NQQnYrSlFGNFpBOFJIRWVnay82eWIvTUZlTmNZUzZ5ek5rMlBScEJGWFZFQjBNVmlkS3FrWm93b0ZNVEp1aVd6NjhEdUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZKVWpuTlFtbzRSNnpXVjJjTzB5MEMyb2Vvdmh4Q2NaT21NbVgxMm44TmZ5WjVaKzd2S252SFJTbXdXVnVSaTQ2Z3YxYTlzOUdqUklYLzhpSERXY3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MjE3OTM1CWZpbGU6RHJheS5hcHAudGFyLmd6CkZZaXpSK051NG9mbUVLcDhOV0xCRzUvaGM2dWlBZmUrMkk4TG5Eb2ZRUHdSMzIwUFVXSmN5M3JhbGFZYURsLzliM2FUZjcwcVVZTjN3WitCcjJDNkJnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXIzdzFIa3VKS3I5NzB6S0UrU01sZkRPb3lSUDlGaXhyMGtSTEIya1lIV1REbHp4YkRXbDBEMzhsZlVqSEZCUlFYMHE4cGo4Sk53Q2F5MFdVUFVHeEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTMyMzgxCWZpbGU6RHJheS5hcHAudGFyLmd6CjF0WnJhTE1IbWRMamZLN2NQQnYrSlFGNFpBOFJIRWVnay82eWIvTUZlTmNZUzZ5ek5rMlBScEJGWFZFQjBNVmlkS3FrWm93b0ZNVEp1aVd6NjhEdUN3PT0K",
-      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXZKVWpuTlFtbzRSNnpXVjJjTzB5MEMyb2Vvdmh4Q2NaT21NbVgxMm44TmZ5WjVaKzd2S252SFJTbXdXVnVSaTQ2Z3YxYTlzOUdqUklYLzhpSERXY3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MjE3OTM1CWZpbGU6RHJheS5hcHAudGFyLmd6CkZZaXpSK051NG9mbUVLcDhOV0xCRzUvaGM2dWlBZmUrMkk4TG5Eb2ZRUHdSMzIwUFVXSmN5M3JhbGFZYURsLzliM2FUZjcwcVVZTjN3WitCcjJDNkJnPT0K",
+      "url": "https://github.com/monorepo-labs/dray/releases/download/v0.17.1/Dray_universal.app.tar.gz"
     }
   }
 }
