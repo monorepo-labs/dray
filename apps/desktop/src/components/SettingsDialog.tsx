@@ -813,8 +813,10 @@ function AnalyticsRow({
           : // Says what is actually sent. It read "your conversations and
             // activity are never collected" while a launch was the only event,
             // and that stopped being true the moment features were reported —
-            // a privacy line that overpromises is worse than no line.
-            "Counts launches and which features get used, under a random id. Your prompts, code and conversations are never collected."
+            // a privacy line that overpromises is worse than no line. Errors
+            // are named for the same reason, and named as *where*: what goes is
+            // a stage or a `file:line`, never the message beside it.
+            "Counts launches, which features get used, and where errors happen, under a random id. Your prompts, code and conversations are never collected."
       }
     >
       <Switch
