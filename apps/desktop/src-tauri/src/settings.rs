@@ -169,22 +169,21 @@ async fn read_from(dir: &Path) -> Result<AppSettings> {
     read_json(&path_in(dir)).await
 }
 
-pub async fn write(settings: &AppSettings) -> Result<()> {
-    let _guard = SETTINGS_LOCK.lock().await;
-    let dir = get_home_app_dir().await?;
-
-    write_to(&dir, settings).await
-}
-
-/// Read, edit and write back under one hold of the lock.
+/// Read, edit and write back under one hold of the lock. **The only way to
+/// change a setting**, and private visibility on everything that writes is what
+/// makes that true rather than aspirational.
 ///
-/// **Every caller changing one field must use this, not [`read`] then
-/// [`write`].** The file is rewritten whole and `read` takes no lock, so a
-/// read-modify-write in two steps can be interleaved by another and lose its
-/// field — and the pair that made that concrete was consent: the analytics
-/// install id minting itself while the settings dialog turned reporting off,
-/// where the later write carried a snapshot taken before the switch moved and
-/// silently put `analytics_enabled: true` back.
+/// The file is rewritten whole and [`read`] takes no lock, so a read-modify-
+/// write in two steps can be interleaved by another and lose its field. There
+/// was a `pub write` beside `read` and seven callers pairing them, which is
+/// exactly the shape that fails — and it fails *across* features, not within
+/// one: the case that made it concrete was the Linear account or a transcription
+/// pick being read while analytics was on, then written back after the reader
+/// opted out, restoring `analytics_enabled: true` and the install id with it.
+///
+/// So consent could be undone by a setting that has nothing to do with it. A
+/// comment saying "use `update`" would have been true and unenforced; taking
+/// the write away is what stops the next one.
 pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let dir = get_home_app_dir().await?;

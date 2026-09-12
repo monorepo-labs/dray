@@ -401,16 +401,10 @@ async fn remove_session_worktree(
     session_id: &str,
     manager: State<'_, SessionManager>,
 ) -> Result<SessionIndexItem, String> {
-    let relocated = manager
+    manager
         .remove_worktree(session_id)
         .await
-        .map_err(|e| e.to_string())?;
-
-    // Only where the tree actually went. A removal refused by a live pid, or by
-    // git holding the branch, leaves the session exactly where it was.
-    analytics::feature_used("worktree_deleted");
-
-    Ok(relocated)
+        .map_err(|e| e.to_string())
 }
 
 /// Removes a session for good: its child, its index entry, and its log. `false`
