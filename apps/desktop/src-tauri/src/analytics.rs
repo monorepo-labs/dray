@@ -6,13 +6,17 @@
 //! Dray, on which version, whether they come back, and which of the things
 //! built here anybody actually uses.
 //!
-//! **The install id is minted only for an install that is opted in.** Someone
-//! who turns this off never has an id written for them at all, because
-//! [`track`] asks [`enabled`] before it asks [`install_id`], and turning the
-//! switch off again clears the stored id — so opting back in is a new person
-//! rather than the old one resurfacing. A uuid v4 rather than the v7 used for
-//! session ids elsewhere: v7 embeds the moment it was minted, which for an
-//! identifier meant to say nothing is one more thing it says.
+//! **The install id is minted only for an install that is opted in**, and
+//! consent is read in the same hold of the settings lock that mints it —
+//! [`settings::ensure_install_id`], which is why it lives over there rather
+//! than here. Someone who turns this off never has an id written for them, and
+//! turning the switch off clears the stored one, so opting back in is a new
+//! person rather than the old one resurfacing. **Nothing caches it in this
+//! process**: a cache would have to be invalidated by the settings command,
+//! which is a second place for consent to be wrong, and the file read it saves
+//! is small and happens a few times a session. A uuid v4 rather than the v7
+//! used for session ids elsewhere: v7 embeds the moment it was minted, which
+//! for an identifier meant to say nothing is one more thing it says.
 //!
 //! **No transport plugin.** `reqwest` is already here for Linear, and PostHog's
 //! capture API is one POST, so an event is a request rather than a queue with a
@@ -32,8 +36,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
-use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 use crate::settings;
 
@@ -151,11 +153,15 @@ async fn send(event: &'static str, properties: Value) {
         return;
     };
 
-    if !enabled().await {
+    if env_opt_out() {
         return;
     }
 
-    let Some(distinct_id) = install_id().await else {
+    // The consent check *is* this call. `ensure_install_id` reads the stored
+    // opt-out and mints under the same hold of the settings lock, so there is
+    // no window where consent is read here and acted on a moment later — which
+    // is what let an id be minted for an install that had just opted out.
+    let Some(distinct_id) = settings::ensure_install_id().await else {
         return;
     };
 
@@ -203,40 +209,6 @@ fn base_properties() -> &'static Map<String, Value> {
         props.insert("is_debug".into(), cfg!(debug_assertions).into());
         props
     })
-}
-
-/// This install's id, minted and persisted on first use.
-///
-/// Read once per process: every event after the first needs no file read, and
-/// two events racing at launch cannot mint two ids.
-///
-/// A failed write still answers with the id it just minted rather than `None` —
-/// the launch is better counted under an id that does not survive the process
-/// than not counted at all, and the next run simply mints another.
-async fn install_id() -> Option<String> {
-    static INSTALL_ID: OnceCell<Option<String>> = OnceCell::const_new();
-
-    INSTALL_ID
-        .get_or_init(|| async {
-            let settings = settings::read().await;
-            if settings.install_id.is_some() {
-                return settings.install_id;
-            }
-
-            let id = Uuid::new_v4().to_string();
-            let next = settings::AppSettings {
-                install_id: Some(id.clone()),
-                ..settings
-            };
-
-            if let Err(e) = settings::write(&next).await {
-                eprintln!("[analytics err] install id not persisted: {e:#}");
-            }
-
-            Some(id)
-        })
-        .await
-        .clone()
 }
 
 #[cfg(test)]

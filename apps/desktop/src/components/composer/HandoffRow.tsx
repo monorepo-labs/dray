@@ -119,6 +119,16 @@ export default function HandoffRow({
                 // in `onSend`, which the composer also calls for typed prompts.
                 // The prompt text is never sent: it is a constant, and which
                 // button was pressed is the whole question.
+                //
+                // **The one place the "report it working" rule gives way**, and
+                // deliberately. `handleSendMsg` catches its own failures and
+                // resolves either way, so awaiting it would report identically
+                // on success and failure — a real fix means changing that
+                // function's contract, which the main composer path shares. And
+                // the question this number answers is whether a row parked
+                // behind the composer gets *found*, which the press is the
+                // signal for. A send that fails past here is the agent
+                // failing, and the transcript is where that is visible.
                 onClick={() => {
                   trackFeature(`handoff_${action.id}`);
                   onSend(action.prompt);

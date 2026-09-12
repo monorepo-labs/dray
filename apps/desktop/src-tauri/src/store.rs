@@ -771,10 +771,22 @@ pub async fn set_session_flags(
         return Ok(None);
     };
 
+    // Collected here and reported after the write, so a failed write reports
+    // nothing. Only a flag that actually *changed* is an action: the frontend
+    // sends the value it wants rather than a toggle, so setting `pinned: true`
+    // on an already-pinned session is a no-op and not somebody pinning it.
+    let mut actions: Vec<&'static str> = Vec::new();
+
     if let Some(v) = archived {
+        if item.archived != v {
+            actions.push(if v { "settle" } else { "unsettle" });
+        }
         item.archived = v;
     }
     if let Some(v) = pinned {
+        if item.pinned != v {
+            actions.push(if v { "pin" } else { "unpin" });
+        }
         item.pinned = v;
     }
 
@@ -783,6 +795,13 @@ pub async fn set_session_flags(
     let updated = item.clone();
 
     write_session_index(&sessions).await?;
+
+    // The reader's own vocabulary, not the field's: the row says Settle where
+    // the index says `archived`, and the question being asked of this number is
+    // about the button.
+    for action in actions {
+        crate::analytics::feature_used(action);
+    }
 
     Ok(Some(updated))
 }

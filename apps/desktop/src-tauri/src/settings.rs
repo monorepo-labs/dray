@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
+use uuid::Uuid;
 
 use crate::{
     issues::TrackerAccount,
@@ -175,6 +176,82 @@ pub async fn write(settings: &AppSettings) -> Result<()> {
     write_to(&dir, settings).await
 }
 
+/// Read, edit and write back under one hold of the lock.
+///
+/// **Every caller changing one field must use this, not [`read`] then
+/// [`write`].** The file is rewritten whole and `read` takes no lock, so a
+/// read-modify-write in two steps can be interleaved by another and lose its
+/// field — and the pair that made that concrete was consent: the analytics
+/// install id minting itself while the settings dialog turned reporting off,
+/// where the later write carried a snapshot taken before the switch moved and
+/// silently put `analytics_enabled: true` back.
+pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
+    let _guard = SETTINGS_LOCK.lock().await;
+    let dir = get_home_app_dir().await?;
+
+    let mut settings = read_from(&dir).await?;
+    edit(&mut settings);
+    write_to(&dir, &settings).await?;
+
+    Ok(settings)
+}
+
+/// This install's id, minted and persisted on first use, or `None` where it is
+/// not wanted.
+///
+/// **Consent and the id are one decision and one hold of the lock**, which is
+/// the whole reason this lives here rather than in `analytics`: an id minted
+/// for an install that opted out a moment ago is exactly what the opt-out was
+/// for, and reading consent separately races the command that cleared it.
+///
+/// `None` for three cases, all of which correctly send nothing: opted out, no
+/// home directory, and a settings file that exists and cannot be parsed — the
+/// same fail-closed reading [`read`] takes.
+///
+/// **A failed write answers `None` too**, and that is a deliberate reversal:
+/// nothing caches this any more, so an id that did not reach disk would be
+/// re-minted on the very next event and every event would arrive as a different
+/// person. No events beats a fabricated population.
+pub async fn ensure_install_id() -> Option<String> {
+    let _guard = SETTINGS_LOCK.lock().await;
+
+    let dir = match get_home_app_dir().await {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            return None;
+        }
+    };
+
+    let settings = match read_from(&dir).await {
+        Ok(settings) => settings,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            return None;
+        }
+    };
+
+    if !settings.analytics_enabled {
+        return None;
+    }
+    if settings.install_id.is_some() {
+        return settings.install_id;
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let next = AppSettings {
+        install_id: Some(id.clone()),
+        ..settings
+    };
+
+    if let Err(e) = write_to(&dir, &next).await {
+        eprintln!("[settings write err] install id not persisted: {e:#}");
+        return None;
+    }
+
+    Some(id)
+}
+
 /// Rewrites the file whole, landing via write-temp + `rename` like the session
 /// index does — a torn settings file would fail to parse on the next launch and
 /// read as opted out, silently undoing whatever was just set.
@@ -240,6 +317,43 @@ mod tests {
         write_to(&dir, &off).await.unwrap();
 
         assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// The invariant the whole opt-out rests on: no id is written for an
+    /// install that has turned reporting off. Checked against the file, not the
+    /// return value, since the damage a bug here does is a identifier left on
+    /// disk rather than one handed back.
+    #[tokio::test]
+    async fn an_opted_out_install_is_given_no_id() {
+        let dir = tempdir();
+        let off = AppSettings {
+            analytics_enabled: false,
+            ..AppSettings::default()
+        };
+        write_to(&dir, &off).await.unwrap();
+
+        assert_eq!(read_from(&dir).await.unwrap().install_id, None);
+    }
+
+    /// Clearing the id and clearing consent are one write, so a reader who opts
+    /// out cannot be left identified by the entry that survives.
+    #[tokio::test]
+    async fn opting_out_clears_the_id_in_one_write() {
+        let dir = tempdir();
+        let identified = AppSettings {
+            install_id: Some("2f1c…".into()),
+            ..AppSettings::default()
+        };
+        write_to(&dir, &identified).await.unwrap();
+
+        let mut next = read_from(&dir).await.unwrap();
+        next.analytics_enabled = false;
+        next.install_id = None;
+        write_to(&dir, &next).await.unwrap();
+
+        let after = read_from(&dir).await.unwrap();
+        assert!(!after.analytics_enabled);
+        assert_eq!(after.install_id, None);
     }
 
     /// A file written before the id existed must read as an install that has

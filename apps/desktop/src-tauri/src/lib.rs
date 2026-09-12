@@ -287,16 +287,20 @@ async fn get_settings() -> settings::SettingsView {
 /// not name.
 #[tauri::command]
 async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, Fail> {
-    let mut next = settings::read().await;
-    next.analytics_enabled = enabled;
-    // Turning it off takes the identifier with it, so nothing is left on disk
-    // naming an install that has asked not to be counted. Opting back in mints
-    // a fresh one, which reads as a new person — the honest answer, since the
-    // gap in between is unmeasured either way.
-    if !enabled {
-        next.install_id = None;
-    }
-    settings::write(&next).await?;
+    // `update` and not read-then-write: the two steps can be interleaved by the
+    // install id minting itself, whose write would then carry a snapshot taken
+    // before this switch moved and put `analytics_enabled: true` straight back.
+    settings::update(|next| {
+        next.analytics_enabled = enabled;
+        // Turning it off takes the identifier with it, so nothing is left on
+        // disk naming an install that has asked not to be counted. Opting back
+        // in mints a fresh one, which reads as a new person — the honest
+        // answer, since the gap in between is unmeasured either way.
+        if !enabled {
+            next.install_id = None;
+        }
+    })
+    .await?;
 
     Ok(settings_view().await)
 }
@@ -397,10 +401,16 @@ async fn remove_session_worktree(
     session_id: &str,
     manager: State<'_, SessionManager>,
 ) -> Result<SessionIndexItem, String> {
-    manager
+    let relocated = manager
         .remove_worktree(session_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Only where the tree actually went. A removal refused by a live pid, or by
+    // git holding the branch, leaves the session exactly where it was.
+    analytics::feature_used("worktree_deleted");
+
+    Ok(relocated)
 }
 
 /// Removes a session for good: its child, its index entry, and its log. `false`
