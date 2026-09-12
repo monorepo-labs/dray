@@ -2029,17 +2029,18 @@ function SessionRow({
             read at once; `visibility` would flip instantly while the button's
             inherited `transition-all` still crossfades, which is what read as an
             overlap. */}
-        {/* `min-w-5` because the slot's width comes from the buttons, and a row
-            that inherits its pin while mid-turn draws neither of them — leaving
-            a zero-width slot for the absolutely-drawn orb to hang out of, over
-            the title. 20px is the orb's own box, the widest thing that can be
-            shown with no button beside it. */}
-        <div className="relative flex min-w-5 shrink-0 items-center justify-end self-stretch pl-2">
+        {/* The min-width is what the *date* needs, not the orb: the slot is
+            otherwise sized by the buttons, and a row drawing one button — or
+            none, which a row that inherits its pin while mid-turn does — leaves
+            the absolutely-drawn date shrink-to-fit inside 20-odd pixels, where
+            "Aug 18" wraps onto two lines. In `em` so it follows the interface
+            font size the reader picks, and wide enough for a month-and-day. */}
+        <div className="relative flex min-w-[4em] shrink-0 items-center justify-end self-stretch pl-2 text-ui">
           {/* `pointer-events-none` unconditionally: it's never a target, and a
               faded-but-present element still hit-tests — stacked on `right-0` it
               would otherwise swallow the cursor over the last button, which reads
               as that one button being dead while its neighbour works. */}
-          <span className="pointer-events-none absolute right-0 flex items-center text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
+          <span className="pointer-events-none absolute right-0 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
             {/* The orb takes the timestamp's place rather than a slot of its
                 own: a row that's working right now is the one row whose "last
                 activity" reads as stale, and one indicator per row is what keeps
