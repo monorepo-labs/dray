@@ -16,8 +16,9 @@ pub mod rpc;
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
+    sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -64,14 +65,58 @@ pub fn mentions_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+/// Whether a `<harness>/<stage>` pair is being reported for the first time in
+/// this run, recording it either way.
+///
+/// A poisoned lock answers false — a dropped event beats a panic raised from
+/// the middle of a read loop written to survive anything.
+fn first_of_its_kind(key: String) -> bool {
+    static REPORTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+    REPORTED.lock().is_ok_and(|mut seen| seen.insert(key))
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::first_of_its_kind;
+
+    /// The whole of the parse-failure report's volume guard: a wire format that
+    /// moved fails every line of a live session, and the second failure says
+    /// nothing the first did not.
+    #[test]
+    fn a_stage_is_reported_once_per_run() {
+        assert!(first_of_its_kind("test-harness/parse".into()));
+        assert!(!first_of_its_kind("test-harness/parse".into()));
+        assert!(first_of_its_kind("test-harness/map".into()));
+        assert!(first_of_its_kind("test-other/parse".into()));
+    }
+}
+
 /// Logs a line this build could not use and files it for investigation, with
 /// the raw line beside it. One file and one set of stages for every harness,
 /// because the question it answers is the same: how well does *this build*
 /// cover the wire format. Failing to *record* a failure is itself only logged —
 /// the read loop must survive anything.
+///
+/// Reported here rather than at [`crate::store::record_parse_failure`] one call
+/// down, which is the same chokepoint and cannot name the harness. Two closed
+/// tags go out and nothing else: `raw` is the whole CLI line, carrying prompts,
+/// file contents and tool results, and `detail` is a serde message free to
+/// embed the value it choked on. Neither leaves the machine.
 pub async fn record_failure(harness: Harness, session_id: &str, stage: &str, detail: &str, line: &str) {
     let name = harness.wire_name();
     eprintln!("[{name} {stage} err] {detail}\n[{stage} err] raw line: {line}");
+
+    if first_of_its_kind(format!("{name}/{stage}")) {
+        // Volume is the reason: a wire format that moved fails *every* line, so
+        // reporting each one is one HTTPS request per line of a live session
+        // for an answer the first already gave. What the event says is that
+        // this build stopped covering the format, which is true once per run.
+        crate::analytics::error(
+            "parse_failure",
+            serde_json::json!({ "stage": stage, "harness": name }),
+        );
+    }
 
     if let Err(err) = crate::store::record_parse_failure(session_id, stage, detail, line).await {
         eprintln!("[{name} parse-failure write err] {err}");
