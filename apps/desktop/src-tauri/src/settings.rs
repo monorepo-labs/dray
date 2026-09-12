@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
+use uuid::Uuid;
 
 use crate::{
     issues::TrackerAccount,
@@ -33,6 +34,15 @@ pub struct AppSettings {
     /// [`read`].
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
+    /// A random id for this install, or `None` where nothing has ever been
+    /// reported from it.
+    ///
+    /// Minted lazily by [`crate::analytics`] on the first event rather than at
+    /// install time, which is what keeps an opted-out install from ever having
+    /// one written — and cleared again when the switch goes off, so opting back
+    /// in is a new person rather than the old one resurfacing.
+    #[serde(default)]
+    pub install_id: Option<String>,
     /// Who the stored issue-tracker key belongs to.
     ///
     /// The account, never the key — that lives in `credentials.json` beside
@@ -94,6 +104,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             analytics_enabled: enabled_by_default(),
+            install_id: None,
             linear_account: None,
             transcription: TranscriptionSettings::default(),
         }
@@ -146,6 +157,7 @@ pub async fn read() -> AppSettings {
 fn opted_out() -> AppSettings {
     AppSettings {
         analytics_enabled: false,
+        install_id: None,
         linear_account: None,
         transcription: TranscriptionSettings::default(),
     }
@@ -157,11 +169,106 @@ async fn read_from(dir: &Path) -> Result<AppSettings> {
     read_json(&path_in(dir)).await
 }
 
-pub async fn write(settings: &AppSettings) -> Result<()> {
+/// Read, edit and write back under one hold of the lock. **The only way to
+/// change a setting**, and private visibility on everything that writes is what
+/// makes that true rather than aspirational.
+///
+/// The file is rewritten whole and [`read`] takes no lock, so a read-modify-
+/// write in two steps can be interleaved by another and lose its field. There
+/// was a `pub write` beside `read` and seven callers pairing them, which is
+/// exactly the shape that fails — and it fails *across* features, not within
+/// one: the case that made it concrete was the Linear account or a transcription
+/// pick being read while analytics was on, then written back after the reader
+/// opted out, restoring `analytics_enabled: true` and the install id with it.
+///
+/// So consent could be undone by a setting that has nothing to do with it. A
+/// comment saying "use `update`" would have been true and unenforced; taking
+/// the write away is what stops the next one.
+pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let dir = get_home_app_dir().await?;
 
-    write_to(&dir, settings).await
+    // **Only a malformed file recovers**, and the distinction is the whole of
+    // this branch. A file that cannot be *parsed* can never be preserved, and
+    // erroring on it would block every settings write in the app — consent,
+    // Linear, transcription — until somebody deleted it by hand, which nothing
+    // on screen says to do. A file that cannot be *read* is the opposite case:
+    // it may be perfectly good and merely unreachable for a moment, so writing
+    // `opted_out()` over it would erase the Linear account, the install id and
+    // every transcription pick in order to change one unrelated switch.
+    //
+    // Opted *out* and not `Default` where it does recover: recovering must
+    // never be a route to turning reporting back on for somebody who had
+    // turned it off.
+    let mut settings = match read_from(&dir).await {
+        Ok(settings) => settings,
+        Err(e) if is_malformed(&e) => {
+            eprintln!("[settings read err] {e:#}");
+            opted_out()
+        }
+        Err(e) => return Err(e),
+    };
+
+    edit(&mut settings);
+    write_to(&dir, &settings).await?;
+
+    Ok(settings)
+}
+
+/// This install's id, minted and persisted on first use, or `None` where it is
+/// not wanted.
+///
+/// **Consent and the id are one decision and one hold of the lock**, which is
+/// the whole reason this lives here rather than in `analytics`: an id minted
+/// for an install that opted out a moment ago is exactly what the opt-out was
+/// for, and reading consent separately races the command that cleared it.
+///
+/// `None` for three cases, all of which correctly send nothing: opted out, no
+/// home directory, and a settings file that exists and cannot be parsed — the
+/// same fail-closed reading [`read`] takes.
+///
+/// **A failed write answers `None` too**, and that is a deliberate reversal:
+/// nothing caches this any more, so an id that did not reach disk would be
+/// re-minted on the very next event and every event would arrive as a different
+/// person. No events beats a fabricated population.
+pub async fn ensure_install_id() -> Option<String> {
+    let _guard = SETTINGS_LOCK.lock().await;
+
+    let dir = match get_home_app_dir().await {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            return None;
+        }
+    };
+
+    let settings = match read_from(&dir).await {
+        Ok(settings) => settings,
+        Err(e) => {
+            eprintln!("[settings read err] {e:#}");
+            return None;
+        }
+    };
+
+    if !settings.analytics_enabled {
+        return None;
+    }
+    if settings.install_id.is_some() {
+        return settings.install_id;
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let next = AppSettings {
+        install_id: Some(id.clone()),
+        ..settings
+    };
+
+    if let Err(e) = write_to(&dir, &next).await {
+        eprintln!("[settings write err] install id not persisted: {e:#}");
+        return None;
+    }
+
+    Some(id)
 }
 
 /// Rewrites the file whole, landing via write-temp + `rename` like the session
@@ -173,6 +280,16 @@ async fn write_to(dir: &Path, settings: &AppSettings) -> Result<()> {
 
 fn path_in(dir: &Path) -> PathBuf {
     dir.join("settings.json")
+}
+
+/// Whether a [`read_from`] failure is the file being **malformed** rather than
+/// unreachable — the one case it is safe to write over.
+///
+/// `read_json` adds context around the real cause, and anyhow downcasts through
+/// that, so the presence of a `serde_json::Error` in the chain is what says the
+/// bytes were read and could not be understood. An I/O error has none.
+fn is_malformed(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<serde_json::Error>().is_some()
 }
 
 #[cfg(test)]
@@ -221,6 +338,7 @@ mod tests {
         let dir = tempdir();
         let off = AppSettings {
             analytics_enabled: false,
+            install_id: Some("2f1c…".into()),
             linear_account: None,
             transcription: TranscriptionSettings::default(),
         };
@@ -228,6 +346,95 @@ mod tests {
         write_to(&dir, &off).await.unwrap();
 
         assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// The two failures `update` must tell apart. Recovering from a malformed
+    /// file replaces it; doing the same for one that is merely unreadable right
+    /// now — a permission, a full disk, a network home directory — would erase
+    /// the Linear account, the install id and every transcription pick to
+    /// change one unrelated switch.
+    #[tokio::test]
+    async fn a_malformed_file_is_told_from_an_unreadable_one() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "{ not json").unwrap();
+
+        assert!(is_malformed(&read_from(&dir).await.unwrap_err()));
+
+        let unreadable = anyhow::Error::new(std::io::Error::other("disk on fire"))
+            .context("could not open settings.json");
+
+        assert!(!is_malformed(&unreadable));
+    }
+
+    /// A file nobody can parse must not brick the settings dialog. `update` is
+    /// now the only way to change anything, so an error here would leave every
+    /// switch in the app dead until the file was deleted by hand — and nothing
+    /// on screen says to do that.
+    #[tokio::test]
+    async fn an_unparseable_file_does_not_block_writes() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "{ not json").unwrap();
+
+        let mut settings = read_from(&dir).await.unwrap_or_else(|_| opted_out());
+        settings.transcription.mute_while_recording = false;
+        write_to(&dir, &settings).await.unwrap();
+
+        let after = read_from(&dir).await.unwrap();
+        assert!(!after.transcription.mute_while_recording);
+        // Recovering is not a route back to reporting for somebody who had
+        // turned it off: the fallback is `opted_out`, never `Default`.
+        assert!(!after.analytics_enabled);
+    }
+
+    /// The invariant the whole opt-out rests on: no id is written for an
+    /// install that has turned reporting off. Checked against the file, not the
+    /// return value, since the damage a bug here does is a identifier left on
+    /// disk rather than one handed back.
+    #[tokio::test]
+    async fn an_opted_out_install_is_given_no_id() {
+        let dir = tempdir();
+        let off = AppSettings {
+            analytics_enabled: false,
+            ..AppSettings::default()
+        };
+        write_to(&dir, &off).await.unwrap();
+
+        assert_eq!(read_from(&dir).await.unwrap().install_id, None);
+    }
+
+    /// Clearing the id and clearing consent are one write, so a reader who opts
+    /// out cannot be left identified by the entry that survives.
+    #[tokio::test]
+    async fn opting_out_clears_the_id_in_one_write() {
+        let dir = tempdir();
+        let identified = AppSettings {
+            install_id: Some("2f1c…".into()),
+            ..AppSettings::default()
+        };
+        write_to(&dir, &identified).await.unwrap();
+
+        let mut next = read_from(&dir).await.unwrap();
+        next.analytics_enabled = false;
+        next.install_id = None;
+        write_to(&dir, &next).await.unwrap();
+
+        let after = read_from(&dir).await.unwrap();
+        assert!(!after.analytics_enabled);
+        assert_eq!(after.install_id, None);
+    }
+
+    /// A file written before the id existed must read as an install that has
+    /// simply never reported, not fail the parse and take the whole file's
+    /// other settings down as opted out with it.
+    #[tokio::test]
+    async fn a_file_predating_the_install_id_reads_without_one() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), r#"{"analyticsEnabled": true}"#).unwrap();
+
+        let settings = read_from(&dir).await.unwrap();
+
+        assert!(settings.analytics_enabled);
+        assert_eq!(settings.install_id, None);
     }
 
     /// An unknown field must not fail the read, or a file written by a newer

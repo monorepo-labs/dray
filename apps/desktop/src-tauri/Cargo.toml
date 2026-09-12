@@ -29,7 +29,10 @@ serde_json = "1"
 anyhow = "1.0.103"
 chrono = "0.4"
 tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.16", features = ["v7"] }
+# `v7` for session ids, which want to sort by creation. `v4` for the analytics
+# install id, which wants to say nothing at all — v7 embeds the moment it was
+# minted. See analytics.rs.
+uuid = { version = "1.16", features = ["v4", "v7"] }
 # Generates the TS mirror of the event model; `cargo test` writes ../src/types/.
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 # `kill(pid, 0)`: whether the process named in a worktree lock is still alive,
@@ -52,13 +55,10 @@ base64 = "0.22"
 # GUI app at all. See notifications.rs.
 notify-rust = { version = "4.18", features = ["preview-macos-un"] }
 
-# Anonymous usage analytics. The client holds no persistent device id and the
-# app key is compiled in from `APTABASE_KEY`; an absent key leaves the plugin
-# registered and inert, which is what dev builds run with. See analytics.rs.
-tauri-plugin-aptabase = "1.0.0"
-# Linear's GraphQL API, and the only service this app talks to directly — `gh`
-# and `claude` are reached by spawning them instead. `rustls` rather than the
-# platform TLS so a Linux build needs no OpenSSL. See issues/linear.rs.
+# Linear's GraphQL API and PostHog's capture endpoint — the only two services
+# this app talks to directly, `gh` and `claude` being reached by spawning them
+# instead. `rustls` rather than the platform TLS so a Linux build needs no
+# OpenSSL. See issues/linear.rs and analytics.rs.
 # `stream` is for the model download, which is hundreds of megabytes and must
 # reach disk a chunk at a time — `bytes()` buffers the whole body first.
 reqwest = { version = "0.12", default-features = false, features = [

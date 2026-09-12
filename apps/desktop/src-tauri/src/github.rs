@@ -1117,11 +1117,18 @@ pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(
     let arg = number.to_string();
 
     let Err(e) = gh(&cwd, &["pr", "merge", &arg, method.flag()]).await else {
+        crate::analytics::feature_used("pr_merged");
         return Ok(());
     };
 
     match merged_state(&cwd, number).await {
-        Some(true) => Ok(()),
+        // Reported on both paths rather than once around the whole function:
+        // the two are the same answer, but only one of them is a call that
+        // reported failure and turned out to have worked.
+        Some(true) => {
+            crate::analytics::feature_used("pr_merged");
+            Ok(())
+        }
         // Either it genuinely didn't merge, or we couldn't find out — and an
         // unverifiable merge has to read as the failure it was reported as.
         _ => Err(e),

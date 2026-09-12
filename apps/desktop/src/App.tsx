@@ -30,6 +30,7 @@ import { usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
+import { trackFeature } from "@/lib/analytics";
 import { handoffActions } from "@/lib/handoff";
 import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
@@ -1096,8 +1097,17 @@ function App() {
     }
   };
 
-  const createSpace = (name: string) =>
+  /// Declares a space, and reports it only where one is actually made.
+  ///
+  /// The check is duplicated outside the updater rather than read from inside
+  /// it, and that is the point: React may call an updater twice, so a report in
+  /// there would count one space as two. Judged against `spaces`, the union —
+  /// re-declaring a name some project already carries as a tag is not a new
+  /// space to the reader, whatever the declared half of the list says.
+  const createSpace = (name: string) => {
     setDeclaredSpaces((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    if (!spaces.includes(name)) trackFeature("space_created");
+  };
 
   /// Steps a space one place in the order the switcher walks.
   ///

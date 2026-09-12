@@ -287,11 +287,38 @@ async fn get_settings() -> settings::SettingsView {
 /// not name.
 #[tauri::command]
 async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, Fail> {
-    let mut next = settings::read().await;
-    next.analytics_enabled = enabled;
-    settings::write(&next).await?;
+    // `update` and not read-then-write: the two steps can be interleaved by the
+    // install id minting itself, whose write would then carry a snapshot taken
+    // before this switch moved and put `analytics_enabled: true` straight back.
+    settings::update(|next| {
+        next.analytics_enabled = enabled;
+        // Turning it off takes the identifier with it, so nothing is left on
+        // disk naming an install that has asked not to be counted. Opting back
+        // in mints a fresh one, which reads as a new person — the honest
+        // answer, since the gap in between is unmeasured either way.
+        if !enabled {
+            next.install_id = None;
+        }
+    })
+    .await?;
 
     Ok(settings_view().await)
+}
+
+/// Reports a feature whose only chokepoint is in the frontend.
+///
+/// The backend reports its own — this exists for the handful, like the handoff
+/// row's buttons, where the thing being measured is a click handler and nothing
+/// in Rust can see it happen. Consent and the install id are still read inside
+/// [`analytics::track`], so a call from the webview cannot report anything a
+/// call from here would not.
+///
+/// Takes the feature as a `String` and does not validate it. The only caller is
+/// this app's own frontend, and a list of permitted names here would be a
+/// second copy of one the call sites already are.
+#[tauri::command]
+fn track_feature(feature: String) {
+    analytics::track("feature_used", serde_json::json!({ "feature": feature }));
 }
 
 async fn settings_view() -> settings::SettingsView {
@@ -408,10 +435,14 @@ async fn fork_session(
     worktree: bool,
     manager: State<'_, SessionManager>,
 ) -> Result<SessionSnapshot, String> {
-    manager
+    let snapshot = manager
         .fork(session_id, fork_id, worktree)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    analytics::feature_used("fork");
+
+    Ok(snapshot)
 }
 
 /// Stops the in-flight turn without killing the session — the CLI aborts its
@@ -515,7 +546,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(analytics::plugin())
         .manage(SessionManager::default())
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
@@ -572,14 +602,10 @@ pub fn run() {
                 }
             });
 
-            // Spawned rather than awaited, but the two halves inside it are
-            // ordered: the launch is reported only once the persisted opt-out
-            // has been read, or an opted-out install would still send the one
-            // event it opted out of.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                analytics::start(&handle).await;
-            });
+            // Returns immediately: consent is read, and the id minted, inside
+            // the task `track` spawns — so nothing on screen waits on a file
+            // read and an opted-out install still sends nothing.
+            analytics::app_started();
 
             Ok(())
         })
@@ -616,6 +642,7 @@ pub fn run() {
             local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,
+            track_feature,
             list_slash_commands,
             files::warm_file_index,
             files::search_files,

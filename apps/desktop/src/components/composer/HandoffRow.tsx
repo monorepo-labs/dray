@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { HANDOFF_ICONS } from "@/components/composer/handoffIcons";
+import { trackFeature } from "@/lib/analytics";
 import type { HandoffAction } from "@/lib/handoff";
 
 /// The row of canned prompts, parked behind the composer. Mostly they hand work
@@ -113,7 +114,25 @@ export default function HandoffRow({
                 size="sm"
                 variant="secondary"
                 disabled={disabled}
-                onClick={() => onSend(action.prompt)}
+                // Reported off `action.id`, which is already a closed union, so
+                // a fourth button cannot arrive nameless — and here rather than
+                // in `onSend`, which the composer also calls for typed prompts.
+                // The prompt text is never sent: it is a constant, and which
+                // button was pressed is the whole question.
+                //
+                // **The one place the "report it working" rule gives way**, and
+                // deliberately. `handleSendMsg` catches its own failures and
+                // resolves either way, so awaiting it would report identically
+                // on success and failure — a real fix means changing that
+                // function's contract, which the main composer path shares. And
+                // the question this number answers is whether a row parked
+                // behind the composer gets *found*, which the press is the
+                // signal for. A send that fails past here is the agent
+                // failing, and the transcript is where that is visible.
+                onClick={() => {
+                  trackFeature(`handoff_${action.id}`);
+                  onSend(action.prompt);
+                }}
                 className="pointer-events-none group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
               >
                 <Icon className="size-3.5" strokeWidth={1.5} />

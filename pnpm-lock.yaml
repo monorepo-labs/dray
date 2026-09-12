@@ -110,12 +110,12 @@ importers:
 
   apps/web:
     dependencies:
-      '@vercel/analytics':
-        specifier: ^2.0.1
-        version: 2.0.1(next@15.5.23(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       next:
         specifier: ^15.5.4
         version: 15.5.23(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      posthog-js:
+        specifier: ^1.430.1
+        version: 1.430.1(@types/react@19.2.17)(react@19.2.8)
       react:
         specifier: ^19.1.0
         version: 19.2.8
@@ -781,6 +781,15 @@ packages:
         optional: true
       shiki:
         optional: true
+
+  '@posthog/browser-common@0.8.2':
+    resolution: {integrity: sha512-8g7+ijrx8bfWmpDjmP07e0ZmdRnJoFqZ6PCcMQvfBTUrr422GRXvQWpQn7yD028zIJHIIn/rUTipKgUC5UkWpw==}
+
+  '@posthog/core@1.53.1':
+    resolution: {integrity: sha512-7mBwBWbcowIHVgwzGC5SHXI74hHLqu3Z2PDZqtuaSn3h+GHrr9GNf1+tFg85mijPZ97PxamBMm82qd2MmpWxdg==}
+
+  '@posthog/types@1.411.1':
+    resolution: {integrity: sha512-Gd7tnSYctcSXup3naVlAgavvenByRao6rsSYdMgWgP35KE9jFn+rMHNRJeI5LNjJuLzMXHEVcgzAN7xcATefdw==}
 
   '@radix-ui/number@1.1.3':
     resolution: {integrity: sha512-Road2bidD0uu/1BGDOWNdPI06g0lIRy6IF9GZcIrDK2KGItfor8IQwQa+yM2ERgHM1MmHxaxpTzk0/Jp42lNfA==}
@@ -2025,35 +2034,6 @@ packages:
   '@upsetjs/venn.js@2.0.0':
     resolution: {integrity: sha512-WbBhLrooyePuQ1VZxrJjtLvTc4NVfpOyKx0sKqioq9bX1C1m7Jgykkn8gLrtwumBioXIqam8DLxp88Adbue6Hw==}
 
-  '@vercel/analytics@2.0.1':
-    resolution: {integrity: sha512-MTQG6V9qQrt1tsDeF+2Uoo5aPjqbVPys1xvnIftXSJYG2SrwXRHnqEvVoYID7BTruDz4lCd2Z7rM1BdkUehk2g==}
-    peerDependencies:
-      '@remix-run/react': ^2
-      '@sveltejs/kit': ^1 || ^2
-      next: '>= 13'
-      nuxt: '>= 3'
-      react: ^18 || ^19 || ^19.0.0-rc
-      svelte: '>= 4'
-      vue: ^3
-      vue-router: ^4
-    peerDependenciesMeta:
-      '@remix-run/react':
-        optional: true
-      '@sveltejs/kit':
-        optional: true
-      next:
-        optional: true
-      nuxt:
-        optional: true
-      react:
-        optional: true
-      svelte:
-        optional: true
-      vue:
-        optional: true
-      vue-router:
-        optional: true
-
   '@vitejs/plugin-react@4.7.0':
     resolution: {integrity: sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==}
     engines: {node: ^14.18.0 || >=16.0.0}
@@ -2295,6 +2275,9 @@ packages:
   cookie@0.7.2:
     resolution: {integrity: sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w==}
     engines: {node: '>= 0.6'}
+
+  core-js@3.50.0:
+    resolution: {integrity: sha512-BRWgOLKkFeCgRudR6zrs8p9XJZcE14grzKMMssoYrk6krtuEZ7MTKPIY5RzOnqsEKIR9kst7wNzphttraT+Yqw==}
 
   cors@2.8.6:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
@@ -2709,6 +2692,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.4.9:
+    resolution: {integrity: sha512-zdxgIEddhfsyCaWpJ2SdXEP8ZMrKJ6+5jl4OupODcywU0IhRk6gdXuVGcPICyfx2H97hVK7xmJtRLPjkxAX8Vw==}
 
   figures@6.1.0:
     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
@@ -3544,9 +3530,28 @@ packages:
     resolution: {integrity: sha512-g50586zr4bZmwFiTlflMu8E0bDTb5I5gertgwAKmsdUlTQIhZtunzUlD1WSzwcVWPoAVpsrA6vlfCD7oXvRwgg==}
     engines: {node: ^10 || ^12 || >=14}
 
+  posthog-js@1.430.1:
+    resolution: {integrity: sha512-gfGL0ktRNrJo8Mlr5bv8DsWVpsG0ejJo/biw+1jVpTYRMOK6nCI+O+R1S+9n3kY/hAOQB7D/67kA+LKwnA6c0A==}
+    peerDependencies:
+      '@types/react': '>=16.8.0'
+      react: '>=16.8.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
+
   powershell-utils@0.1.0:
     resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
     engines: {node: '>=20'}
+
+  preact@10.29.8:
+    resolution: {integrity: sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==}
+    peerDependencies:
+      preact-render-to-string: '>=5'
+    peerDependenciesMeta:
+      preact-render-to-string:
+        optional: true
 
   pretty-ms@9.3.0:
     resolution: {integrity: sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==}
@@ -3566,6 +3571,9 @@ packages:
   qs@6.15.3:
     resolution: {integrity: sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A==}
     engines: {node: '>=0.6'}
+
+  query-selector-shadow-dom@1.0.1:
+    resolution: {integrity: sha512-lT5yCqEBgfoMYpf3F2xQRK7zEr1rhIIZuceDK6+xRkJQ4NMbHTwXqk4NkwDwQMNqXgG9r9fyHnzwNVs6zV5KRw==}
 
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
@@ -4124,6 +4132,9 @@ packages:
 
   web-namespaces@2.0.1:
     resolution: {integrity: sha512-bKr1DkiNa2krS7qxNtdrtHAmzuYGFQLiQ13TsorsdT6ULTkPLKuu5+GsFpDlg6JFjUTwX2DyhMPG2be8uPrqsQ==}
+
+  web-vitals@6.2.1:
+    resolution: {integrity: sha512-rLcLXA2sx6+9dE88NHFubwTtGxpK4yYBLj6qHPdFoCaLr0cXGb4efOqtKLlm4loGA4OEKHIQKMKzZkKyOh5ctw==}
 
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
@@ -4723,6 +4734,17 @@ snapshots:
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
       shiki: 3.23.0
+
+  '@posthog/browser-common@0.8.2':
+    dependencies:
+      '@posthog/core': 1.53.1
+      '@posthog/types': 1.411.1
+
+  '@posthog/core@1.53.1':
+    dependencies:
+      '@posthog/types': 1.411.1
+
+  '@posthog/types@1.411.1': {}
 
   '@radix-ui/number@1.1.3': {}
 
@@ -5959,11 +5981,6 @@ snapshots:
       d3-selection: 3.0.0
       d3-transition: 3.0.1(d3-selection@3.0.0)
 
-  '@vercel/analytics@2.0.1(next@15.5.23(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)':
-    optionalDependencies:
-      next: 15.5.23(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      react: 19.2.8
-
   '@vitejs/plugin-react@4.7.0(vite@7.3.6(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0))':
     dependencies:
       '@babel/core': 7.29.7
@@ -6181,6 +6198,8 @@ snapshots:
   cookie-signature@1.2.2: {}
 
   cookie@0.7.2: {}
+
+  core-js@3.50.0: {}
 
   cors@2.8.6:
     dependencies:
@@ -6643,6 +6662,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fflate@0.4.9: {}
 
   figures@6.1.0:
     dependencies:
@@ -7654,7 +7675,27 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
+  posthog-js@1.430.1(@types/react@19.2.17)(react@19.2.8):
+    dependencies:
+      '@posthog/browser-common': 0.8.2
+      '@posthog/core': 1.53.1
+      '@posthog/types': 1.411.1
+      core-js: 3.50.0
+      dompurify: 3.4.13
+      fflate: 0.4.9
+      preact: 10.29.8
+      query-selector-shadow-dom: 1.0.1
+      web-vitals: 6.2.1
+      web-vitals-soft-navs: web-vitals@6.2.1
+    optionalDependencies:
+      '@types/react': 19.2.17
+      react: 19.2.8
+    transitivePeerDependencies:
+      - preact-render-to-string
+
   powershell-utils@0.1.0: {}
+
+  preact@10.29.8: {}
 
   pretty-ms@9.3.0:
     dependencies:
@@ -7676,6 +7717,8 @@ snapshots:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
+
+  query-selector-shadow-dom@1.0.1: {}
 
   queue-microtask@1.2.3: {}
 
@@ -8360,6 +8403,8 @@ snapshots:
   vscode-material-icons@0.1.1: {}
 
   web-namespaces@2.0.1: {}
+
+  web-vitals@6.2.1: {}
 
   which@2.0.2:
     dependencies:

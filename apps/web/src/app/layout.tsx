@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Analytics } from "@vercel/analytics/next";
 import { Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
@@ -58,10 +57,9 @@ export default function RootLayout({
       data-theme="dark"
       className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable}`}
     >
-      <body className="font-sans">
-        {children}
-        <Analytics />
-      </body>
+      {/* Nothing analytics-shaped mounts here: PostHog starts from
+          `src/instrumentation-client.ts`, which Next runs before hydration. */}
+      <body className="font-sans">{children}</body>
     </html>
   );
 }

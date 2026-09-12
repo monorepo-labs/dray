@@ -109,10 +109,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Aptabase's write-only app key, read by `option_env!` at compile
+          # PostHog's write-only project key, read by `option_env!` at compile
           # time. Unset is not fatal — the build ships with analytics inert,
-          # which is also what a local build does.
-          APTABASE_KEY: ${{ secrets.APTABASE_KEY }}
+          # which is also what a local build does. `POSTHOG_HOST` is only needed
+          # if the project moves off US cloud; unset takes the default.
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
         with:
           # The Tauri project no longer sits at the repo root.
           projectPath: apps/desktop

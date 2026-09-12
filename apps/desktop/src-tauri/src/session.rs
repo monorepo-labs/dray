@@ -283,9 +283,17 @@ impl StatusTracker {
 /// `cwd`. The two agree today, but `cwd` is a field the agent can move —
 /// `EnterWorktree` relocates a live session — and the one argument this must
 /// never get wrong is which directory to delete.
-async fn remove_session_worktree(item: &SessionIndexItem) -> Result<()> {
+/// Answers whether a tree was actually **there** to remove.
+///
+/// Not the same question as whether this succeeded, which is why it is reported
+/// separately: [`git::remove_worktree`] skips the removal outright for a path
+/// that does not exist and treats a stale registration as the outcome it wanted,
+/// so its `Ok` means "the tree is gone" and not "a tree was deleted". The
+/// difference is the whole of it for anything counting the action — tidying up
+/// after a tree somebody already removed by hand is not somebody deleting one.
+async fn remove_session_worktree(item: &SessionIndexItem) -> Result<bool> {
     let Some(name) = item.worktree_name.as_deref() else {
-        return Ok(());
+        return Ok(false);
     };
 
     let path = worktree_path(&item.project_path, name);
@@ -293,9 +301,11 @@ async fn remove_session_worktree(item: &SessionIndexItem) -> Result<()> {
     // index — the same rebuild `sessionBranch` does on the frontend.
     let branch = git::worktree_branch(name);
 
+    let existed = std::path::Path::new(&path).exists();
+
     git::remove_worktree(&item.project_path, &path, Some(&branch)).await?;
 
-    Ok(())
+    Ok(existed)
 }
 
 /// Persists a status change and tells the frontend. Failures are logged, not
@@ -550,6 +560,27 @@ impl SessionManager {
                 }
                 return Err(e);
             }
+
+            // Reported here rather than at the top of this block, where the
+            // harness is already known: everything between the two can still
+            // fail, and a session counted before its row exists is a start that
+            // never happened. Which harness and model people actually reach for
+            // is the question this answers — nothing about the prompt, which is
+            // the reader's own text and never leaves the machine.
+            // Read off the index entry rather than the arguments, which the
+            // build above has already consumed — and which is the better source
+            // anyway: this reports what was actually written down.
+            crate::analytics::track(
+                "session_started",
+                serde_json::json!({
+                    "harness": item.harness,
+                    "model": item.model.as_str(),
+                    "effort": item.effort,
+                    "permission_mode": item.permission_mode,
+                    "worktree": item.worktree_name.is_some(),
+                    "spawned": item.parent_session_id.is_some(),
+                }),
+            );
 
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.
@@ -1141,11 +1172,21 @@ impl SessionManager {
             session.kill().await?;
         }
 
-        remove_session_worktree(&item).await?;
+        let existed = remove_session_worktree(&item).await?;
 
-        relocate_session_to_project(session_id)
+        let relocated = relocate_session_to_project(session_id)
             .await?
-            .with_context(|| format!("no session {session_id}"))
+            .with_context(|| format!("no session {session_id}"))?;
+
+        // Reported here and not at the command, since only this side can tell a
+        // deletion from a tidy-up — and only on the explicit route: `delete`
+        // calls the same helper, but removing a session is a different action
+        // and counting it here would report two features for one press.
+        if existed {
+            crate::analytics::feature_used("worktree_deleted");
+        }
+
+        Ok(relocated)
     }
 
     /// Deletes a session: kills its child if one is running, then drops the

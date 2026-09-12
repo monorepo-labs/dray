@@ -858,9 +858,14 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
 
     write_key(IssueTracker::Linear, &key).await?;
 
-    let mut next = settings::read().await;
-    next.linear_account = Some(account);
-    settings::write(&next).await.map_err(|e| e.to_string())?;
+    settings::update(|next| next.linear_account = Some(account))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // After the key and the account are both down, so this reports a connection
+    // that exists rather than an attempt. The account itself is never sent —
+    // only that a tracker is now connected.
+    crate::analytics::feature_used("linear_connected");
 
     Ok(get_integrations().await)
 }
@@ -872,9 +877,9 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
 pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
     delete_key(IssueTracker::Linear).await?;
 
-    let mut next = settings::read().await;
-    next.linear_account = None;
-    settings::write(&next).await.map_err(|e| e.to_string())?;
+    settings::update(|next| next.linear_account = None)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(get_integrations().await)
 }

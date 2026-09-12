@@ -194,11 +194,13 @@ pub async fn download_transcription_model(app: AppHandle, model_id: String) -> R
 
     // Re-read rather than checking before the download: it takes minutes, and
     // the reader may have selected something else in the meantime.
-    let mut next = settings::read().await;
-    if next.transcription.model.is_none() {
-        next.transcription.model = Some(model.id.to_string());
-        settings::write(&next).await.map_err(|e| e.to_string())?;
-    }
+    settings::update(|next| {
+        if next.transcription.model.is_none() {
+            next.transcription.model = Some(model.id.to_string());
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -225,11 +227,13 @@ pub async fn delete_transcription_model(
     download::delete(model).await.map_err(|e| e.to_string())?;
 
     // Selecting a model that no longer exists is not a state worth keeping.
-    let mut next = settings::read().await;
-    if next.transcription.model.as_deref() == Some(model_id.as_str()) {
-        next.transcription.model = None;
-        settings::write(&next).await.map_err(|e| e.to_string())?;
-    }
+    settings::update(|next| {
+        if next.transcription.model.as_deref() == Some(model_id.as_str()) {
+            next.transcription.model = None;
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -249,10 +253,9 @@ pub async fn select_transcription_model(
     // the previous model's.
     state.engine.unload().await;
 
-    let mut next = settings::read().await;
-    next.transcription.model = model_id;
-
-    settings::write(&next).await.map_err(|e| e.to_string())?;
+    settings::update(|next| next.transcription.model = model_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -264,19 +267,19 @@ pub async fn select_transcription_model(
 /// to the default for one it cannot find.
 #[tauri::command]
 pub async fn select_transcription_device(device: Option<String>) -> Result<(), String> {
-    let mut next = settings::read().await;
-    next.transcription.device = device;
-
-    settings::write(&next).await.map_err(|e| e.to_string())
+    settings::update(|next| next.transcription.device = device)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Turns muting-while-recording on or off.
 #[tauri::command]
 pub async fn set_transcription_mute(mute: bool) -> Result<(), String> {
-    let mut next = settings::read().await;
-    next.transcription.mute_while_recording = mute;
-
-    settings::write(&next).await.map_err(|e| e.to_string())
+    settings::update(|next| next.transcription.mute_while_recording = mute)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Whether macOS will actually feed this process audio.
@@ -392,6 +395,16 @@ async fn transcribe_audio(
             if text.is_empty() {
                 TranscribeOutcome::Empty
             } else {
+                // Here rather than at the two commands, so a retry that finally
+                // produced words counts like a stop that did. The words
+                // themselves are never reported — only that dictation worked,
+                // and with which model: nothing else says whether `recommended`
+                // is a pick people keep, or which catalog entries are worth
+                // carrying.
+                crate::analytics::track(
+                    "feature_used",
+                    serde_json::json!({ "feature": "dictation", "model": model.id }),
+                );
                 TranscribeOutcome::Text(text)
             }
         }
