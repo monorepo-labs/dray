@@ -5,6 +5,25 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.17.1
+
+### Changed
+
+- **Analytics moved to PostHog, and the settings row now says what is
+  measured.** Three events — a launch, a session starting, a feature
+  being used — and nothing about what you write. Opting out clears the
+  install id, so opting back in reads as a new person.
+
+### Fixed
+
+- **Opting out can no longer be undone by an unrelated setting.** A
+  transcription pick or a Linear account written back from a stale read
+  restored analytics to on.
+- **Installing an update waits on the turn, not on background tasks.** A
+  session running a dev server used to block the button for good.
+- **A subagent row stops shimmering once its run goes to background.**
+- **Sidebar dates stay on one line.**
+
 ## 0.17.0
 
 ### Added
