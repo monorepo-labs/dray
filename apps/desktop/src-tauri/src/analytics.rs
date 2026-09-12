@@ -157,13 +157,21 @@ pub fn feature_used(feature: &'static str) {
 /// stage, a harness, a `file:line` of our own source — and never a `String`
 /// that came out of an error.
 pub fn error(kind: &'static str, properties: Value) {
+    track("error", error_properties(kind, properties));
+}
+
+/// The merge [`error`] sends, split out because it is the one part of that call
+/// a test can hold: the kind goes in **last**, so a call site carrying one of
+/// its own cannot rename what the breakdown is read by. The opposite of
+/// [`track`]'s rule, where a call site correcting a base property is the point.
+fn error_properties(kind: &'static str, properties: Value) -> Value {
     let mut props = Map::new();
-    props.insert("kind".into(), kind.into());
     if let Value::Object(extra) = properties {
         props.extend(extra);
     }
+    props.insert("kind".into(), kind.into());
 
-    track("error", Value::Object(props));
+    Value::Object(props)
 }
 
 /// Reports panics by location, and leaves what a panic *does* alone.
@@ -307,6 +315,16 @@ mod tests {
         assert_eq!(props["harness"], json!("codex"));
         assert_eq!(props["os"], json!("plan9"));
         assert_eq!(props["app_version"], json!(env!("CARGO_PKG_VERSION")));
+    }
+
+    /// The kind is what the breakdown is read by, so a call site's own
+    /// properties must not be able to rename it.
+    #[test]
+    fn a_call_site_cannot_rename_the_kind() {
+        let props = error_properties("parse_failure", json!({ "kind": "map", "stage": "map" }));
+
+        assert_eq!(props["kind"], json!("parse_failure"));
+        assert_eq!(props["stage"], json!("map"));
     }
 
     /// What a panic report may carry. A dependency's path names the machine it
