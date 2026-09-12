@@ -12,7 +12,10 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Analytics moved to PostHog, and the settings row now says what is
   measured.** Three events — a launch, a session starting, a feature
   being used — and nothing about what you write. Opting out clears the
-  install id, so opting back in reads as a new person.
+  install id, so opting back in reads as a new person. Crashes and
+  wire-format failures report where they happened — a file and line, a
+  harness and stage — and never the message beside it, since those carry
+  prompts, code and paths.
 
 ### Fixed
 
