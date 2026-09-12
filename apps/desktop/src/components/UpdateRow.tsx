@@ -113,7 +113,7 @@ export default function UpdateRow({
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
           <TooltipContent side="top">
-            Waiting for the running task to finish.
+            Waiting for the running turn to finish.
           </TooltipContent>
         </Tooltip>
       ) : (

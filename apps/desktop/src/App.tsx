@@ -137,7 +137,6 @@ function App() {
     busy,
     backgroundTasks,
     liveTaskIds,
-    tasksBySession,
     compacting,
     apiRetry,
     working,
@@ -240,13 +239,14 @@ function App() {
   } = useUpdater();
 
   // Every session the app has started this run, not the open one: the install
-  // relaunches the app, so any live child is one this would kill mid-turn — or
-  // mid-task, since a background task outlives its turn. A session from a
-  // previous run cannot still be running — no child survives a restart — so
-  // the two live maps answer this on their own.
-  const anyRunning =
-    Object.values(statusBySession).some((s) => s === "in_progress") ||
-    Object.values(tasksBySession).some((tasks) => tasks.length > 0);
+  // relaunches the app, so any live child is one this would kill mid-turn. A
+  // session from a previous run cannot still be running — no child survives a
+  // restart — so the live map answers this on its own.
+  //
+  // The turn alone, never outstanding background tasks: a `local_bash` task
+  // never ends, so a session running a dev server blocked the update for the
+  // rest of its life with nothing saying why. Same reading Stop and fork take.
+  const anyRunning = Object.values(statusBySession).some((s) => s === "in_progress");
 
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
 
