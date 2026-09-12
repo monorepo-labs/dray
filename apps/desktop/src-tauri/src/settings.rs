@@ -188,20 +188,25 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
     let _guard = SETTINGS_LOCK.lock().await;
     let dir = get_home_app_dir().await?;
 
-    // The same fail-closed reading [`read`] takes, and for the same reason it
-    // must not be an error here: a file that exists and cannot be parsed would
-    // otherwise block *every* settings write — consent, Linear, transcription —
-    // until somebody deleted it by hand, and nothing in the app says to. What
-    // cannot be parsed cannot be preserved, so the edit lands on
-    // [`opted_out`] and the unreadable file is replaced by a readable one.
-    // Opted *out* and not `Default`: recovering must never be a route to
-    // turning reporting back on for somebody who had turned it off.
+    // **Only a malformed file recovers**, and the distinction is the whole of
+    // this branch. A file that cannot be *parsed* can never be preserved, and
+    // erroring on it would block every settings write in the app — consent,
+    // Linear, transcription — until somebody deleted it by hand, which nothing
+    // on screen says to do. A file that cannot be *read* is the opposite case:
+    // it may be perfectly good and merely unreachable for a moment, so writing
+    // `opted_out()` over it would erase the Linear account, the install id and
+    // every transcription pick in order to change one unrelated switch.
+    //
+    // Opted *out* and not `Default` where it does recover: recovering must
+    // never be a route to turning reporting back on for somebody who had
+    // turned it off.
     let mut settings = match read_from(&dir).await {
         Ok(settings) => settings,
-        Err(e) => {
+        Err(e) if is_malformed(&e) => {
             eprintln!("[settings read err] {e:#}");
             opted_out()
         }
+        Err(e) => return Err(e),
     };
 
     edit(&mut settings);
@@ -277,6 +282,16 @@ fn path_in(dir: &Path) -> PathBuf {
     dir.join("settings.json")
 }
 
+/// Whether a [`read_from`] failure is the file being **malformed** rather than
+/// unreachable — the one case it is safe to write over.
+///
+/// `read_json` adds context around the real cause, and anyhow downcasts through
+/// that, so the presence of a `serde_json::Error` in the chain is what says the
+/// bytes were read and could not be understood. An I/O error has none.
+fn is_malformed(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<serde_json::Error>().is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +346,24 @@ mod tests {
         write_to(&dir, &off).await.unwrap();
 
         assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// The two failures `update` must tell apart. Recovering from a malformed
+    /// file replaces it; doing the same for one that is merely unreadable right
+    /// now — a permission, a full disk, a network home directory — would erase
+    /// the Linear account, the install id and every transcription pick to
+    /// change one unrelated switch.
+    #[tokio::test]
+    async fn a_malformed_file_is_told_from_an_unreadable_one() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), "{ not json").unwrap();
+
+        assert!(is_malformed(&read_from(&dir).await.unwrap_err()));
+
+        let unreadable = anyhow::Error::new(std::io::Error::other("disk on fire"))
+            .context("could not open settings.json");
+
+        assert!(!is_malformed(&unreadable));
     }
 
     /// A file nobody can parse must not brick the settings dialog. `update` is
