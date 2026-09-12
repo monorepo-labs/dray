@@ -810,7 +810,11 @@ function AnalyticsRow({
           ? // Disabled and saying why, rather than hidden or — worse — drawn
             // from the stored value and sitting at `on` while nothing is sent.
             "Turned off for this run by DRAY_NO_ANALYTICS."
-          : "Counts how many people use Dray. Your conversations and activity are never collected."
+          : // Says what is actually sent. It read "your conversations and
+            // activity are never collected" while a launch was the only event,
+            // and that stopped being true the moment features were reported —
+            // a privacy line that overpromises is worse than no line.
+            "Counts launches and which features get used, under a random id. Your prompts, code and conversations are never collected."
       }
     >
       <Switch

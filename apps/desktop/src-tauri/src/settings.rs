@@ -33,6 +33,15 @@ pub struct AppSettings {
     /// [`read`].
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
+    /// A random id for this install, or `None` where nothing has ever been
+    /// reported from it.
+    ///
+    /// Minted lazily by [`crate::analytics`] on the first event rather than at
+    /// install time, which is what keeps an opted-out install from ever having
+    /// one written — and cleared again when the switch goes off, so opting back
+    /// in is a new person rather than the old one resurfacing.
+    #[serde(default)]
+    pub install_id: Option<String>,
     /// Who the stored issue-tracker key belongs to.
     ///
     /// The account, never the key — that lives in `credentials.json` beside
@@ -94,6 +103,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             analytics_enabled: enabled_by_default(),
+            install_id: None,
             linear_account: None,
             transcription: TranscriptionSettings::default(),
         }
@@ -146,6 +156,7 @@ pub async fn read() -> AppSettings {
 fn opted_out() -> AppSettings {
     AppSettings {
         analytics_enabled: false,
+        install_id: None,
         linear_account: None,
         transcription: TranscriptionSettings::default(),
     }
@@ -221,6 +232,7 @@ mod tests {
         let dir = tempdir();
         let off = AppSettings {
             analytics_enabled: false,
+            install_id: Some("2f1c…".into()),
             linear_account: None,
             transcription: TranscriptionSettings::default(),
         };
@@ -228,6 +240,20 @@ mod tests {
         write_to(&dir, &off).await.unwrap();
 
         assert_eq!(read_from(&dir).await.unwrap(), off);
+    }
+
+    /// A file written before the id existed must read as an install that has
+    /// simply never reported, not fail the parse and take the whole file's
+    /// other settings down as opted out with it.
+    #[tokio::test]
+    async fn a_file_predating_the_install_id_reads_without_one() {
+        let dir = tempdir();
+        std::fs::write(path_in(&dir), r#"{"analyticsEnabled": true}"#).unwrap();
+
+        let settings = read_from(&dir).await.unwrap();
+
+        assert!(settings.analytics_enabled);
+        assert_eq!(settings.install_id, None);
     }
 
     /// An unknown field must not fail the read, or a file written by a newer

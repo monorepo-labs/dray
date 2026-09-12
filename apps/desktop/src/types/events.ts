@@ -291,6 +291,16 @@ export type AppSettings = {
  */
 analyticsEnabled: boolean, 
 /**
+ * A random id for this install, or `None` where nothing has ever been
+ * reported from it.
+ *
+ * Minted lazily by [`crate::analytics`] on the first event rather than at
+ * install time, which is what keeps an opted-out install from ever having
+ * one written — and cleared again when the switch goes off, so opting back
+ * in is a new person rather than the old one resurfacing.
+ */
+installId: string | null, 
+/**
  * Who the stored issue-tracker key belongs to.
  *
  * The account, never the key — that lives in `credentials.json` beside

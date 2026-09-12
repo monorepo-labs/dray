@@ -1,61 +1,97 @@
-//! Anonymous usage analytics over Aptabase.
+//! Anonymous usage analytics over PostHog.
 //!
-//! One event, `app_started`, and that is the whole of it: how many people run
-//! Dray, on which version, on which OS. The plugin stamps `appVersion`,
-//! `osName`, `osVersion`, `locale`, `engineVersion` and `isDebug` onto every
-//! event itself, so the call site carries no properties — everything worth
-//! knowing at this scope is already on the envelope, and `isDebug` is what
-//! keeps `pnpm tauri dev` runs out of the release numbers.
+//! Three events — a launch, a session starting, and a feature being reached for
+//! the first time in a run — carrying no content and no identity beyond a
+//! random id minted on this machine. What they answer is how many people run
+//! Dray, on which version, whether they come back, and which of the things
+//! built here anybody actually uses.
 //!
-//! **No persistent identifier is sent.** The client mints a session id that
-//! rolls over after four idle hours and writes nothing to disk, so this
-//! measures launches rather than people: actives and version adoption are
-//! answerable, retention cohorts are not. That is the trade Aptabase makes, and
-//! it is why there is no install id in `~/.dray` to go with it.
+//! **The install id is minted only for an install that is opted in.** Someone
+//! who turns this off never has an id written for them at all, because
+//! [`track`] asks [`enabled`] before it asks [`install_id`], and turning the
+//! switch off again clears the stored id — so opting back in is a new person
+//! rather than the old one resurfacing. A uuid v4 rather than the v7 used for
+//! session ids elsewhere: v7 embeds the moment it was minted, which for an
+//! identifier meant to say nothing is one more thing it says.
 //!
-//! **`app_exited` is deliberately absent.** It buys session duration and
-//! nothing else, and it cannot be tracked for free: Tauri dispatches plugin
-//! `on_event` handlers *before* the app's own `run` callback, so the plugin's
-//! flush-on-exit has already run by the time anything in that callback could
-//! enqueue. Sending it would mean a second `flush_events_blocking` on the quit
-//! path — `futures::executor::block_on` around a request with a 10s timeout,
-//! on the main thread, after the window is gone. Not worth a duration figure.
+//! **No transport plugin.** `reqwest` is already here for Linear, and PostHog's
+//! capture API is one POST, so an event is a request rather than a queue with a
+//! flush interval. At this volume — single figures per session — batching would
+//! buy nothing and cost a background task and a drain on the quit path.
 //!
-//! The app key is compiled in from `APTABASE_KEY`. An absent key is the
-//! ordinary case rather than a failure: the plugin stays registered and drops
-//! every event before it reaches the queue, which is what an unconfigured
-//! checkout runs as.
+//! **Nothing is stamped for us.** Aptabase's plugin put `appVersion`, `osName`
+//! and friends on every envelope itself; PostHog does not, so
+//! [`base_properties`] builds that set once. Without it version adoption — the
+//! one question the old single-event setup could answer — would be lost.
+//!
+//! The project key is compiled in from `POSTHOG_KEY`. An absent key is the
+//! ordinary case rather than a failure: every local build compiles with none
+//! and sends nothing, which is what keeps `pnpm tauri dev` out of the numbers.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use tauri::{plugin::TauriPlugin, AppHandle, Runtime};
-use tauri_plugin_aptabase::{EventTracker, InitOptions};
+use serde_json::{json, Map, Value};
+use tokio::sync::OnceCell;
+use uuid::Uuid;
+
+use crate::settings;
 
 /// Set at build time by the release workflow. `option_env!` resolves at compile
 /// time, so `build.rs` has to declare the rerun — otherwise a key exported
 /// after the first build stays baked in as absent.
-const APP_KEY: Option<&str> = option_env!("APTABASE_KEY");
+const API_KEY: Option<&str> = option_env!("POSTHOG_KEY");
 
-/// The plugin's own default is 60s, which is longer than a good many launches:
-/// opening Dray to look at a running session and quitting is well under it, and
-/// those runs would then report only through the blocking flush on exit. Short
-/// enough that the queue is normally already empty by the time someone quits,
-/// and free when it is — the poll returns without a request on an empty queue.
-const FLUSH_INTERVAL: Duration = Duration::from_secs(15);
+/// Set at build time only if the project moves off US cloud. Wrong host means a
+/// key that authenticates nowhere and events that vanish with a 401, so it is
+/// worth a knob rather than a constant somebody has to remember to edit.
+const HOST_OVERRIDE: Option<&str> = option_env!("POSTHOG_HOST");
+
+const DEFAULT_HOST: &str = "https://us.i.posthog.com";
+
+/// Where events go.
+///
+/// The empty string is treated as unset, and that is not defensive: the release
+/// workflow passes this through from a repository *variable*, which expands to
+/// `""` when undefined rather than being absent — so a `Some("")` here is the
+/// ordinary case for every build that has not set one, and taking it literally
+/// would post every event at a URL with no host in it.
+fn host() -> &'static str {
+    HOST_OVERRIDE
+        .filter(|host| !host.is_empty())
+        .unwrap_or(DEFAULT_HOST)
+}
+
+/// Short. Nothing waits on this, and a request still in flight when the app
+/// quits is a dropped event either way — so the only thing a long timeout buys
+/// is a task outliving the thing it was reporting about.
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shared, because a `Client` owns the connection pool — the same reason
+/// `linear.rs` keeps one.
+fn client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(TIMEOUT)
+            .user_agent(concat!("Dray/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("reqwest client")
+    })
+}
 
 /// Whether this run reports at all — what the settings dialog draws, and not
 /// the same as what is on disk whenever [`env_opt_out`] holds.
 ///
-/// Read from disk on every ask rather than held: the plugin decides its own
-/// enablement once, at `build` time, from the key alone, which cannot answer a
-/// toggle someone flips while the app is running — and a copy held here was
-/// one more thing to keep in step with the file. The read is one small file
-/// and nothing asks on a hot path.
+/// Read from disk on every ask rather than held: a copy kept here would be one
+/// more thing to keep in step with the file, and the read is one small file
+/// that nothing asks for on a hot path.
 ///
 /// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
 /// can turn reporting off; it cannot turn it on over a stored `false`.
 pub async fn enabled() -> bool {
-    !env_opt_out() && crate::settings::read().await.analytics_enabled
+    !env_opt_out() && settings::read().await.analytics_enabled
 }
 
 /// Whether the environment has forced reporting off for this run.
@@ -66,40 +102,174 @@ pub fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
 }
 
-/// Reports the launch, once consent has been read. Awaited inside `setup`'s
-/// own spawn rather than blocking it — nothing on screen waits for this.
-pub async fn start(app: &AppHandle) {
-    track(app, "app_started").await;
-}
-
-/// The plugin.
-///
-/// Registered whether or not a key exists: an inert plugin keeps [`track`] an
-/// ordinary call rather than an `Option` every call site unwraps, and the
-/// managed state the tracking trait reaches for only exists once it is.
-pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
-    tauri_plugin_aptabase::Builder::new(APP_KEY.unwrap_or_default())
-        .with_options(InitOptions {
-            host: None,
-            flush_interval: Some(FLUSH_INTERVAL),
-        })
-        .build()
-}
-
 /// Enqueues one event, or drops it if this run opted out.
 ///
-/// Consent is read here, on every call, so a second call site cannot forget to
-/// ask — and cannot run ahead of the persisted answer, which would send an
-/// opted-out install the one event it opted out of.
+/// Deliberately **not** `async` and takes no `AppHandle`: an event is
+/// fire-and-forget, and a call that had to be awaited would put a file read and
+/// an HTTPS request in front of whatever the reader just did. That is also what
+/// lets the sites that report features call this — several are synchronous
+/// commands with no handle in reach.
+///
+/// Consent is read inside the spawned half, on every call, so a new call site
+/// cannot forget to ask and cannot run ahead of the persisted answer.
+///
+/// `event` is `&'static str` because every one is a literal, and taking it by
+/// value is what keeps the spawned future `'static` without an allocation.
+pub fn track(event: &'static str, properties: Value) {
+    tauri::async_runtime::spawn(send(event, properties));
+}
+
+/// Reports the launch. Retention is answered by this event alone — one per
+/// install per day is all a return visit is — so the other two exist for
+/// adoption rather than for this.
+pub fn app_started() {
+    track("app_started", json!({}));
+}
+
+/// Reports a feature being reached for.
+///
+/// One event carrying the feature as a property, never an event per feature:
+/// PostHog breaks a single insight down by property, where a name each is a
+/// chart each to keep in step — and a feature added later then shows up in the
+/// existing breakdown rather than needing a dashboard change to be visible at
+/// all.
+///
+/// Reported on the feature *working*, not on the control being pressed. A click
+/// that errored says nothing about adoption.
+pub fn feature_used(feature: &'static str) {
+    track("feature_used", json!({ "feature": feature }));
+}
+
+/// The body of [`track`], split out so the spawn site stays one line.
 ///
 /// Best-effort throughout, like the notification path next door: analytics that
-/// surfaced an error would be worse than analytics that went missing.
-pub async fn track(app: &AppHandle, name: &str) {
+/// surfaced an error would be worse than analytics that went missing. A
+/// non-success status is logged rather than dropped, since the two ways this
+/// silently reports nothing — a wrong key and a wrong region — both land there.
+async fn send(event: &'static str, properties: Value) {
+    let Some(key) = API_KEY.filter(|key| !key.is_empty()) else {
+        return;
+    };
+
     if !enabled().await {
         return;
     }
 
-    if let Err(e) = app.track_event(name, None) {
-        eprintln!("[analytics err] {e}");
+    let Some(distinct_id) = install_id().await else {
+        return;
+    };
+
+    let mut props = base_properties().clone();
+    if let Value::Object(extra) = properties {
+        props.extend(extra);
+    }
+
+    let body = json!({
+        "api_key": key,
+        "event": event,
+        "distinct_id": distinct_id,
+        "properties": props,
+    });
+
+    let endpoint = format!("{}/i/v0/e/", host());
+
+    match client().post(&endpoint).json(&body).send().await {
+        Ok(response) if !response.status().is_success() => {
+            eprintln!("[analytics err] {} from {endpoint}", response.status());
+        }
+        Err(e) => eprintln!("[analytics err] {e}"),
+        Ok(_) => {}
+    }
+}
+
+/// What every event carries, built once.
+///
+/// Deliberately short. The OS *version* is absent because nothing in the tree
+/// knows it — reading it means a new dependency or spawning `sw_vers` on the
+/// launch path, and neither is worth a figure nobody has asked a question of
+/// yet. `arch` is free from the same module and does answer one, since Apple
+/// Silicon is what decides the transcription backend.
+fn base_properties() -> &'static Map<String, Value> {
+    static BASE: OnceLock<Map<String, Value>> = OnceLock::new();
+
+    BASE.get_or_init(|| {
+        let mut props = Map::new();
+        props.insert("app_version".into(), env!("CARGO_PKG_VERSION").into());
+        props.insert("os".into(), std::env::consts::OS.into());
+        props.insert("arch".into(), std::env::consts::ARCH.into());
+        // Only reachable by a debug build compiled *with* a key, which is not
+        // how anything ships — but that is exactly the build whose events would
+        // otherwise be indistinguishable from a release one's.
+        props.insert("is_debug".into(), cfg!(debug_assertions).into());
+        props
+    })
+}
+
+/// This install's id, minted and persisted on first use.
+///
+/// Read once per process: every event after the first needs no file read, and
+/// two events racing at launch cannot mint two ids.
+///
+/// A failed write still answers with the id it just minted rather than `None` —
+/// the launch is better counted under an id that does not survive the process
+/// than not counted at all, and the next run simply mints another.
+async fn install_id() -> Option<String> {
+    static INSTALL_ID: OnceCell<Option<String>> = OnceCell::const_new();
+
+    INSTALL_ID
+        .get_or_init(|| async {
+            let settings = settings::read().await;
+            if settings.install_id.is_some() {
+                return settings.install_id;
+            }
+
+            let id = Uuid::new_v4().to_string();
+            let next = settings::AppSettings {
+                install_id: Some(id.clone()),
+                ..settings
+            };
+
+            if let Err(e) = settings::write(&next).await {
+                eprintln!("[analytics err] install id not persisted: {e:#}");
+            }
+
+            Some(id)
+        })
+        .await
+        .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one thing in here worth pinning: an event's own properties reach the
+    /// payload, and they win over the base set rather than being dropped by it.
+    #[test]
+    fn event_properties_override_the_base_set() {
+        let mut props = base_properties().clone();
+        let Value::Object(extra) = json!({ "harness": "codex", "os": "plan9" }) else {
+            unreachable!()
+        };
+        props.extend(extra);
+
+        assert_eq!(props["harness"], json!("codex"));
+        assert_eq!(props["os"], json!("plan9"));
+        assert_eq!(props["app_version"], json!(env!("CARGO_PKG_VERSION")));
+    }
+
+    /// The release workflow passes the host through from a repository variable,
+    /// which expands to `""` rather than nothing when undefined — so the empty
+    /// string has to read as unset. Taken literally it would post every event
+    /// to `/i/v0/e/` with no host, and the failure is one line in a log nobody
+    /// reads.
+    #[test]
+    fn an_empty_host_override_falls_back() {
+        assert_eq!(Some("").filter(|host: &&str| !host.is_empty()), None);
+        assert_eq!(
+            Some("https://eu.i.posthog.com").filter(|host: &&str| !host.is_empty()),
+            Some("https://eu.i.posthog.com")
+        );
+        assert!(host().starts_with("https://"));
     }
 }

@@ -2,6 +2,9 @@ packages:
   - "apps/*"
 
 allowBuilds:
+  # Arrives under posthog-js. Its postinstall only prints a funding notice, so
+  # there is nothing to run and nothing lost by refusing it.
+  core-js: false
   # Fetches the platform-specific binary vite runs; without it, builds fail on a
   # clean install.
   esbuild: true

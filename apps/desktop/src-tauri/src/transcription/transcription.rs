@@ -392,6 +392,10 @@ async fn transcribe_audio(
             if text.is_empty() {
                 TranscribeOutcome::Empty
             } else {
+                // Here rather than at the two commands, so a retry that finally
+                // produced words counts like a stop that did. The words
+                // themselves are never reported — only that dictation worked.
+                crate::analytics::feature_used("dictation");
                 TranscribeOutcome::Text(text)
             }
         }

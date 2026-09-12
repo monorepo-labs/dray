@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vercel/analytics": "^2.0.1",
     "next": "^15.5.4",
+    "posthog-js": "^1.430.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

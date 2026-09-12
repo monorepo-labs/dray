@@ -551,6 +551,27 @@ impl SessionManager {
                 return Err(e);
             }
 
+            // Reported here rather than at the top of this block, where the
+            // harness is already known: everything between the two can still
+            // fail, and a session counted before its row exists is a start that
+            // never happened. Which harness and model people actually reach for
+            // is the question this answers — nothing about the prompt, which is
+            // the reader's own text and never leaves the machine.
+            // Read off the index entry rather than the arguments, which the
+            // build above has already consumed — and which is the better source
+            // anyway: this reports what was actually written down.
+            crate::analytics::track(
+                "session_started",
+                serde_json::json!({
+                    "harness": item.harness,
+                    "model": item.model.as_str(),
+                    "effort": item.effort,
+                    "permission_mode": item.permission_mode,
+                    "worktree": item.worktree_name.is_some(),
+                    "spawned": item.parent_session_id.is_some(),
+                }),
+            );
+
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.
             //
