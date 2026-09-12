@@ -394,8 +394,14 @@ async fn transcribe_audio(
             } else {
                 // Here rather than at the two commands, so a retry that finally
                 // produced words counts like a stop that did. The words
-                // themselves are never reported — only that dictation worked.
-                crate::analytics::feature_used("dictation");
+                // themselves are never reported — only that dictation worked,
+                // and with which model: nothing else says whether `recommended`
+                // is a pick people keep, or which catalog entries are worth
+                // carrying.
+                crate::analytics::track(
+                    "feature_used",
+                    serde_json::json!({ "feature": "dictation", "model": model.id }),
+                );
                 TranscribeOutcome::Text(text)
             }
         }
