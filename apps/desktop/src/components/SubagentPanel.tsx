@@ -146,7 +146,7 @@ function RunRow({
           <span
             className={cn(
               "min-w-0 flex-1 truncate",
-              run.done ? "text-sidebar-foreground" : "shimmer-text",
+              run.done || run.background ? "text-sidebar-foreground" : "shimmer-text",
             )}
           >
             {detail}

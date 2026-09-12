@@ -19,6 +19,10 @@ export type SubagentRun = {
   status: string | null;
   lastTool: string | null;
   done: boolean;
+  /// The spawning call answered while the run was still open, so the harness
+  /// put the work in the background. Not "in flight": a dev server started
+  /// this way never ends, and a row shimmering for it reads as a call stuck.
+  background: boolean;
   usage: Usage | null;
   /// The subagent's own work, excluding its lifecycle events.
   events: AgentEvent[];
@@ -669,6 +673,7 @@ export function buildTranscript(
         status: null,
         lastTool: null,
         done: false,
+        background: false,
         usage: null,
         events: [],
         spawn: null,
@@ -703,13 +708,6 @@ export function buildTranscript(
     }
   }
 
-  // A second pass, because the spawning call is logged before the `task_started`
-  // that creates the run — the tool_use block lands in the assistant message
-  // first.
-  for (const run of subagentById.values()) {
-    run.spawn = callById.get(run.id) ?? null;
-  }
-
   // Applied last, and only where no real result exists. A background subagent
   // can report back after the turn that spawned it, so a call marked above must
   // still lose to the result that eventually arrives — and while the child
@@ -720,6 +718,16 @@ export function buildTranscript(
     const taskId = subagentById.get(callId)?.taskId;
     if (taskId !== null && taskId !== undefined && liveTaskIds.has(taskId)) continue;
     resultByCallId.set(callId, ABANDONED);
+  }
+
+  // A second pass, because the spawning call is logged before the `task_started`
+  // that creates the run — the tool_use block lands in the assistant message
+  // first. After the abandoned marks, so `background` reads the final result
+  // map: a foreground run's call answers only when the run ends, so a result
+  // beside an open run is the harness saying it went to the background.
+  for (const run of subagentById.values()) {
+    run.spawn = callById.get(run.id) ?? null;
+    run.background = !run.done && resultByCallId.has(run.id);
   }
 
   const mainThread = events.filter((event) => !event.subagent);
