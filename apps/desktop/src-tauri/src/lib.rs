@@ -541,6 +541,10 @@ async fn mark_session_idle(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the builder, so a panic while the app is still coming up — the
+    // window nobody could report from — is covered like any other.
+    analytics::install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_macos_permissions::init())
         .plugin(tauri_plugin_dialog::init())

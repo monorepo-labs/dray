@@ -1,10 +1,11 @@
 //! Anonymous usage analytics over PostHog.
 //!
-//! Three events — a launch, a session starting, and a feature being reached for
-//! the first time in a run — carrying no content and no identity beyond a
-//! random id minted on this machine. What they answer is how many people run
-//! Dray, on which version, whether they come back, and which of the things
-//! built here anybody actually uses.
+//! Four events — a launch, a session starting, a feature being reached for the
+//! first time in a run, and something breaking — carrying no content and no
+//! identity beyond a random id minted on this machine. What they answer is how
+//! many people run Dray, on which version, whether they come back, which of the
+//! things built here anybody actually uses, and whether the build is failing
+//! under them in a way nothing else would ever tell us.
 //!
 //! **The install id is minted only for an install that is opted in**, and
 //! consent is read in the same hold of the settings lock that mints it —
@@ -142,6 +143,84 @@ pub fn feature_used(feature: &'static str) {
     track("feature_used", json!({ "feature": feature }));
 }
 
+/// Reports something that broke, by **where** it broke and never by what it
+/// said.
+///
+/// One event with the kind as a property, the bargain [`feature_used`] makes,
+/// so a fourth kind later shows up in the existing breakdown rather than
+/// needing a dashboard change to be visible at all.
+///
+/// The rule every call site here has to keep: an error string or a stack frame
+/// carries file paths, and a path carries the project, the branch and the
+/// client's name. The settings dialog promises prompts, code and conversations
+/// are never collected, so `properties` may hold a closed set of tags — a
+/// stage, a harness, a `file:line` of our own source — and never a `String`
+/// that came out of an error.
+pub fn error(kind: &'static str, properties: Value) {
+    let mut props = Map::new();
+    props.insert("kind".into(), kind.into());
+    if let Value::Object(extra) = properties {
+        props.extend(extra);
+    }
+
+    track("error", Value::Object(props));
+}
+
+/// Reports panics by location, and leaves what a panic *does* alone.
+///
+/// Two closed things go out: `file:line` from the panic's own `Location`, and
+/// the thread's name, which is one this app or tokio chose. **The payload never
+/// does** — a panic message is arbitrary text, and `expect` is routinely handed
+/// a path to explain itself with.
+///
+/// Chained to the previous hook rather than replacing it, so the default
+/// printing and whatever the profile does about aborting are unchanged.
+/// Fire-and-forget like every other event: a panic on the main thread takes the
+/// process before the request could land, which is a dropped event and not a
+/// reason to hold a dying app open.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        error(
+            "panic",
+            json!({
+                "location": info
+                    .location()
+                    .map(|at| format!("{}:{}", trim_source_path(at.file()), at.line())),
+                "thread": std::thread::current().name().map(str::to_string),
+            }),
+        );
+
+        previous(info);
+    }));
+}
+
+/// Cuts the build machine out of a panic's source path.
+///
+/// A `Location` is baked in at compile time, so it names wherever this was
+/// built and never the reader's disk — this crate's own code reports
+/// `src/session.rs`, but a dependency reports the release runner's home
+/// directory on the way to the cargo registry, and the app's own path on a
+/// local build. Cargo's `trim-paths` is the proper cure and is not stable on
+/// the toolchain the release workflow pins, so the report trims instead: a
+/// registry or git checkout keeps the part naming the crate, and anything else
+/// still absolute is cut to its file name, since an absolute path arriving here
+/// came from a build directory.
+fn trim_source_path(file: &str) -> &str {
+    for marker in ["/registry/src/", "/git/checkouts/"] {
+        if let Some((_, crate_path)) = file.split_once(marker) {
+            return crate_path;
+        }
+    }
+
+    if file.starts_with('/') {
+        return file.rsplit('/').next().unwrap_or(file);
+    }
+
+    file
+}
+
 /// The body of [`track`], split out so the spawn site stays one line.
 ///
 /// Best-effort throughout, like the notification path next door: analytics that
@@ -228,6 +307,25 @@ mod tests {
         assert_eq!(props["harness"], json!("codex"));
         assert_eq!(props["os"], json!("plan9"));
         assert_eq!(props["app_version"], json!(env!("CARGO_PKG_VERSION")));
+    }
+
+    /// What a panic report may carry. A dependency's path names the machine it
+    /// was built on, and a local build's names this checkout — both are cut
+    /// back to something that identifies the *code*, which is the whole of what
+    /// the report is for.
+    #[test]
+    fn a_panic_location_names_code_and_not_a_machine() {
+        assert_eq!(
+            trim_source_path(
+                "/Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.47.1/src/task.rs"
+            ),
+            "index.crates.io-1949cf8c6b5b557f/tokio-1.47.1/src/task.rs"
+        );
+        assert_eq!(trim_source_path("src/session.rs"), "src/session.rs");
+        assert_eq!(
+            trim_source_path("/Users/yogesh/Documents/ade/apps/desktop/src-tauri/src/lib.rs"),
+            "lib.rs"
+        );
     }
 
     /// The release workflow passes the host through from a repository variable,

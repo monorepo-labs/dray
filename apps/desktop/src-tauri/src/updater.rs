@@ -8,9 +8,12 @@
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
+
+use crate::analytics;
 
 const STABLE_MANIFEST: &str = "https://monorepo-labs.github.io/dray/stable.json";
 const BETA_MANIFEST: &str = "https://monorepo-labs.github.io/dray/beta.json";
@@ -92,6 +95,17 @@ impl InstallError {
     fn install(message: impl Into<String>) -> Self {
         Self::Install {
             message: message.into(),
+        }
+    }
+
+    /// The tag, as the frontend reads it. Written out rather than derived from
+    /// the `Serialize` above, since serializing to find out would carry the
+    /// message along with it — and the message is the one thing that must not
+    /// reach a report.
+    fn stage(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "install",
+            Self::Relaunch { .. } => "relaunch",
         }
     }
 }
@@ -185,6 +199,21 @@ pub async fn check_update(
 /// running to say so. Nothing here may call `restart` again for that reason.
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), InstallError> {
+    let outcome = install(app).await;
+
+    // One report for four ways to fail, which is why the body is split out. A
+    // broken updater is otherwise entirely invisible: the reader stops getting
+    // versions and nothing anywhere says so. Only the tag goes — the message
+    // beside it is the plugin's, free to name a path on the reader's disk.
+    if let Err(e) = &outcome {
+        analytics::error("update_install", json!({ "stage": e.stage() }));
+    }
+
+    outcome
+}
+
+/// The body of [`install_update`], split out so every failure passes one point.
+async fn install(app: AppHandle) -> Result<(), InstallError> {
     // Cloned rather than taken, so a failed install leaves the bundle in place
     // to be retried. Taking it would strand the row on a button that can only
     // ever error: the frontend stops checking once an update is ready, so
@@ -288,6 +317,22 @@ mod tests {
             bundle_of(Path::new("/Applications/Dray.app/Contents/MacOS/dray")),
             Some(Path::new("/Applications/Dray.app"))
         );
+    }
+
+    /// The stage is stated twice — once for the frontend to match a cure on,
+    /// once for a report that must not carry the message beside it — so the two
+    /// spellings are pinned together rather than left free to drift.
+    #[test]
+    fn a_reported_stage_is_the_one_the_frontend_reads() {
+        for error in [
+            super::InstallError::install("swap failed"),
+            super::InstallError::Relaunch {
+                message: "open refused".into(),
+            },
+        ] {
+            let wire = serde_json::to_value(&error).expect("serializes");
+            assert_eq!(wire["stage"], error.stage());
+        }
     }
 
     #[test]
