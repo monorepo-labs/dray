@@ -121,6 +121,11 @@ function RunRow({
   // the button would be one the CLI answers success to and nothing happens.
   const stoppable = live && !run.done && run.taskId !== null;
 
+  // A run whose spawn carries no brief and which has filed no events of its own
+  // expands onto an empty box. Events arrive as it works, so this flips back on
+  // by itself.
+  const hasContent = run.events.length > 0 || (run.spawn != null && hasBrief(run.spawn));
+
   return (
     <div ref={ref} className="border-b border-border">
       {/* A row, not one button: the stop control is a second action on the same
@@ -131,12 +136,14 @@ function RunRow({
         <button
           type="button"
           onClick={onToggle}
+          disabled={!hasContent}
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left text-ui"
         >
           <ChevronRight
             className={cn(
               "size-3.5 shrink-0 text-muted-foreground transition-transform",
               open && "rotate-90",
+              !hasContent && "invisible",
             )}
           />
 
@@ -182,7 +189,7 @@ function RunRow({
         )}
       </div>
 
-      {open && (
+      {open && hasContent && (
         <div className="flex flex-col gap-2 border-t border-border px-3 py-2.5">
           {/* The spawning call first: its arguments are the prompt this run was
               given, and its result the report it came back with. For a
