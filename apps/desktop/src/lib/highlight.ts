@@ -55,8 +55,12 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   mention: "text-accent-mention",
   issue: "text-accent-issue",
   // Underlined and nothing else: a URL is already its own colour of word,
-  // and it must read the same in the composer, where it is only text.
-  url: "underline decoration-muted-foreground underline-offset-2",
+  // and it must read the same in the composer, where it is only text. The
+  // decoration follows the *text* rather than naming a page token, since the
+  // bubble is the one surface a palette repaints under itself — Default's light
+  // block fills it with `--primary` — and `--muted-foreground` there is a dark
+  // grey rule drawn under white text.
+  url: "underline decoration-current/60 underline-offset-2",
   // An inline mark takes no class here, and that is the rule rather than an
   // omission: the composer paints this over a textarea that still lays out the
   // delimiters, so bolding or shrinking a run would slide every glyph after it

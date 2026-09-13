@@ -235,7 +235,7 @@ export default function UserMessage({
                   <button
                     key={i}
                     type="button"
-                    className={cn(SEGMENT_COLOR.url, "cursor-pointer hover:decoration-foreground")}
+                    className={cn(SEGMENT_COLOR.url, "cursor-pointer hover:decoration-current")}
                     onClick={(e) => openLink(segment.text, e)}
                   >
                     {segment.text}
