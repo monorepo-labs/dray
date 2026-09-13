@@ -62,25 +62,82 @@ pub async fn find(id: &ModelId) -> Option<Model> {
         .or_else(|| every_codex_model().into_iter().find(|m| &m.id == id))
 }
 
+/// The model a Codex session starts on when nobody picked one: the list's own
+/// first row, which is Codex's newest.
+///
+/// Asked rather than named, because the table's default is a model this build
+/// knows and the *installed* Codex may not — `gpt6_astra` seeded onto a CLI
+/// predating Astra is a create that fails at the spawn for a choice nobody
+/// made. A probe that cannot run falls back to the table through [`list`], so
+/// the old answer is still the answer where there is nothing better.
+pub async fn default_model() -> ModelId {
+    list()
+        .await
+        .first()
+        .map(|m| m.id.clone())
+        .unwrap_or_default()
+}
+
+/// The id for a `--model` alias, from what Codex reported *or* the table.
+///
+/// The table alone would refuse an alias for a model newer than this build —
+/// which is the one thing `dray new --model` most wants to name, since the
+/// picker is already offering it.
+pub async fn id_for_arg(alias: &str) -> Option<ModelId> {
+    list()
+        .await
+        .into_iter()
+        .chain(every_codex_model())
+        .find(|m| m.arg == alias)
+        .map(|m| m.id)
+}
+
 /// Drops the cached answer, so the next read asks Codex again.
 pub fn forget() {
     CACHE.forget();
 }
 
+/// A page of rows, so a list longer than one page is not silently halved.
+///
+/// `limit` is the server's own knob and its `nextCursor` is what pages the rest
+/// — verified live, where a bogus cursor is refused outright (`invalid cursor`)
+/// rather than ignored. The cap is there so a server answering its own cursor
+/// forever cannot spin: ten pages is far past any model list, and stopping
+/// short costs the rows the table would have named anyway.
+const MAX_PAGES: usize = 10;
+
 async fn probe() -> Result<Vec<Model>> {
-    // No cwd: `model/list` is an account-wide answer, where the skill list next
-    // door is per project. `includeHidden` stays off — it adds internal rows
-    // (`gpt-reserve`, `codex-auto-review`) nobody picked.
-    let answer = probe::ask(None, "model/list", json!({"includeHidden": false})).await?;
-    let rows = read_rows(&answer);
+    let mut rows = Vec::new();
+    let mut cursor: Option<Value> = None;
+
+    for _ in 0..MAX_PAGES {
+        // No cwd: `model/list` is an account-wide answer, where the skill list
+        // next door is per project. `includeHidden` stays off — it adds
+        // internal rows (`gpt-reserve`, `codex-auto-review`) nobody picked.
+        let mut params = json!({"includeHidden": false});
+        if let Some(cursor) = cursor.take() {
+            params["cursor"] = cursor;
+        }
+
+        let answer = probe::ask(None, "model/list", params).await?;
+        let Some(page) = read_page(&answer) else { break };
+
+        rows.extend(page.rows);
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+
+    let models = fold(rows);
 
     // An answer this build cannot read is not an empty picker: the caller falls
     // back to the table, which is a stale list rather than no list.
-    if rows.is_empty() {
+    if models.is_empty() {
         bail!("codex listed no models this build could read");
     }
 
-    Ok(rows)
+    Ok(models)
 }
 
 /// One row of `model/list`, which answers far more than this — an upgrade
@@ -108,31 +165,51 @@ struct Rung {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelList {
     #[serde(default)]
     data: Vec<Row>,
+    /// Whatever the server wants handed back to reach the next page — a number
+    /// today, kept whole rather than typed, since only the server reads it.
+    #[serde(default)]
+    next_cursor: Option<Value>,
 }
 
-/// Folds `model/list` onto the picker's rows.
+struct Page {
+    rows: Vec<Row>,
+    next: Option<Value>,
+}
+
+/// One page of `model/list`, or `None` where this build cannot read the shape.
 ///
 /// Read leniently for `map_model_usage`'s reason: a field Codex adds later must
 /// cost nothing, and a shape it changes must cost the *list* rather than the
-/// app — the caller reads an empty answer as "use the table".
-///
-/// `nextCursor` is deliberately unread. One page has held every model on every
-/// capture, and a second page of models nobody has heard of is a smaller loss
-/// than a paging loop nothing exercises.
-fn read_rows(answer: &Value) -> Vec<Model> {
-    let Ok(list) = serde_json::from_value::<ModelList>(answer.clone()) else {
-        return Vec::new();
-    };
+/// app — the caller reads no rows as "use the table".
+fn read_page(answer: &Value) -> Option<Page> {
+    let list = serde_json::from_value::<ModelList>(answer.clone()).ok()?;
 
-    list.data
-        .iter()
+    Some(Page {
+        rows: list.data,
+        next: list.next_cursor.filter(|next| !next.is_null()),
+    })
+}
+
+/// Every page's rows folded into the picker's list.
+///
+/// Tier is counted across the whole list rather than per page, or a second page
+/// would start its own top level and put four rows in a two-row cycle.
+fn fold(rows: Vec<Row>) -> Vec<Model> {
+    rows.iter()
         .filter(|row| !row.hidden && !row.id.is_empty())
         .enumerate()
         .map(|(at, row)| row_to_model(row, at))
         .collect()
+}
+
+/// One page, for a caller that has the whole answer in hand — the tests.
+#[cfg(test)]
+fn read_rows(answer: &Value) -> Vec<Model> {
+    read_page(answer).map(|page| fold(page.rows)).unwrap_or_default()
 }
 
 /// Reads one row, keeping the id this app has always persisted for it.
@@ -347,6 +424,36 @@ mod tests {
 
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].efforts, vec![Effort::High]);
+    }
+
+    /// A list longer than one page is paged, not halved — and the tier is
+    /// counted across the whole thing, or page two starts its own top level.
+    #[test]
+    fn a_second_page_is_read_and_tiered_with_the_first() {
+        let page_one = json!({"data": [{"id": "a"}, {"id": "b"}], "nextCursor": 2});
+        let page_two = json!({"data": [{"id": "c"}], "nextCursor": null});
+
+        let first = read_page(&page_one).unwrap();
+        let second = read_page(&page_two).unwrap();
+
+        assert_eq!(first.next, Some(json!(2)));
+        assert_eq!(second.next, None);
+
+        let mut rows = first.rows;
+        rows.extend(second.rows);
+        let models = fold(rows);
+
+        let tiers: Vec<(&str, bool)> = models
+            .iter()
+            .map(|m| (m.arg.as_str(), m.secondary))
+            .collect();
+        assert_eq!(tiers, [("a", false), ("b", false), ("c", true)]);
+    }
+
+    /// The capture's own cursor is null, which is what one page looks like.
+    #[test]
+    fn a_single_page_answers_no_cursor() {
+        assert_eq!(read_page(&captured()).unwrap().next, None);
     }
 
     /// A shape this build cannot read is an empty answer, which the caller turns

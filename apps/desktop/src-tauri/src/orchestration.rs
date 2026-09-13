@@ -342,7 +342,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     // `add_project` bumps `last_selected` and resorts the list, which would
     // let an agent's call quietly reorder the user's project picker.
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
-    let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness)?;
+    let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?;
 
     let effort = resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?;
     let permission_mode = parent
@@ -512,28 +512,40 @@ async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
 /// a Codex session spawned from a Claude one would otherwise inherit `opus`,
 /// which Codex cannot run at all, and the create would fail at the spawn for a
 /// choice nobody made.
-fn resolve_model(
+///
+/// Codex answers both halves itself, since its list is the machine's: an alias
+/// it reports resolves even where this build's table has never heard of it, and
+/// the default is the list's first row rather than a model named here that the
+/// *installed* Codex may not have.
+async fn resolve_model(
     requested: Option<&str>,
     parent: Option<&SessionIndexItem>,
     harness: Harness,
 ) -> Result<ModelId> {
     if let Some(alias) = requested {
-        let id = id_for_arg(alias, harness).with_context(|| {
+        let found = match harness {
+            Harness::Codex => crate::harness::codex::models::id_for_arg(alias).await,
+            _ => id_for_arg(alias, harness),
+        };
+
+        return found.with_context(|| {
             let known: Vec<_> = models_for(harness).into_iter().map(|m| m.arg).collect();
             format!("unknown model {alias:?} — try {}", known.join(", "))
-        })?;
-        return Ok(id);
+        });
     }
 
-    Ok(parent
-        .map(|p| p.model.clone())
-        .filter(|id| runs_on(id, harness))
+    if let Some(inherited) = parent.map(|p| p.model.clone()).filter(|id| runs_on(id, harness)) {
+        return Ok(inherited);
+    }
+
+    Ok(match harness {
+        Harness::Codex => crate::harness::codex::models::default_model().await,
         // `None` is pi's answer and means "pass no `--model`": pi is
         // multi-provider, so any constant named here might not exist on the
         // machine, and its own settings already say which model the reader
         // wants. The unset sentinel is what carries that through the index.
-        .or_else(|| default_model_for(harness))
-        .unwrap_or_default())
+        _ => default_model_for(harness).unwrap_or_default(),
+    })
 }
 
 /// The caller's level if it gave one, else the parent's, else `None` — which
