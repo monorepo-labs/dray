@@ -45,21 +45,55 @@ pub async fn list() -> Vec<Model> {
 }
 
 /// The model with this id, from whatever Codex last reported.
-///
-/// Falls through to the static table, which holds the generations the picker
-/// retired *and* everything Codex would have answered had the probe run — so a
-/// session started on an older model still resumes, and a spawn still knows the
-/// `--model` alias when the probe is down.
 pub async fn find(id: &ModelId) -> Option<Model> {
+    resolve(id, &list().await)
+}
+
+/// Three answers, in order, and the last one is the whole reason this is a
+/// function rather than a `find`.
+///
+/// The table is asked after the list because it holds the generations the
+/// picker retired, so a session started on one still resumes.
+///
+/// Past both, an id is taken **as written** — pi's rule, for pi's reason. A
+/// *discovered* model is one no table here names, so a restart whose probe
+/// cannot complete can leave a live session's own model unnameable; refusing it
+/// there reports "not a Codex model" about a model this app itself offered, and
+/// the session cannot be resumed by any retry that does not also fix Codex. As
+/// written, the id **is** the alias, and a Codex that genuinely cannot run it
+/// says so in its own words — which names the real fault where a guess here
+/// could not. The stand-in carries no ladder, so that one spawn omits
+/// `--effort` and Codex uses its own; the recorded level is untouched and the
+/// next answered probe restores the real row.
+///
+/// What it must not do is make *everything* runnable: `send_msg` reads
+/// `Some`/`None` here as "can Codex run this", so a Claude alias has to come
+/// back `None` or a session would spawn Codex on `opus`. `find_model` is what
+/// asks that, being the one table that holds both harnesses.
+fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
     if id.is_unset() {
         return None;
     }
 
-    list()
-        .await
-        .into_iter()
+    if let Some(model) = discovered
+        .iter()
+        .cloned()
         .find(|m| &m.id == id)
         .or_else(|| every_codex_model().into_iter().find(|m| &m.id == id))
+    {
+        return Some(model);
+    }
+
+    crate::models::find_model(id).is_none().then(|| Model {
+        id: id.clone(),
+        label: id.to_string(),
+        efforts: Vec::new(),
+        default_effort: None,
+        arg: id.to_string(),
+        provider: String::new(),
+        accepts_images: true,
+        secondary: true,
+    })
 }
 
 /// The model a Codex session starts on when nobody picked one: the list's own
@@ -454,6 +488,46 @@ mod tests {
     #[test]
     fn a_single_page_answers_no_cursor() {
         assert_eq!(read_page(&captured()).unwrap().next, None);
+    }
+
+    /// Discovered first, then the table for a generation the picker retired.
+    #[test]
+    fn a_model_resolves_from_the_list_then_from_the_table() {
+        let discovered = read_rows(&captured());
+
+        let astra = resolve(&ModelId::new("gpt6_astra"), &discovered).unwrap();
+        assert_eq!(astra.arg, "gpt-6-astra");
+
+        // Retired from the picker, still runnable, and not in the capture.
+        let old = resolve(&ModelId::new("gpt54"), &discovered).unwrap();
+        assert_eq!(old.arg, "gpt-5.4");
+
+        assert!(resolve(&ModelId::default(), &discovered).is_none());
+    }
+
+    /// A session started on a model only Codex named must still resume when the
+    /// probe cannot answer — the restart case, where neither list holds it. The
+    /// id is the alias, so Codex is the one that reports a model it cannot run.
+    #[test]
+    fn a_model_no_list_names_is_taken_as_written() {
+        let stood_in = resolve(&ModelId::new("gpt-7-nova"), &[]).unwrap();
+
+        assert_eq!(stood_in.arg, "gpt-7-nova");
+        assert_eq!(stood_in.id.as_str(), "gpt-7-nova");
+        // No ladder, so the spawn omits `--effort` rather than sending a rung
+        // nothing has said this model takes.
+        assert!(stood_in.efforts.is_empty());
+        assert_eq!(stood_in.default_effort, None);
+    }
+
+    /// And it must not make everything runnable: `send_msg` reads this as "can
+    /// Codex run it", so another harness's model has to come back `None` or a
+    /// Codex session would spawn on `opus`.
+    #[test]
+    fn another_harnesss_model_is_still_refused() {
+        for alias in ["opus", "sonnet", "haiku", "fable"] {
+            assert!(resolve(&ModelId::new(alias), &[]).is_none(), "{alias} resolved");
+        }
     }
 
     /// A shape this build cannot read is an empty answer, which the caller turns
