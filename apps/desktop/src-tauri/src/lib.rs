@@ -113,6 +113,14 @@ async fn send_msg(
         return Err("invalid harness".to_string());
     }
 
+    // Reported here rather than inside `SessionManager::send_msg`, which is the
+    // chokepoint for *prompts* and not for people: the orchestration socket
+    // reaches that function directly, both to relay a `dray send` and to start
+    // a session `dray new` asked for, and an agent finishing at 3am would mark
+    // the day active with nobody in the room. A Tauri command is reachable from
+    // the webview alone, so getting here means somebody pressed send.
+    analytics::active_day();
+
     manager
         .send_msg(
             session_id,

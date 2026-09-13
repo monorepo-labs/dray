@@ -389,16 +389,6 @@ impl SessionManager {
         from: Option<MessageSender>,
         app: &AppHandle,
     ) -> Result<SendOutcome> {
-        // Every prompt passes through here, new session or resumed, which is
-        // the whole reason activity is counted at this point and not at a
-        // session being created. A *relay* is the one thing arriving here with
-        // nobody present — `dray send` from a spawned agent lands at whatever
-        // hour that agent finishes — so a sender means this is not a person
-        // using the app.
-        if from.is_none() {
-            crate::analytics::active_day();
-        }
-
         // Resolved against whichever table can name it. The two single-vendor
         // harnesses have one written here; pi's list is answered by the machine,
         // so its models are looked up in what the probe last reported.

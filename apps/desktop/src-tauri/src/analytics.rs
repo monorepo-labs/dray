@@ -121,7 +121,7 @@ pub fn env_opt_out() -> bool {
 /// `event` is `&'static str` because every one is a literal, and taking it by
 /// value is what keeps the spawned future `'static` without an allocation.
 pub fn track(event: &'static str, properties: Value) {
-    tauri::async_runtime::spawn(send(event, properties));
+    tauri::async_runtime::spawn(send(event, None, properties));
 }
 
 /// Reports the launch. What it uniquely answers is which build is in the wild:
@@ -140,22 +140,27 @@ pub fn app_started() {
 /// event and moves no number, where remembering the date across runs would cost
 /// a file, a lock and a corruption path on the launch path to prevent nothing.
 ///
-/// The date is claimed under the lock and the event sent outside it, so nothing
-/// in [`track`] can ever be reached with this held.
+/// **The day is claimed only once consent has answered**, inside [`send`] and
+/// after the opt-out is read — never here, where the spawn happens. Claiming up
+/// front looked equivalent and is the bug [`settings::ensure_install_id`] was
+/// written to stop, one layer up: an install that launched opted *out* would
+/// claim the day, send nothing, and then be silenced for the rest of that day
+/// by its own claim if the reader turned reporting back on. Process state that
+/// consent has to remember to clear is a second place for consent to be wrong;
+/// claiming after it is asked leaves nothing to clear.
 ///
 /// Known wrinkle, not worth solving: "day" is the machine's local date, which
 /// disagrees with PostHog's project timezone at the edges for anyone outside
 /// it.
 pub fn track_daily(event: &'static str, key: String, properties: Value) {
-    if claim_day(key, chrono::Local::now().format("%Y-%m-%d").to_string()) {
-        track(event, properties);
-    }
+    tauri::async_runtime::spawn(send(event, Some(key), properties));
 }
 
 /// Whether `key` still owes a report for `day`, marking it reported if so.
 ///
-/// Split from [`track_daily`] so the throttle can be tested without a clock or
-/// a request, and so the lock is visibly released before anything is sent.
+/// Split out so the throttle can be tested without a clock or a request, and so
+/// the lock is visibly released before anything is sent. Atomic under that
+/// lock, which is what stops two events landing together from both claiming.
 fn claim_day(key: String, day: String) -> bool {
     static REPORTED: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
@@ -184,10 +189,12 @@ fn claim_day(key: String, day: String) -> bool {
 /// already frontmost never reports *gaining* focus and somebody who opens Dray,
 /// works and quits without switching apps would go uncounted. **Focus gained**
 /// catches coming back to check on a session an agent is running, which reaches
-/// no prompt at all and is real use of an app about parallel agents. **A prompt
-/// reaching `send_msg`** is the chokepoint every turn passes through, new
-/// session or resumed, and covers a reader who leaves the app open and
-/// frontmost across a date boundary.
+/// no prompt at all and is real use of an app about parallel agents. **The
+/// `send_msg` command** covers a reader who leaves the app open and frontmost
+/// across a date boundary — the *command*, not `SessionManager::send_msg` one
+/// call down, since the orchestration socket reaches that directly to relay a
+/// `dray send` and to start a session `dray new` asked for. A Tauri command is
+/// reachable from the webview alone, so it needs no gate to mean a person.
 ///
 /// The throttle is what makes a third site free rather than a third event: all
 /// three share one key, so whichever gets there first claims the day and the
@@ -304,7 +311,7 @@ fn trim_source_path(file: &str) -> &str {
 /// surfaced an error would be worse than analytics that went missing. A
 /// non-success status is logged rather than dropped, since the two ways this
 /// silently reports nothing — a wrong key and a wrong region — both land there.
-async fn send(event: &'static str, properties: Value) {
+async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
     let Some(key) = API_KEY.filter(|key| !key.is_empty()) else {
         return;
     };
@@ -320,6 +327,15 @@ async fn send(event: &'static str, properties: Value) {
     let Some(distinct_id) = settings::ensure_install_id().await else {
         return;
     };
+
+    // After consent, never before it: a day claimed by a run that was opted out
+    // would suppress every later report that run made, including the ones the
+    // reader turned back on to get.
+    if let Some(daily_key) = daily_key {
+        if !claim_day(daily_key, chrono::Local::now().format("%Y-%m-%d").to_string()) {
+            return;
+        }
+    }
 
     let mut props = base_properties().clone();
     if let Value::Object(extra) = properties {
