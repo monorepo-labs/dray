@@ -146,7 +146,7 @@ impl<'de> Deserialize<'de> for ModelId {
 pub fn default_model_for(harness: Harness) -> Option<ModelId> {
     match harness {
         Harness::ClaudeCode => Some(ModelId::new("opus")),
-        Harness::Codex => Some(ModelId::new("gpt56_sol")),
+        Harness::Codex => Some(ModelId::new("gpt6_astra")),
         Harness::Pi => None,
         // No list to default out of, and nothing will spawn for it anyway, so
         // there is no model to name — the same `None` pi takes, for a different
@@ -277,7 +277,7 @@ pub fn claude_models() -> Vec<Model> {
 pub fn codex_models() -> Vec<Model> {
     use Effort::*;
 
-    // The current family only. Older generations keep their ids, aliases and
+    // The two current families only. Older generations keep their ids, aliases and
     // context windows — a session started on one resumes and reads back — they
     // are simply not offered, since a picker is a recommendation and nothing
     // here recommends last year's model.
@@ -290,20 +290,28 @@ pub fn codex_models() -> Vec<Model> {
 
     vec![
         Model::new(
+            "gpt6_astra",
+            "gpt-6-astra",
+            "Astra",
+            with_ultra.clone(),
+            Some(Medium),
+        ),
+        Model::new(
             "gpt56_sol",
             "gpt-5.6-sol",
-            "5.6 Sol",
+            "Sol",
             with_ultra.clone(),
             Some(Medium),
         ),
         Model::new(
             "gpt56_terra",
             "gpt-5.6-terra",
-            "5.6 Terra",
+            "Terra",
             with_ultra,
             Some(Medium),
-        ),
-        Model::new("gpt56_luna", "gpt-5.6-luna", "5.6 Luna", all, Some(Medium)),
+        )
+        .under_more(),
+        Model::new("gpt56_luna", "gpt-5.6-luna", "Luna", all, Some(Medium)).under_more(),
     ]
 }
 
@@ -312,7 +320,7 @@ pub fn codex_models() -> Vec<Model> {
 /// [`codex_models`] is the picker's list and stops at the current family; this
 /// is what [`find_model`] searches, so a session started on an older one
 /// resumes instead of failing at the spawn with "unknown model".
-fn every_codex_model() -> Vec<Model> {
+pub(crate) fn every_codex_model() -> Vec<Model> {
     use Effort::*;
 
     let older = vec![Low, Medium, High, Xhigh];
@@ -460,21 +468,29 @@ mod tests {
             .any(|m| m.id == id("gpt55")));
     }
 
-    /// The picker offers one family, and every model in it reasons — so a
-    /// harness switch can never land the composer on a model with no effort.
+    /// Every model the picker offers reasons — so a harness switch can never
+    /// land the composer on a model with no effort.
     #[test]
     fn the_offered_codex_models_are_the_current_family() {
         let offered = models_for(Harness::Codex);
 
         assert_eq!(
             offered.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
-            ["5.6 Sol", "5.6 Terra", "5.6 Luna"]
+            ["Astra", "Sol", "Terra", "Luna"]
         );
         // Medium, where Claude's default is High. Cheap to state, and the one
         // number a reader would otherwise have to open the picker to learn.
         assert!(offered
             .iter()
             .all(|m| m.default_effort == Some(Effort::Medium)));
+
+        // Shift+Tab cycles the top level, so two is the budget here as well.
+        let cycled: Vec<&str> = offered
+            .iter()
+            .filter(|m| !m.secondary)
+            .map(|m| m.label.as_str())
+            .collect();
+        assert_eq!(cycled, ["Astra", "Sol"]);
     }
 
     /// `ultra` is per model, not per family — Codex reports it on Sol and Terra
@@ -494,9 +510,10 @@ mod tests {
         assert_eq!(
             tops,
             [
-                ("5.6 Sol".to_string(), Some(Effort::Ultra)),
-                ("5.6 Terra".to_string(), Some(Effort::Ultra)),
-                ("5.6 Luna".to_string(), Some(Effort::Max)),
+                ("Astra".to_string(), Some(Effort::Ultra)),
+                ("Sol".to_string(), Some(Effort::Ultra)),
+                ("Terra".to_string(), Some(Effort::Ultra)),
+                ("Luna".to_string(), Some(Effort::Max)),
             ]
         );
 
@@ -617,6 +634,7 @@ mod tests {
             "sonnet",
             "fable",
             "haiku",
+            "gpt6_astra",
             "gpt56_sol",
             "gpt56_terra",
             "gpt56_luna",
@@ -696,7 +714,7 @@ mod tests {
     #[test]
     fn only_pi_has_no_default_model() {
         assert_eq!(default_model_for(Harness::ClaudeCode), Some(id("opus")));
-        assert_eq!(default_model_for(Harness::Codex), Some(id("gpt56_sol")));
+        assert_eq!(default_model_for(Harness::Codex), Some(id("gpt6_astra")));
         assert_eq!(default_model_for(Harness::Pi), None);
 
         for harness in [Harness::ClaudeCode, Harness::Codex] {

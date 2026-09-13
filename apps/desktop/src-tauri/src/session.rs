@@ -398,6 +398,9 @@ impl SessionManager {
         // key for is the worst possible first run.
         let model_spec = match harness {
             Harness::Pi => crate::harness::pi::models::find(&model).await,
+            // Codex's list is the machine's answer too now, with the table
+            // behind it — so a model shipped after this build still spawns.
+            Harness::Codex => crate::harness::codex::models::find(&model).await,
             _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
         };
 
@@ -409,7 +412,16 @@ impl SessionManager {
         //
         // The unset sentinel is exempt: it names no model, so there is nothing
         // to be wrong about, and refusing it would refuse pi's own default.
-        if !model.is_unset() && !runs_on(&model, harness) {
+        // Codex answers the wider question itself: the lookup above
+        // searched what Codex reported *and* the table, where `runs_on`
+        // knows only the table and would refuse a model newer than this
+        // build.
+        let runnable = match harness {
+            Harness::Codex => model_spec.is_some(),
+            _ => runs_on(&model, harness),
+        };
+
+        if !model.is_unset() && !runnable {
             let named = model_spec
                 .as_ref()
                 .map(|m| m.label.clone())

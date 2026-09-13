@@ -18,12 +18,7 @@ use crate::harness::{claude_code::commands::SlashCommand, ProbeCache};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{process::Stdio, sync::LazyLock, time::Duration};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::Command,
-    time::timeout,
-};
+use std::{sync::LazyLock, time::Duration};
 
 /// One row of `skills/list`, which answers far more per skill than this — a
 /// scope, a plugin id, a display interface. Only what the picker draws and what
@@ -65,9 +60,6 @@ struct SkillsList {
 /// Code's list is: a probe costs a child, and a skill installed while Dray is
 /// open is a restart away rather than a keystroke away.
 static CACHE: LazyLock<ProbeCache<Vec<Skill>>> = LazyLock::new(|| ProbeCache::new(Duration::MAX));
-
-/// A probe that hangs must not hold the picker open forever.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Every skill available in `cwd`, cached after the first read. Only the picker
 /// reads this; the send path asks the session's own child instead.
@@ -151,73 +143,11 @@ pub fn without_command(text: &str) -> &str {
     }
 }
 
-/// Spawns a throwaway app-server in `cwd` purely to ask it, then takes it down.
-///
-/// The directory is load-bearing: `skills/list` resolves project-scoped skills
-/// against the process's own cwd, verified live — a probe spawned anywhere else
-/// answers for the wrong project.
-///
-/// The timeout is *inside* here, and that is the difference between a kill and
-/// a hope. Dropping a `Child` with `kill_on_drop` sends the signal but reaps on
-/// the runtime's own schedule with no guarantee, and this child is not a lone
-/// process: a codex app-server starts every MCP server the reader has
-/// configured, so one left standing is a small tree of them. So every exit runs
-/// through `child.kill().await`, which signals *and* waits.
+/// Asks a throwaway app-server in `cwd`, which is load-bearing: `skills/list`
+/// resolves project-scoped skills against the process's own cwd, verified live
+/// — a probe spawned anywhere else answers for the wrong project.
 async fn probe(cwd: &str) -> Result<Vec<Skill>> {
-    let bin = crate::binpath::codex().await;
-    let mut child = Command::new(&bin)
-        .arg("app-server")
-        .current_dir(cwd)
-        .env("PATH", crate::harness::agent_path(&bin))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        // Belt to the kill's braces: it covers this whole future being dropped,
-        // which the explicit kill below cannot, since it never runs then.
-        .kill_on_drop(true)
-        .spawn()
-        .context("couldn't start codex to ask for its skills")?;
-
-    // Taken before the ask, so nothing it does borrows the child and the kill
-    // below has one exit path to sit on.
-    let stdin = child.stdin.take().context("failed to take stdin")?;
-    let stdout = child.stdout.take().context("failed to take stdout")?;
-
-    let answer = timeout(PROBE_TIMEOUT, ask(stdin, stdout)).await;
-
-    // However the ask went. A probe that timed out is exactly the child least
-    // likely to notice its stdin has gone, so it is the one that most needs it.
-    let _ = child.kill().await;
-
-    answer.context("timed out asking codex for its skills")?
-}
-
-/// The handshake and the one question, over a child's pipes.
-async fn ask(stdin: tokio::process::ChildStdin, stdout: tokio::process::ChildStdout) -> Result<Vec<Skill>> {
-    let client = RpcClient::new(stdin);
-
-    tokio::spawn({
-        let client = client.clone();
-        async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                client.accept(&line).await;
-            }
-        }
-    });
-
-    // Every other method is refused with "Not initialized" until both halves of
-    // the handshake have gone out.
-    client
-        .request(
-            "initialize",
-            json!({"clientInfo": {"name": "dray", "title": "Dray",
-                                  "version": env!("CARGO_PKG_VERSION")}}),
-        )
-        .await?;
-    client.notify("initialized", json!({}))?;
-
-    let answer = client.request("skills/list", json!({})).await?;
+    let answer = super::probe::ask(Some(cwd), "skills/list", json!({})).await?;
 
     Ok(read_rows(&answer))
 }

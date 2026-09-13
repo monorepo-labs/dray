@@ -32,8 +32,10 @@ use tokio::{
 
 pub mod commands;
 pub mod mapper;
+pub mod models;
 pub mod parser;
 pub mod permissions;
+pub mod probe;
 pub mod rpc;
 
 use permissions::ApprovalKind;

@@ -254,6 +254,7 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
     // harness still gets the list it always got.
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
+        harness::Harness::Codex => harness::codex::models::list().await,
         other => models::models_for(other),
     }
 }
@@ -265,6 +266,7 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
 #[tauri::command]
 async fn refresh_models() {
     harness::pi::models::forget();
+    harness::codex::models::forget();
 }
 
 /// The preferences Rust owns. Everything else the settings dialog draws is the
