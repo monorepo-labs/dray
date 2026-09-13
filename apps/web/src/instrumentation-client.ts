@@ -36,5 +36,12 @@ if (key) {
     // navigation is a bug waiting for the second one.
     capture_pageview: "history_change",
     person_profiles: "identified_only",
+    // The desktop app reports into this same project under a stable install
+    // uuid where every visit here is a new cookieless person, so an unfiltered
+    // "unique users" figure is the sum of two populations that mean different
+    // things. Registered from `loaded` rather than after `init` returns,
+    // because the initial pageview is captured inside init and a super property
+    // only rides captures made after it.
+    loaded: (ph) => ph.register({ source: "site" }),
   });
 }

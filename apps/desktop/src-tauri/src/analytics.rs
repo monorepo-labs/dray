@@ -1,11 +1,12 @@
 //! Anonymous usage analytics over PostHog.
 //!
-//! Four events — a launch, a session starting, a feature being reached for the
-//! first time in a run, and something breaking — carrying no content and no
-//! identity beyond a random id minted on this machine. What they answer is how
-//! many people run Dray, on which version, whether they come back, which of the
-//! things built here anybody actually uses, and whether the build is failing
-//! under them in a way nothing else would ever tell us.
+//! Five events — a launch, a day the app was used, a session starting, a
+//! feature being reached for the first time in a run, and something breaking —
+//! carrying no content and no identity beyond a random id minted on this
+//! machine. What they answer is how many people run Dray, on which version,
+//! whether they come back, which of the things built here anybody actually
+//! uses, and whether the build is failing under them in a way nothing else
+//! would ever tell us.
 //!
 //! **The install id is minted only for an install that is opted in**, and
 //! consent is read in the same hold of the settings lock that mints it —
@@ -33,7 +34,8 @@
 //! ordinary case rather than a failure: every local build compiles with none
 //! and sends nothing, which is what keeps `pnpm tauri dev` out of the numbers.
 
-use std::sync::OnceLock;
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -122,11 +124,78 @@ pub fn track(event: &'static str, properties: Value) {
     tauri::async_runtime::spawn(send(event, properties));
 }
 
-/// Reports the launch. Retention is answered by this event alone — one per
-/// install per day is all a return visit is — so the other two exist for
-/// adoption rather than for this.
+/// Reports the launch. What it uniquely answers is which build is in the wild:
+/// this app gets left open for days, so launches undercount *use* badly and
+/// [`active_day`] is what measures that.
 pub fn app_started() {
     track("app_started", json!({}));
+}
+
+/// Reports `event` at most once per local day per `key`, for the life of this
+/// process.
+///
+/// **Deliberately not persisted, and that is the whole design.** PostHog counts
+/// distinct people per day, so an install reporting the same event three times
+/// in one day still reads as one active user — a restart re-reporting costs one
+/// event and moves no number, where remembering the date across runs would cost
+/// a file, a lock and a corruption path on the launch path to prevent nothing.
+///
+/// The date is claimed under the lock and the event sent outside it, so nothing
+/// in [`track`] can ever be reached with this held.
+///
+/// Known wrinkle, not worth solving: "day" is the machine's local date, which
+/// disagrees with PostHog's project timezone at the edges for anyone outside
+/// it.
+pub fn track_daily(event: &'static str, key: String, properties: Value) {
+    if claim_day(key, chrono::Local::now().format("%Y-%m-%d").to_string()) {
+        track(event, properties);
+    }
+}
+
+/// Whether `key` still owes a report for `day`, marking it reported if so.
+///
+/// Split from [`track_daily`] so the throttle can be tested without a clock or
+/// a request, and so the lock is visibly released before anything is sent.
+fn claim_day(key: String, day: String) -> bool {
+    static REPORTED: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+    // Recovered rather than unwrapped: a poisoned lock is not a reason to take
+    // the app down over an event nobody is waiting on.
+    let mut reported = REPORTED.lock().unwrap_or_else(|e| e.into_inner());
+    if reported.get(&key).is_some_and(|last| *last == day) {
+        return false;
+    }
+    reported.insert(key, day);
+
+    true
+}
+
+/// Reports that this install was used today, at most once a day per run.
+///
+/// Neither event beside it answers activity. [`app_started`] measures installs
+/// and version adoption, since this app is left open for days at a time, and
+/// `session_started` fires only for a session being *created* — so somebody
+/// working all day in one resumed session was invisible, and the most engaged
+/// readers read as churned.
+///
+/// Three call sites, each covering a hole the others leave. **Launch** is the
+/// only one guaranteed to fire: `focus.ts` seeds itself from
+/// `document.hasFocus()` and reports changes alone, so a window that comes up
+/// already frontmost never reports *gaining* focus and somebody who opens Dray,
+/// works and quits without switching apps would go uncounted. **Focus gained**
+/// catches coming back to check on a session an agent is running, which reaches
+/// no prompt at all and is real use of an app about parallel agents. **A prompt
+/// reaching `send_msg`** is the chokepoint every turn passes through, new
+/// session or resumed, and covers a reader who leaves the app open and
+/// frontmost across a date boundary.
+///
+/// The throttle is what makes a third site free rather than a third event: all
+/// three share one key, so whichever gets there first claims the day and the
+/// other two are no-ops. It is also why none of them asks what the others did
+/// — "report this only if nothing reported today" is exactly what the claim
+/// already is.
+pub fn active_day() {
+    track_daily("active_day", "active_day".into(), json!({}));
 }
 
 /// Reports a feature being reached for.
@@ -294,6 +363,14 @@ fn base_properties() -> &'static Map<String, Value> {
         // how anything ships — but that is exactly the build whose events would
         // otherwise be indistinguishable from a release one's.
         props.insert("is_debug".into(), cfg!(debug_assertions).into());
+        // The marketing site reports into this same project under a *cookieless
+        // per-visit* id where this one is a stable install uuid, so any
+        // unfiltered "unique users" figure is the sum of two incompatible
+        // populations. `$lib` half-separates them already — posthog-js sets it
+        // and this POST sets nothing — but a dashboard built on a property's
+        // *absence* breaks the day something else stops setting one. The one
+        // thing here that cannot be added retroactively.
+        props.insert("source".into(), "app".into());
         props
     })
 }
@@ -344,6 +421,17 @@ mod tests {
             trim_source_path("/Users/yogesh/Documents/ade/apps/desktop/src-tauri/src/lib.rs"),
             "lib.rs"
         );
+    }
+
+    /// The throttle itself: a day is claimed once, keys do not throttle each
+    /// other, and the next day is a fresh claim. Distinct keys per test, since
+    /// the state behind this is process-wide by design.
+    #[test]
+    fn a_key_reports_once_a_day() {
+        assert!(claim_day("first".into(), "2026-09-13".into()));
+        assert!(!claim_day("first".into(), "2026-09-13".into()));
+        assert!(claim_day("second".into(), "2026-09-13".into()));
+        assert!(claim_day("first".into(), "2026-09-14".into()));
     }
 
     /// The release workflow passes the host through from a repository variable,

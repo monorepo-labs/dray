@@ -13,3 +13,15 @@ import { invoke } from "@tauri-apps/api/core";
 export function trackFeature(feature: string) {
   void invoke("track_feature", { feature }).catch(() => {});
 }
+
+/// Reports that the app is being used today.
+///
+/// Fired on every focus gain and throttled in Rust to one report per local day,
+/// against the same key the backend's own two call sites claim — so this
+/// decides nothing about whether anything is sent, and there is no state here
+/// to keep in step with theirs.
+///
+/// Swallows failures for the same reason [`trackFeature`] does.
+export function trackActiveDay() {
+  void invoke("track_active_day").catch(() => {});
+}
