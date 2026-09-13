@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
 import { imagesOf, type QueuedPrompt } from "@/hooks/useSessions";
@@ -7,6 +9,7 @@ import {
   splitMention,
   withLineBreaks,
 } from "@/lib/highlight";
+import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
 
 /// Prompts typed into the running turn that the app is still holding.
@@ -30,6 +33,7 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
         // carrying the line written for the receiving agent, and it must not
         // read one way queued and another way sent.
         const body = withLineBreaks(stripSenderPrefix(message.text, message.from));
+        const brand = commandBrand(body);
 
         return (
           <div key={message.id} className="flex w-full flex-col items-end gap-1">
@@ -42,7 +46,14 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
               {/* Guarded like the delivered bubble's: a prompt can be an
                   attachment and nothing else. */}
               {body && (
-                <div className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground">
+                <div
+                  className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground"
+                  // Branded here too, or a Greptile command waits as an ordinary
+                  // bubble and turns green the moment it is delivered — which is
+                  // the "different kind of thing" this row exists not to be.
+                  data-brand={brand ? "" : undefined}
+                  style={brand ? ({ "--brand": brand } as CSSProperties) : undefined}
+                >
                   {/* Same bubble, same break rule — see `UserMessage`. */}
                   <span className="whitespace-pre-wrap wrap-anywhere">
                     {highlightSegments(body).map((segment, s) => {
