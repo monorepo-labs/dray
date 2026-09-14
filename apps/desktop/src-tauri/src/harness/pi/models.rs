@@ -169,10 +169,7 @@ async fn read_rows(client: &PiClient, data: &Value) -> Vec<Model> {
 }
 
 async fn ask_levels(client: &PiClient, row: &Value) -> Result<Vec<Effort>> {
-    let id = row
-        .get("id")
-        .and_then(Value::as_str)
-        .context("row has no id")?;
+    let id = row.get("id").and_then(Value::as_str).context("row has no id")?;
     let provider = row
         .get("provider")
         .and_then(Value::as_str)
@@ -281,10 +278,7 @@ pub fn by_provider(models: &[Model]) -> Vec<(String, Vec<Model>)> {
     // A linear find: providers number a handful, and the list is what keeps
     // pi's order.
     for model in models {
-        match groups
-            .iter_mut()
-            .find(|(provider, _)| *provider == model.provider)
-        {
+        match groups.iter_mut().find(|(provider, _)| *provider == model.provider) {
             Some((_, rows)) => rows.push(model.clone()),
             None => groups.push((model.provider.clone(), vec![model.clone()])),
         }
@@ -353,10 +347,7 @@ mod tests {
     #[test]
     fn the_id_carries_the_provider_and_the_arg_does_not() {
         for model in rows() {
-            assert_eq!(
-                model.id.as_str(),
-                format!("{}/{}", model.provider, model.arg)
-            );
+            assert_eq!(model.id.as_str(), format!("{}/{}", model.provider, model.arg));
             assert!(!model.arg.contains('/'), "{} is not bare", model.arg);
         }
     }

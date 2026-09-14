@@ -150,16 +150,10 @@ pub async fn warm_file_index(cwd: String) -> Result<(), Fail> {
 /// holds a `parking_lot` read guard across the whole scoring pass, which is not
 /// something that may be held across an await point.
 #[tauri::command]
-pub async fn search_files(
-    cwd: String,
-    query: String,
-    limit: usize,
-) -> Result<Vec<FileMatch>, Fail> {
-    Ok(
-        tokio::task::spawn_blocking(move || search(&cwd, &query, limit))
-            .await
-            .map_err(anyhow::Error::from)??,
-    )
+pub async fn search_files(cwd: String, query: String, limit: usize) -> Result<Vec<FileMatch>, Fail> {
+    Ok(tokio::task::spawn_blocking(move || search(&cwd, &query, limit))
+        .await
+        .map_err(anyhow::Error::from)??)
 }
 
 /// The best `limit` matches for `query` in `cwd`, best first.

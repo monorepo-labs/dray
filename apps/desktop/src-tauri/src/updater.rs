@@ -117,13 +117,13 @@ impl InstallError {
 /// A failed check is not an error the user should see — no network is the
 /// common case — so the caller logs and moves on.
 #[tauri::command]
-pub async fn check_update(channel: UpdateChannel, app: AppHandle) -> Result<(), String> {
+pub async fn check_update(
+    channel: UpdateChannel,
+    app: AppHandle,
+) -> Result<(), String> {
     let updater = app
         .updater_builder()
-        .endpoints(vec![channel
-            .manifest()
-            .parse()
-            .map_err(|e| format!("{e}"))?])
+        .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;

@@ -150,9 +150,7 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
 /// A blank name is the same as no space: an empty string would draw a nameless
 /// entry in the switcher that nothing could ever be moved out of.
 fn normalize_space(space: Option<String>) -> Option<String> {
-    space
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    space.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 /// The edit [`retag_space`] makes, split from the file so it can be tested
@@ -266,10 +264,7 @@ mod tests {
 
         assert!(retag(&mut projects, "Work", Some("Client".into())));
         let spaces: Vec<_> = projects.iter().map(|p| p.space.as_deref()).collect();
-        assert_eq!(
-            spaces,
-            [Some("Client"), Some("Personal"), None, Some("Client")]
-        );
+        assert_eq!(spaces, [Some("Client"), Some("Personal"), None, Some("Client")]);
     }
 
     #[test]

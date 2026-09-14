@@ -127,34 +127,20 @@ fn paths() -> Option<Paths> {
     };
     let helpers = bundle.join("Contents/Frameworks");
     let beside = helpers.join(FRAMEWORK);
-    let framework = if beside.exists() {
-        beside
-    } else {
-        crate::chromium::installed_framework()?
-    };
-    Some(Paths {
-        framework,
-        helpers,
-        bundle,
-    })
+    let framework = if beside.exists() { beside } else { crate::chromium::installed_framework()? };
+    Some(Paths { framework, helpers, bundle })
 }
 
 /// A framework beside the helpers is the dev layout, and nothing to fetch.
 fn dev_framework() -> Option<PathBuf> {
-    paths()
-        .filter(|p| p.framework.starts_with(&p.helpers))
-        .map(|p| p.framework)
+    paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
 
 /// Dev builds get their own profile root, as they get their own socket:
 /// Chromium holds a singleton lock on the root, so a dev build sharing the
 /// release app's would fail to initialize and exit the process.
 fn browser_dir() -> PathBuf {
-    let dir = if tauri::is_dev() {
-        ".dray/browser-dev"
-    } else {
-        ".dray/browser"
-    };
+    let dir = if tauri::is_dev() { ".dray/browser-dev" } else { ".dray/browser" };
     std::env::home_dir().unwrap_or_default().join(dir)
 }
 
@@ -187,9 +173,7 @@ fn ensure_started() -> bool {
 }
 
 fn start() -> Option<bool> {
-    let Some(app) = APP.get() else {
-        return Some(false);
-    };
+    let Some(app) = APP.get() else { return Some(false) };
     // Held from finding the framework to loading it, so `chromium::remove`
     // cannot take it off disk in between and leave this process's one
     // chance at starting CEF spent on a path that is no longer there.
@@ -213,11 +197,7 @@ fn start() -> Option<bool> {
     // Returns -1 for the browser process; helpers are a separate binary, so
     // this process is never anything else.
     let ret = keeping_signal(libc::SIGCHLD, || {
-        execute_process(
-            Some(args.as_main_args()),
-            None::<&mut App>,
-            std::ptr::null_mut(),
-        )
+        execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut())
     });
     if ret >= 0 {
         eprintln!("cef: execute_process answered {ret} in the browser process");
@@ -242,12 +222,7 @@ fn start() -> Option<bool> {
     };
     let mut cef_app = DrayApp::new();
     let ok = keeping_signal(libc::SIGCHLD, || {
-        initialize(
-            Some(args.as_main_args()),
-            Some(&settings),
-            Some(&mut cef_app),
-            std::ptr::null_mut(),
-        ) == 1
+        initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) == 1
     });
     if !ok {
         eprintln!("cef: initialize failed");
@@ -340,11 +315,7 @@ mod signal_tests {
 
         assert_eq!(action_of(libc::SIGUSR2).sa_sigaction, ours.sa_sigaction);
         assert!(!blocked(libc::SIGUSR2));
-        assert_eq!(
-            DELIVERED.load(Ordering::SeqCst),
-            1,
-            "the synthetic signal reached the restored handler"
-        );
+        assert_eq!(DELIVERED.load(Ordering::SeqCst), 1, "the synthetic signal reached the restored handler");
 
         unsafe { libc::sigaction(libc::SIGUSR2, &before, std::ptr::null_mut()) };
     }
@@ -382,8 +353,8 @@ extern "C" fn dray_send_event(this: &AnyObject, _sel: Sel, event: &NSEvent) {
 /// to that class at runtime and `sendEvent:` is swizzled to wrap Tao's.
 unsafe fn patch_nsapp(app: &NSApplication) {
     use objc2::ffi::{
-        class_addMethod, class_addProtocol, class_getInstanceMethod,
-        method_exchangeImplementations, objc_getProtocol,
+        class_addMethod, class_addProtocol, class_getInstanceMethod, method_exchangeImplementations,
+        objc_getProtocol,
     };
     let cls: *const AnyClass = app.class();
     let cls = cls as *mut AnyClass;
@@ -391,16 +362,8 @@ unsafe fn patch_nsapp(app: &NSApplication) {
         let imp: objc2::runtime::Imp = std::mem::transmute(imp);
         class_addMethod(cls, sel, imp, types.as_ptr());
     };
-    add(
-        sel!(isHandlingSendEvent),
-        is_handling_send_event as *const (),
-        c"B@:",
-    );
-    add(
-        sel!(setHandlingSendEvent:),
-        set_handling_send_event as *const (),
-        c"v@:B",
-    );
+    add(sel!(isHandlingSendEvent), is_handling_send_event as *const (), c"B@:");
+    add(sel!(setHandlingSendEvent:), set_handling_send_event as *const (), c"v@:B");
     add(sel!(draySendEvent:), dray_send_event as *const (), c"v@:@");
     let original = class_getInstanceMethod(cls, sel!(sendEvent:));
     let ours = class_getInstanceMethod(cls, sel!(draySendEvent:));
@@ -524,29 +487,18 @@ fn publish(session: &str) {
     if let Some(app) = APP.get() {
         let _ = app.emit(
             "browser_tabs",
-            TabsEvent {
-                session_id: session.to_string(),
-                tabs: tabs_of(session),
-            },
+            TabsEvent { session_id: session.to_string(), tabs: tabs_of(session) },
         );
     }
 }
 
 fn session_of(id: i32) -> Option<String> {
-    TABS.lock()
-        .unwrap()
-        .iter()
-        .find(|t| t.id == id)
-        .map(|t| t.session.clone())
+    TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.session.clone())
 }
 
 /// A handle to call CEF on, with the lock already released.
 fn browser_of(id: i32) -> Option<Browser> {
-    TABS.lock()
-        .unwrap()
-        .iter()
-        .find(|t| t.id == id)
-        .map(|t| t.browser.clone())
+    TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.browser.clone())
 }
 
 fn context_for(session: &str) -> Option<RequestContext> {
@@ -576,18 +528,8 @@ fn child_window_info() -> Result<WindowInfo, String> {
     let parent = window.ns_view().map_err(|e| e.to_string())?;
     let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
     let bounds = layout
-        .map(|l| Rect {
-            x: l.x as i32,
-            y: l.y as i32,
-            width: l.width as i32,
-            height: l.height as i32,
-        })
-        .unwrap_or(Rect {
-            x: 0,
-            y: 0,
-            width: 800,
-            height: 600,
-        });
+        .map(|l| Rect { x: l.x as i32, y: l.y as i32, width: l.width as i32, height: l.height as i32 })
+        .unwrap_or(Rect { x: 0, y: 0, width: 800, height: 600 });
     let mut info = WindowInfo::default().set_as_child(parent, &bounds);
     info.hidden = 1;
     Ok(info)
@@ -684,13 +626,9 @@ fn refocus_webview(from: &NSView) {
     if !holds {
         return;
     }
-    let Some(parent) = (unsafe { from.superview() }) else {
-        return;
-    };
+    let Some(parent) = (unsafe { from.superview() }) else { return };
     // By kind, not name: wry subclasses it as `WryWebView`.
-    let Some(wk) = AnyClass::get(c"WKWebView") else {
-        return;
-    };
+    let Some(wk) = AnyClass::get(c"WKWebView") else { return };
     let subviews = parent.subviews();
     if let Some(webview) = subviews.iter().find(|v| v.isKindOfClass(wk)) {
         window.makeFirstResponder(Some(&**webview));
@@ -702,13 +640,7 @@ fn refocus_webview(from: &NSView) {
 /// widget hidden, and a hidden widget drops mouse and key events (measured:
 /// a page listener saw nothing). `apply_layout` puts it back.
 fn reveal(id: i32) {
-    let view = TABS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|t| t.id == id)
-        .map(|t| t.view)
-        .unwrap_or(0);
+    let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.view).unwrap_or(0);
     if view == 0 {
         return;
     }
@@ -717,11 +649,7 @@ fn reveal(id: i32) {
         return;
     }
     let size = view.frame().size;
-    let size = if size.width < 1.0 || size.height < 1.0 {
-        NSSize::new(800.0, 600.0)
-    } else {
-        size
-    };
+    let size = if size.width < 1.0 || size.height < 1.0 { NSSize::new(800.0, 600.0) } else { size };
     view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), size));
     view.setHidden(false);
 }
@@ -880,9 +808,7 @@ wrap_life_span_handler! {
 fn update_tab(id: i32, f: impl FnOnce(&mut Tab)) {
     let session = {
         let mut tabs = TABS.lock().unwrap();
-        let Some(tab) = tabs.iter_mut().find(|t| t.id == id) else {
-            return;
-        };
+        let Some(tab) = tabs.iter_mut().find(|t| t.id == id) else { return };
         f(tab);
         tab.session.clone()
     };
@@ -966,23 +892,12 @@ static PICKING: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 /// pressed for a picker that no longer exists. From `on_load_start` on the
 /// main frame and from `on_before_close`.
 fn disarm_picker(id: i32) {
-    let was = PICKING
-        .lock()
-        .unwrap()
-        .as_mut()
-        .map(|s| s.remove(&id))
-        .unwrap_or(false);
+    let was = PICKING.lock().unwrap().as_mut().map(|s| s.remove(&id)).unwrap_or(false);
     if !was {
         return;
     }
     if let (Some(app), Some(session)) = (APP.get(), session_of(id)) {
-        let _ = app.emit(
-            "browser_pick",
-            PickEvent {
-                session_id: session,
-                element: None,
-            },
-        );
+        let _ = app.emit("browser_pick", PickEvent { session_id: session, element: None });
     }
 }
 
@@ -1268,24 +1183,8 @@ wrap_keyboard_handler! {
 /// Which session is on screen and where, in CSS pixels from the window's
 /// top-left. `visible: false` hides every tab.
 #[tauri::command]
-pub fn browser_layout(
-    session_id: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    visible: bool,
-) -> Result<(), String> {
-    *LAYOUT.lock().unwrap() = Some((
-        session_id,
-        Layout {
-            x,
-            y,
-            width,
-            height,
-            visible,
-        },
-    ));
+pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f64, visible: bool) -> Result<(), String> {
+    *LAYOUT.lock().unwrap() = Some((session_id, Layout { x, y, width, height, visible }));
     on_main(apply_layout)
 }
 
@@ -1297,10 +1196,7 @@ pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<()
     let (tx, rx) = mpsc::channel();
     on_main(move || {
         if !new_tab {
-            if let Some(frame) = active_id(&session_id)
-                .and_then(|id| browser_of(id))
-                .and_then(|b| b.main_frame())
-            {
+            if let Some(frame) = active_id(&session_id).and_then(|id| browser_of(id)).and_then(|b| b.main_frame()) {
                 frame.load_url(Some(&CefString::from(url.as_str())));
                 let _ = tx.send(Ok(()));
                 return;
@@ -1308,8 +1204,7 @@ pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<()
         }
         let _ = tx.send(create_tab(&session_id, &url, true));
     })?;
-    rx.recv_timeout(Duration::from_secs(10))
-        .map_err(|_| "Chromium did not answer".to_string())?
+    rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "Chromium did not answer".to_string())?
 }
 
 #[tauri::command]
@@ -1349,9 +1244,7 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
 #[tauri::command]
 pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
     on_main(move || {
-        let Some(browser) = active_id(&session_id).and_then(browser_of) else {
-            return;
-        };
+        let Some(browser) = active_id(&session_id).and_then(browser_of) else { return };
         match action.as_str() {
             "back" => browser.go_back(),
             "forward" => browser.go_forward(),
@@ -1386,12 +1279,8 @@ pub fn browser_devtools(session_id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
     on_main(move || {
-        let Some(id) = active_id(&session_id) else {
-            return;
-        };
-        let Some(frame) = browser_of(id).and_then(|b| b.main_frame()) else {
-            return;
-        };
+        let Some(id) = active_id(&session_id) else { return };
+        let Some(frame) = browser_of(id).and_then(|b| b.main_frame()) else { return };
         {
             let mut picking = PICKING.lock().unwrap();
             let set = picking.get_or_insert_with(HashSet::new);
@@ -1401,11 +1290,7 @@ pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
                 set.remove(&id);
             }
         }
-        let code = if start {
-            PICK_JS
-        } else {
-            "window.__drayPick && window.__drayPick.stop()"
-        };
+        let code = if start { PICK_JS } else { "window.__drayPick && window.__drayPick.stop()" };
         frame.execute_java_script(Some(&CefString::from(code)), None, 0);
     })
 }

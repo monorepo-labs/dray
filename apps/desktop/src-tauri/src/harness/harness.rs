@@ -103,13 +103,7 @@ mod report_tests {
 /// tags go out and nothing else: `raw` is the whole CLI line, carrying prompts,
 /// file contents and tool results, and `detail` is a serde message free to
 /// embed the value it choked on. Neither leaves the machine.
-pub async fn record_failure(
-    harness: Harness,
-    session_id: &str,
-    stage: &str,
-    detail: &str,
-    line: &str,
-) {
+pub async fn record_failure(harness: Harness, session_id: &str, stage: &str, detail: &str, line: &str) {
     let name = harness.wire_name();
     eprintln!("[{name} {stage} err] {detail}\n[{stage} err] raw line: {line}");
 
@@ -130,10 +124,7 @@ pub async fn record_failure(
 }
 
 /// Copies the child's stderr to this process's, for logging only.
-pub async fn read_stderr(
-    harness: Harness,
-    stderr: tokio::process::ChildStderr,
-) -> anyhow::Result<()> {
+pub async fn read_stderr(harness: Harness, stderr: tokio::process::ChildStderr) -> anyhow::Result<()> {
     use tokio::io::AsyncBufReadExt;
 
     let name = harness.wire_name();
@@ -360,11 +351,7 @@ mod install_tests {
                     b.install_command(),
                     "{a:?} and {b:?} share an install command"
                 );
-                assert_ne!(
-                    a.docs_url(),
-                    b.docs_url(),
-                    "{a:?} and {b:?} share a docs URL"
-                );
+                assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
                 assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
             }
         }

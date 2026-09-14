@@ -16,10 +16,7 @@ fn main() {
         .find_map(|a| a.strip_prefix("--framework-dir-path=").map(PathBuf::from))
         .unwrap_or_else(|| {
             let exe = std::env::current_exe().expect("no current exe");
-            exe.parent()
-                .expect("no exe dir")
-                .join("../../..")
-                .join(FRAMEWORK)
+            exe.parent().expect("no exe dir").join("../../..").join(FRAMEWORK)
         })
         .join("Chromium Embedded Framework");
     let c_path = std::ffi::CString::new(framework.as_os_str().as_encoded_bytes()).expect("path");
@@ -29,10 +26,6 @@ fn main() {
         framework.display()
     );
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
-    let code = cef::execute_process(
-        Some(args.as_main_args()),
-        None::<&mut cef::App>,
-        std::ptr::null_mut(),
-    );
+    let code = cef::execute_process(Some(args.as_main_args()), None::<&mut cef::App>, std::ptr::null_mut());
     std::process::exit(code);
 }

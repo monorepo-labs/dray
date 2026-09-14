@@ -153,13 +153,8 @@ mod pi_resolution_tests {
     async fn where_pi_resolves_to() {
         println!("pi -> {}", super::pi().await.display());
         // The mise branch alone, since any earlier hit hides it above.
-        let mise = std::env::home_dir()
-            .unwrap()
-            .join(".local/share/mise/installs");
-        println!(
-            "mise pi -> {:?}",
-            super::find_versioned(&mise, 2, &["bin", "", "pi"], "pi")
-        );
+        let mise = std::env::home_dir().unwrap().join(".local/share/mise/installs");
+        println!("mise pi -> {:?}", super::find_versioned(&mise, 2, &["bin", "", "pi"], "pi"));
     }
 }
 
@@ -394,11 +389,7 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
             1,
             &["installation/bin"],
         ),
-        (
-            home.join(".local/share/fnm/node-versions"),
-            1,
-            &["installation/bin"],
-        ),
+        (home.join(".local/share/fnm/node-versions"), 1, &["installation/bin"]),
         // installs/<tool>/<version>/bin — `<tool>` is `nodejs` for an `npm -g`
         // under an asdf node, or the plugin's own name.
         (home.join(".asdf/installs"), 2, &["bin"]),
@@ -411,11 +402,7 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
         // across every tool rather than `installs/<bin>`, since a CLI lands
         // under `node` (npm -g), its registry name (`claude`, `claude-code`,
         // `codex`) or `npm-<package>` depending on how it was asked for.
-        (
-            home.join(".local/share/mise/installs"),
-            2,
-            &["bin", "", bin],
-        ),
+        (home.join(".local/share/mise/installs"), 2, &["bin", "", bin]),
     ];
     versioned
         .iter()
@@ -539,10 +526,7 @@ mod tests {
 
         let layouts: &[&str] = &["bin", "", "pi"];
         assert_eq!(find_versioned(&root, 2, layouts, "pi"), Some(latest));
-        assert_eq!(
-            find_versioned(&root, 2, &["bin"], "claude"),
-            Some(under_node)
-        );
+        assert_eq!(find_versioned(&root, 2, &["bin"], "claude"), Some(under_node));
         assert_eq!(find_versioned(&root, 2, &["bin"], "pi"), None);
         assert_eq!(find_versioned(&root.join("nope"), 2, layouts, "pi"), None);
 

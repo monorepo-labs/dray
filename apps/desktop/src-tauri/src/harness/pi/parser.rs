@@ -30,11 +30,7 @@ use serde_json::Value;
 /// gets a variant of its own — folding the two turns the failure log from a
 /// signal into noise, which is the `tool_progress` lesson from Claude Code.
 #[derive(Debug, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum PiEvent {
     /// The answer to a command, carrying the id it was sent with.
     ///
@@ -65,14 +61,10 @@ pub enum PiEvent {
 
     /// A message opens. The `user` and `toolResult` ones are echoes of what Dray
     /// already knows and are dropped by the mapper.
-    MessageStart {
-        message: PiMessage,
-    },
+    MessageStart { message: PiMessage },
     /// The committed message. This wins over the deltas that preceded it, the
     /// same bargain Claude Code's `assistant` event makes.
-    MessageEnd {
-        message: PiMessage,
-    },
+    MessageEnd { message: PiMessage },
     /// One streaming frame. `usage` rides every one and is all zeros on a real
     /// provider until the message completes, so nothing reads it here — the
     /// context ring pulls `get_session_stats` instead.
@@ -332,11 +324,7 @@ pub enum ContentBlock {
 /// unidentified is the whole of pi's correlation — so `BlockRef.message_id` has
 /// to be minted by the mapper rather than read off the wire.
 #[derive(Debug, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum AssistantEvent {
     TextStart {
         content_index: u32,
@@ -600,10 +588,7 @@ mod tests {
     fn an_unmodelled_line_names_itself_and_says_if_it_blocks() {
         let plain = describe_line(r#"{"type":"weather_changed","sunny":true}"#);
         assert!(plain.contains("weather_changed"), "{plain}");
-        assert!(
-            !plain.contains("blocked"),
-            "nothing is waiting on it: {plain}"
-        );
+        assert!(!plain.contains("blocked"), "nothing is waiting on it: {plain}");
 
         let request = describe_line(r#"{"type":"consent_request","id":"abc"}"#);
         assert!(request.contains("consent_request"), "{request}");

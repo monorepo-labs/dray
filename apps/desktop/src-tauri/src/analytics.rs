@@ -332,10 +332,7 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
     // would suppress every later report that run made, including the ones the
     // reader turned back on to get.
     if let Some(daily_key) = daily_key {
-        if !claim_day(
-            daily_key,
-            chrono::Local::now().format("%Y-%m-%d").to_string(),
-        ) {
+        if !claim_day(daily_key, chrono::Local::now().format("%Y-%m-%d").to_string()) {
             return;
         }
     }

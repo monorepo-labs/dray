@@ -63,19 +63,11 @@ struct Known {
 }
 
 const fn editor(bundle: &'static str, name: &'static str) -> Known {
-    Known {
-        bundle,
-        name,
-        kind: ExternalAppKind::Editor,
-    }
+    Known { bundle, name, kind: ExternalAppKind::Editor }
 }
 
 const fn terminal(bundle: &'static str, name: &'static str) -> Known {
-    Known {
-        bundle,
-        name,
-        kind: ExternalAppKind::Terminal,
-    }
+    Known { bundle, name, kind: ExternalAppKind::Terminal }
 }
 
 /// The apps this menu knows how to hand a path to, in the order drawn.
@@ -551,8 +543,7 @@ mod tests {
                 app.kind,
                 app.name,
                 app.path,
-                app.icon
-                    .map_or("none".into(), |icon| format!("{}b", icon.len()))
+                app.icon.map_or("none".into(), |icon| format!("{}b", icon.len()))
             );
         }
     }

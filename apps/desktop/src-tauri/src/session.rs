@@ -5,10 +5,12 @@ use crate::{
         MessageSender, PermissionBehavior,
     },
     git,
-    harness::claude_code::{
-        self,
-        control::{ControlLine, ControlRequest},
-        permissions::{answer_response, decision_response, PendingPermissions, Reply},
+    harness::{
+        claude_code::{
+            self,
+            control::{ControlLine, ControlRequest},
+            permissions::{answer_response, decision_response, PendingPermissions, Reply},
+        },
     },
     issues::{self, IssueRef},
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
@@ -523,13 +525,10 @@ impl SessionManager {
             // sidebar row pointing at a directory that never existed and can
             // never start. `HEAD` where there is no remote, matching what the
             // CLI itself falls back to when the fetch fails.
-            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref)
-            {
-                (false, true, None) => Some(
-                    git::default_base(cwd)
-                        .await
-                        .unwrap_or_else(|| "HEAD".into()),
-                ),
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
+                (false, true, None) => {
+                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
+                }
                 _ => None,
             };
             let base_ref = base_ref.or(resolved_base.as_deref());
@@ -1260,11 +1259,7 @@ impl SessionManager {
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
-        self.sessions
-            .lock()
-            .await
-            .get(session_id)
-            .and_then(|s| s.child.id())
+        self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
     }
 
     /// The child goes first and its lock is released before the disk work, so a
@@ -1703,11 +1698,7 @@ impl Session {
             bail!("that pi session is no longer running");
         }
 
-        write_line(
-            self.stdin.lines()?,
-            &ControlLine::new(ControlRequest::Interrupt),
-        )
-        .await?;
+        write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
 
         Ok(())
     }
@@ -1800,9 +1791,7 @@ impl Session {
                     .decision
                     .clone()
                     .context("this option carries no decision to send")?;
-                thread
-                    .client
-                    .respond(*rpc_id, json!({"decision": decision}))?;
+                thread.client.respond(*rpc_id, json!({"decision": decision}))?;
             }
             _ => {
                 write_line(
@@ -2023,10 +2012,9 @@ async fn deliver_prompt(
     // that only grows. Failing after it leaves a bubble with no turn behind it,
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
-        Transport::Rpc(thread) => Some((
-            thread,
-            crate::harness::codex::turn_input(thread, &text).await?,
-        )),
+        Transport::Rpc(thread) => {
+            Some((thread, crate::harness::codex::turn_input(thread, &text).await?))
+        }
         _ => None,
     };
 
@@ -2284,14 +2272,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
 
         tokio::spawn(async move {
             flush_queued(
-                &session_id,
-                harness,
-                &queued,
-                &seq,
-                &events,
-                &transport,
-                &status,
-                &app,
+                &session_id, harness, &queued, &seq, &events, &transport, &status, &app,
             )
             .await;
         });
@@ -2602,7 +2583,7 @@ mod tests {
     /// as long as it ran.
     #[test]
     fn only_an_auth_failure_outranks_a_background_task() {
-        // turn_in_flight, busy, settings_changed
+        // auth_failed, turn_in_flight, busy, settings_changed
         assert!(!respawn_needed(false, false, false, false), "nothing to do");
         assert!(
             respawn_needed(false, false, false, true),

@@ -148,9 +148,7 @@ pub async fn init(
         .spawn()
         .context("couldn't start claude")?;
 
-    let stdin = Arc::new(Mutex::new(
-        child.stdin.take().context("failed to take stdin")?,
-    ));
+    let stdin = Arc::new(Mutex::new(child.stdin.take().context("failed to take stdin")?));
     let stdout = child.stdout.take().context("failed to take stdout")?;
     let stderr = child.stderr.take().context("failed to take stderr")?;
 
@@ -291,14 +289,7 @@ async fn read_stdout(
             request: parser::ControlRequest::Unsupported,
         } = &claude_event
         {
-            record_failure(
-                ClaudeCode,
-                session_id,
-                "unsupported_request",
-                "unanswerable",
-                &line,
-            )
-            .await;
+            record_failure(ClaudeCode, session_id, "unsupported_request", "unanswerable", &line).await;
 
             let denial = permissions::auto_deny_response(
                 request_id,
@@ -314,14 +305,7 @@ async fn read_stdout(
         // has never seen. Recorded alongside outright failures because it is
         // the same coverage gap; the catch-all only stops it costing the line.
         if let ClaudeCodeEvent::System(parser::SystemEvent::Unrecognized) = &claude_event {
-            record_failure(
-                ClaudeCode,
-                session_id,
-                "unknown_subtype",
-                "unmodeled system subtype",
-                &line,
-            )
-            .await;
+            record_failure(ClaudeCode, session_id, "unknown_subtype", "unmodeled system subtype", &line).await;
         }
 
         let agent_event = match mapper.map(claude_event) {

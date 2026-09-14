@@ -92,9 +92,7 @@ mod tests {
     /// a stop that silently did nothing.
     #[test]
     fn stop_task_names_the_task_not_its_spawning_call() {
-        let line = ControlLine::new(ControlRequest::StopTask {
-            task_id: "bhkk97xab",
-        });
+        let line = ControlLine::new(ControlRequest::StopTask { task_id: "bhkk97xab" });
         let value = serde_json::to_value(&line).unwrap();
 
         assert_eq!(

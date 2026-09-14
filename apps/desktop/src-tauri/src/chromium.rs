@@ -80,20 +80,12 @@ pub enum ChromiumStatus {
     /// Not on disk and nothing fetching it: before the first attempt, or
     /// after Remove.
     Absent,
-    Downloading {
-        received: u64,
-        total: u64,
-    },
+    Downloading { received: u64, total: u64 },
     /// The tarball is verified and being unpacked, ~10s.
     Extracting,
     #[serde(rename_all = "camelCase")]
-    Ready {
-        version: String,
-        size_bytes: u64,
-    },
-    Failed {
-        message: String,
-    },
+    Ready { version: String, size_bytes: u64 },
+    Failed { message: String },
 }
 
 static STATUS: Mutex<Option<ChromiumStatus>> = Mutex::new(None);
@@ -102,11 +94,7 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static WAKE: Notify = Notify::const_new();
 
 pub fn status() -> ChromiumStatus {
-    STATUS
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap_or(ChromiumStatus::Absent)
+    STATUS.lock().unwrap().clone().unwrap_or(ChromiumStatus::Absent)
 }
 
 fn set(app: &AppHandle, status: ChromiumStatus) {
@@ -134,10 +122,7 @@ pub fn installed_framework() -> Option<PathBuf> {
 pub fn not_ready_reason() -> String {
     match status() {
         ChromiumStatus::Downloading { received, total } => {
-            format!(
-                "Chromium is still downloading ({}%)",
-                percent(received, total)
-            )
+            format!("Chromium is still downloading ({}%)", percent(received, total))
         }
         ChromiumStatus::Extracting => "Chromium is still downloading (unpacking)".into(),
         ChromiumStatus::Failed { message } => {
@@ -171,13 +156,7 @@ pub fn start(app: AppHandle, present: Option<PathBuf>) {
         // Said before the wait, or a tab asked for in these seconds is told
         // to go and press Download in Settings for a download about to start.
         if let Some(tarball) = tarball() {
-            set(
-                &app,
-                ChromiumStatus::Downloading {
-                    received: 0,
-                    total: tarball.size,
-                },
-            );
+            set(&app, ChromiumStatus::Downloading { received: 0, total: tarball.size });
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
         run(app).await;
@@ -208,15 +187,8 @@ async fn run(app: AppHandle) {
             Ok(()) => break,
             Err(e) => {
                 eprintln!("[chromium download err] {e:#}");
-                set(
-                    &app,
-                    ChromiumStatus::Failed {
-                        message: format!("{e:#}"),
-                    },
-                );
-                let Some(secs) = backoff.get(attempt) else {
-                    break;
-                };
+                set(&app, ChromiumStatus::Failed { message: format!("{e:#}") });
+                let Some(secs) = backoff.get(attempt) else { break };
                 attempt += 1;
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(*secs)) => {}
@@ -234,18 +206,10 @@ async fn run(app: AppHandle) {
 async fn download(app: &AppHandle) -> Result<()> {
     let tarball = tarball().context("no Chromium build for this architecture")?;
     let dir = cef_dir();
-    fs::create_dir_all(&dir)
-        .await
-        .context("could not create ~/.dray/cef")?;
+    fs::create_dir_all(&dir).await.context("could not create ~/.dray/cef")?;
     let part = dir.join(format!("{}.part", tarball.name()));
 
-    set(
-        app,
-        ChromiumStatus::Downloading {
-            received: 0,
-            total: tarball.size,
-        },
-    );
+    set(app, ChromiumStatus::Downloading { received: 0, total: tarball.size });
     if let Err(e) = stream_to(app, tarball, &part).await {
         let _ = fs::remove_file(&part).await;
         return Err(e);
@@ -269,10 +233,7 @@ async fn download(app: &AppHandle) -> Result<()> {
         .context("could not run tar")?;
     let _ = fs::remove_file(&part).await;
     if !out.status.success() {
-        bail!(
-            "could not unpack the archive: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        bail!("could not unpack the archive: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     let framework = stage.join(FRAMEWORK);
     if !framework.join(LIBRARY).is_file() {
@@ -306,9 +267,7 @@ async fn stream_to(app: &AppHandle, tarball: &Tarball, part: &Path) -> Result<()
 /// Everything in `~/.dray/cef` but the current version: older frameworks,
 /// stale `.part`s from a killed run.
 async fn sweep(dir: &Path) {
-    let Ok(mut entries) = fs::read_dir(dir).await else {
-        return;
-    };
+    let Ok(mut entries) = fs::read_dir(dir).await else { return };
     while let Ok(Some(entry)) = entries.next_entry().await {
         if entry.file_name() == VERSION.as_ref() as &std::ffi::OsStr {
             continue;
@@ -327,16 +286,11 @@ async fn ready(framework: &Path) -> ChromiumStatus {
     let size_bytes = tokio::task::spawn_blocking(move || dir_size(&path))
         .await
         .unwrap_or(0);
-    ChromiumStatus::Ready {
-        version: VERSION.into(),
-        size_bytes,
-    }
+    ChromiumStatus::Ready { version: VERSION.into(), size_bytes }
 }
 
 fn dir_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
     entries
         .flatten()
         .map(|e| {
@@ -419,9 +373,7 @@ mod tests {
             X64.name(),
             "cef_binary_151.3.24+g2384915+chromium-151.0.7922.174_macosx64_minimal.tar.bz2"
         );
-        assert!(ARM64
-            .url()
-            .starts_with("https://cef-builds.spotifycdn.com/cef_binary_151.3.24%2B"));
+        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_151.3.24%2B"));
         assert!(!ARM64.url().contains('+'));
     }
 

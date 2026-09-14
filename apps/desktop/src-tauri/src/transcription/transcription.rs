@@ -89,9 +89,7 @@ pub enum TranscribeOutcome {
     // *variants*, and a struct variant's fields keep their snake case without
     // this — which crosses the bridge as `audio_path` and reads as undefined.
     #[serde(rename_all = "camelCase")]
-    NeedsModel {
-        audio_path: Option<String>,
-    },
+    NeedsModel { audio_path: Option<String> },
     /// The device fed nothing but zeros — permission, or a muted input.
     NoAudio,
     /// Audio arrived and the model found no words in it. Ordinary.
@@ -478,9 +476,7 @@ pub async fn retry_transcription(
     path: String,
 ) -> Result<TranscribeOutcome, String> {
     let path = PathBuf::from(path);
-    let audio = recordings::read(&path)
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
     Ok(transcribe_audio(&state, audio, Some(path)).await)
 }

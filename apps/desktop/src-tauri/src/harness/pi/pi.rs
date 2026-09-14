@@ -35,8 +35,8 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -534,14 +534,7 @@ async fn read_stdout(
             Incoming::Event(raw) => raw,
             Incoming::Response { matched: true } => continue,
             Incoming::Response { matched: false } => {
-                record_failure(
-                    Pi,
-                    &session_id,
-                    "stray_response",
-                    "no caller waiting",
-                    &line,
-                )
-                .await;
+                record_failure(Pi, &session_id, "stray_response", "no caller waiting", &line).await;
                 continue;
             }
             Incoming::Malformed => {
@@ -563,14 +556,7 @@ async fn read_stdout(
         // are — it is a coverage gap, and the catch-all only stops it costing
         // the line.
         if matches!(event, parser::PiEvent::Unknown) {
-            record_failure(
-                Pi,
-                &session_id,
-                "unknown_line",
-                &parser::describe_line(&line),
-                &line,
-            )
-            .await;
+            record_failure(Pi, &session_id, "unknown_line", &parser::describe_line(&line), &line).await;
             continue;
         }
 
@@ -614,10 +600,7 @@ async fn read_stdout(
         // `extension_ui_response` carrying this id comes back, and
         // `ctx.ui.confirm` has no timeout, so silence stalls the session with a
         // complete transcript on screen and nothing saying why.
-        if let parser::PiEvent::ExtensionUiRequest {
-            id, method, title, ..
-        } = &event
-        {
+        if let parser::PiEvent::ExtensionUiRequest { id, method, title, .. } = &event {
             // Four of the nine block. The five in `ANNOUNCEMENTS` are output:
             // pi mints an id for them and registers no waiter, so a reply is
             // dropped. Drawing them is wanted and not built, and dropping them
@@ -917,8 +900,7 @@ mod tests {
                 "round {round}: a dialog survived the Stop (registered {registered}, drained {drained})"
             );
             assert_eq!(
-                registered,
-                drained == 1,
+                registered, drained == 1,
                 "round {round}: a registered dialog has to be the one drained"
             );
         }

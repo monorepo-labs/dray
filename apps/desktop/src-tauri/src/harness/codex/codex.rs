@@ -13,9 +13,9 @@
 //! app-server behind a Node process.
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
-use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::harness::{read_stderr, record_failure, Harness::Codex};
 use crate::models::{Effort, Model};
+use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
 use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
@@ -192,8 +192,7 @@ pub async fn init(
         let queued = queued.clone();
         let seq = seq.clone();
         async move {
-            if let Err(error) =
-                read_stdout(stdout, reader, ready_rx, events, status, queued, seq).await
+            if let Err(error) = read_stdout(stdout, reader, ready_rx, events, status, queued, seq).await
             {
                 eprintln!("Failed to read Codex stdout: {error}");
             }
@@ -206,20 +205,27 @@ pub async fn init(
         }
     });
 
-    let thread_id =
-        match open_thread(&client, session_id, &settings, session_cwd, is_new_session).await {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                // Everything above is post-spawn, so the child is running and about
-                // to be dropped with nobody left to talk to it. Killed rather than
-                // dropped: a `Child` is not reaped on drop, so every failed start
-                // would leave an app-server alive for the life of the app — and a
-                // handshake that timed out is exactly the child least likely to
-                // notice its stdin has gone.
-                let _ = child.kill().await;
-                return Err(error);
-            }
-        };
+    let thread_id = match open_thread(
+        &client,
+        session_id,
+        &settings,
+        session_cwd,
+        is_new_session,
+    )
+    .await
+    {
+        Ok(thread_id) => thread_id,
+        Err(error) => {
+            // Everything above is post-spawn, so the child is running and about
+            // to be dropped with nobody left to talk to it. Killed rather than
+            // dropped: a `Child` is not reaped on drop, so every failed start
+            // would leave an app-server alive for the life of the app — and a
+            // handshake that timed out is exactly the child least likely to
+            // notice its stdin has gone.
+            let _ = child.kill().await;
+            return Err(error);
+        }
+    };
 
     let thread = Thread {
         client,
@@ -315,7 +321,11 @@ async fn start_thread(client: &RpcClient, settings: &TurnSettings, cwd: &str) ->
 /// between runs — which is every effort or model change, since those respawn
 /// the child — would go on running the old one while the index reported the
 /// new. Silent, because nothing on the wire disagrees.
-async fn resume_thread(client: &RpcClient, thread_id: &str, settings: &TurnSettings) -> Result<()> {
+async fn resume_thread(
+    client: &RpcClient,
+    thread_id: &str,
+    settings: &TurnSettings,
+) -> Result<()> {
     let mut params = settings.thread_params();
     params["threadId"] = json!(thread_id);
 
@@ -437,8 +447,7 @@ async fn read_stdout(
                         if let Err(err) =
                             raise_permission(&handles, &mut mapper, id, kind, params).await
                         {
-                            record_failure(
-                                Codex,
+                            record_failure(Codex,
                                 &handles.session_id,
                                 "unsupported_request",
                                 &err.to_string(),
@@ -449,14 +458,8 @@ async fn read_stdout(
                         }
                     }
                     None => {
-                        record_failure(
-                            Codex,
-                            &handles.session_id,
-                            "unsupported_request",
-                            &method,
-                            &line,
-                        )
-                        .await;
+                        record_failure(Codex, &handles.session_id, "unsupported_request", &method, &line)
+                            .await;
 
                         // Not an approval, so there is nothing to put to the
                         // user and nothing honest to answer. A protocol error
@@ -481,14 +484,7 @@ async fn read_stdout(
             Incoming::Response { .. } => continue,
 
             Incoming::Malformed => {
-                record_failure(
-                    Codex,
-                    &handles.session_id,
-                    "parse",
-                    "not a JSON-RPC message",
-                    &line,
-                )
-                .await;
+                record_failure(Codex, &handles.session_id, "parse", "not a JSON-RPC message", &line).await;
                 continue;
             }
         };
@@ -749,10 +745,7 @@ mod tests {
     /// asked not to stop, stop.
     #[test]
     fn stance_widens_into_both_settings() {
-        assert_eq!(
-            approval_for(ApprovalPolicy::Plan),
-            ("on-request", "read-only")
-        );
+        assert_eq!(approval_for(ApprovalPolicy::Plan), ("on-request", "read-only"));
         assert_eq!(
             approval_for(ApprovalPolicy::BypassPermissions),
             ("never", "danger-full-access")
@@ -1056,10 +1049,7 @@ mod tests {
         assert!(!inputs.is_empty(), "the capture drew no shell row");
         for input in inputs {
             assert!(input.get("cwd").is_none(), "cwd leaked into a shell row");
-            assert!(
-                input.get("command").is_some(),
-                "a shell row lost its command"
-            );
+            assert!(input.get("command").is_some(), "a shell row lost its command");
         }
     }
 
@@ -1086,11 +1076,7 @@ mod tests {
             })
             .collect();
 
-        assert!(
-            plans.len() >= 2,
-            "the capture rewrote the plan; drew {}",
-            plans.len()
-        );
+        assert!(plans.len() >= 2, "the capture rewrote the plan; drew {}", plans.len());
         let steps = plans[0].get("plan").and_then(|p| p.as_array());
         assert!(
             steps.is_some_and(|s| !s.is_empty()),
@@ -1195,10 +1181,7 @@ mod tests {
 
         // The card sits beside a title and a running orb, so the agent's own
         // identifier is written as prose rather than pasted in.
-        assert_eq!(
-            mapper::agent_name(Some("/root/count_to_three")),
-            "Count to three"
-        );
+        assert_eq!(mapper::agent_name(Some("/root/count_to_three")), "Count to three");
         assert_eq!(mapper::agent_name(None), "Agent");
 
         let spawn = events
@@ -1263,7 +1246,9 @@ mod tests {
         // into the ring, describing a conversation the reader is not having.
         let usage = events
             .iter()
-            .filter(|e| matches!(&e.payload, crate::events::AgentEventPayload::UsageUpdate(_)))
+            .filter(|e| {
+                matches!(&e.payload, crate::events::AgentEventPayload::UsageUpdate(_))
+            })
             .count();
         assert_eq!(usage, 6, "a subagent's usage reached the main context ring");
 
@@ -1283,14 +1268,12 @@ mod tests {
         // rides the *main* thread — so an unstamped one matches no run and
         // leaves a finished subagent shimmering for the rest of the session.
         assert!(
-            events
-                .iter()
-                .any(|e| e.subagent.as_ref().is_some_and(|r| r.id == spawn)
-                    && matches!(
-                        &e.payload,
-                        crate::events::AgentEventPayload::SubagentCompleted { status, .. }
-                            if status == "completed"
-                    )),
+            events.iter().any(|e| e.subagent.as_ref().is_some_and(|r| r.id == spawn)
+                && matches!(
+                    &e.payload,
+                    crate::events::AgentEventPayload::SubagentCompleted { status, .. }
+                        if status == "completed"
+                )),
             "the run never settled"
         );
     }
@@ -1422,9 +1405,13 @@ mod tests {
             crate::models::find_model(&default).expect("the default Codex model should be listed");
         let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto);
 
-        let thread_id = start_thread(&client, &settings, std::env::temp_dir().to_str().unwrap())
-            .await
-            .expect("thread/start should succeed");
+        let thread_id = start_thread(
+            &client,
+            &settings,
+            std::env::temp_dir().to_str().unwrap(),
+        )
+        .await
+        .expect("thread/start should succeed");
 
         assert!(!thread_id.is_empty(), "a thread id came back");
         println!("live thread: {thread_id}");

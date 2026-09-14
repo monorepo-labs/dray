@@ -344,16 +344,18 @@ pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()>
 /// pair that would drift. Callers that need every entry (`set_*`, `get_*`) still
 /// use [`list_session_index_items`] directly.
 #[tauri::command]
-pub async fn list_session_index_items(archived: bool) -> Result<Vec<SessionIndexItem>, Fail> {
-    Ok(filter_by_archived(read_index().await?, archived))
+pub async fn list_session_index_items(
+    archived: bool,
+) -> Result<Vec<SessionIndexItem>, Fail> {
+    Ok(filter_by_archived(
+        read_index().await?,
+        archived,
+    ))
 }
 
 /// Split out from the async read so it can be tested without an `index.json`.
 fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
-    items
-        .into_iter()
-        .filter(|i| i.archived == archived)
-        .collect()
+    items.into_iter().filter(|i| i.archived == archived).collect()
 }
 
 impl SessionIndexItem {
@@ -547,7 +549,8 @@ pub async fn resolve_unclaimed_worktree_name(
         .unwrap_or_default();
 
     let taken = |name: &str| {
-        claimed.iter().any(|c| c == name) || branches.contains(&crate::git::worktree_branch(name))
+        claimed.iter().any(|c| c == name)
+            || branches.contains(&crate::git::worktree_branch(name))
     };
 
     // A name the user asked for is answered, never silently swapped — so a
@@ -621,22 +624,22 @@ pub fn worktree_path(project_path: &str, name: &str) -> String {
 const ADJECTIVES: [&str; 32] = [
     "amber", "brisk", "calm", "dusky", "eager", "fleet", "gentle", "hazy", "ivory", "jolly",
     "keen", "lucid", "mellow", "noble", "opal", "quiet", "rapid", "sunny", "tidy", "vivid",
-    "witty", "young", "zesty", "bold", "crisp", "deft", "fair", "glad", "humble", "kind", "lively",
-    "merry",
+    "witty", "young", "zesty", "bold", "crisp", "deft", "fair", "glad", "humble", "kind",
+    "lively", "merry",
 ];
 
 const COLORS: [&str; 32] = [
     "azure", "bronze", "crimson", "denim", "emerald", "fuchsia", "gold", "hazel", "indigo", "jade",
-    "khaki", "lilac", "maroon", "navy", "olive", "plum", "rose", "sage", "teal", "umber", "violet",
-    "wheat", "coral", "cobalt", "ochre", "pearl", "ruby", "slate", "topaz", "cream", "mint",
-    "peach",
+    "khaki", "lilac", "maroon", "navy", "olive", "plum", "rose", "sage", "teal", "umber",
+    "violet", "wheat", "coral", "cobalt", "ochre", "pearl", "ruby", "slate", "topaz", "cream",
+    "mint", "peach",
 ];
 
 const NOUNS: [&str; 32] = [
     "atlas", "beacon", "cedar", "delta", "ember", "fjord", "grove", "harbor", "isle", "jetty",
     "kite", "lantern", "meadow", "nimbus", "orchard", "pebble", "quarry", "ridge", "summit",
-    "tundra", "valley", "willow", "yarrow", "zephyr", "bay", "canyon", "dune", "falcon", "glacier",
-    "heron", "inlet", "lagoon",
+    "tundra", "valley", "willow", "yarrow", "zephyr", "bay", "canyon", "dune", "falcon",
+    "glacier", "heron", "inlet", "lagoon",
 ];
 
 /// Three-word name from v7 UUID entropy — avoids a `rand` dependency. List
@@ -829,7 +832,8 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
 
     match item.issues.iter_mut().find(|linked| {
         linked.tracker == issue.tracker
-            && (linked.id == issue.id || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
+            && (linked.id == issue.id
+                || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
     }) {
         Some(existing) => *existing = issue,
         None => item.issues.push(issue),
@@ -954,7 +958,9 @@ pub async fn set_session_status(
 /// checkout of its own", which is the fact that settles which of the two wins.
 ///
 /// Returns the entry as written, or `None` for an id the index doesn't hold.
-pub async fn relocate_session_to_project(session_id: &str) -> Result<Option<SessionIndexItem>> {
+pub async fn relocate_session_to_project(
+    session_id: &str,
+) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
@@ -1652,10 +1658,7 @@ mod tests {
         // A real level it can run, one rung below what was asked for.
         assert!(matches!(read[0].effort, Some(OlderBuildEffort::Max)));
         // And the truth rides along in the map that carries it back untouched.
-        assert_eq!(
-            read[0].unknown.get("effortAbove"),
-            Some(&Value::from("ultra"))
-        );
+        assert_eq!(read[0].unknown.get("effortAbove"), Some(&Value::from("ultra")));
 
         // Nothing anywhere in the file spells the variant it cannot parse.
         assert!(!written.contains("\"effort\":\"ultra\""));

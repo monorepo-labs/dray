@@ -996,10 +996,7 @@ fn mcp_text(result: Option<&serde_json::Value>, error: Option<&serde_json::Value
         };
     }
 
-    let Some(content) = result
-        .and_then(|r| r.get("content"))
-        .and_then(|c| c.as_array())
-    else {
+    let Some(content) = result.and_then(|r| r.get("content")).and_then(|c| c.as_array()) else {
         return String::new();
     };
 

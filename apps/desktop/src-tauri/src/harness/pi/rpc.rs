@@ -503,9 +503,7 @@ mod tests {
             pending: Pending::new(),
         };
 
-        client
-            .send(&json!({"type": "before"}))
-            .expect("stdin is open");
+        client.send(&json!({"type": "before"})).expect("stdin is open");
         client.close();
         client
             .send(&json!({"type": "after"}))
