@@ -2432,62 +2432,33 @@ pub async fn flush_queued(
     status: &Arc<Mutex<StatusTracker>>,
     app: &AppHandle,
 ) {
-    // Drained under one lock so a cancel arriving mid-flush either takes a
-    // message back before any of this or finds nothing — never races a
-    // half-written batch.
-    //
-    // fx runs one prompt per turn, so it takes one message per flush and the
-    // rest wait for the next turn's end. A message that fails to send starts
-    // no turn, and so no flush that would reach the next — hence the loop:
-    // keep taking until one is delivered or nothing is left. Every other
-    // child absorbs several lines at one boundary and takes the whole batch.
-    let one_per_turn = matches!(transport, Transport::Fx(_));
-    let mut delivered = 0;
-
-    while delivered == 0 {
-        let batch: Vec<QueuedMessage> = {
-            let mut held = queued.lock().await;
-            if one_per_turn && !held.is_empty() {
-                vec![held.remove(0)]
-            } else {
-                std::mem::take(&mut *held)
-            }
-        };
-
-        if batch.is_empty() {
-            break;
-        }
-
-        deliver_batch(
-            batch, session_id, harness, seq, events, transport, app, &mut delivered,
-        )
-        .await;
-
-        if !one_per_turn {
-            break;
-        }
-    }
-
-    // fx reserved its next turn in `ingest` before this ran, so a delivery that
-    // landed needs no status change — the session is already `InProgress`. What
-    // does need one is the reservation delivering *nothing*: the whole queue
-    // failed to send, or a cancel emptied it after the reservation. Give the
-    // turn back, or the session hangs `InProgress` on a prompt no child holds.
-    if one_per_turn {
-        if delivered == 0 {
-            if let Some(next) = status.lock().await.release_reserved_turn() {
-                publish_status(session_id, next, app).await;
-            }
-        }
+    // fx drains one prompt per turn and reserves the next in `ingest`, so its
+    // release is a two-lock affair the batch model has no answer to. Its own
+    // path.
+    if matches!(transport, Transport::Fx(_)) {
+        flush_fx(session_id, harness, queued, seq, events, transport, status, app).await;
         return;
     }
 
-    // Every other transport takes the whole batch at a boundary and is not
-    // reserved ahead. A delivered batch at `turn_completed` opens a turn the
-    // CLI has not announced yet, so without this the composer reads idle for
-    // the second or so until `init` arrives — offering to send into a session
-    // that is already working. Redundant at a tool boundary, where the session
-    // is in-progress and `on_send` reports no change.
+    // Every other transport takes the whole batch at a boundary. Drained under
+    // one lock so a cancel arriving mid-flush either takes a message back before
+    // any of this or finds nothing — never races a half-written batch.
+    let batch: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
+    if batch.is_empty() {
+        return;
+    }
+
+    let mut delivered = 0;
+    deliver_batch(
+        batch, session_id, harness, seq, events, transport, app, &mut delivered,
+    )
+    .await;
+
+    // A delivered batch at `turn_completed` opens a turn the CLI has not
+    // announced yet, so without this the composer reads idle for the second or
+    // so until `init` arrives — offering to send into a session that is already
+    // working. Redundant at a tool boundary, where the session is in-progress
+    // and `on_send` reports no change.
     //
     // Only where something actually reached the child. A batch that all failed
     // starts no turn, and reporting one would leave the session running forever
@@ -2497,6 +2468,80 @@ pub async fn flush_queued(
     }
     if let Some(next) = status.lock().await.on_send() {
         publish_status(session_id, next, app).await;
+    }
+}
+
+/// The fx flush: one prompt per turn, and the release symmetric to the
+/// reservation `ingest` makes.
+///
+/// The empty-check and the release of the reservation are done **while holding
+/// both status and queued** — the crux, symmetric to `fx_queue_if_in_flight`
+/// on the send side. Release the queue lock before marking the turn Completed
+/// and a send can enqueue in the gap, leaving a prompt with no turn to flush
+/// it. Holding both, a send either lands its message before the empty-check
+/// (drained here, or reserved for the next turn) or reads the released
+/// Completed after and delivers directly.
+///
+/// A message that fails to send starts no turn and so no flush to reach the
+/// next, hence the loop: keep taking until one is delivered or the queue is
+/// empty. Locks are dropped across each delivery, so a cancel or a send can
+/// move the queue between attempts — which the next iteration re-reads.
+///
+/// Order is status→queued, as everywhere; nothing holds queued while awaiting
+/// status, so no deadlock.
+async fn flush_fx(
+    session_id: &str,
+    harness: Harness,
+    queued: &QueuedMessages,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    transport: &Transport,
+    status: &Arc<Mutex<StatusTracker>>,
+    app: &AppHandle,
+) {
+    loop {
+        let message = {
+            let mut tracker = status.lock().await;
+            let mut held = queued.lock().await;
+            match held.is_empty() {
+                // Nothing to hand over: the whole queue failed to send, or a
+                // cancel emptied it. Give the reserved turn back under both
+                // locks, or the session hangs `InProgress` on a prompt no child
+                // holds — and a send racing this either queued before the check
+                // (so it is not empty) or reads Completed after and delivers.
+                true => {
+                    let released = tracker.release_reserved_turn();
+                    drop(held);
+                    drop(tracker);
+                    if let Some(next) = released {
+                        publish_status(session_id, next, app).await;
+                    }
+                    return;
+                }
+                false => held.remove(0),
+            }
+        };
+
+        // Delivered outside the locks — attachment prep, the log write and
+        // `start_turn` all await. On success the reservation stands as
+        // `InProgress` and the turn is the delivered prompt's; on failure
+        // `deliver_batch` reports it and the loop takes the next.
+        let mut delivered = 0;
+        deliver_batch(
+            vec![message],
+            session_id,
+            harness,
+            seq,
+            events,
+            transport,
+            app,
+            &mut delivered,
+        )
+        .await;
+
+        if delivered > 0 {
+            return;
+        }
     }
 }
 
