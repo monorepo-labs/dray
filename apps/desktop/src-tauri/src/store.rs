@@ -356,11 +356,13 @@ pub async fn list_session_index_items(
 /// The repo root for an entry whose `cwd` is gone, or `None` where none of the
 /// candidates is on disk.
 ///
-/// Tried in order of how much the entry itself claims: the recorded project
-/// root first, then the root each of the two paths sits under, since
-/// `.claude/worktrees/<name>` is the one shape a worktree path ever takes here.
-/// The second is not hypothetical — `dray new` used to record the *caller's*
-/// worktree as the project, so those entries dangle on both fields at once.
+/// **A managed worktree is never the answer, even where it is the recorded
+/// project and still on disk.** `dray new` used to record the *caller's* own
+/// worktree as the project, and that caller is usually a live session — so
+/// taking `project_path` at its word would move this session into another
+/// session's checkout, which is the one thing a worktree per session exists to
+/// prevent. The repo above it is tried first for that reason, and the recorded
+/// project only where it names no worktree at all.
 ///
 /// `None` is the important answer: a project on an unmounted drive reads
 /// exactly like a deleted one from here, and rewriting it would move the
@@ -368,13 +370,13 @@ pub async fn list_session_index_items(
 /// PR tab until the drive is back.
 fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) -> Option<String> {
     [
-        Some(item.project_path.as_str()),
         worktree_root_of(&item.project_path),
+        Some(item.project_path.as_str()),
         worktree_root_of(&item.cwd),
     ]
     .into_iter()
     .flatten()
-    .find(|root| *root != item.cwd && dir_exists(root))
+    .find(|root| dir_exists(root))
     .map(str::to_string)
 }
 
@@ -382,6 +384,12 @@ fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) ->
 ///
 /// Split on the first occurrence, so a worktree made inside a worktree still
 /// answers the real repo rather than the tree in between.
+///
+/// A `/` separator rather than `Path::components`, because this reads paths the
+/// app itself wrote on the only platform it runs on: CEF, the app picker, the
+/// notification centre and the output mute are all macOS-only, and the release
+/// workflow builds `universal-apple-darwin` and nothing else. A Windows port
+/// has this to fix and a great deal more beside it.
 fn worktree_root_of(path: &str) -> Option<&str> {
     path.split_once("/.claude/worktrees/").map(|(root, _)| root)
 }
@@ -2408,6 +2416,35 @@ mod tests {
             !mark_relocated(&mut items, |dir| dir == "/p"),
             "a second pass must report nothing to write"
         );
+    }
+
+    /// The caller's worktree recorded as the project is usually a *live*
+    /// session's checkout, so taking `project_path` at its word would put two
+    /// sessions in one directory — the one thing a worktree per session exists
+    /// to prevent. The repo above it is the answer even though the recorded
+    /// project is right there on disk.
+    #[test]
+    fn a_repair_never_lands_in_another_sessions_worktree() {
+        let mut items = vec![SessionIndexItem::new(
+            "a",
+            Harness::ClaudeCode,
+            "/repo/.claude/worktrees/caller/.claude/worktrees/mine",
+            "/repo/.claude/worktrees/caller",
+            None,
+            Some("worktree-mine"),
+            "hi",
+            ModelId::new("opus"),
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        )];
+
+        // The caller is still working in its own tree; only ours has gone.
+        let on_disk = |dir: &str| dir == "/repo" || dir == "/repo/.claude/worktrees/caller";
+
+        assert!(mark_relocated(&mut items, on_disk));
+        assert_eq!(items[0].cwd, "/repo");
+        assert_eq!(items[0].project_path, "/repo");
     }
 
     #[test]
