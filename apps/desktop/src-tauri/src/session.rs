@@ -2352,24 +2352,68 @@ pub async fn flush_queued(
     // Drained under one lock so a cancel arriving mid-flush either takes a
     // message back before any of this or finds nothing — never races a
     // half-written batch.
-    let batch: Vec<QueuedMessage> = {
-        let mut held = queued.lock().await;
-        // fx runs one prompt per turn, so a batch goes out one message per
-        // turn end; the rest wait for the next. Every other child absorbs
-        // several lines at one boundary.
-        if matches!(transport, Transport::Fx(_)) && !held.is_empty() {
-            vec![held.remove(0)]
-        } else {
-            std::mem::take(&mut *held)
-        }
-    };
-
-    if batch.is_empty() {
-        return;
-    }
-
+    //
+    // fx runs one prompt per turn, so it takes one message per flush and the
+    // rest wait for the next turn's end. A message that fails to send starts
+    // no turn, and so no flush that would reach the next — hence the loop:
+    // keep taking until one is delivered or nothing is left. Every other
+    // child absorbs several lines at one boundary and takes the whole batch.
+    let one_per_turn = matches!(transport, Transport::Fx(_));
     let mut delivered = 0;
 
+    while delivered == 0 {
+        let batch: Vec<QueuedMessage> = {
+            let mut held = queued.lock().await;
+            if one_per_turn && !held.is_empty() {
+                vec![held.remove(0)]
+            } else {
+                std::mem::take(&mut *held)
+            }
+        };
+
+        if batch.is_empty() {
+            break;
+        }
+
+        deliver_batch(
+            batch, session_id, harness, seq, events, transport, app, &mut delivered,
+        )
+        .await;
+
+        if !one_per_turn {
+            break;
+        }
+    }
+
+    // A flush at `turn_completed` lands just after the tracker marked the
+    // session finished, and the prompt it just wrote opens a new turn the CLI
+    // has not announced yet. Without this the composer reads idle for the
+    // second or so until `init` arrives — offering to send into a session that
+    // is already working. Redundant at a tool boundary, where the session is
+    // in-progress and `on_send` reports no change.
+    //
+    // Only where something actually reached the child. A batch that all failed
+    // starts no turn, and reporting one would leave the session running forever
+    // on a prompt the agent never received.
+    if delivered == 0 {
+        return;
+    }
+    if let Some(next) = status.lock().await.on_send() {
+        publish_status(session_id, next, app).await;
+    }
+}
+
+/// Hands one drained batch to the child, oldest first, counting what landed.
+async fn deliver_batch(
+    batch: Vec<QueuedMessage>,
+    session_id: &str,
+    harness: Harness,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    transport: &Transport,
+    app: &AppHandle,
+    delivered: &mut usize,
+) {
     for message in batch {
         // No baseline, and this is the load-bearing half of the queued case:
         // the changes panel pairs the newest baseline with the newest head
@@ -2394,7 +2438,7 @@ pub async fn flush_queued(
         )
         .await
         {
-            Ok(()) => delivered += 1,
+            Ok(()) => *delivered += 1,
             Err(err) => {
                 eprintln!("[queued flush err] {err}");
                 // Drawn, not only logged. The prompt is already on screen and in
@@ -2406,23 +2450,6 @@ pub async fn flush_queued(
                 report_send_failure(session_id, harness, &err.to_string(), seq, events, app).await;
             }
         }
-    }
-
-    // A flush at `turn_completed` lands just after the tracker marked the
-    // session finished, and the prompt it just wrote opens a new turn the CLI
-    // has not announced yet. Without this the composer reads idle for the
-    // second or so until `init` arrives — offering to send into a session that
-    // is already working. Redundant at a tool boundary, where the session is
-    // in-progress and `on_send` reports no change.
-    //
-    // Only where something actually reached the child. A batch that all failed
-    // starts no turn, and reporting one would leave the session running forever
-    // on a prompt the agent never received.
-    if delivered == 0 {
-        return;
-    }
-    if let Some(next) = status.lock().await.on_send() {
-        publish_status(session_id, next, app).await;
     }
 }
 
