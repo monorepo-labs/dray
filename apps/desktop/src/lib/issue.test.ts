@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyIssue,
+  filterIssues,
   groupIssues,
   issueSpan,
   issueTag,
@@ -150,5 +151,31 @@ describe("groupIssues", () => {
 
   it("drops empty buckets", () => {
     expect(groupIssues([])).toEqual([]);
+  });
+});
+
+describe("filterIssues", () => {
+  const rows = [
+    { ...issue("DRA-53", "started"), title: "Add issue tracker integration" },
+    { ...issue("DRA-9", "backlog"), title: "Worktree cleanup" },
+  ];
+
+  /// The tag gets typed lower case where the identifier is spelled upper.
+  it("matches an identifier however it is cased", () => {
+    expect(filterIssues(rows, "dra-5").map((i) => i.identifier)).toEqual(["DRA-53"]);
+  });
+
+  it("matches a word anywhere in the title", () => {
+    expect(filterIssues(rows, "cleanup").map((i) => i.identifier)).toEqual(["DRA-9"]);
+  });
+
+  /// A bare `#` opens the picker on the whole assigned list, so an empty query
+  /// narrows nothing.
+  it("keeps everything for an empty query", () => {
+    expect(filterIssues(rows, "  ")).toEqual(rows);
+  });
+
+  it("answers nothing rather than everything when nothing matches", () => {
+    expect(filterIssues(rows, "zzz")).toEqual([]);
   });
 });

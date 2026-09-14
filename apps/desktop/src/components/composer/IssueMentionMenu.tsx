@@ -20,6 +20,7 @@ export default function IssueMentionMenu({
   onHover,
   placement = "above",
   bare = false,
+  loading = false,
 }: {
   issues: Issue[];
   activeIndex: number;
@@ -27,6 +28,10 @@ export default function IssueMentionMenu({
   onHover: (index: number) => void;
   placement?: "above" | "below";
   bare?: boolean;
+  /// Whether Linear is still being waited on. The one picker of the three that
+  /// needs it: the other two read memory, where this reads the network on a
+  /// query nothing has cached yet.
+  loading?: boolean;
 }) {
   return (
     <PickerMenu
@@ -38,6 +43,7 @@ export default function IssueMentionMenu({
       onHover={onHover}
       placement={placement}
       bare={bare}
+      loading={loading}
       renderItem={(issue) => (
         <>
           <IssueStateIcon kind={issue.state.kind} color={issue.state.color} label={issue.state.name} />

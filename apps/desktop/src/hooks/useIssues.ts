@@ -20,10 +20,15 @@ import type {
   IssueUnavailable,
 } from "@/types/events";
 
-/// How many rows the page asks for. Well past a screenful, and short of a
+/// How many rows a list read asks for. Well past a screenful, and short of a
 /// workspace: the useful list is what the reader is assigned and has not
 /// finished, which is rarely near this.
-const PAGE_LIMIT = 100;
+///
+/// Exported because the composer's `#` picker reads with it too. The cache below
+/// is keyed on the *query* and not on the depth it was read to, so a picker
+/// asking for fewer rows would write a truncated answer under the key the page
+/// then paints from.
+export const ISSUE_LIST_LIMIT = 100;
 
 /// Typing in the page's search box reaches the network, so it is spaced out.
 /// Longer than the composer picker's 200ms: that one filters a menu somebody is
@@ -83,6 +88,27 @@ function remember(key: string, issues: Issue[], generation: number) {
     cache.delete(oldest);
     fetchedAt.delete(oldest);
   }
+}
+
+/// This cache's answer for `query`, and whether it is still fresh.
+///
+/// Exported for the composer's `#` picker, which asks the question the issues
+/// page opens with (`assigned`, unsettled) and so is usually reading an entry
+/// the page already filled. Both halves, since the picker uses them for
+/// different things: a stale answer is still worth *painting* while a read runs,
+/// where a fresh one is worth not making the read at all.
+export function cachedIssues(query: IssueQuery): { issues: Issue[]; fresh: boolean } | undefined {
+  const key = keyOf(query);
+  const issues = cache.get(key);
+  if (!issues) return undefined;
+
+  return { issues, fresh: Date.now() - (fetchedAt.get(key) ?? 0) < FRESH_MS };
+}
+
+/// Files a list read under `query`, so the picker's reads warm the page and the
+/// page's warm the picker.
+export function rememberIssues(query: IssueQuery, issues: Issue[], generation: number) {
+  remember(keyOf(query), issues, generation);
 }
 
 /// Opened issues, keyed by identifier.
@@ -459,7 +485,7 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
     const reading = issueGeneration();
 
     const run = () => {
-      invoke<Issue[]>("list_issues", { query, limit: PAGE_LIMIT })
+      invoke<Issue[]>("list_issues", { query, limit: ISSUE_LIST_LIMIT })
         .then((next) => {
           if (cancelled) return;
           remember(key, next, reading);
