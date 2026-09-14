@@ -380,6 +380,19 @@ fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) ->
     .map(str::to_string)
 }
 
+/// The project root a session belongs to, which is **never a worktree Dray
+/// manages**: an entry filed under one is a mis-filed record, since `dray new`
+/// used to record the caller's own tree as the new session's project.
+///
+/// Both places that move a session out of its worktree need this — the backfill
+/// below and [`relocate_session_to_project`], which is Dray's own delete. The
+/// delete had it wrong and the backfill could not heal it: it rewrote `cwd` to
+/// `project_path` unconditionally, and the result *exists*, so the pass that
+/// repairs a missing `cwd` never looks at it again.
+fn project_root_of(project_path: &str) -> &str {
+    worktree_root_of(project_path).unwrap_or(project_path)
+}
+
 /// The project a `<project>/.claude/worktrees/<name>` path belongs to, or
 /// `None` where the path is not a worktree **Dray manages**.
 ///
@@ -1021,7 +1034,9 @@ pub async fn relocate_session_to_project(
         return Ok(None);
     };
 
-    item.cwd = item.project_path.clone();
+    let root = project_root_of(&item.project_path).to_string();
+    item.project_path = root.clone();
+    item.cwd = root;
     item.worktree_name = None;
     item.worktree_removed = true;
     let updated = item.clone();
@@ -1049,12 +1064,27 @@ pub async fn relocate_session_to_project(
 /// and every `git` and `gh` spawned there then fails with ENOENT before the
 /// binary is reached. See [`surviving_root`] for where those go.
 ///
+/// Those get `worktree_removed` too, including the mis-filed `dray new` entries
+/// that were never worktree sessions at all — so `session_branch` answers their
+/// recorded branch, which is the *caller's*, and their PR tab draws the caller's
+/// PR. That is the same false positive the shape rule above can produce,
+/// arriving by another door, and it is honest here for the same reason: their
+/// work did land on that branch.
+///
 /// Writes only when it changed something, so this is a read on every launch
 /// after the first.
 pub async fn backfill_removed_worktrees() -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
+    // `is_dir` rather than a test for ENOENT specifically, which is the defect
+    // being repaired. An unreadable directory — macOS TCC before the folder
+    // prompt, a stalled network volume — reads as gone here, and that is only
+    // safe because every candidate is an ancestor of the `cwd` or the recorded
+    // project, so a whole-subtree failure answers false for all of them and
+    // `surviving_root` finds nothing to move to. A candidate readable while the
+    // `cwd` is not would relocate a session whose tree is merely unreachable,
+    // costing it the flag below rather than anything destructive.
     if mark_relocated(&mut sessions, |dir| Path::new(dir).is_dir()) {
         write_session_index(&sessions).await?;
     }
@@ -2427,6 +2457,19 @@ mod tests {
         assert!(
             !mark_relocated(&mut items, |dir| dir == "/p"),
             "a second pass must report nothing to write"
+        );
+    }
+
+    /// Dray's own delete used to set `cwd = project_path` flat, so a session
+    /// whose project was the caller's tree landed in that caller's checkout —
+    /// and the backfill could never heal it, since the result exists.
+    #[test]
+    fn a_project_root_is_never_a_worktree_we_manage() {
+        assert_eq!(project_root_of("/repo/.claude/worktrees/caller"), "/repo");
+        assert_eq!(project_root_of("/repo"), "/repo");
+        assert_eq!(
+            project_root_of("/home/me/.claude/worktrees/proj/subrepo"),
+            "/home/me/.claude/worktrees/proj/subrepo"
         );
     }
 
