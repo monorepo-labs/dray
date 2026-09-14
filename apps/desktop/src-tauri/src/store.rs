@@ -353,6 +353,39 @@ pub async fn list_session_index_items(
     ))
 }
 
+/// The repo root for an entry whose `cwd` is gone, or `None` where none of the
+/// candidates is on disk.
+///
+/// Tried in order of how much the entry itself claims: the recorded project
+/// root first, then the root each of the two paths sits under, since
+/// `.claude/worktrees/<name>` is the one shape a worktree path ever takes here.
+/// The second is not hypothetical — `dray new` used to record the *caller's*
+/// worktree as the project, so those entries dangle on both fields at once.
+///
+/// `None` is the important answer: a project on an unmounted drive reads
+/// exactly like a deleted one from here, and rewriting it would move the
+/// session to a directory the reader never chose. Leaving it alone costs the
+/// PR tab until the drive is back.
+fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) -> Option<String> {
+    [
+        Some(item.project_path.as_str()),
+        worktree_root_of(&item.project_path),
+        worktree_root_of(&item.cwd),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|root| *root != item.cwd && dir_exists(root))
+    .map(str::to_string)
+}
+
+/// The project a `<project>/.claude/worktrees/<name>` path belongs to.
+///
+/// Split on the first occurrence, so a worktree made inside a worktree still
+/// answers the real repo rather than the tree in between.
+fn worktree_root_of(path: &str) -> Option<&str> {
+    path.split_once("/.claude/worktrees/").map(|(root, _)| root)
+}
+
 /// Split out from the async read so it can be tested without an `index.json`.
 fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
     items.into_iter().filter(|i| i.archived == archived).collect()
@@ -991,13 +1024,18 @@ pub async fn relocate_session_to_project(
 /// produce, and it costs that session its recorded branch instead of its HEAD
 /// rather than anything destructive.
 ///
+/// It also repairs the entries that shape cannot describe: a tree removed by
+/// anything but Dray's own delete leaves `cwd` naming a directory that is gone,
+/// and every `git` and `gh` spawned there then fails with ENOENT before the
+/// binary is reached. See [`surviving_root`] for where those go.
+///
 /// Writes only when it changed something, so this is a read on every launch
 /// after the first.
 pub async fn backfill_removed_worktrees() -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
-    if mark_relocated(&mut sessions) {
+    if mark_relocated(&mut sessions, |dir| Path::new(dir).is_dir()) {
         write_session_index(&sessions).await?;
     }
 
@@ -1006,9 +1044,20 @@ pub async fn backfill_removed_worktrees() -> Result<()> {
 
 /// Split out from the async read so it can be tested without an `index.json`.
 /// Answers whether anything changed, which is what decides the write.
-fn mark_relocated(items: &mut [SessionIndexItem]) -> bool {
+fn mark_relocated(items: &mut [SessionIndexItem], dir_exists: impl Fn(&str) -> bool) -> bool {
     let mut changed = false;
     for item in items.iter_mut() {
+        if !dir_exists(&item.cwd) {
+            if let Some(root) = surviving_root(item, &dir_exists) {
+                item.project_path = root.clone();
+                item.cwd = root;
+                item.worktree_name = None;
+                item.worktree_removed = true;
+                changed = true;
+                continue;
+            }
+        }
+
         let relocated = item.worktree_name.is_none()
             && item.cwd == item.project_path
             && item
@@ -2292,13 +2341,71 @@ mod tests {
             session("/p", Some("main"), None),
         ];
 
-        assert!(mark_relocated(&mut items));
+        let on_disk = |dir: &str| dir == "/p" || dir == "/p/.claude/worktrees/calm-owl";
+
+        assert!(mark_relocated(&mut items, on_disk));
         assert!(items[0].worktree_removed);
         assert!(!items[1].worktree_removed);
         assert!(!items[2].worktree_removed);
 
         assert!(
-            !mark_relocated(&mut items),
+            !mark_relocated(&mut items, on_disk),
+            "a second pass must report nothing to write"
+        );
+    }
+
+    /// A tree removed by anything but Dray's own delete leaves `cwd` naming a
+    /// directory that is gone, and every `git` and `gh` the session runs then
+    /// fails with ENOENT before the binary is reached — which reaches the
+    /// reader as the PR panel saying it could not run `gh` while the sidebar's
+    /// mark for the same session, read in the project root, is fine.
+    #[test]
+    fn a_cwd_that_no_longer_exists_moves_back_to_the_project() {
+        let session = |cwd: &str, project: &str, worktree: Option<&str>| {
+            SessionIndexItem::new(
+                "a",
+                Harness::ClaudeCode,
+                cwd,
+                project,
+                worktree,
+                Some("worktree-calm-owl"),
+                "hi",
+                ModelId::new("opus"),
+                None,
+                ApprovalPolicy::Auto,
+                None,
+            )
+        };
+
+        let mut items = vec![
+            // The tree went without the index hearing about it.
+            session("/p/.claude/worktrees/calm-owl", "/p", Some("calm-owl")),
+            // `dray new` recorded the caller's own worktree as the project, so
+            // both fields dangle and only the shape says where the repo is.
+            session(
+                "/p/.claude/worktrees/gone",
+                "/p/.claude/worktrees/gone",
+                None,
+            ),
+            // The project is unreachable, not deleted — leave it alone.
+            session("/elsewhere/.claude/worktrees/calm-owl", "/elsewhere", None),
+        ];
+
+        assert!(mark_relocated(&mut items, |dir| dir == "/p"));
+
+        for item in &items[..2] {
+            assert_eq!(item.cwd, "/p");
+            assert_eq!(item.project_path, "/p");
+            assert_eq!(item.worktree_name, None);
+            assert!(item.worktree_removed);
+            assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
+        }
+
+        assert_eq!(items[2].cwd, "/elsewhere/.claude/worktrees/calm-owl");
+        assert!(!items[2].worktree_removed);
+
+        assert!(
+            !mark_relocated(&mut items, |dir| dir == "/p"),
             "a second pass must report nothing to write"
         );
     }
