@@ -380,10 +380,20 @@ fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) ->
     .map(str::to_string)
 }
 
-/// The project a `<project>/.claude/worktrees/<name>` path belongs to.
+/// The project a `<project>/.claude/worktrees/<name>` path belongs to, or
+/// `None` where the path is not a worktree **Dray manages**.
 ///
-/// Split on the first occurrence, so a worktree made inside a worktree still
-/// answers the real repo rather than the tree in between.
+/// `<name>` has to be a *direct* child, which is the same reading
+/// `git::is_managed_worktree` takes before it deletes one, and for the
+/// same reason: that shape is what `claude -w` and `create_worktree` mint, and
+/// nothing else here is ours to reason about. Without it a repository that
+/// merely sits somewhere below a `.claude/worktrees/` segment would be read as
+/// a worktree and a session in it moved to an ancestor that is not its repo.
+///
+/// Split on the first occurrence, so the outermost repo is the answer for a
+/// tree made inside a tree — where the nested path is then no direct child of
+/// it and answers `None`, which is right: the entry's recorded project is what
+/// names the repo in that case, and it is tried first anyway.
 ///
 /// A `/` separator rather than `Path::components`, because this reads paths the
 /// app itself wrote on the only platform it runs on: CEF, the app picker, the
@@ -391,7 +401,9 @@ fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) ->
 /// workflow builds `universal-apple-darwin` and nothing else. A Windows port
 /// has this to fix and a great deal more beside it.
 fn worktree_root_of(path: &str) -> Option<&str> {
-    path.split_once("/.claude/worktrees/").map(|(root, _)| root)
+    let (root, name) = path.split_once("/.claude/worktrees/")?;
+    let name = name.trim_end_matches('/');
+    (!name.is_empty() && !name.contains('/')).then_some(root)
 }
 
 /// Split out from the async read so it can be tested without an `index.json`.
@@ -2416,6 +2428,25 @@ mod tests {
             !mark_relocated(&mut items, |dir| dir == "/p"),
             "a second pass must report nothing to write"
         );
+    }
+
+    /// A path is only a worktree Dray manages where `<name>` is a direct child,
+    /// so an ordinary repository that happens to sit below such a segment is
+    /// left to speak for itself rather than redirected to an ancestor.
+    #[test]
+    fn only_a_direct_child_of_the_worktrees_dir_is_one_of_ours() {
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/calm-owl"), Some("/repo"));
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/calm-owl/"), Some("/repo"));
+
+        // A repository of its own that merely lives below the segment.
+        assert_eq!(worktree_root_of("/home/me/.claude/worktrees/proj/subrepo"), None);
+        // A tree made inside a tree: no direct child of the outermost repo.
+        assert_eq!(
+            worktree_root_of("/repo/.claude/worktrees/caller/.claude/worktrees/mine"),
+            None
+        );
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/"), None);
+        assert_eq!(worktree_root_of("/repo"), None);
     }
 
     /// The caller's worktree recorded as the project is usually a *live*
