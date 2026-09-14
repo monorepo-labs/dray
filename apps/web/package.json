@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "cobe": "^2.0.1",
     "next": "^15.5.4",
     "posthog-js": "^1.430.1",
     "react": "^19.1.0",

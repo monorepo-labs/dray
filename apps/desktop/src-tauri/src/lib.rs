@@ -113,6 +113,14 @@ async fn send_msg(
         return Err("invalid harness".to_string());
     }
 
+    // Reported here rather than inside `SessionManager::send_msg`, which is the
+    // chokepoint for *prompts* and not for people: the orchestration socket
+    // reaches that function directly, both to relay a `dray send` and to start
+    // a session `dray new` asked for, and an agent finishing at 3am would mark
+    // the day active with nobody in the room. A Tauri command is reachable from
+    // the webview alone, so getting here means somebody pressed send.
+    analytics::active_day();
+
     manager
         .send_msg(
             session_id,
@@ -255,6 +263,7 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
         harness::Harness::Fx => harness::fx::models::list().await,
+        harness::Harness::Codex => harness::codex::models::list().await,
         other => models::models_for(other),
     }
 }
@@ -270,6 +279,7 @@ async fn refresh_models() {
     // tables, so dropping the cache alone would still answer from a table. A
     // manual Refresh means "ask fx again", so probe the active provider now.
     harness::fx::models::refresh().await;
+    harness::codex::models::forget();
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.
@@ -332,6 +342,21 @@ async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, 
 #[tauri::command]
 fn track_feature(feature: String) {
     analytics::track("feature_used", serde_json::json!({ "feature": feature }));
+}
+
+/// Reports that the app is being used today, from the frontend's focus channel.
+///
+/// The one kind of use nothing in Rust can see: coming back to read a session
+/// an agent is already running sends no prompt and starts nothing. The signal
+/// comes from `src/lib/focus.ts`, which is where the rule for reading it
+/// already lives — the DOM's `focus` fires for a native menu or devtools
+/// closing too, which is not the reader arriving.
+///
+/// Called on every focus gain and decides nothing: the daily throttle is in
+/// [`analytics::active_day`] and shared with the two backend call sites.
+#[tauri::command]
+fn track_active_day() {
+    analytics::active_day();
 }
 
 async fn settings_view() -> settings::SettingsView {
@@ -624,6 +649,12 @@ pub fn run() {
             // the task `track` spawns — so nothing on screen waits on a file
             // read and an opted-out install still sends nothing.
             analytics::app_started();
+            // The guaranteed half of `active_day`: `focus.ts` reports focus
+            // *changes*, so a window that comes up already frontmost never
+            // reports gaining it, and somebody who opens Dray, works and quits
+            // without switching apps would go uncounted. Free to state beside
+            // the other two sites — all three claim one daily key.
+            analytics::active_day();
 
             Ok(())
         })
@@ -662,6 +693,7 @@ pub fn run() {
             get_settings,
             set_analytics_enabled,
             track_feature,
+            track_active_day,
             list_slash_commands,
             files::warm_file_index,
             files::search_files,

@@ -1,7 +1,9 @@
 import { LazyVideo } from "@/components/LazyVideo";
+import { Quotes } from "@/components/Testimonials";
 import { FEATURES } from "@/lib/features";
 
-/// Four sections, each a few lines of text with its capture underneath.
+/// One section per feature, each a few lines of text with its capture
+/// underneath and the reactions to it under that.
 /// Stacked, not side by side: a capture of a desktop window only reads at
 /// full column width, and beside a text column it was half that. Text
 /// first, so the label names what the clip is about before it plays.
@@ -40,6 +42,9 @@ export function Features({ className }: { className?: string }) {
               className="block w-full"
             />
           </div>
+          {/* Under the clip, not over it: the claim and the evidence for it
+              should be read in that order, and the clip is the claim. */}
+          <Quotes handles={f.quotes} className="mt-3" />
         </article>
       ))}
     </section>

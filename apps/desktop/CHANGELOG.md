@@ -5,6 +5,62 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.17.3
+
+### Changed
+
+- **A failed turn draws one muted line, not a paragraph in red.** A
+  refusal's own reasoning is truncated to its first line, and it leads
+  with "Permission denied." where that verdict would otherwise sit past
+  the cut.
+- **The `#` issue picker opens from the same cache the Issues page
+  fills.** Opening it and typing in it no longer costs a Linear round
+  trip each, and cached rows are filtered locally while the network
+  answers.
+
+### Fixed
+
+- **A session whose login expired now recovers on the next prompt.**
+  The CLI remembers being logged out for the life of its process, so
+  logging in next door changed nothing and restarting the app was the
+  only cure. Dray restarts the child itself, even where a background
+  task is still running.
+- **Sessions whose worktree was removed outside Dray are repaired at
+  launch**, so the PR panel stops reporting that it could not run `gh`.
+  A session is never moved into a checkout another session is working
+  in.
+- **Browser screenshots are laid out at a real viewport** — 1440×900,
+  or whatever `set viewport` / `set device` last asked for — rather
+  than at the pane's own width, which returned desktop pages at phone
+  breakpoints.
+- **A subagent run with nothing to open no longer sits indented** under
+  one that has something.
+
+## 0.17.2
+
+### Added
+
+- **Codex's model list comes from Codex.** A model OpenAI ships is
+  pickable the day it lands rather than the day Dray next releases. The
+  first two rows are the top level and the Shift+Tab cycle, so a new
+  flagship arrives there on its own; the rest fold into More models. The
+  built-in table stays as the offline fallback.
+
+### Changed
+
+- **A prompt running one of Greptile's commands is tinted to say whose
+  it is**, queued or sent.
+- **Analytics counts a day you used Dray**, not only a launch or a new
+  session — a day spent in one resumed session read as nobody there.
+  Still nothing about what you write.
+
+### Fixed
+
+- **Links in your own messages no longer draw a dark underline** under
+  white text in default light.
+- **A subagent run with nothing to show can't be expanded** onto an
+  empty box. It opens again as soon as it has events.
+
 ## 0.17.1
 
 ### Changed

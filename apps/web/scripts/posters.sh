@@ -20,6 +20,15 @@ for video in public/*.mp4; do
   fi
   # A second in, not frame zero: these captures open on a still window and an
   # opening frame is often the least representative one in the clip.
-  ffmpeg -y -loglevel error -ss 1 -i "$video" -frames:v 1 -q:v 4 "$poster"
+  #
+  # A clip whose whole subject is something the reader *does* has nothing to
+  # show that early — split-view opens on one pane and is not split until the
+  # drag lands. Named here rather than fixed by hand, or the next --force run
+  # quietly puts the empty frame back.
+  case "$(basename "$video")" in
+    split-view.mp4) at=40 ;;
+    *) at=1 ;;
+  esac
+  ffmpeg -y -loglevel error -ss "$at" -i "$video" -frames:v 1 -q:v 4 "$poster"
   echo "wrote $poster"
 done

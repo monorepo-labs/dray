@@ -168,7 +168,8 @@ Verbs:
   find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <verb> [arg]
   wait [<selector> | <ms>] [--url ..] [--text ..] [--load ..]
   screenshot [path] [--full] | eval <js> | console | errors
-  set viewport <w> <h> | set device <name>";
+  set viewport <w> <h> | set device <name>
+screenshot lays the page out at 1440×900, or the last set viewport/device.";
 
 #[derive(Args)]
 #[command(after_help = BROWSER_VERBS)]

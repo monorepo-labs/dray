@@ -5,13 +5,19 @@ import { AppleGlyph } from "@/components/AppleGlyph";
 import { DOWNLOAD } from "@/lib/links";
 
 /// The download link, split out as a client component so the click can be
-/// counted. The href is a plain navigation off-site, so the event fires on the
-/// way out — `sendBeacon` is what lets it survive the unload, where the default
-/// transport is a request the browser is free to cancel as the page goes.
+/// counted.
+///
+/// **`sendBeacon` is kept even though the new tab means this page no longer
+/// unloads.** It was load-bearing when the href navigated in place — the
+/// default transport is a request the browser is free to cancel as the page
+/// goes. It costs nothing now and it is what stops the event disappearing
+/// silently if `target` is ever dropped again.
 export function DownloadButton() {
   return (
     <a
       href={DOWNLOAD}
+      target="_blank"
+      rel="noopener noreferrer"
       onClick={() =>
         posthog.capture("download", { platform: "macos" }, { transport: "sendBeacon" })
       }

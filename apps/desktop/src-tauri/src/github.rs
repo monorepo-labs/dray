@@ -9,7 +9,7 @@
 use anyhow::Result;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, process::Stdio, sync::LazyLock};
+use std::{collections::HashMap, path::Path, process::Stdio, sync::LazyLock};
 use tokio::{process::Command, sync::Mutex};
 use ts_rs::TS;
 
@@ -777,6 +777,14 @@ const NO_CLI: &str = "GitHub CLI (gh) not found.";
 /// less like what the user sees in their own terminal.
 async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     let bin = binpath::gh().await.ok_or(NO_CLI)?;
+
+    // A worktree removed outside Dray leaves the session's `cwd` naming a
+    // directory that is gone, and the spawn then fails with ENOENT *before*
+    // `gh` is reached — which reads as `gh` itself being missing. The startup
+    // backfill repairs the entry, so this is the window before the next launch.
+    if !Path::new(cwd).is_dir() {
+        return Err(format!("{cwd} no longer exists."));
+    }
 
     let out = Command::new(bin)
         .args(args)

@@ -263,7 +263,7 @@ export default function ChatInput({
   // the same reason: the caret sits in exactly one token, and a token opening
   // with `#` is neither one opening with `@` nor a command at position zero.
   const issue = issueSpan(message, caret);
-  const issues = useIssueSearch(issue?.query ?? null);
+  const { issues, loading: issuesLoading } = useIssueSearch(issue?.query ?? null);
 
   // Flattened in render order, so arrowing through the list and drawing it
   // can't disagree about which row an index names.
@@ -273,8 +273,14 @@ export default function ChatInput({
   // separate all the way to the pick, so nothing has to be narrowed back out of
   // a union that `mention` already decided.
   const rowCount = mention ? files.length : issue ? issues.length : commandMatches.length;
+  // Rows, or the `#` picker waiting on Linear with none yet — the one case a
+  // picker is worth drawing empty, since its placeholder rows are what say the
+  // list is coming rather than absent. The other two read memory and have
+  // nothing to wait for.
   const menuOpen =
-    !dismissed && rowCount > 0 && (query !== null || mention !== null || issue !== null);
+    !dismissed &&
+    (rowCount > 0 || issuesLoading) &&
+    (query !== null || mention !== null || issue !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
   // its end — and an undefined row only shows up as a crash on the keystroke
@@ -761,6 +767,7 @@ export default function ChatInput({
                 onHover={setActiveIndex}
                 placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
+                loading={issuesLoading}
               />
             ) : (
               <SlashCommandMenu
@@ -859,7 +866,12 @@ export default function ChatInput({
                     // Whichever picker is open owns these keys, and only while it
                     // is — Enter completes the highlighted row instead of sending,
                     // which is the one place the composer's usual rule gives way.
-                    if (menuOpen && !e.nativeEvent.isComposing) {
+                    //
+                    // Gated on there being *rows*, not on the menu being drawn:
+                    // a picker showing placeholders has nothing to highlight, so
+                    // `% rowCount` is a division by zero and Enter would be
+                    // swallowed by a pick that can only land on nothing.
+                    if (menuOpen && rowCount > 0 && !e.nativeEvent.isComposing) {
                       if (e.key === "ArrowDown") {
                         e.preventDefault();
                         setActiveIndex((active + 1) % rowCount);
@@ -974,6 +986,13 @@ export default function ChatInput({
           // the smaller half of why: Enter completes the highlighted row there
           // rather than sending, and the picker draws its own ↵ hint saying so.
           // Two Enter legends at once, one of them untrue.
+          //
+          // The menu, not its rows — including while it is still placeholders.
+          // Enter does send there, so the legend would be *true*; it is dropped
+          // anyway, because a send hint under an open picker reads as belonging
+          // to the list and there is nothing in the list to send. Omitting a
+          // hint costs less than drawing one that looks like it means the row
+          // above it.
           !menuOpen && (
             <div className="flex items-center gap-1 pt-2 text-ui text-muted-foreground/60">
               Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send

@@ -220,3 +220,18 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## Greptile
+
+<https://www.greptile.com>
+
+Not a licence — a trademark note. Greptile review Dray's pull requests for free
+as an OSS sponsor, and Dray marks a prompt running one of their commands with
+**Greptile Green** (`#28e99f`, from their published guidelines at
+<https://www.greptile.com/design>).
+
+That colour is Greptile's mark, used to identify Greptile's own commands and
+nothing else. It is not covered by any grant above, and it travels with its
+owner's permission rather than with a licence file. No Greptile artwork is used.

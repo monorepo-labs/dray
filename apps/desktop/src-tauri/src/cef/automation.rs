@@ -27,6 +27,19 @@ static NEXT_ID: AtomicI32 = AtomicI32::new(1);
 static PENDING: Mutex<Option<HashMap<(i32, i32), oneshot::Sender<Reply>>>> = Mutex::new(None);
 /// What each tab's page logged since `console`/`errors` last drained it.
 static CONSOLE: Mutex<Option<HashMap<i32, Vec<(bool, String)>>>> = Mutex::new(None);
+/// The size `set viewport`/`set device` asked for, per session. Only
+/// `screenshot` reads it: the widget stays the pane's size and the page is
+/// laid out at this size for the capture alone.
+static VIEWPORT: Mutex<Option<HashMap<String, (u32, u32)>>> = Mutex::new(None);
+/// A laptop, since nearly everything looked at through here is a page built
+/// for one; the pane itself is a third of a window and lays a page out at
+/// phone breakpoints.
+const DEFAULT_VIEWPORT: (u32, u32) = (1440, 900);
+/// One capture at a time: the override is tab-wide, so two overlapping
+/// screenshots would clear each other's, and requests off the socket are
+/// not serialized. ponytail: one lock app-wide, per-tab if captures ever
+/// queue behind each other.
+static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -622,17 +635,15 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::Screenshot { path, full } => {
             let tab = active_tab(session)?;
-            let mut params = json!({ "format": "png" });
-            if full {
-                let size = eval(tab, "({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })").await?;
-                params["captureBeyondViewport"] = json!(true);
-                params["clip"] = json!({ "x": 0, "y": 0, "width": size["w"], "height": size["h"], "scale": 1 });
-            }
-            let reply = cdp(tab, "Page.captureScreenshot", params).await?;
-            let data = reply["data"].as_str().ok_or("no image came back")?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .map_err(|e| format!("bad image data: {e}"))?;
+            let (w, h) = screenshot_size(session);
+            let held = CAPTURING.lock().await;
+            let bytes = capture(tab, w, h, full).await;
+            // Cleared on the failing path too, or one timed-out capture leaves
+            // the tab laid out at a width nobody asked for and every later
+            // verb reads a page that isn't the one on screen.
+            let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+            drop(held);
+            let bytes = bytes?;
             let path = match path {
                 Some(p) => screenshot_path(session, &p).await?,
                 None => {
@@ -687,6 +698,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::SetViewport { width, height } => {
             active_tab(session)?;
+            remember_viewport(session, width, height);
             emit_viewport(session, "custom", width, height);
             ok(format!("viewport {width}×{height}"))
         }
@@ -699,10 +711,53 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     let names = DEVICES.iter().map(|d| d.0).collect::<Vec<_>>().join(", ");
                     format!("no device {name:?}; one of {names}")
                 })?;
+            remember_viewport(session, *w, *h);
             emit_viewport(session, &label.to_lowercase().replace(' ', "-"), *w, *h);
             ok(format!("{label} {w}×{h}"))
         }
     }
+}
+
+fn remember_viewport(session: &str, width: u32, height: u32) {
+    VIEWPORT.lock().unwrap().get_or_insert_with(HashMap::new).insert(session.into(), (width, height));
+}
+
+/// What `screenshot` lays the page out at: the session's own pick, else a laptop.
+fn screenshot_size(session: &str) -> (u32, u32) {
+    VIEWPORT
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(session).copied())
+        .unwrap_or(DEFAULT_VIEWPORT)
+}
+
+/// The PNG of the page laid out at `w`×`h`. The widget is the pane's size,
+/// so `Page.captureScreenshot` alone answers a desktop layout as a phone; the
+/// metrics override is the one thing that sizes a page independently of the
+/// widget drawing it. `deviceScaleFactor: 1`, or a 1440-wide request answers
+/// a 2880-wide PNG on a retina screen. The caller clears the override.
+async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String> {
+    cdp(
+        tab,
+        "Emulation.setDeviceMetricsOverride",
+        json!({ "width": w, "height": h, "deviceScaleFactor": 1, "mobile": false }),
+    )
+    .await?;
+    // A page that reflows paints a frame or two later; capturing inside that
+    // window catches the layout half-moved.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let mut params = json!({ "format": "png" });
+    if full {
+        let size = eval(tab, "({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })").await?;
+        params["captureBeyondViewport"] = json!(true);
+        params["clip"] = json!({ "x": 0, "y": 0, "width": size["w"], "height": size["h"], "scale": 1 });
+    }
+    let reply = cdp(tab, "Page.captureScreenshot", params).await?;
+    let data = reply["data"].as_str().ok_or("no image came back")?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| format!("bad image data: {e}"))
 }
 
 /// Truncating write that refuses a symlink at the leaf, so a link planted
@@ -971,6 +1026,14 @@ mod tests {
         let (down, up) = key_events("Enter").unwrap();
         assert_eq!(down["windowsVirtualKeyCode"], 13);
         assert_eq!(up["type"], "keyUp");
+    }
+
+    #[test]
+    fn screenshot_size_is_the_last_set_or_a_laptop() {
+        assert_eq!(screenshot_size("unset"), (1440, 900));
+        remember_viewport("s1", 375, 667);
+        assert_eq!(screenshot_size("s1"), (375, 667));
+        assert_eq!(screenshot_size("unset"), (1440, 900));
     }
 
     #[test]

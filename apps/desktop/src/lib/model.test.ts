@@ -14,7 +14,7 @@ import type { Model } from "@/types/events";
 const model = (id: string, provider?: string): Model =>
   ({ id, label: id, efforts: [], defaultEffort: null, provider }) as unknown as Model;
 
-const CODEX = [model("gpt56_sol"), model("gpt55")];
+const CODEX = [model("gpt6_astra"), model("gpt55")];
 const CLAUDE = [model("fable"), model("opus"), model("haiku")];
 
 describe("usableModel", () => {
@@ -25,7 +25,7 @@ describe("usableModel", () => {
   /// The whole point: a model stored under the other harness reaches every
   /// seeding path, not only the one that switched harness.
   it("replaces a pick belonging to the other harness", () => {
-    expect(usableModel(CODEX, "haiku" as never, "codex")).toBe("gpt56_sol");
+    expect(usableModel(CODEX, "haiku" as never, "codex")).toBe("gpt6_astra");
   });
 
   /// The head of the list is a picker-ordering decision. Reading it as an

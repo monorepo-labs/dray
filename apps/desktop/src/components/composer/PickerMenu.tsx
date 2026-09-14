@@ -27,6 +27,32 @@ export type PickerGroup<T> = {
   items: T[];
 };
 
+/// Placeholder rows, drawn only where a picker has nothing yet and is waiting on
+/// something slower than memory — which today is the `#` picker alone, since the
+/// other two read an index and a cached list.
+///
+/// Three, and of uneven width: a row is an icon, a short fixed-width token and a
+/// title, so equal bars would read as a table rather than as a list about to
+/// arrive. Shaped after the issue row deliberately — the point of a skeleton is
+/// that nothing moves when the real rows replace it.
+const SKELETON_WIDTHS = ["w-44", "w-28", "w-36"];
+
+function Skeleton() {
+  return (
+    // Hidden from assistive tech, which is told the list is busy instead: three
+    // rows that say nothing are three rows worth of noise to read through.
+    <div aria-hidden>
+      {SKELETON_WIDTHS.map((width) => (
+        <div key={width} className="flex h-8 items-center gap-2 px-2">
+          <span className="size-3.5 shrink-0 animate-pulse rounded-full bg-muted-foreground/20" />
+          <span className="h-3 w-14 shrink-0 animate-pulse rounded bg-muted-foreground/20" />
+          <span className={cn("h-3 animate-pulse rounded bg-muted-foreground/10", width)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function PickerMenu<T>({
   groups,
   label,
@@ -37,6 +63,7 @@ export default function PickerMenu<T>({
   onHover,
   placement = "above",
   bare = false,
+  loading = false,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -63,6 +90,11 @@ export default function PickerMenu<T>({
   /// travel together today, but one is geometry and one is surface, and reading
   /// the second off the first is what makes a later third state impossible.
   bare?: boolean;
+  /// Whether an answer is still being waited on. Only read where there are no
+  /// rows: a list already holding something paints that, since replacing rows
+  /// somebody is reading with placeholders is the flicker a cache exists to
+  /// remove.
+  loading?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -117,7 +149,11 @@ export default function PickerMenu<T>({
     onHover(index);
   };
 
-  if (!groups.length) return null;
+  // Counted rather than asking whether `groups` is empty: a picker whose one
+  // group holds nothing is the same empty list as no groups at all, and it is
+  // the shape the `#` picker is in on a cold open.
+  const rows = groups.reduce((n, group) => n + group.items.length, 0);
+  if (!rows && !loading) return null;
 
   // Runs across the whole list rather than restarting per group, so it lines up
   // with the flat index the composer navigates by.
@@ -172,7 +208,10 @@ export default function PickerMenu<T>({
         !below && (bare ? "bottom-full -mb-1.5" : "bottom-full mb-1.5"),
       )}
     >
-      {!below && hint}
+      {/* Dropped while the list is still placeholders: naming the keys that
+          navigate a list holding nothing to navigate is chrome describing
+          something that isn't there yet. */}
+      {!below && rows > 0 && hint}
 
       {/* The frame and the scroller are separate elements on purpose. With the
           radius on the scrolling box itself, the scrollbar is laid out in that
@@ -223,6 +262,7 @@ export default function PickerMenu<T>({
           ref={listRef}
           role="listbox"
           aria-label={label}
+          aria-busy={loading}
           // One inset, not two: `p-1` rather than a taller `py`, so the gap above
           // the first row is the gap beside it. Uneven, the top read as a band
           // of empty surface above the list while the sides read as an edge.
@@ -249,6 +289,8 @@ export default function PickerMenu<T>({
             bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1 pr-0",
           )}
         >
+          {!rows && <Skeleton />}
+
           {groups.map((group, g) => (
             <div
               key={group.label ?? `group-${g}`}
@@ -311,7 +353,7 @@ export default function PickerMenu<T>({
         </div>
       </div>
 
-      {below && hint}
+      {below && rows > 0 && hint}
     </div>
   );
 }

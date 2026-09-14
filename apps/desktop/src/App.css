@@ -610,6 +610,35 @@
       color: inherit;
     }
   }
+
+  /* The exception to that `inherit`, and the only accent that gets one. The
+     page's own `--accent-command` measures 1.53:1 on this fill — invisible —
+     but lightness is what carries contrast here, and at hue 110 sRGB holds
+     0.19 chroma all the way up at L 0.94, where hue 75 clips below 0.08. So
+     the run stays unmistakably yellow at 2.77:1, against the 3.14:1 the white
+     prose beside it already sits at.
+
+     Mention keeps the `inherit` above and cannot be fixed: it is hue 245 and so
+     is the fill, so any version of it reads as the bubble rather than as a word
+     on it. Issue is left alone with it — one accent is the idiom worth carrying
+     into this mode, three is a palette.
+
+     Not in the branded bubble, whose fill is a light green this would vanish
+     against; its ink is `--foreground` and the run inherits that. */
+  .user-bubble:not([data-brand]) .text-accent-command {
+    color: oklch(0.94 0.19 110);
+  }
+
+  /* The one palette that *fills* the bubble, so the wash the rule above paints
+     goes over a saturated blue and cannot be seen at all. Here the brand takes
+     the fill instead — the same idiom this mode already uses to say "this is a
+     message you sent", in the colour that says whose command it runs. Ink back
+     to `--foreground`, since the fill is a light green and `--primary-foreground`
+     is near-white; the accent runs inherit it as they do the white above. */
+  .user-bubble[data-brand] {
+    background: var(--brand);
+    color: var(--foreground);
+  }
 }
 
 /* Catppuccin — https://github.com/catppuccin/catppuccin, MIT. Mocha and Latte,
@@ -948,6 +977,19 @@
 
 [data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
   opacity: 1;
+}
+
+/* A prompt running a branded plugin's own command — Greptile's, today. The
+   colour arrives as `--brand` on the element ([pluginBrand.ts]) and this is
+   where it becomes a surface.
+
+   A layer painted *over* the bubble rather than a fill replacing it: the bubble
+   is `bg-card` in fourteen of the fifteen palettes and a translucent wash lands
+   the same on all of them, leaving the text colour the palette chose alone. The
+   fifteenth answers for itself below. */
+.user-bubble[data-brand] {
+  background-image: linear-gradient(var(--brand-wash), var(--brand-wash));
+  --brand-wash: color-mix(in oklab, var(--brand) 16%, transparent);
 }
 
 /* MarkdownTable's scroll box, horizontal-only. `overflow-y: auto` here feeds

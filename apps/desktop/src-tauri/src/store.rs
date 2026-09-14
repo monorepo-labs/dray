@@ -353,6 +353,72 @@ pub async fn list_session_index_items(
     ))
 }
 
+/// The repo root for an entry whose `cwd` is gone, or `None` where none of the
+/// candidates is on disk.
+///
+/// **A managed worktree is never the answer, even where it is the recorded
+/// project and still on disk.** `dray new` used to record the *caller's* own
+/// worktree as the project, and that caller is usually a live session — so
+/// taking `project_path` at its word would move this session into another
+/// session's checkout, which is the one thing a worktree per session exists to
+/// prevent. The repo above it is tried first for that reason, and the recorded
+/// project only where it names no worktree at all.
+///
+/// `None` is the important answer: a project on an unmounted drive reads
+/// exactly like a deleted one from here, and rewriting it would move the
+/// session to a directory the reader never chose. Leaving it alone costs the
+/// PR tab until the drive is back.
+fn surviving_root(item: &SessionIndexItem, dir_exists: impl Fn(&str) -> bool) -> Option<String> {
+    [
+        worktree_root_of(&item.project_path),
+        Some(item.project_path.as_str()),
+        worktree_root_of(&item.cwd),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|root| dir_exists(root))
+    .map(str::to_string)
+}
+
+/// The project root a session belongs to, which is **never a worktree Dray
+/// manages**: an entry filed under one is a mis-filed record, since `dray new`
+/// used to record the caller's own tree as the new session's project.
+///
+/// Both places that move a session out of its worktree need this — the backfill
+/// below and [`relocate_session_to_project`], which is Dray's own delete. The
+/// delete had it wrong and the backfill could not heal it: it rewrote `cwd` to
+/// `project_path` unconditionally, and the result *exists*, so the pass that
+/// repairs a missing `cwd` never looks at it again.
+fn project_root_of(project_path: &str) -> &str {
+    worktree_root_of(project_path).unwrap_or(project_path)
+}
+
+/// The project a `<project>/.claude/worktrees/<name>` path belongs to, or
+/// `None` where the path is not a worktree **Dray manages**.
+///
+/// `<name>` has to be a *direct* child, which is the same reading
+/// `git::is_managed_worktree` takes before it deletes one, and for the
+/// same reason: that shape is what `claude -w` and `create_worktree` mint, and
+/// nothing else here is ours to reason about. Without it a repository that
+/// merely sits somewhere below a `.claude/worktrees/` segment would be read as
+/// a worktree and a session in it moved to an ancestor that is not its repo.
+///
+/// Split on the first occurrence, so the outermost repo is the answer for a
+/// tree made inside a tree — where the nested path is then no direct child of
+/// it and answers `None`, which is right: the entry's recorded project is what
+/// names the repo in that case, and it is tried first anyway.
+///
+/// A `/` separator rather than `Path::components`, because this reads paths the
+/// app itself wrote on the only platform it runs on: CEF, the app picker, the
+/// notification centre and the output mute are all macOS-only, and the release
+/// workflow builds `universal-apple-darwin` and nothing else. A Windows port
+/// has this to fix and a great deal more beside it.
+fn worktree_root_of(path: &str) -> Option<&str> {
+    let (root, name) = path.split_once("/.claude/worktrees/")?;
+    let name = name.trim_end_matches('/');
+    (!name.is_empty() && !name.contains('/')).then_some(root)
+}
+
 /// Split out from the async read so it can be tested without an `index.json`.
 fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
     items.into_iter().filter(|i| i.archived == archived).collect()
@@ -977,7 +1043,9 @@ pub async fn relocate_session_to_project(
         return Ok(None);
     };
 
-    item.cwd = item.project_path.clone();
+    let root = project_root_of(&item.project_path).to_string();
+    item.project_path = root.clone();
+    item.cwd = root;
     item.worktree_name = None;
     item.worktree_removed = true;
     let updated = item.clone();
@@ -1000,13 +1068,33 @@ pub async fn relocate_session_to_project(
 /// produce, and it costs that session its recorded branch instead of its HEAD
 /// rather than anything destructive.
 ///
+/// It also repairs the entries that shape cannot describe: a tree removed by
+/// anything but Dray's own delete leaves `cwd` naming a directory that is gone,
+/// and every `git` and `gh` spawned there then fails with ENOENT before the
+/// binary is reached. See [`surviving_root`] for where those go.
+///
+/// Those get `worktree_removed` too, including the mis-filed `dray new` entries
+/// that were never worktree sessions at all — so `session_branch` answers their
+/// recorded branch, which is the *caller's*, and their PR tab draws the caller's
+/// PR. That is the same false positive the shape rule above can produce,
+/// arriving by another door, and it is honest here for the same reason: their
+/// work did land on that branch.
+///
 /// Writes only when it changed something, so this is a read on every launch
 /// after the first.
 pub async fn backfill_removed_worktrees() -> Result<()> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
-    if mark_relocated(&mut sessions) {
+    // `is_dir` rather than a test for ENOENT specifically, which is the defect
+    // being repaired. An unreadable directory — macOS TCC before the folder
+    // prompt, a stalled network volume — reads as gone here, and that is only
+    // safe because every candidate is an ancestor of the `cwd` or the recorded
+    // project, so a whole-subtree failure answers false for all of them and
+    // `surviving_root` finds nothing to move to. A candidate readable while the
+    // `cwd` is not would relocate a session whose tree is merely unreachable,
+    // costing it the flag below rather than anything destructive.
+    if mark_relocated(&mut sessions, |dir| Path::new(dir).is_dir()) {
         write_session_index(&sessions).await?;
     }
 
@@ -1015,9 +1103,20 @@ pub async fn backfill_removed_worktrees() -> Result<()> {
 
 /// Split out from the async read so it can be tested without an `index.json`.
 /// Answers whether anything changed, which is what decides the write.
-fn mark_relocated(items: &mut [SessionIndexItem]) -> bool {
+fn mark_relocated(items: &mut [SessionIndexItem], dir_exists: impl Fn(&str) -> bool) -> bool {
     let mut changed = false;
     for item in items.iter_mut() {
+        if !dir_exists(&item.cwd) {
+            if let Some(root) = surviving_root(item, &dir_exists) {
+                item.project_path = root.clone();
+                item.cwd = root;
+                item.worktree_name = None;
+                item.worktree_removed = true;
+                changed = true;
+                continue;
+            }
+        }
+
         let relocated = item.worktree_name.is_none()
             && item.cwd == item.project_path
             && item
@@ -2301,15 +2400,134 @@ mod tests {
             session("/p", Some("main"), None),
         ];
 
-        assert!(mark_relocated(&mut items));
+        let on_disk = |dir: &str| dir == "/p" || dir == "/p/.claude/worktrees/calm-owl";
+
+        assert!(mark_relocated(&mut items, on_disk));
         assert!(items[0].worktree_removed);
         assert!(!items[1].worktree_removed);
         assert!(!items[2].worktree_removed);
 
         assert!(
-            !mark_relocated(&mut items),
+            !mark_relocated(&mut items, on_disk),
             "a second pass must report nothing to write"
         );
+    }
+
+    /// A tree removed by anything but Dray's own delete leaves `cwd` naming a
+    /// directory that is gone, and every `git` and `gh` the session runs then
+    /// fails with ENOENT before the binary is reached — which reaches the
+    /// reader as the PR panel saying it could not run `gh` while the sidebar's
+    /// mark for the same session, read in the project root, is fine.
+    #[test]
+    fn a_cwd_that_no_longer_exists_moves_back_to_the_project() {
+        let session = |cwd: &str, project: &str, worktree: Option<&str>| {
+            SessionIndexItem::new(
+                "a",
+                Harness::ClaudeCode,
+                cwd,
+                project,
+                worktree,
+                Some("worktree-calm-owl"),
+                "hi",
+                ModelId::new("opus"),
+                None,
+                ApprovalPolicy::Auto,
+                None,
+            )
+        };
+
+        let mut items = vec![
+            // The tree went without the index hearing about it.
+            session("/p/.claude/worktrees/calm-owl", "/p", Some("calm-owl")),
+            // `dray new` recorded the caller's own worktree as the project, so
+            // both fields dangle and only the shape says where the repo is.
+            session(
+                "/p/.claude/worktrees/gone",
+                "/p/.claude/worktrees/gone",
+                None,
+            ),
+            // The project is unreachable, not deleted — leave it alone.
+            session("/elsewhere/.claude/worktrees/calm-owl", "/elsewhere", None),
+        ];
+
+        assert!(mark_relocated(&mut items, |dir| dir == "/p"));
+
+        for item in &items[..2] {
+            assert_eq!(item.cwd, "/p");
+            assert_eq!(item.project_path, "/p");
+            assert_eq!(item.worktree_name, None);
+            assert!(item.worktree_removed);
+            assert_eq!(item.branch.as_deref(), Some("worktree-calm-owl"));
+        }
+
+        assert_eq!(items[2].cwd, "/elsewhere/.claude/worktrees/calm-owl");
+        assert!(!items[2].worktree_removed);
+
+        assert!(
+            !mark_relocated(&mut items, |dir| dir == "/p"),
+            "a second pass must report nothing to write"
+        );
+    }
+
+    /// Dray's own delete used to set `cwd = project_path` flat, so a session
+    /// whose project was the caller's tree landed in that caller's checkout —
+    /// and the backfill could never heal it, since the result exists.
+    #[test]
+    fn a_project_root_is_never_a_worktree_we_manage() {
+        assert_eq!(project_root_of("/repo/.claude/worktrees/caller"), "/repo");
+        assert_eq!(project_root_of("/repo"), "/repo");
+        assert_eq!(
+            project_root_of("/home/me/.claude/worktrees/proj/subrepo"),
+            "/home/me/.claude/worktrees/proj/subrepo"
+        );
+    }
+
+    /// A path is only a worktree Dray manages where `<name>` is a direct child,
+    /// so an ordinary repository that happens to sit below such a segment is
+    /// left to speak for itself rather than redirected to an ancestor.
+    #[test]
+    fn only_a_direct_child_of_the_worktrees_dir_is_one_of_ours() {
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/calm-owl"), Some("/repo"));
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/calm-owl/"), Some("/repo"));
+
+        // A repository of its own that merely lives below the segment.
+        assert_eq!(worktree_root_of("/home/me/.claude/worktrees/proj/subrepo"), None);
+        // A tree made inside a tree: no direct child of the outermost repo.
+        assert_eq!(
+            worktree_root_of("/repo/.claude/worktrees/caller/.claude/worktrees/mine"),
+            None
+        );
+        assert_eq!(worktree_root_of("/repo/.claude/worktrees/"), None);
+        assert_eq!(worktree_root_of("/repo"), None);
+    }
+
+    /// The caller's worktree recorded as the project is usually a *live*
+    /// session's checkout, so taking `project_path` at its word would put two
+    /// sessions in one directory — the one thing a worktree per session exists
+    /// to prevent. The repo above it is the answer even though the recorded
+    /// project is right there on disk.
+    #[test]
+    fn a_repair_never_lands_in_another_sessions_worktree() {
+        let mut items = vec![SessionIndexItem::new(
+            "a",
+            Harness::ClaudeCode,
+            "/repo/.claude/worktrees/caller/.claude/worktrees/mine",
+            "/repo/.claude/worktrees/caller",
+            None,
+            Some("worktree-mine"),
+            "hi",
+            ModelId::new("opus"),
+            None,
+            ApprovalPolicy::Auto,
+            None,
+        )];
+
+        // The caller is still working in its own tree; only ours has gone.
+        let on_disk = |dir: &str| dir == "/repo" || dir == "/repo/.claude/worktrees/caller";
+
+        assert!(mark_relocated(&mut items, on_disk));
+        assert_eq!(items[0].cwd, "/repo");
+        assert_eq!(items[0].project_path, "/repo");
     }
 
     #[test]

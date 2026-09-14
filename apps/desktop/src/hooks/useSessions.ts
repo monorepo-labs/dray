@@ -1403,12 +1403,14 @@ useEffect(() => {
   };
 }, [harness, modelsGeneration])
 
-/// Drops whatever pi cached and reads again.
+/// Drops whatever the harnesses cached and reads again.
 ///
-/// Only pi has a list that can change under the reader — a provider logged in
-/// while Dray is open is exactly the case somebody would then try to use, and
-/// waiting out the cache reads as the list being wrong. The other two are
-/// tables, so this costs them one round trip and answers the same thing.
+/// pi is the case it exists for: a provider logged in while Dray is open is
+/// exactly the one somebody would then try to use, and waiting out the cache
+/// reads as the list being wrong. Codex's list is read too, and is kept for the
+/// life of the process — so this is the only way to see a model that arrived
+/// with a CLI update without restarting. Claude Code is still a table, so this
+/// costs it one round trip and answers the same thing.
 const refreshModels = () => {
   invoke("refresh_models")
     .catch(() => {})

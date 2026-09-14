@@ -62,8 +62,8 @@ export function inlineMark(segment: Segment, key: number): ReactElement | null {
           type="button"
           title={segment.href}
           className={cn(
-            "cursor-pointer underline decoration-muted-foreground underline-offset-2",
-            "hover:decoration-foreground",
+            "cursor-pointer underline decoration-current/60 underline-offset-2",
+            "hover:decoration-current",
           )}
           onClick={(e) => segment.href && openLink(segment.href, e)}
         >

@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
+import type { CSSProperties } from "react";
 
 import SessionAvatar from "@/components/SessionAvatar";
 import FileLink from "@/components/chat/FileLink";
@@ -16,6 +17,7 @@ import {
 } from "@/lib/highlight";
 import { issueUrl, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
+import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
 import { shortenPath } from "@/lib/tools";
 import { cn } from "@/lib/utils";
@@ -83,6 +85,10 @@ export default function UserMessage({
   const body = withLineBreaks(stripSenderPrefix(text, from));
   const segments = withPaths(highlightSegments(body));
 
+  // A prompt running a branded plugin's own command. Null for everything else,
+  // which is nearly every message.
+  const brand = commandBrand(body);
+
   // An image with neither an archived copy nor bytes of its own — the file was
   // cleared out from under a transcript that still names it. `ImageRow` drops
   // those, so this row is what is left to say about them.
@@ -119,7 +125,15 @@ export default function UserMessage({
         // from the page. `--shadow-card`, not the composer's `--shadow-surface`:
         // this sits *in* the transcript rather than floating at the window's
         // edge, and the crisper one read as an edge cut under it.
-        <div className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)">
+        <div
+          className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)"
+          // The colour rides in and App.css paints it — a palette that fills
+          // this bubble has to answer differently to one that doesn't, and only
+          // the palette knows which it is. `data-brand` is what the rules match
+          // on, since a custom property can't be selected for.
+          data-brand={brand ? "" : undefined}
+          style={brand ? ({ "--brand": brand } as CSSProperties) : undefined}
+        >
           {/* `wrap-anywhere` because a pasted path or URL has no whitespace to
               wrap at, and the bubble's `max-w` caps the box and not what is
               drawn in it — so the glyphs run out over the transcript's own
@@ -235,7 +249,7 @@ export default function UserMessage({
                   <button
                     key={i}
                     type="button"
-                    className={cn(SEGMENT_COLOR.url, "cursor-pointer hover:decoration-foreground")}
+                    className={cn(SEGMENT_COLOR.url, "cursor-pointer hover:decoration-current")}
                     onClick={(e) => openLink(segment.text, e)}
                   >
                     {segment.text}

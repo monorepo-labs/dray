@@ -210,3 +210,24 @@ export function newIssueGeneration(): number {
 /// generation re-reads rather than sitting on it until something else happens to
 /// remount it.
 export const subscribeIssueGeneration = bumped.subscribe;
+
+/// `issues` narrowed to those whose identifier or title holds `query`.
+///
+/// A deliberate approximation of Linear's own match, which also reads
+/// descriptions and so can answer rows this cannot — the picker paints this
+/// while the real read is in flight and replaces it with the server's answer
+/// when that lands, so the cost of under-matching is a row appearing a moment
+/// late rather than one going missing.
+///
+/// Identifier before title, and both case-insensitively: `#dra-53` is how the
+/// tag gets typed, where the identifier is spelled `DRA-53`.
+export function filterIssues(issues: Issue[], query: string): Issue[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return issues;
+
+  return issues.filter(
+    (issue) =>
+      issue.identifier.toLowerCase().includes(needle) ||
+      issue.title.toLowerCase().includes(needle),
+  );
+}
