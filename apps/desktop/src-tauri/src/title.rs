@@ -275,8 +275,9 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
         .with_context(|| format!("couldn't start {} for title generation", harness.label()))?;
 
     let output = match timeout(DEADLINE, child.wait_with_output()).await {
-        Ok(res) => res
-            .with_context(|| format!("{} failed while generating a title", harness.label()))?,
+        Ok(res) => {
+            res.with_context(|| format!("{} failed while generating a title", harness.label()))?
+        }
         Err(_) => bail!("title generation timed out"),
     };
 
@@ -404,9 +405,18 @@ mod tests {
 
     #[test]
     fn strips_the_wrapping_a_model_adds() {
-        assert_eq!(clean_title("\"Fix the auth redirect\"\n").unwrap(), "Fix the auth redirect");
-        assert_eq!(clean_title("**Fix the auth redirect**").unwrap(), "Fix the auth redirect");
-        assert_eq!(clean_title("Fix the auth redirect.").unwrap(), "Fix the auth redirect");
+        assert_eq!(
+            clean_title("\"Fix the auth redirect\"\n").unwrap(),
+            "Fix the auth redirect"
+        );
+        assert_eq!(
+            clean_title("**Fix the auth redirect**").unwrap(),
+            "Fix the auth redirect"
+        );
+        assert_eq!(
+            clean_title("Fix the auth redirect.").unwrap(),
+            "Fix the auth redirect"
+        );
     }
 
     /// Real output from `--append-system-prompt`: the child stayed a coding
@@ -535,8 +545,12 @@ mod command_tests {
     /// model, so neither reader needs the other's binary installed.
     #[tokio::test]
     async fn each_harness_names_its_own_cheap_model() {
-        assert!(args_for(Harness::ClaudeCode).await.contains(&"haiku".to_string()));
-        assert!(args_for(Harness::Codex).await.contains(&"gpt-5.6-luna".to_string()));
+        assert!(args_for(Harness::ClaudeCode)
+            .await
+            .contains(&"haiku".to_string()));
+        assert!(args_for(Harness::Codex)
+            .await
+            .contains(&"gpt-5.6-luna".to_string()));
     }
 
     /// Claude keeps the project out by having no tool to reach it with.
@@ -572,7 +586,10 @@ mod command_tests {
 
         let scratch = scratch_dir().await.unwrap();
         assert!(scratch.is_dir());
-        assert!(!scratch.starts_with(project), "{scratch:?} is inside the repo");
+        assert!(
+            !scratch.starts_with(project),
+            "{scratch:?} is inside the repo"
+        );
         assert_eq!(
             tokio::fs::read_dir(&scratch)
                 .await
@@ -660,7 +677,9 @@ mod cli_tests {
 
     #[tokio::test]
     async fn an_empty_prompt_never_spawns() {
-        assert!(generate_title(Harness::ClaudeCode, "   \n ", ".").await.is_err());
+        assert!(generate_title(Harness::ClaudeCode, "   \n ", ".")
+            .await
+            .is_err());
         assert!(generate_title(Harness::Codex, "   \n ", ".").await.is_err());
     }
 
@@ -678,7 +697,10 @@ mod cli_tests {
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("/nonexistent/worktrees/blue-kite"), "got: {err}");
+        assert!(
+            err.contains("/nonexistent/worktrees/blue-kite"),
+            "got: {err}"
+        );
     }
 }
 
@@ -701,7 +723,10 @@ mod injection_tests {
             .await
             .unwrap();
 
-            assert!(!title.to_lowercase().contains("pwned"), "{harness:?}: {title}");
+            assert!(
+                !title.to_lowercase().contains("pwned"),
+                "{harness:?}: {title}"
+            );
             println!("{harness:?} title: {title}");
         }
     }

@@ -158,7 +158,10 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
 
                 let allow = behavior == "allow";
                 (
-                    format!("{} {subject}", if allow { "Always allow" } else { "Always deny" }),
+                    format!(
+                        "{} {subject}",
+                        if allow { "Always allow" } else { "Always deny" }
+                    ),
                     PermissionOptionKind::AlwaysRule,
                     if allow {
                         PermissionBehavior::Allow

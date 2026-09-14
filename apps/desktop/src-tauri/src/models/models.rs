@@ -598,7 +598,10 @@ mod tests {
     /// level, or "More models" is a menu of models that cannot be run.
     #[test]
     fn a_model_under_more_still_runs() {
-        let more: Vec<Model> = claude_models().into_iter().filter(|m| m.secondary).collect();
+        let more: Vec<Model> = claude_models()
+            .into_iter()
+            .filter(|m| m.secondary)
+            .collect();
         assert!(!more.is_empty());
 
         for model in more {
@@ -693,7 +696,10 @@ mod tests {
             Some(id("opus")),
             "an alias must resolve to its persisted id, not to itself"
         );
-        assert_eq!(id_for_arg("gpt-5.6-sol", Harness::Codex), Some(id("gpt56_sol")));
+        assert_eq!(
+            id_for_arg("gpt-5.6-sol", Harness::Codex),
+            Some(id("gpt56_sol"))
+        );
 
         assert_eq!(id_for_arg("opus", Harness::Codex), None);
         assert_eq!(id_for_arg("gpt-5.6-sol", Harness::ClaudeCode), None);
@@ -742,7 +748,10 @@ mod wire_tests {
         let some: Option<Effort> = serde_json::from_str("\"xhigh\"").unwrap();
         assert_eq!(some, Some(Effort::Xhigh));
 
-        assert_eq!(serde_json::to_string(&Some(Effort::Max)).unwrap(), "\"max\"");
+        assert_eq!(
+            serde_json::to_string(&Some(Effort::Max)).unwrap(),
+            "\"max\""
+        );
     }
 
     /// Every level the CLI documents must survive the round trip, or a session
@@ -759,7 +768,12 @@ mod wire_tests {
         ] {
             let json = serde_json::to_string(&e).unwrap();
             assert_eq!(json, format!("\"{}\"", e.as_arg()));
-            assert_eq!(Effort::from_arg(e.as_arg()), Some(e), "{} lost its inverse", e.as_arg());
+            assert_eq!(
+                Effort::from_arg(e.as_arg()),
+                Some(e),
+                "{} lost its inverse",
+                e.as_arg()
+            );
         }
     }
 

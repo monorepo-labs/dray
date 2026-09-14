@@ -28,7 +28,6 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(target_os = "macos")]
 pub mod chromium;
-mod local_servers;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]
@@ -40,6 +39,7 @@ pub mod github;
 pub mod harness;
 #[path = "issues/issues.rs"]
 pub mod issues;
+mod local_servers;
 #[path = "models/models.rs"]
 pub mod models;
 pub mod notifications;

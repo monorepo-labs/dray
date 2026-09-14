@@ -69,8 +69,7 @@ pub struct Desk {
 /// apart — registered inside `pi::init`, read from a Tauri command — and
 /// threading a handle between them would put pi's own concern through every
 /// signature in between.
-static DESKS: LazyLock<Mutex<HashMap<String, Desk>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static DESKS: LazyLock<Mutex<HashMap<String, Desk>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Hands out [`Desk::token`]. Only ever increments, so no two desks in one run
 /// of the app can share one.
@@ -238,10 +237,11 @@ impl Desk {
                 continue;
             };
 
-            if let Err(error) =
-                self.client
-                    .send(&super::dialog::response(method, request_id, &HashMap::new()))
-            {
+            if let Err(error) = self.client.send(&super::dialog::response(
+                method,
+                request_id,
+                &HashMap::new(),
+            )) {
                 eprintln!("[pi] could not cancel dialog {request_id}: {error}");
             }
         }

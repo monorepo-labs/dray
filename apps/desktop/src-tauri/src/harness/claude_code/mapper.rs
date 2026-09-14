@@ -5,10 +5,9 @@
 
 use crate::{
     events::{
-        rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef,
-        BlockType, ContextWindow, DeltaEvent, ImageRef, ModelUsage, PermissionBehavior, Question,
-        QuestionOption, SessionInfo,
-        Settings, Subagent, ToolResult, ToolType, TurnStatus, Usage,
+        rfc3339_from_unix, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef, BlockType,
+        ContextWindow, DeltaEvent, ImageRef, ModelUsage, PermissionBehavior, Question,
+        QuestionOption, SessionInfo, Settings, Subagent, ToolResult, ToolType, TurnStatus, Usage,
     },
     harness::{
         claude_code::{
@@ -32,7 +31,6 @@ use std::{
         Arc,
     },
 };
-
 
 pub struct Mapper {
     /// Set by `message_start`, read by the block frames that follow it.
@@ -347,7 +345,14 @@ impl Mapper {
 
         // No Claude Code line carries a turn id; the session layer opens a turn
         // when it writes a prompt.
-        let mut event = AgentEvent::mint(session_id, Harness::ClaudeCode, seq, None, subagent, payload);
+        let mut event = AgentEvent::mint(
+            session_id,
+            Harness::ClaudeCode,
+            seq,
+            None,
+            subagent,
+            payload,
+        );
         if let Some(ts) = timestamp {
             event.ts = ts;
         }
@@ -777,8 +782,10 @@ impl Mapper {
         model_usage: &Value,
     ) -> Usage {
         let per_model = map_model_usage(model_usage);
-        let window = match (self.last_occupancy, context_window(&per_model, self.model.as_deref()))
-        {
+        let window = match (
+            self.last_occupancy,
+            context_window(&per_model, self.model.as_deref()),
+        ) {
             (Some(used_tokens), Some(max_tokens)) if used_tokens > 0 => Some(ContextWindow {
                 used_tokens,
                 max_tokens,
@@ -852,7 +859,11 @@ fn is_interrupt_notice(text: &str) -> bool {
 fn is_auth_failure(text: &str) -> bool {
     crate::harness::mentions_any(
         text,
-        &["please run /login", "failed to authenticate", "not logged in"],
+        &[
+            "please run /login",
+            "failed to authenticate",
+            "not logged in",
+        ],
     )
 }
 
@@ -1324,7 +1335,10 @@ mod tests {
         );
 
         // Untagged text is returned untouched, wrapper-shaped or not.
-        assert_eq!(strip_tool_use_error("plain failure".into()), "plain failure");
+        assert_eq!(
+            strip_tool_use_error("plain failure".into()),
+            "plain failure"
+        );
         assert_eq!(
             strip_tool_use_error("grep hit: <tool_use_error> appears here".into()),
             "grep hit: <tool_use_error> appears here"
@@ -1389,7 +1403,10 @@ mod tests {
 
         let image = &result.images[0];
         assert_eq!(image.mime_type.as_deref(), Some("image/png"));
-        assert!(image.path.is_none(), "the session layer archives it, not us");
+        assert!(
+            image.path.is_none(),
+            "the session layer archives it, not us"
+        );
         assert!(image
             .url
             .as_deref()
@@ -1398,7 +1415,10 @@ mod tests {
         // The sidecar's copy of the same bytes is what used to be persisted.
         let file = result.structured.as_ref().unwrap().get("file").unwrap();
         assert!(file.get("base64").is_none(), "the second copy survived");
-        assert!(file.get("dimensions").is_some(), "the shape came off with it");
+        assert!(
+            file.get("dimensions").is_some(),
+            "the shape came off with it"
+        );
     }
 
     /// A prompt reaches the mapper two ways — bare string, or wrapped in a lone
@@ -1644,7 +1664,9 @@ mod tests {
             let line = format!(
                 r#"{{"type":"rate_limit_event","rate_limit_info":{info},"uuid":"u","session_id":"s"}}"#
             );
-            Mapper::default().map(parser::parse_line(&line).unwrap()).unwrap()
+            Mapper::default()
+                .map(parser::parse_line(&line).unwrap())
+                .unwrap()
         };
 
         assert!(
@@ -1671,7 +1693,10 @@ mod tests {
         );
         assert!(event(r#"{"status":"rejected"}"#).is_some());
         assert!(event(r#"{"status":"some_future_status"}"#).is_some());
-        assert!(event("{}").is_some(), "a missing status is not a healthy one");
+        assert!(
+            event("{}").is_some(),
+            "a missing status is not a healthy one"
+        );
 
         let payload = event(
             r#"{"status":"rejected","resetsAt":1785494400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false}"#,
@@ -1887,7 +1912,10 @@ mod tests {
         .sum();
 
         assert_eq!(summed, 401_103);
-        assert!(summed > 9 * 41_102, "the overshoot is a multiple, not a drift");
+        assert!(
+            summed > 9 * 41_102,
+            "the overshoot is a multiple, not a drift"
+        );
     }
 
     /// A window keyed by a model this session never ran is not this session's
@@ -2044,7 +2072,10 @@ mod tests {
         let pending = PendingPermissions::default();
         let mut mapper = Mapper::new(Arc::new(AtomicU64::new(0)), Arc::clone(&pending));
 
-        let events = map_fixture(&mut mapper, include_str!("fixtures/ask_user_question.jsonl"));
+        let events = map_fixture(
+            &mut mapper,
+            include_str!("fixtures/ask_user_question.jsonl"),
+        );
 
         assert!(!events
             .iter()
@@ -2229,7 +2260,9 @@ mod tests {
     fn ignores_a_status_line_that_drives_nothing() {
         let line = r#"{"type":"system","subtype":"status","status":null,"compact_result":"success","uuid":"u","session_id":"s"}"#;
 
-        let event = Mapper::default().map(parser::parse_line(line).unwrap()).unwrap();
+        let event = Mapper::default()
+            .map(parser::parse_line(line).unwrap())
+            .unwrap();
         assert!(event.is_none());
     }
 
@@ -2354,8 +2387,7 @@ mod tests {
     #[test]
     fn a_cancel_for_an_unknown_request_says_nothing() {
         let mut mapper = Mapper::default();
-        let cancel =
-            r#"{"type":"control_cancel_request","request_id":"7c504efe-e476-4519-b3cc-fd5f0a1b6f7d"}"#;
+        let cancel = r#"{"type":"control_cancel_request","request_id":"7c504efe-e476-4519-b3cc-fd5f0a1b6f7d"}"#;
 
         assert!(map_fixture(&mut mapper, cancel).is_empty());
     }
@@ -2374,4 +2406,3 @@ mod tests {
         assert!(map_fixture(&mut mapper, line).is_empty());
     }
 }
-

@@ -237,7 +237,11 @@ mod tests {
     /// The answer is the label, which is what `ctx.ui.select` resolves to.
     #[test]
     fn a_select_answers_with_the_label_that_was_picked() {
-        let sent = response("select", "d-1", &answers("Allow always", "Allow probe_tool?"));
+        let sent = response(
+            "select",
+            "d-1",
+            &answers("Allow always", "Allow probe_tool?"),
+        );
 
         assert_eq!(
             sent,
@@ -421,7 +425,11 @@ mod tests {
                 .filter_map(|event| {
                     let (_, pending, questions) = for_request(&event)?;
                     Some((
-                        pending.reply.dialog_method().unwrap_or_default().to_string(),
+                        pending
+                            .reply
+                            .dialog_method()
+                            .unwrap_or_default()
+                            .to_string(),
                         questions[0].free_text,
                         questions[0].options.len(),
                     ))

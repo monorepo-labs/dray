@@ -119,7 +119,10 @@ pub async fn list_commands(cwd: &str) -> Vec<SlashCommand> {
 /// not just this one — so the reader retypes. That is a worse cure than it
 /// sounds and a better one than a session that answered the wrong prompt.
 pub async fn skill_item(client: &RpcClient, text: &str) -> Result<Option<Value>> {
-    let Some(name) = text.strip_prefix('/').and_then(|rest| rest.split_whitespace().next()) else {
+    let Some(name) = text
+        .strip_prefix('/')
+        .and_then(|rest| rest.split_whitespace().next())
+    else {
         return Ok(None);
     };
 

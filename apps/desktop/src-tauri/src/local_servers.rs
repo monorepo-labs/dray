@@ -51,7 +51,11 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
     let in_tree = |pid: u32| {
         tree.as_deref()
             .zip(cwds.get(&pid))
-            .map(|(tree, cwd)| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.clone()).starts_with(tree))
+            .map(|(tree, cwd)| {
+                std::fs::canonicalize(cwd)
+                    .unwrap_or_else(|_| cwd.clone())
+                    .starts_with(tree)
+            })
             .unwrap_or(false)
     };
     // Dray's own DevTools port lists otherwise: a dev build runs from the tree.
@@ -62,7 +66,11 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
         .filter(|(pid, _, _)| *pid != me)
         .filter_map(|(pid, name, port)| {
             let is_mine = mine.contains(&pid);
-            (is_mine || in_tree(pid)).then_some(LocalServer { port, process: name, mine: is_mine })
+            (is_mine || in_tree(pid)).then_some(LocalServer {
+                port,
+                process: name,
+                mine: is_mine,
+            })
         })
         .filter(|s| seen.insert(s.port))
         .collect();
@@ -114,8 +122,15 @@ fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
     if pids.is_empty() {
         return HashMap::new();
     }
-    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-    let Ok(out) = Command::new("lsof").args(["-a", "-p", &list, "-d", "cwd", "-Fpn"]).output() else {
+    let list = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let Ok(out) = Command::new("lsof")
+        .args(["-a", "-p", &list, "-d", "cwd", "-Fpn"])
+        .output()
+    else {
         return HashMap::new();
     };
     parse_cwds(&String::from_utf8_lossy(&out.stdout))
@@ -146,9 +161,16 @@ fn parse_lsof(text: &str) -> Vec<(u32, String, u16)> {
             ("n", rest) => {
                 // `127.0.0.1:3000`, `[::1]:3000`, `*:3000`; loopback and
                 // wildcard both answer on localhost.
-                let Some((host, port)) = rest.rsplit_once(':') else { continue };
-                let Ok(port) = port.parse::<u16>() else { continue };
-                let local = matches!(host, "127.0.0.1" | "[::1]" | "*" | "localhost" | "0.0.0.0" | "[::]");
+                let Some((host, port)) = rest.rsplit_once(':') else {
+                    continue;
+                };
+                let Ok(port) = port.parse::<u16>() else {
+                    continue;
+                };
+                let local = matches!(
+                    host,
+                    "127.0.0.1" | "[::1]" | "*" | "localhost" | "0.0.0.0" | "[::]"
+                );
                 if local && pid != 0 {
                     rows.push((pid, name.clone(), port));
                 }

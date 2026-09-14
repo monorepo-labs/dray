@@ -225,8 +225,14 @@ mod tests {
 
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
-        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), TARGET_RATE);
-        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize, wav.len() - 8);
+        assert_eq!(
+            u32::from_le_bytes(wav[24..28].try_into().unwrap()),
+            TARGET_RATE
+        );
+        assert_eq!(
+            u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize,
+            wav.len() - 8
+        );
     }
 
     /// Full scale must not wrap to the opposite rail, which is the loudest

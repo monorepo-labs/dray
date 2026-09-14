@@ -263,8 +263,7 @@ fn emit(
 
 /// Resolves an id to the path of an installed model, or says why not.
 pub async fn installed_path(model_id: &str) -> Result<PathBuf> {
-    let model =
-        catalog::find(model_id).ok_or_else(|| anyhow!("unknown model \"{model_id}\""))?;
+    let model = catalog::find(model_id).ok_or_else(|| anyhow!("unknown model \"{model_id}\""))?;
 
     if !is_installed(model).await {
         bail!("{} is not downloaded yet", model.name);

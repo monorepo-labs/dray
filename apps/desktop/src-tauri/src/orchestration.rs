@@ -118,8 +118,8 @@ pub async fn serve(app: AppHandle) -> Result<()> {
     // running beside.
     tokio::fs::remove_file(&path).await.ok();
 
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("could not bind {}", path.display()))?;
+    let listener =
+        UnixListener::bind(&path).with_context(|| format!("could not bind {}", path.display()))?;
 
     restrict(&path)?;
 
@@ -201,9 +201,9 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
         Ok(Version { v }) if v != PROTOCOL_VERSION => Response::error(mismatch(v)),
         _ => match serde_json::from_str::<Envelope>(&line) {
             Ok(envelope) => match dispatch(envelope.request, app).await {
-            Ok(response) => response,
-            // Reported rather than logged: the caller is an agent, and this
-            // string is what it reads back as tool output.
+                Ok(response) => response,
+                // Reported rather than logged: the caller is an agent, and this
+                // string is what it reads back as tool output.
                 Err(e) => Response::error(format!("{e:#}")),
             },
             Err(e) => Response::error(format!("could not parse the request: {e}")),
@@ -233,10 +233,12 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
 async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     #[cfg(all(feature = "cef", target_os = "macos"))]
     {
-        Ok(match crate::cef::automation::run(&request.session_id, request.action).await {
-            Ok((output, data)) => Response::Browser { output, data },
-            Err(message) => Response::error(message),
-        })
+        Ok(
+            match crate::cef::automation::run(&request.session_id, request.action).await {
+                Ok((output, data)) => Response::Browser { output, data },
+                Err(message) => Response::error(message),
+            },
+        )
     }
     #[cfg(not(all(feature = "cef", target_os = "macos")))]
     {
@@ -441,7 +443,10 @@ async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
         // deleted — names a branch this one has never heard of. Said here
         // rather than left to git, whose error names the branch without saying
         // that a session was what asked for it.
-        if crate::git::resolve_commit(project_path, &branch).await.is_none() {
+        if crate::git::resolve_commit(project_path, &branch)
+            .await
+            .is_none()
+        {
             bail!(
                 "session {from} is on branch {branch}, which {project_path} does not have — \
                  check the two are the same repository, and that the branch still exists"
@@ -451,7 +456,10 @@ async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
         return Ok(branch);
     }
 
-    if crate::git::resolve_commit(project_path, from).await.is_some() {
+    if crate::git::resolve_commit(project_path, from)
+        .await
+        .is_some()
+    {
         return Ok(from.to_string());
     }
 
@@ -534,7 +542,10 @@ async fn resolve_model(
         });
     }
 
-    if let Some(inherited) = parent.map(|p| p.model.clone()).filter(|id| runs_on(id, harness)) {
+    if let Some(inherited) = parent
+        .map(|p| p.model.clone())
+        .filter(|id| runs_on(id, harness))
+    {
         return Ok(inherited);
     }
 
@@ -569,7 +580,9 @@ fn resolve_effort(
         })?));
     }
 
-    Ok(parent.filter(|p| p.harness == harness).and_then(|p| p.effort))
+    Ok(parent
+        .filter(|p| p.harness == harness)
+        .and_then(|p| p.effort))
 }
 
 /// Sends a prompt into a session that already exists.
@@ -770,7 +783,10 @@ mod tests {
             resolve_effort(None, Some(&parent), Harness::ClaudeCode).unwrap(),
             Some(Effort::High)
         );
-        assert_eq!(resolve_effort(None, Some(&parent), Harness::Codex).unwrap(), None);
+        assert_eq!(
+            resolve_effort(None, Some(&parent), Harness::Codex).unwrap(),
+            None
+        );
         // A level the caller named stands whatever the parent ran.
         assert_eq!(
             resolve_effort(Some("max"), Some(&parent), Harness::Codex).unwrap(),

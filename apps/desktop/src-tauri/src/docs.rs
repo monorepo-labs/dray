@@ -186,8 +186,12 @@ fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>)
     };
 
     for path in paths {
-        let Ok(real) = std::fs::canonicalize(&path) else { continue };
-        let Some(dir) = real.parent().map(|p| p.to_path_buf()) else { continue };
+        let Ok(real) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        let Some(dir) = real.parent().map(|p| p.to_path_buf()) else {
+            continue;
+        };
         watch_dir(dir);
 
         // The lexical path with only its *directory* resolved, so a doc under a
@@ -284,7 +288,9 @@ mod tests {
         let path = at(&dir, "notes.md");
         std::fs::write(&path, "# theirs\n").unwrap();
 
-        let outcome = save_doc(path.clone(), "# mine\n".into(), None).await.unwrap();
+        let outcome = save_doc(path.clone(), "# mine\n".into(), None)
+            .await
+            .unwrap();
         assert_eq!(outcome, SaveOutcome::Saved);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# mine\n");
 
@@ -356,7 +362,10 @@ mod tests {
         // exist is dropped rather than watched blind.
         assert_eq!(dirs, vec![std::fs::canonicalize(&dir).unwrap()]);
         assert_eq!(watched.len(), 2);
-        assert_eq!(watched.get(&std::fs::canonicalize(&one).unwrap()), Some(&one));
+        assert_eq!(
+            watched.get(&std::fs::canonicalize(&one).unwrap()),
+            Some(&one)
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -366,7 +375,9 @@ mod tests {
         let dir = scratch();
         let path = at(&dir, "typo.md");
 
-        assert!(save_doc(path.clone(), "# new\n".into(), None).await.is_err());
+        assert!(save_doc(path.clone(), "# new\n".into(), None)
+            .await
+            .is_err());
         assert!(!std::path::Path::new(&path).exists());
 
         std::fs::remove_dir_all(&dir).unwrap();

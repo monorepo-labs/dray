@@ -8,8 +8,8 @@
 //! itself, and injects it before the model turn, so a 40MB CSV costs a path
 //! rather than a context window. That means a non-image attachment needs no
 //! wire surface at all: it is prompt text by the time it leaves here.
-use anyhow::{Context, Result};
 use crate::harness::Harness;
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -439,7 +439,10 @@ mod archive_tests {
         archive_result_images(&session, &mut images).await;
 
         let stored = images[0].path.as_deref().expect("not archived");
-        assert!(stored.ends_with(".gif"), "{stored} took the wrong extension");
+        assert!(
+            stored.ends_with(".gif"),
+            "{stored} took the wrong extension"
+        );
         assert!(images[0].url.is_none(), "the bytes outlived the archive");
         assert_eq!(
             fs::read(stored).await.unwrap(),

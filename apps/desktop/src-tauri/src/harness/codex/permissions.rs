@@ -27,8 +27,14 @@ pub struct ApprovalKind {
 }
 
 impl ApprovalKind {
-    pub const COMMAND: Self = Self { tool_name: "shell", display_name: "Shell" };
-    pub const FILE_CHANGE: Self = Self { tool_name: "apply_patch", display_name: "Edit" };
+    pub const COMMAND: Self = Self {
+        tool_name: "shell",
+        display_name: "Shell",
+    };
+    pub const FILE_CHANGE: Self = Self {
+        tool_name: "apply_patch",
+        display_name: "Edit",
+    };
 }
 
 /// Builds the held request and the buttons for it in one pass, so what the user
@@ -229,7 +235,8 @@ mod tests {
     /// one way this could grant something the server never offered.
     #[test]
     fn a_button_carries_the_servers_own_decision() {
-        let amendment = json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh"]}});
+        let amendment =
+            json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh"]}});
         let request = request_offering(json!(["accept", amendment.clone(), "decline"]));
 
         let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
@@ -257,10 +264,7 @@ mod tests {
 
         let (_, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
         let labels: Vec<&str> = offered.iter().map(|o| o.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            ["Allow once", "Always allow example.com", "Deny"]
-        );
+        assert_eq!(labels, ["Allow once", "Always allow example.com", "Deny"]);
     }
 
     /// A file change carries no command, so the amendment label has nothing to

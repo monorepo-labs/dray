@@ -80,7 +80,12 @@ pub async fn list_branches(cwd: &str) -> Result<BranchList, Fail> {
 pub async fn worktree_branch_names(cwd: &str) -> Vec<String> {
     match git(
         cwd,
-        &["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"],
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/",
+            "refs/remotes/",
+        ],
     )
     .await
     {
@@ -119,10 +124,13 @@ fn parse_worktree_branch_names(raw: &str) -> Vec<String> {
 /// string `main`, which it then fails to `rev-parse`, and claiming a base that
 /// can't resolve would be worse than saying nothing.
 pub async fn default_base(cwd: &str) -> Option<String> {
-    if let Some(head) = git(cwd, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    if let Some(head) = git(
+        cwd,
+        &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"],
+    )
+    .await
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
     {
         return Some(head);
     }
@@ -310,7 +318,11 @@ pub async fn base_ref_tree(cwd: &str) -> Option<String> {
     let base = default_base(cwd).await;
     let base = base.as_deref().unwrap_or("HEAD");
 
-    let tree = git(cwd, &["rev-parse", "--verify", "-q", &format!("{base}^{{tree}}")]).await?;
+    let tree = git(
+        cwd,
+        &["rev-parse", "--verify", "-q", &format!("{base}^{{tree}}")],
+    )
+    .await?;
 
     let tree = tree.trim().to_string();
     (!tree.is_empty()).then_some(tree)
@@ -431,7 +443,11 @@ fn is_tree_id(id: &str) -> bool {
 /// since the panel names a file per row and two rows for one move reads as
 /// twice the work.
 #[tauri::command]
-pub async fn changes_since(cwd: &str, baseline: &str, head: Option<&str>) -> Result<ChangeSet, Fail> {
+pub async fn changes_since(
+    cwd: &str,
+    baseline: &str,
+    head: Option<&str>,
+) -> Result<ChangeSet, Fail> {
     if !is_tree_id(baseline) {
         fail!("invalid baseline id");
     }
@@ -527,9 +543,12 @@ async fn diff_trees(cwd: &str, base: &str, head: &str) -> Result<Vec<ChangedFile
     // working-tree file whose name happens to be a hex sha (build caches do
     // this) makes the whole command die with "ambiguous argument". Verified
     // reproducible; one token closes it.
-    let status = git(cwd, &["diff", "-M", "-z", "--name-status", base, head, "--"])
-        .await
-        .context("git diff --name-status failed")?;
+    let status = git(
+        cwd,
+        &["diff", "-M", "-z", "--name-status", base, head, "--"],
+    )
+    .await
+    .context("git diff --name-status failed")?;
     let numstat = git(cwd, &["diff", "-M", "-z", "--numstat", base, head, "--"])
         .await
         .context("git diff --numstat failed")?;
@@ -1518,7 +1537,11 @@ pub async fn create_worktree(project_path: &str, name: &str, base: &str) -> Resu
 /// The branch delete is best-effort and reported through the return value
 /// rather than as a failure: the directory is what the reader asked to be rid
 /// of, and a branch left behind is tidy-up, not a failed removal.
-pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Option<&str>) -> Result<bool> {
+pub async fn remove_worktree(
+    project_path: &str,
+    worktree_path: &str,
+    branch: Option<&str>,
+) -> Result<bool> {
     let project = PathBuf::from(project_path);
     let tree = PathBuf::from(worktree_path);
 
@@ -1526,7 +1549,10 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
         bail!("{worktree_path} is not a worktree Dray created, so it will not be removed");
     }
 
-    if let Some(reason) = worktree_disposition(worktree_path, project_path).await.locked_by {
+    if let Some(reason) = worktree_disposition(worktree_path, project_path)
+        .await
+        .locked_by
+    {
         bail!("that worktree is in use by another session ({reason})");
     }
 
@@ -1535,7 +1561,12 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
     let _ = git(project_path, &["worktree", "unlock", worktree_path]).await;
 
     if Path::new(worktree_path).exists() {
-        if let Err(e) = run(project_path, &["worktree", "remove", "--force", worktree_path]).await {
+        if let Err(e) = run(
+            project_path,
+            &["worktree", "remove", "--force", worktree_path],
+        )
+        .await
+        {
             // Git no longer recognising the tree is the outcome we wanted, not
             // a failure: prune the stale registration and carry on. Anything
             // else is a real refusal and the reader has to see it.
@@ -1556,12 +1587,11 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
     // `--end-of-options` so a branch whose name begins with `-` is a name and
     // not a flag. The name comes from our own index, but it was minted from a
     // worktree name the user could have chosen.
-    Ok(run(
-        project_path,
-        &["branch", "-D", "--end-of-options", branch],
+    Ok(
+        run(project_path, &["branch", "-D", "--end-of-options", branch])
+            .await
+            .is_ok(),
     )
-    .await
-    .is_ok())
 }
 
 /// Git's ways of saying "that isn't a worktree I know about", which is success
@@ -1684,11 +1714,7 @@ mod tests {
         assert_eq!(
             parsed,
             vec![
-                (
-                    "R100".into(),
-                    "after.txt".into(),
-                    Some("before.txt".into())
-                ),
+                ("R100".into(), "after.txt".into(), Some("before.txt".into())),
                 ("M".into(), "bin.dat".into(), None),
                 ("D".into(), "gone.txt".into(), None),
                 ("M".into(), "keep.txt".into(), None),
@@ -1703,7 +1729,10 @@ mod tests {
 
         // The rename is keyed by its new name, matching name-status.
         let renamed = &parsed["after.txt"];
-        assert_eq!((renamed.added, renamed.removed, renamed.binary), (0, 0, false));
+        assert_eq!(
+            (renamed.added, renamed.removed, renamed.binary),
+            (0, 0, false)
+        );
 
         // Binary reports `-` for both counts, which must not read as a change
         // of zero lines that happens to be text.
@@ -1785,7 +1814,14 @@ mod tests {
 
         run(
             at,
-            &["worktree", "add", "-q", "-b", &branch, path.to_str().unwrap()],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &branch,
+                path.to_str().unwrap(),
+            ],
         )
         .await
         .unwrap();
@@ -1793,7 +1829,13 @@ mod tests {
         if let Some(reason) = lock {
             run(
                 at,
-                &["worktree", "lock", "--reason", reason, path.to_str().unwrap()],
+                &[
+                    "worktree",
+                    "lock",
+                    "--reason",
+                    reason,
+                    path.to_str().unwrap(),
+                ],
             )
             .await
             .unwrap();
@@ -1812,8 +1854,12 @@ mod tests {
 
         // Work sitting on a branch nobody pushed — the case a reviewer spawned
         // off `origin/<default>` would find nothing of.
-        run(at, &["checkout", "-q", "-b", "authors-work"]).await.unwrap();
-        fs::write(dir.join("feature.txt"), "the work\n").await.unwrap();
+        run(at, &["checkout", "-q", "-b", "authors-work"])
+            .await
+            .unwrap();
+        fs::write(dir.join("feature.txt"), "the work\n")
+            .await
+            .unwrap();
         run(at, &["add", "-A"]).await.unwrap();
         run(at, &["commit", "-qm", "the work"]).await.unwrap();
         run(at, &["checkout", "-q", "-"]).await.unwrap();
@@ -1851,10 +1897,15 @@ mod tests {
         let err = create_worktree(at, "nope", "no-such-branch")
             .await
             .expect_err("an unresolvable base is not a base");
-        assert!(err.to_string().contains("no-such-branch"), "unhelpful: {err}");
+        assert!(
+            err.to_string().contains("no-such-branch"),
+            "unhelpful: {err}"
+        );
 
         assert!(!dir.join(".claude").join("worktrees").join("nope").exists());
-        let branches = git(at, &["branch", "--list", "worktree-nope"]).await.unwrap();
+        let branches = git(at, &["branch", "--list", "worktree-nope"])
+            .await
+            .unwrap();
         assert!(branches.trim().is_empty(), "branch left behind: {branches}");
 
         fs::remove_dir_all(&dir).await.ok();
@@ -1921,7 +1972,10 @@ mod tests {
         let err = create_worktree(at, "recycled", "HEAD")
             .await
             .expect_err("a branch another worktree holds must not be reset");
-        assert!(err.to_string().contains("already used"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("already used"),
+            "unexpected: {err}"
+        );
 
         fs::remove_dir_all(&dir).await.ok();
     }
@@ -1964,7 +2018,9 @@ mod tests {
         let at = dir.to_str().unwrap();
 
         assert!(current_branch(at).await.is_some());
-        run(at, &["checkout", "-q", "--detach", "HEAD"]).await.unwrap();
+        run(at, &["checkout", "-q", "--detach", "HEAD"])
+            .await
+            .unwrap();
         // `rev-parse --abbrev-ref` answers the literal string "HEAD" here,
         // which is the wrong answer this reads around.
         assert_eq!(current_branch(at).await, None);
@@ -1996,7 +2052,9 @@ mod tests {
         assert!(deleted_branch, "the branch outlived its worktree");
         assert!(!path.exists(), "the directory is still on disk");
 
-        let branches = git(at, &["branch", "--list", "worktree-one"]).await.unwrap();
+        let branches = git(at, &["branch", "--list", "worktree-one"])
+            .await
+            .unwrap();
         assert!(branches.trim().is_empty(), "branch left behind: {branches}");
 
         let list = git(at, &["worktree", "list", "--porcelain"]).await.unwrap();
@@ -2076,9 +2134,12 @@ mod tests {
         assert_eq!(dirty.unpushed_commits, 1);
 
         // A branch some other ref also holds is not work this removal loses.
-        run(at, &["update-ref", "refs/remotes/origin/four", "worktree-four"])
-            .await
-            .unwrap();
+        run(
+            at,
+            &["update-ref", "refs/remotes/origin/four", "worktree-four"],
+        )
+        .await
+        .unwrap();
         let pushed = worktree_disposition(tree, at).await;
         assert_eq!(pushed.unpushed_commits, 0, "a pushed branch still warned");
 
@@ -2154,9 +2215,12 @@ mod tests {
         let base = snapshot_tree(at).await.unwrap();
 
         // Stand-in for a turn: an edit, a delete, and an untracked new file.
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nalready here\nfrom the turn\n")
-            .await
-            .unwrap();
+        fs::write(
+            dir.join("keep.txt"),
+            "a\nb\nc\nalready here\nfrom the turn\n",
+        )
+        .await
+        .unwrap();
         fs::remove_file(dir.join("gone.txt")).await.unwrap();
         fs::write(dir.join("new.txt"), "brand new\n").await.unwrap();
 
@@ -2236,7 +2300,9 @@ mod tests {
         );
 
         assert!(
-            changes_since(at, &base, Some("--not-a-tree")).await.is_err(),
+            changes_since(at, &base, Some("--not-a-tree"))
+                .await
+                .is_err(),
             "a non-hex head must be rejected before it reaches argv"
         );
 
@@ -2251,7 +2317,9 @@ mod tests {
 
         // The agent edits and commits. Content is what the snapshot compares,
         // so the commit is invisible and the change still shows.
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n")
+            .await
+            .unwrap();
         run(at, &["add", "-A"]).await.unwrap();
         run(at, &["commit", "-qm", "agent work"]).await.unwrap();
 
@@ -2278,7 +2346,10 @@ mod tests {
 
         let changes = changes_since(at, &base, None).await.unwrap();
         let bin = changes.files.iter().find(|f| f.path == "bin.dat").unwrap();
-        assert!(bin.binary, "git reports `-` counts, which must set the flag");
+        assert!(
+            bin.binary,
+            "git reports `-` counts, which must set the flag"
+        );
 
         let versions = file_change(at, &base, &changes.head, "bin.dat", None)
             .await
@@ -2415,9 +2486,15 @@ mod tests {
         assert_eq!(file.status, ChangeStatus::Renamed);
         assert_eq!(file.old_path.as_deref(), Some("keep.txt"));
 
-        let versions = file_change(at, &base, &changes.head, &file.path, file.old_path.as_deref())
-            .await
-            .unwrap();
+        let versions = file_change(
+            at,
+            &base,
+            &changes.head,
+            &file.path,
+            file.old_path.as_deref(),
+        )
+        .await
+        .unwrap();
         // The old side must resolve under `keep.txt`. Read under the new name it
         // would be missing, and the row would draw a whole-file addition.
         assert_eq!(versions.old_text.as_deref(), Some(before.as_str()));
@@ -2560,12 +2637,18 @@ mod tests {
         // A real repository, so it must not read as a plain directory — and its
         // one file has to be listed, which is the whole point of not folding
         // this into `None`.
-        let base = head_tree(at).await.expect("an unborn branch still has a repo");
+        let base = head_tree(at)
+            .await
+            .expect("an unborn branch still has a repo");
         assert_eq!(base, EMPTY_TREE);
 
         let changes = changes_since(at, &base, None).await.unwrap();
         assert_eq!(
-            changes.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            changes
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
             ["first.txt"],
         );
         assert_eq!(changes.files[0].status, ChangeStatus::Added);
@@ -2578,7 +2661,9 @@ mod tests {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
 
-        let head = head_tree(at).await.expect("a repo with a commit has a tree");
+        let head = head_tree(at)
+            .await
+            .expect("a repo with a commit has a tree");
 
         // Clean tree, so the working-tree snapshot agrees with HEAD — which is
         // what makes an empty uncommitted list empty.
@@ -2597,9 +2682,13 @@ mod tests {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
 
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n")
+            .await
+            .unwrap();
         run(at, &["commit", "-aqm", "second"]).await.unwrap();
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\ne\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\ne\n")
+            .await
+            .unwrap();
         run(at, &["commit", "-aqm", "third"]).await.unwrap();
 
         let page = log_commits(at, 2, 0).await.unwrap();
@@ -2624,7 +2713,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dray-nonrepo-{}", Uuid::now_v7()));
         fs::create_dir_all(&dir).await.unwrap();
 
-        assert!(log_commits(dir.to_str().unwrap(), 50, 0).await.unwrap().is_empty());
+        assert!(log_commits(dir.to_str().unwrap(), 50, 0)
+            .await
+            .unwrap()
+            .is_empty());
 
         fs::remove_dir_all(&dir).await.ok();
     }
@@ -2638,10 +2730,16 @@ mod tests {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
 
-        run(at, &["checkout", "-q", "-b", "authors-work"]).await.unwrap();
-        fs::write(dir.join("feature.txt"), "the work\n").await.unwrap();
+        run(at, &["checkout", "-q", "-b", "authors-work"])
+            .await
+            .unwrap();
+        fs::write(dir.join("feature.txt"), "the work\n")
+            .await
+            .unwrap();
         run(at, &["add", "-A"]).await.unwrap();
-        run(at, &["commit", "-qm", "author's commit"]).await.unwrap();
+        run(at, &["commit", "-qm", "author's commit"])
+            .await
+            .unwrap();
         run(at, &["checkout", "-q", "-"]).await.unwrap();
 
         let path = create_worktree(at, "reviewer", "authors-work")
@@ -2651,7 +2749,9 @@ mod tests {
             .await
             .unwrap();
         run(&path, &["add", "-A"]).await.unwrap();
-        run(&path, &["commit", "-qm", "reviewer's commit"]).await.unwrap();
+        run(&path, &["commit", "-qm", "reviewer's commit"])
+            .await
+            .unwrap();
 
         let page = log_branch_commits(&path, 50, 0).await.unwrap();
         assert_eq!(
@@ -2670,7 +2770,9 @@ mod tests {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
 
-        run(at, &["checkout", "-q", "-b", "base-work"]).await.unwrap();
+        run(at, &["checkout", "-q", "-b", "base-work"])
+            .await
+            .unwrap();
         fs::write(dir.join("base.txt"), "one\n").await.unwrap();
         run(at, &["add", "-A"]).await.unwrap();
         run(at, &["commit", "-qm", "base one"]).await.unwrap();
@@ -2678,7 +2780,9 @@ mod tests {
         let path = create_worktree(at, "reviewer", "base-work").await.unwrap();
         // The tree goes and the branch stays, which is what makes the second
         // create a `Reset to` rather than another `Created from`.
-        run(at, &["worktree", "remove", "--force", &path]).await.unwrap();
+        run(at, &["worktree", "remove", "--force", &path])
+            .await
+            .unwrap();
 
         fs::write(dir.join("base.txt"), "two\n").await.unwrap();
         run(at, &["commit", "-aqm", "base two"]).await.unwrap();
@@ -2688,7 +2792,9 @@ mod tests {
             .await
             .unwrap();
         run(&path, &["add", "-A"]).await.unwrap();
-        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"])
+            .await
+            .unwrap();
 
         let page = log_branch_commits(&path, 50, 0).await.unwrap();
         assert_eq!(
@@ -2723,19 +2829,27 @@ mod tests {
         run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
             .await
             .unwrap();
-        run(at, &["remote", "set-head", "origin", "main"]).await.unwrap();
+        run(at, &["remote", "set-head", "origin", "main"])
+            .await
+            .unwrap();
         assert_eq!(default_base(at).await.as_deref(), Some("origin/main"));
 
         let path = create_worktree(at, "worker", "origin/main")
             .await
             .expect("the default base is a base");
-        fs::write(Path::new(&path).join("one.txt"), "1\n").await.unwrap();
+        fs::write(Path::new(&path).join("one.txt"), "1\n")
+            .await
+            .unwrap();
         run(&path, &["add", "-A"]).await.unwrap();
-        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"])
+            .await
+            .unwrap();
 
         // Upstream moves after the fork, and the session merges it in. The push
         // is what carries it onto `origin/main`, which the worktree shares.
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nd\n")
+            .await
+            .unwrap();
         run(at, &["commit", "-aqm", "upstream work"]).await.unwrap();
         run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
             .await
@@ -2784,12 +2898,18 @@ mod tests {
         run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"])
             .await
             .unwrap();
-        run(at, &["remote", "set-head", "origin", "main"]).await.unwrap();
+        run(at, &["remote", "set-head", "origin", "main"])
+            .await
+            .unwrap();
 
         let path = create_worktree(at, "worker", "origin/main").await.unwrap();
-        fs::write(Path::new(&path).join("one.txt"), "1\n").await.unwrap();
+        fs::write(Path::new(&path).join("one.txt"), "1\n")
+            .await
+            .unwrap();
         run(&path, &["add", "-A"]).await.unwrap();
-        run(&path, &["commit", "-qm", "session work"]).await.unwrap();
+        run(&path, &["commit", "-qm", "session work"])
+            .await
+            .unwrap();
 
         // The branch lands on the default branch and the worktree learns about
         // it, which is what makes `origin/main` contain this session's commit.
@@ -2847,13 +2967,20 @@ mod tests {
 
         // `gone.txt` sorts first alphabetically, so a list still in git's own
         // order would put it on top whichever was edited last.
-        fs::write(dir.join("gone.txt"), "x\ny\nfirst\n").await.unwrap();
+        fs::write(dir.join("gone.txt"), "x\ny\nfirst\n")
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nsecond\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nsecond\n")
+            .await
+            .unwrap();
 
         let live = changes_since(at, &base, None).await.unwrap();
         assert_eq!(
-            live.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            live.files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
             ["keep.txt", "gone.txt"],
         );
 
@@ -2862,7 +2989,10 @@ mod tests {
         let frozen = snapshot_tree(at).await.unwrap();
         let then = changes_since(at, &base, Some(&frozen)).await.unwrap();
         assert_eq!(
-            then.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            then.files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
             ["gone.txt", "keep.txt"],
         );
 
@@ -2904,11 +3034,16 @@ mod tests {
         run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
             .await
             .unwrap();
-        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"])
+            .await
+            .unwrap();
 
         let status = work_status(at).await;
         let default = status.default_branch.expect("a pushed branch resolves one");
-        assert!(!default.starts_with("origin/"), "still carries its remote: {default}");
+        assert!(
+            !default.starts_with("origin/"),
+            "still carries its remote: {default}"
+        );
         assert_eq!(Some(default), status.branch);
 
         fs::remove_dir_all(&dir).await.ok();
@@ -2932,14 +3067,18 @@ mod tests {
         run(at, &["remote", "add", "origin", remote.to_str().unwrap()])
             .await
             .unwrap();
-        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"])
+            .await
+            .unwrap();
 
         // On the base itself, with everything pushed: nothing to propose.
         let on_base = work_status(at).await;
         assert_eq!(on_base.ahead_of_base, Some(0));
 
         run(at, &["checkout", "-q", "-b", "feature"]).await.unwrap();
-        fs::write(dir.join("keep.txt"), "a\nb\nc\nchanged\n").await.unwrap();
+        fs::write(dir.join("keep.txt"), "a\nb\nc\nchanged\n")
+            .await
+            .unwrap();
         run(at, &["add", "-A"]).await.unwrap();
         run(at, &["commit", "-qm", "work"]).await.unwrap();
 
@@ -2947,7 +3086,9 @@ mod tests {
         let unpushed = work_status(at).await;
         assert_eq!(unpushed.ahead_of_base, Some(1));
 
-        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"])
+            .await
+            .unwrap();
 
         // Pushed in full. `ahead` falls back to zero and `ahead_of_base` must
         // not — this is the exact state a branch is in when its PR is opened.
@@ -2977,13 +3118,21 @@ mod tests {
             .await
             .unwrap();
 
-        run(at, &["checkout", "-q", "-b", "release/current"]).await.unwrap();
-        run(at, &["push", "-q", "-u", "origin", "HEAD"]).await.unwrap();
+        run(at, &["checkout", "-q", "-b", "release/current"])
+            .await
+            .unwrap();
+        run(at, &["push", "-q", "-u", "origin", "HEAD"])
+            .await
+            .unwrap();
         // `-b` on the ref git would have written for us, so `origin/HEAD`
         // resolves the way a cloned repo's does.
         run(
             at,
-            &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/current"],
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/release/current",
+            ],
         )
         .await
         .unwrap();

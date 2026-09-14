@@ -761,11 +761,7 @@ fn wanted_tags(prompt: &str, named: &[String]) -> Vec<WantedTag> {
 /// Split from the read above so the rule is testable without a key and without
 /// a network: what happens when nothing resolves is exactly the case worth
 /// pinning, and it is the one a test process cannot reach by asking Linear.
-fn apply_tags(
-    prompt: &str,
-    wanted: &[WantedTag],
-    resolved: Vec<Option<IssueRef>>,
-) -> ExpandedTags {
+fn apply_tags(prompt: &str, wanted: &[WantedTag], resolved: Vec<Option<IssueRef>>) -> ExpandedTags {
     let mut mentioned = Vec::new();
     let mut linked = Vec::new();
     let mut appended = Vec::new();
@@ -892,7 +888,9 @@ pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
 /// about which issue is most urgent.
 #[tauri::command]
 pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    let key = read_key(IssueTracker::Linear)
+        .await
+        .ok_or(IssueUnavailable::NotConnected)?;
 
     linear::list_issues(&key, &query, limit).await
 }
@@ -908,7 +906,9 @@ pub async fn get_issue(
     identifier: String,
     id: Option<String>,
 ) -> Result<IssueDetail, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    let key = read_key(IssueTracker::Linear)
+        .await
+        .ok_or(IssueUnavailable::NotConnected)?;
 
     linear::get_issue(&key, &identifier, id.as_deref()).await
 }
@@ -937,7 +937,9 @@ pub async fn update_issue(
     state_id: Option<String>,
     priority: Option<IssuePriority>,
 ) -> Result<IssueDetail, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    let key = read_key(IssueTracker::Linear)
+        .await
+        .ok_or(IssueUnavailable::NotConnected)?;
 
     linear::update_issue(&key, &id, state_id.as_deref(), priority).await?;
 
@@ -982,7 +984,9 @@ pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailab
 /// The teams and projects the filter row offers.
 #[tauri::command]
 pub async fn list_issue_filters() -> Result<IssueFilters, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    let key = read_key(IssueTracker::Linear)
+        .await
+        .ok_or(IssueUnavailable::NotConnected)?;
 
     linear::list_filters(&key).await
 }

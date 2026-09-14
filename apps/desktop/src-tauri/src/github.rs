@@ -645,7 +645,9 @@ impl RawPr {
         let mut loose: Vec<PrComment> = Vec::new();
 
         for raw in Nodes::take(self.review_threads) {
-            let Some((review, thread)) = raw.map() else { continue };
+            let Some((review, thread)) = raw.map() else {
+                continue;
+            };
             match review {
                 Some(id) => threads.entry(id).or_default().push(thread),
                 None => loose.push(thread),
@@ -817,7 +819,18 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
         return Ok(hit.clone());
     }
 
-    let out = gh(cwd, &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).await?;
+    let out = gh(
+        cwd,
+        &[
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "-q",
+            ".nameWithOwner",
+        ],
+    )
+    .await?;
     let slug = out.trim();
 
     let (owner, name) = slug
@@ -847,7 +860,9 @@ pub async fn prs_for_branch(
     cwd: String,
     branch: String,
 ) -> Result<Vec<PullRequest>, PrUnavailable> {
-    prs_for_branch_inner(&cwd, &branch).await.map_err(unavailable)
+    prs_for_branch_inner(&cwd, &branch)
+        .await
+        .map_err(unavailable)
 }
 
 /// Maps a raw `gh` failure onto the reason the panel branches on. Split out so
@@ -1176,7 +1191,13 @@ pub async fn delete_branch(cwd: String, number: u64) -> Result<(), String> {
 
     let out = gh(
         &cwd,
-        &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"],
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "headRefName,isCrossRepository",
+        ],
     )
     .await?;
 
@@ -1197,7 +1218,11 @@ fn head_ref_to_delete(json: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("could not read that pull request: {e}"))?;
 
-    if value.get("isCrossRepository").and_then(serde_json::Value::as_bool) != Some(false) {
+    if value
+        .get("isCrossRepository")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+    {
         return Err("that branch lives in a fork, so it is not this repository's to delete".into());
     }
 
@@ -1214,7 +1239,9 @@ fn head_ref_to_delete(json: &str) -> Result<String, String> {
 /// a discussion attached to it, which happens on GitHub.
 #[tauri::command]
 pub async fn reopen_pr(cwd: String, number: u64) -> Result<(), String> {
-    gh(&cwd, &["pr", "reopen", &number.to_string()]).await.map(|_| ())
+    gh(&cwd, &["pr", "reopen", &number.to_string()])
+        .await
+        .map(|_| ())
 }
 
 /// Takes a draft out of draft. The other direction (`--undo`) isn't offered:
@@ -1222,7 +1249,9 @@ pub async fn reopen_pr(cwd: String, number: u64) -> Result<(), String> {
 /// state the reader can set on GitHub in the rare case they want it.
 #[tauri::command]
 pub async fn mark_pr_ready(cwd: String, number: u64) -> Result<(), String> {
-    gh(&cwd, &["pr", "ready", &number.to_string()]).await.map(|_| ())
+    gh(&cwd, &["pr", "ready", &number.to_string()])
+        .await
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1237,7 +1266,10 @@ mod tests {
     const FIXTURE: &str = include_str!("fixtures/pr_graphql.json");
 
     fn parse() -> PullRequest {
-        read_prs(FIXTURE).expect("fixture parses").pop().expect("one PR")
+        read_prs(FIXTURE)
+            .expect("fixture parses")
+            .pop()
+            .expect("one PR")
     }
 
     #[test]
@@ -1246,7 +1278,10 @@ mod tests {
         assert_eq!(pr.checks.len(), 3);
         // `StatusContext` carries its name on `context`, `CheckRun` on `name`.
         assert!(pr.checks.iter().any(|c| c.name == "Vercel"));
-        assert!(pr.checks.iter().any(|c| c.name == "Vercel Preview Comments"));
+        assert!(pr
+            .checks
+            .iter()
+            .any(|c| c.name == "Vercel Preview Comments"));
         assert!(pr.checks.iter().all(|c| c.state == CheckState::Success));
     }
 
@@ -1278,7 +1313,10 @@ mod tests {
         assert_eq!(pr.comments[0].author, "vercel");
         assert_eq!(pr.comments[0].kind, CommentKind::Comment);
         assert!(pr.comments.iter().any(|c| c.kind == CommentKind::Reviewed));
-        assert!(pr.comments.windows(2).all(|w| w[0].created_at <= w[1].created_at));
+        assert!(pr
+            .comments
+            .windows(2)
+            .all(|w| w[0].created_at <= w[1].created_at));
         // Nothing on the timeline itself is a file comment.
         assert!(pr.comments.iter().all(|c| c.path.is_none()));
     }
@@ -1370,7 +1408,9 @@ mod tests {
     fn an_empty_thread_draws_no_row() {
         let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
             {"path":"src/main.rs","comments":{"nodes":[]}}]}}]}}}}"#;
-        assert!(read_prs(out).expect("empty thread parses")[0].comments.is_empty());
+        assert!(read_prs(out).expect("empty thread parses")[0]
+            .comments
+            .is_empty());
     }
 
     /// GraphQL sends `null` where the repo requires no review, and an empty
@@ -1461,9 +1501,7 @@ mod tests {
             PrUnavailable::NoCli
         ));
         assert!(matches!(
-            unavailable(
-                "To get started with GitHub CLI, please run:  gh auth login".to_string()
-            ),
+            unavailable("To get started with GitHub CLI, please run:  gh auth login".to_string()),
             PrUnavailable::NotAuthenticated
         ));
         assert!(matches!(
@@ -1489,7 +1527,10 @@ mod tests {
     #[test]
     fn diff_counts_come_through() {
         let pr = parse();
-        assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
+        assert_eq!(
+            (pr.additions, pr.deletions, pr.changed_files),
+            (2155, 66, 22)
+        );
     }
 
     /// `headRefName` outlives the branch — a merged PR goes on naming the one
@@ -1629,7 +1670,10 @@ mod tests {
                     "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}]}},
                   "merged":{{"nodes":[]}}}}}}}}"#
             );
-            read_pr_marks(&out).expect("pr marks parse").remove(0).checks_state
+            read_pr_marks(&out)
+                .expect("pr marks parse")
+                .remove(0)
+                .checks_state
         };
 
         assert_eq!(mark(r#"{"state":"PENDING"}"#), PrChecksState::Running);
@@ -1669,7 +1713,9 @@ mod tests {
     #[test]
     fn no_pr_marks_reads_as_empty() {
         let out = r#"{"data":{"repository":{"open":{"nodes":null},"merged":{"nodes":null}}}}"#;
-        assert!(read_pr_marks(out).expect("null connections parse").is_empty());
+        assert!(read_pr_marks(out)
+            .expect("null connections parse")
+            .is_empty());
     }
 
     #[test]

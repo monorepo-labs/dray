@@ -314,7 +314,11 @@ mod tests {
         let engine = Engine::default();
 
         engine
-            .warm(engine.token(), "whisper-small".into(), PathBuf::from("/nonexistent"))
+            .warm(
+                engine.token(),
+                "whisper-small".into(),
+                PathBuf::from("/nonexistent"),
+            )
             .await;
 
         assert!(engine.loaded.lock().await.is_none());

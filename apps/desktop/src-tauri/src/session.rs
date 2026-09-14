@@ -5,12 +5,10 @@ use crate::{
         MessageSender, PermissionBehavior,
     },
     git,
-    harness::{
-        claude_code::{
-            self,
-            control::{ControlLine, ControlRequest},
-            permissions::{answer_response, decision_response, PendingPermissions, Reply},
-        },
+    harness::claude_code::{
+        self,
+        control::{ControlLine, ControlRequest},
+        permissions::{answer_response, decision_response, PendingPermissions, Reply},
     },
     issues::{self, IssueRef},
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
@@ -120,6 +118,34 @@ pub struct SendOutcome {
     /// link_session_issue`]'s reason — re-tagging *replaces* an entry, so what
     /// changed is not a set the caller can apply on its own.
     pub issues: Vec<IssueRef>,
+}
+
+/// Whether a send has to replace the child rather than write to it.
+///
+/// A **setting change** waits for everything to be idle, background tasks
+/// included: the kill takes a dev server or a Monitor with it, and the index
+/// records the pick either way, so the next idle send is what applies it.
+///
+/// A **login that ran out** does not wait, and that asymmetry is the whole
+/// reason this is a function. A deferred setting costs a pick that lands late;
+/// a deferred login costs the session, because a logged-out child refuses every
+/// prompt from its own memory and a `local_bash` task never ends on its own —
+/// so "wait for idle" there means wait forever. The reader's only other cure
+/// was restarting the app, which kills those tasks too, so the trade is a dev
+/// server against a session and it was already being made.
+///
+/// A **turn in flight** refuses both. There is nothing to recover into while
+/// the child is mid-call, and a prompt arriving then is queued below instead.
+fn respawn_needed(
+    auth_failed: bool,
+    turn_in_flight: bool,
+    busy: bool,
+    settings_changed: bool,
+) -> bool {
+    if turn_in_flight {
+        return false;
+    }
+    auth_failed || (!busy && settings_changed)
 }
 
 /// Drives [`SessionStatus`] from the mapped event stream plus the user's own
@@ -497,10 +523,13 @@ impl SessionManager {
             // sidebar row pointing at a directory that never existed and can
             // never start. `HEAD` where there is no remote, matching what the
             // CLI itself falls back to when the fetch fails.
-            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
-                (false, true, None) => {
-                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
-                }
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref)
+            {
+                (false, true, None) => Some(
+                    git::default_base(cwd)
+                        .await
+                        .unwrap_or_else(|| "HEAD".into()),
+                ),
                 _ => None,
             };
             let base_ref = base_ref.or(resolved_base.as_deref());
@@ -702,19 +731,19 @@ impl SessionManager {
         // anything is working at all decides that the child must not be
         // replaced, while only an open model call means this prompt has a turn
         // to be folded into.
-        let (busy, turn_in_flight, tool_in_flight, auth_failed) = match sessions_guard.get(session_id)
-        {
-            Some(s) => {
-                let tracker = s.status.lock().await;
-                (
-                    tracker.has_outstanding_work(),
-                    tracker.turn_in_flight(),
-                    tracker.tool_in_flight(),
-                    tracker.auth_failed(),
-                )
-            }
-            None => (false, false, false, false),
-        };
+        let (busy, turn_in_flight, tool_in_flight, auth_failed) =
+            match sessions_guard.get(session_id) {
+                Some(s) => {
+                    let tracker = s.status.lock().await;
+                    (
+                        tracker.has_outstanding_work(),
+                        tracker.turn_in_flight(),
+                        tracker.tool_in_flight(),
+                        tracker.auth_failed(),
+                    )
+                }
+                None => (false, false, false, false),
+            };
 
         // Effort is fixed at spawn — the CLI has no `set_effort` control request
         // — so changing it means replacing the child. Resuming by id keeps the
@@ -734,23 +763,18 @@ impl SessionManager {
         // free than the reader asked for. Respawning settles both at once, and
         // `thread/resume` carries the conversation across it.
         //
+        //
         // A login that ran out is the other reason, and it is not a setting at
-        // all: the child holds "not logged in" in its own memory and refuses
-        // every later prompt from there, so the reader logging in next door
-        // changes nothing until the process is replaced. No control request
-        // reaches that state on any harness — only a fresh child reads the
-        // credentials that were just written.
-        let respawn_needed = !busy
-            && sessions_guard.get(session_id).is_some_and(|s| {
-                let caps = s.harness.caps();
+        // all — see [`respawn_needed`], which is where the two part company.
+        let settings_changed = sessions_guard.get(session_id).is_some_and(|s| {
+            let caps = s.harness.caps();
 
-                auth_failed
-                    || (s.effort != effort && !caps.applies_effort_in_place)
-                    || (s.model != model && !caps.applies_model_in_place)
-                    || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
-            });
+            (s.effort != effort && !caps.applies_effort_in_place)
+                || (s.model != model && !caps.applies_model_in_place)
+                || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
+        });
 
-        if respawn_needed {
+        if respawn_needed(auth_failed, turn_in_flight, busy, settings_changed) {
             if let Some(s) = sessions_guard.remove(session_id) {
                 s.kill().await?;
             }
@@ -1236,7 +1260,11 @@ impl SessionManager {
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
-        self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
+        self.sessions
+            .lock()
+            .await
+            .get(session_id)
+            .and_then(|s| s.child.id())
     }
 
     /// The child goes first and its lock is released before the disk work, so a
@@ -1675,7 +1703,11 @@ impl Session {
             bail!("that pi session is no longer running");
         }
 
-        write_line(self.stdin.lines()?, &ControlLine::new(ControlRequest::Interrupt)).await?;
+        write_line(
+            self.stdin.lines()?,
+            &ControlLine::new(ControlRequest::Interrupt),
+        )
+        .await?;
 
         Ok(())
     }
@@ -1768,7 +1800,9 @@ impl Session {
                     .decision
                     .clone()
                     .context("this option carries no decision to send")?;
-                thread.client.respond(*rpc_id, json!({"decision": decision}))?;
+                thread
+                    .client
+                    .respond(*rpc_id, json!({"decision": decision}))?;
             }
             _ => {
                 write_line(
@@ -1989,9 +2023,10 @@ async fn deliver_prompt(
     // that only grows. Failing after it leaves a bubble with no turn behind it,
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
-        Transport::Rpc(thread) => {
-            Some((thread, crate::harness::codex::turn_input(thread, &text).await?))
-        }
+        Transport::Rpc(thread) => Some((
+            thread,
+            crate::harness::codex::turn_input(thread, &text).await?,
+        )),
         _ => None,
     };
 
@@ -2249,7 +2284,14 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
 
         tokio::spawn(async move {
             flush_queued(
-                &session_id, harness, &queued, &seq, &events, &transport, &status, &app,
+                &session_id,
+                harness,
+                &queued,
+                &seq,
+                &events,
+                &transport,
+                &status,
+                &app,
             )
             .await;
         });
@@ -2554,6 +2596,32 @@ mod tests {
         }
     }
 
+    /// The asymmetry between the two reasons to replace a child. A setting
+    /// change defers to a background task; an auth failure cannot, since a
+    /// `local_bash` task never ends and the session would stay logged out for
+    /// as long as it ran.
+    #[test]
+    fn only_an_auth_failure_outranks_a_background_task() {
+        // turn_in_flight, busy, settings_changed
+        assert!(!respawn_needed(false, false, false, false), "nothing to do");
+        assert!(
+            respawn_needed(false, false, false, true),
+            "an idle pick applies"
+        );
+        assert!(
+            !respawn_needed(false, false, true, true),
+            "a pick waits for the task rather than killing it"
+        );
+        assert!(
+            respawn_needed(true, false, true, false),
+            "a login does not wait for a task that may never end"
+        );
+        assert!(
+            !respawn_needed(true, true, true, true),
+            "nothing replaces a child mid-turn"
+        );
+    }
+
     /// What makes a logged-out session curable without restarting the app. The
     /// child answers every later prompt "not logged in" from its own memory, so
     /// `send_msg` replaces it — and it must stop doing that the moment a turn
@@ -2571,7 +2639,10 @@ mod tests {
         assert!(tracker.auth_failed(), "sending is not logging in");
 
         tracker.on_event(&turn_completed());
-        assert!(!tracker.auth_failed(), "a turn that completed says so itself");
+        assert!(
+            !tracker.auth_failed(),
+            "a turn that completed says so itself"
+        );
     }
 
     /// The reason the two readings exist separately. A background task keeps

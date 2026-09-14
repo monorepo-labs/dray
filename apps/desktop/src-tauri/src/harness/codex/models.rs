@@ -154,7 +154,9 @@ async fn probe() -> Result<Vec<Model>> {
         }
 
         let answer = probe::ask(None, "model/list", params).await?;
-        let Some(page) = read_page(&answer) else { break };
+        let Some(page) = read_page(&answer) else {
+            break;
+        };
 
         rows.extend(page.rows);
         match page.next {
@@ -243,7 +245,9 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
 /// One page, for a caller that has the whole answer in hand — the tests.
 #[cfg(test)]
 fn read_rows(answer: &Value) -> Vec<Model> {
-    read_page(answer).map(|page| fold(page.rows)).unwrap_or_default()
+    read_page(answer)
+        .map(|page| fold(page.rows))
+        .unwrap_or_default()
 }
 
 /// Reads one row, keeping the id this app has always persisted for it.
@@ -526,7 +530,10 @@ mod tests {
     #[test]
     fn another_harnesss_model_is_still_refused() {
         for alias in ["opus", "sonnet", "haiku", "fable"] {
-            assert!(resolve(&ModelId::new(alias), &[]).is_none(), "{alias} resolved");
+            assert!(
+                resolve(&ModelId::new(alias), &[]).is_none(),
+                "{alias} resolved"
+            );
         }
     }
 

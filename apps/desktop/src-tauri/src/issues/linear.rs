@@ -19,8 +19,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value};
 
 use super::{
-    Issue, IssueAsset, IssueComment, IssueDetail, IssueFilters, IssueGroup, IssueLabel, IssuePerson,
-    IssuePriority, IssueQuery, IssueScope, IssueState, IssueStateKind, IssueTracker,
+    Issue, IssueAsset, IssueComment, IssueDetail, IssueFilters, IssueGroup, IssueLabel,
+    IssuePerson, IssuePriority, IssueQuery, IssueScope, IssueState, IssueStateKind, IssueTracker,
     IssueUnavailable, TrackerAccount,
 };
 
@@ -446,7 +446,10 @@ pub async fn update_issue(
     // belonging to another team, most likely. It comes back at 200 with no
     // `errors`, so without this the panel re-reads, finds nothing moved, and
     // silently redraws what the reader was already looking at.
-    match data.pointer("/issueUpdate/success").and_then(Value::as_bool) {
+    match data
+        .pointer("/issueUpdate/success")
+        .and_then(Value::as_bool)
+    {
         Some(true) => Ok(()),
         _ => Err(IssueUnavailable::Other("Linear refused the change".into())),
     }

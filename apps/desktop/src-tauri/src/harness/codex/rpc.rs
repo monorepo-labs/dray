@@ -23,7 +23,6 @@ use tokio::time::Duration;
 
 use crate::harness::rpc::{spawn_writer, Outbound, Pending};
 
-
 /// How long any request may go unanswered before it is given up on.
 ///
 /// Every request this client sends is an *acknowledgement*: `turn/start`
@@ -117,7 +116,9 @@ impl RpcClient {
 
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
 
-        self.pending.wait(&id, rx, timeout, method, "the agent").await
+        self.pending
+            .wait(&id, rx, timeout, method, "the agent")
+            .await
     }
 
     /// Sends a notification: no id, so nothing to wait for.

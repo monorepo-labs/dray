@@ -91,7 +91,10 @@ pub(super) fn observe(browser: &Browser) -> Option<Registration> {
 /// Called from `on_console_message` for every line a page logs.
 pub(super) fn log(tab: i32, error: bool, text: String) {
     let mut guard = CONSOLE.lock().unwrap();
-    let lines = guard.get_or_insert_with(HashMap::new).entry(tab).or_default();
+    let lines = guard
+        .get_or_insert_with(HashMap::new)
+        .entry(tab)
+        .or_default();
     if lines.len() >= MAX_CONSOLE {
         lines.remove(0);
     }
@@ -108,7 +111,11 @@ pub(super) fn forget(tab: i32) {
 async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
     let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
     let (tx, rx) = oneshot::channel();
-    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), tx);
+    PENDING
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert((tab, id), tx);
     let message = json!({ "id": id, "method": method, "params": params }).to_string();
     on_main(move || {
         let sent = browser_of(tab)
@@ -116,7 +123,12 @@ async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
             .map(|host| host.send_dev_tools_message(Some(message.as_bytes())) == 1)
             .unwrap_or(false);
         if !sent {
-            if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
+            if let Some(tx) = PENDING
+                .lock()
+                .unwrap()
+                .as_mut()
+                .and_then(|m| m.remove(&(tab, id)))
+            {
                 let _ = tx.send(Err("that tab is gone".into()));
             }
         }
@@ -150,7 +162,10 @@ async fn eval(tab: i32, expression: &str) -> Reply {
             .unwrap_or("the script threw");
         return Err(text.lines().next().unwrap_or(text).to_string());
     }
-    Ok(reply.pointer("/result/value").cloned().unwrap_or(Value::Null))
+    Ok(reply
+        .pointer("/result/value")
+        .cloned()
+        .unwrap_or(Value::Null))
 }
 
 /// Runs `body` with `el` bound to the located element, or fails naming what
@@ -170,7 +185,11 @@ async fn with_element(tab: i32, at: &Locator, body: &str) -> Reply {
 fn describe_locator(at: &Locator) -> String {
     match at {
         Locator::Target { target } => target.clone(),
-        Locator::Role { role, name: Some(n), .. } => format!("{role} \"{n}\""),
+        Locator::Role {
+            role,
+            name: Some(n),
+            ..
+        } => format!("{role} \"{n}\""),
         Locator::Role { role, .. } => role.clone(),
         Locator::Text { text, .. } => format!("text \"{text}\""),
         Locator::Label { label, .. } => format!("label \"{label}\""),
@@ -202,13 +221,18 @@ async fn wait_loaded(tab: i32) -> Result<(), String> {
     while start.elapsed() < LOAD_TIMEOUT {
         match tab_state(tab) {
             Some((_, _, true)) => seen_loading = true,
-            Some(_) if seen_loading || start.elapsed() > Duration::from_millis(600) => return Ok(()),
+            Some(_) if seen_loading || start.elapsed() > Duration::from_millis(600) => {
+                return Ok(())
+            }
             Some(_) => {}
             None => return Ok(()),
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    Err(format!("the page is still loading after {}s", LOAD_TIMEOUT.as_secs()))
+    Err(format!(
+        "the page is still loading after {}s",
+        LOAD_TIMEOUT.as_secs()
+    ))
 }
 
 /// `dray browser` opens web pages. `file://` would hand an agent every file
@@ -223,7 +247,9 @@ fn web_url(url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("{url:?} is not a URL: {e}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(()),
-        scheme => Err(format!("only http and https pages can be opened from here, not {scheme}:")),
+        scheme => Err(format!(
+            "only http and https pages can be opened from here, not {scheme}:"
+        )),
     }
 }
 
@@ -232,7 +258,9 @@ fn owned(session: &str, id: i32) -> Result<i32, String> {
     if tabs_of(session).iter().any(|t| t.id == id) {
         Ok(id)
     } else {
-        Err(format!("no tab {id} in this session; `dray browser tab` lists them"))
+        Err(format!(
+            "no tab {id} in this session; `dray browser tab` lists them"
+        ))
     }
 }
 
@@ -245,7 +273,11 @@ fn active_tab(session: &str) -> Result<i32, String> {
 fn page(tab: i32) -> (String, Value) {
     match tab_state(tab) {
         Some((url, title, _)) => {
-            let text = if title.is_empty() { url.clone() } else { format!("{title} — {url}") };
+            let text = if title.is_empty() {
+                url.clone()
+            } else {
+                format!("{title} — {url}")
+            };
             (text, json!({ "url": url, "title": title }))
         }
         None => ("no tab".into(), json!({})),
@@ -256,7 +288,11 @@ fn page(tab: i32) -> (String, Value) {
 async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
     let start = Instant::now();
     loop {
-        if let Some(id) = tabs_of(session).iter().map(|t| t.id).find(|id| !before.contains(id)) {
+        if let Some(id) = tabs_of(session)
+            .iter()
+            .map(|t| t.id)
+            .find(|id| !before.contains(id))
+        {
             return Ok(id);
         }
         if start.elapsed() > LOAD_TIMEOUT {
@@ -268,8 +304,13 @@ async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
 
 async fn mouse(tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(), String> {
     let mut params = json!({ "type": kind, "x": x, "y": y });
-    params.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
-    cdp(tab, "Input.dispatchMouseEvent", params).await.map(|_| ())
+    params
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().cloned().unwrap_or_default());
+    cdp(tab, "Input.dispatchMouseEvent", params)
+        .await
+        .map(|_| ())
 }
 
 /// The viewport centre of the element, scrolled into view first so a click
@@ -296,7 +337,10 @@ async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
     if let Some(cover) = point.get("covered").and_then(Value::as_str) {
         return Err(format!("{} is covered by <{cover}>", describe_locator(at)));
     }
-    Ok((point["x"].as_f64().unwrap_or(0.0), point["y"].as_f64().unwrap_or(0.0)))
+    Ok((
+        point["x"].as_f64().unwrap_or(0.0),
+        point["y"].as_f64().unwrap_or(0.0),
+    ))
 }
 
 async fn click(tab: i32, at: &Locator, count: u32) -> Result<(), String> {
@@ -342,7 +386,10 @@ async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
     // A radio cannot be unchecked by clicking, and a custom control may
     // ignore the click; read it back rather than report the click as done.
     if checked(tab, at).await? != on {
-        return Err(format!("{} did not change when clicked", describe_locator(at)));
+        return Err(format!(
+            "{} did not change when clicked",
+            describe_locator(at)
+        ));
     }
     Ok(())
 }
@@ -418,7 +465,14 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 "no tabs".to_string()
             } else {
                 tabs.iter()
-                    .map(|t| format!("{} {}{}", t.id, if t.active { "* " } else { "  " }, page(t.id).0))
+                    .map(|t| {
+                        format!(
+                            "{} {}{}",
+                            t.id,
+                            if t.active { "* " } else { "  " },
+                            page(t.id).0
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             };
@@ -452,10 +506,19 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             browser_close(session.to_string(), id)?;
             ok(format!("closed tab {id}"))
         }
-        BrowserAction::Snapshot { interactive, compact, selector } => {
+        BrowserAction::Snapshot {
+            interactive,
+            compact,
+            selector,
+        } => {
             let tab = active_tab(session)?;
-            let opts = json!({ "interactive": interactive, "compact": compact, "selector": selector });
-            let text = eval(tab, &format!("(() => {{ {HELPERS_JS} return __snapshot({opts}); }})()")).await?;
+            let opts =
+                json!({ "interactive": interactive, "compact": compact, "selector": selector });
+            let text = eval(
+                tab,
+                &format!("(() => {{ {HELPERS_JS} return __snapshot({opts}); }})()"),
+            )
+            .await?;
             let text = clip(text.as_str().unwrap_or(""));
             Ok((text.clone(), json!({ "snapshot": text })))
         }
@@ -484,7 +547,11 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = active_tab(session)?;
             focus(tab, &at, clear).await?;
             cdp(tab, "Input.insertText", json!({ "text": text })).await?;
-            ok(format!("{} {}", if clear { "filled" } else { "typed into" }, describe_locator(&at)))
+            ok(format!(
+                "{} {}",
+                if clear { "filled" } else { "typed into" },
+                describe_locator(&at)
+            ))
         }
         BrowserAction::Press { key } => {
             let tab = active_tab(session)?;
@@ -532,12 +599,19 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("scrolled {direction} {amount}"))
         }
         BrowserAction::ScrollIntoView { at } => {
-            with_element(active_tab(session)?, &at, "el.scrollIntoView({ block: 'center' }); return true;").await?;
+            with_element(
+                active_tab(session)?,
+                &at,
+                "el.scrollIntoView({ block: 'center' }); return true;",
+            )
+            .await?;
             ok(format!("scrolled to {}", describe_locator(&at)))
         }
         BrowserAction::Get { what, at } => {
             let tab = active_tab(session)?;
-            let at = at.unwrap_or(Locator::Target { target: "html".into() });
+            let at = at.unwrap_or(Locator::Target {
+                target: "html".into(),
+            });
             let value = match what {
                 Get::Title => page(tab).1["title"].clone(),
                 Get::Url => page(tab).1["url"].clone(),
@@ -575,7 +649,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = active_tab(session)?;
             let body = match what {
                 Is::Visible => "return __visible(el);",
-                Is::Enabled => "return !el.disabled && el.getAttribute('aria-disabled') !== 'true';",
+                Is::Enabled => {
+                    "return !el.disabled && el.getAttribute('aria-disabled') !== 'true';"
+                }
                 Is::Checked => "return !!el.checked || el.getAttribute('aria-checked') === 'true';",
             };
             // No match is `false`; a broken selector or a dead tab is an
@@ -588,7 +664,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let yes = value == Value::Bool(true);
             Ok((yes.to_string(), json!({ "value": yes })))
         }
-        BrowserAction::Wait { selector, ms, url, text, load } => {
+        BrowserAction::Wait {
+            selector,
+            ms,
+            url,
+            text,
+            load,
+        } => {
             let tab = active_tab(session)?;
             if let Some(ms) = ms {
                 tokio::time::sleep(Duration::from_millis(ms.min(60_000))).await;
@@ -596,20 +678,39 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             }
             if let Some(state) = load {
                 if state != "load" {
-                    return Err(format!("wait --load takes `load`; nothing here measures {state}"));
+                    return Err(format!(
+                        "wait --load takes `load`; nothing here measures {state}"
+                    ));
                 }
                 wait_loaded(tab).await?;
                 return ok(format!("loaded: {}", page(tab).0));
             }
             let (probe, what) = if let Some(sel) = selector {
-                let at = serde_json::to_string(&Locator::Target { target: sel.clone() }).unwrap();
-                (format!("(() => {{ {HELPERS_JS} return __find({at}).length > 0; }})()"), sel)
+                let at = serde_json::to_string(&Locator::Target {
+                    target: sel.clone(),
+                })
+                .unwrap();
+                (
+                    format!("(() => {{ {HELPERS_JS} return __find({at}).length > 0; }})()"),
+                    sel,
+                )
             } else if let Some(url) = url {
-                (format!("location.href.includes({})", Value::String(url.clone())), url)
+                (
+                    format!("location.href.includes({})", Value::String(url.clone())),
+                    url,
+                )
             } else if let Some(text) = text {
-                (format!("(document.body?.innerText || '').includes({})", Value::String(text.clone())), text)
+                (
+                    format!(
+                        "(document.body?.innerText || '').includes({})",
+                        Value::String(text.clone())
+                    ),
+                    text,
+                )
             } else {
-                return Err("wait for what? a selector, --url, --text, --load or a number of ms".into());
+                return Err(
+                    "wait for what? a selector, --url, --text, --load or a number of ms".into(),
+                );
             };
             let start = Instant::now();
             while start.elapsed() < LOAD_TIMEOUT {
@@ -618,7 +719,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            Err(format!("{what} did not appear within {}s", LOAD_TIMEOUT.as_secs()))
+            Err(format!(
+                "{what} did not appear within {}s",
+                LOAD_TIMEOUT.as_secs()
+            ))
         }
         BrowserAction::Screenshot { path, full } => {
             let tab = active_tab(session)?;
@@ -626,7 +730,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             if full {
                 let size = eval(tab, "({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })").await?;
                 params["captureBeyondViewport"] = json!(true);
-                params["clip"] = json!({ "x": 0, "y": 0, "width": size["w"], "height": size["h"], "scale": 1 });
+                params["clip"] =
+                    json!({ "x": 0, "y": 0, "width": size["w"], "height": size["h"], "scale": 1 });
             }
             let reply = cdp(tab, "Page.captureScreenshot", params).await?;
             let data = reply["data"].as_str().ok_or("no image came back")?;
@@ -645,7 +750,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     dir.join(format!("{}-{stamp}.png", &session[..8.min(session.len())]))
                 }
             };
-            write_nofollow(&path, &bytes).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            write_nofollow(&path, &bytes)
+                .map_err(|e| format!("could not write {}: {e}", path.display()))?;
             let shown = path.display().to_string();
             Ok((shown.clone(), json!({ "path": shown })))
         }
@@ -671,7 +777,12 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 .filter(|(error, _)| *error || !errors_only)
                 .collect();
             let text = if lines.is_empty() {
-                if errors_only { "no errors" } else { "nothing logged" }.to_string()
+                if errors_only {
+                    "no errors"
+                } else {
+                    "nothing logged"
+                }
+                .to_string()
             } else {
                 lines
                     .iter()
@@ -734,7 +845,11 @@ async fn screenshot_path(session: &str, given: &str) -> Result<PathBuf, String> 
         .map(|item| PathBuf::from(item.cwd))
         .ok_or("this session has no checkout to write under")?;
     let cwd = std::fs::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
-    let full = if Path::new(given).is_absolute() { PathBuf::from(given) } else { cwd.join(given) };
+    let full = if Path::new(given).is_absolute() {
+        PathBuf::from(given)
+    } else {
+        cwd.join(given)
+    };
     let name = full.file_name().ok_or("the path names no file")?.to_owned();
     let parent = full.parent().ok_or("the path names no directory")?;
     let parent = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -745,7 +860,11 @@ async fn screenshot_path(session: &str, given: &str) -> Result<PathBuf, String> 
         ));
     }
     let path = parent.join(name);
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return Err(format!("{} is a symlink", path.display()));
     }
     Ok(path)
@@ -766,7 +885,12 @@ fn emit_viewport(session: &str, preset: &str, width: u32, height: u32) {
     if let Some(app) = APP.get() {
         let _ = app.emit(
             "browser_viewport",
-            ViewportEvent { session_id: session.into(), preset: preset.into(), width, height },
+            ViewportEvent {
+                session_id: session.into(),
+                preset: preset.into(),
+                width,
+                height,
+            },
         );
     }
 }
@@ -820,7 +944,11 @@ fn key_events(spec: &str) -> Result<(Value, Value), String> {
     };
     let base = json!({ "key": name, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk, "modifiers": modifiers });
     let mut down = base.clone();
-    down["type"] = json!(if text.is_some() { "keyDown" } else { "rawKeyDown" });
+    down["type"] = json!(if text.is_some() {
+        "keyDown"
+    } else {
+        "rawKeyDown"
+    });
     if let Some(text) = text {
         // Both, as Puppeteer sends them: `text` alone types but does not
         // submit a form on Enter.
@@ -836,7 +964,12 @@ fn clip(text: &str) -> String {
     if text.len() <= MAX_TEXT {
         return text.to_string();
     }
-    let cut = text.char_indices().map(|(i, _)| i).take_while(|&i| i <= MAX_TEXT).last().unwrap_or(0);
+    let cut = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= MAX_TEXT)
+        .last()
+        .unwrap_or(0);
     format!("{}\n… [{} more characters]", &text[..cut], text.len() - cut)
 }
 
@@ -955,10 +1088,21 @@ mod tests {
 
     #[test]
     fn locators_serialize_the_way_the_page_script_reads_them() {
-        let js = serde_json::to_string(&Locator::Role { role: "button".into(), name: Some("Go".into()), exact: false }).unwrap();
-        assert_eq!(js, r#"{"by":"role","role":"button","name":"Go","exact":false}"#);
+        let js = serde_json::to_string(&Locator::Role {
+            role: "button".into(),
+            name: Some("Go".into()),
+            exact: false,
+        })
+        .unwrap();
+        assert_eq!(
+            js,
+            r#"{"by":"role","role":"button","name":"Go","exact":false}"#
+        );
         let js = serde_json::to_string(&Locator::TestId { id: "x".into() }).unwrap();
-        assert!(js.contains(r#""by":"test_id""#), "the switch in HELPERS_JS spells it test_id");
+        assert!(
+            js.contains(r#""by":"test_id""#),
+            "the switch in HELPERS_JS spells it test_id"
+        );
     }
 
     #[test]
