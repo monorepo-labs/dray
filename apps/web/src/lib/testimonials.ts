@@ -2,6 +2,30 @@
 /// embedded: every one of these is a reply, and an embed wants a standalone
 /// post.
 ///
+/// Being replies, they all open with the handles they were addressed to, and
+/// **only this account's own is dropped** — reading "@yogesharc" on
+/// yogesharc's own page is the page talking to itself. Anyone else in the
+/// thread stays, since cutting them rewrites who was being spoken to.
+/// Everything else is verbatim, typos included.
+///
+/// Two posts are quoted short of their end — KKY's, which went on to ask for
+/// shortcut customization, a thing the app already has; and Aguiar Filho's,
+/// which went on to ask for Codex, which the headline of this very page says
+/// it runs. Both cuts are for the same reason: the part removed asks for
+/// something that is already here, so leaving it in describes a gap that does
+/// not exist.
+///
+/// **One post is reworded, and it is the only one.** Jongmin Park wrote "the
+/// sidebar is weirdly satisfying" and the card says "this is weirdly
+/// satisfying", so it reads under the split-view clip rather than naming a
+/// part of the app that clip is not about.
+///
+/// Keep that to one, and prefer a cut. The card carries the person's name,
+/// their picture and a link to the post, so anything drawn here is checkable
+/// — which makes shortening fair and rewriting a thing a reader can catch.
+/// Every other quote on this page is verbatim from its first word to wherever
+/// it stops.
+///
 /// `avatar` is a path under `public/avatars/`. Absent is an ordinary state and
 /// draws the initial instead, so a quote can go up before its picture does.
 export type Testimonial = {
@@ -18,6 +42,17 @@ export type Testimonial = {
   /// accounts that have none, which is a claim about somebody else's account.
   verified?: boolean;
 };
+
+/// Looked up by handle, because that is what [`Feature.quotes`] names: a
+/// feature points at the reaction it wants under it, and a handle is the one
+/// thing about a post that is both stable and readable in the feature list.
+///
+/// A handle no entry carries answers `undefined` and draws nothing, which is
+/// the right failure — deleting a quote from the list below must not be able
+/// to take the page down with it.
+export function byHandle(handle: string): Testimonial | undefined {
+  return TESTIMONIALS.find((t) => t.handle === handle);
+}
 
 export const TESTIMONIALS: Testimonial[] = [
   {
@@ -37,13 +72,6 @@ export const TESTIMONIALS: Testimonial[] = [
     text: "That's awesome! Looks like a huge upgrade to the workflow. Love seeing these improvements.",
   },
   {
-    name: "Aguiar Filho",
-    handle: "aguiarfilho_",
-    url: "https://x.com/aguiarfilho_/status/2092582930287657447",
-    avatar: "/avatars/aguiarfilho_.jpg",
-    text: "Congrats on the app, man, it’s really great! Do you have any plans to add Codex?",
-  },
-  {
     name: "Felix",
     handle: "vcfgdev",
     url: "https://x.com/vcfgdev/status/2095046763929555405",
@@ -52,12 +80,11 @@ export const TESTIMONIALS: Testimonial[] = [
     text: "the startup is blazing fast.",
   },
   {
-    name: "jan",
-    handle: "miaugladiator1",
-    url: "https://x.com/miaugladiator1/status/2092577563784737120",
-    avatar: "/avatars/miaugladiator1.jpg",
-    verified: true,
-    text: "uhhhh, this needs codex support though hehe",
+    name: "Aguiar Filho",
+    handle: "aguiarfilho_",
+    url: "https://x.com/aguiarfilho_/status/2092582930287657447",
+    avatar: "/avatars/aguiarfilho_.jpg",
+    text: "Congrats on the app, man, it’s really great!",
   },
   {
     name: "Felipe Orlando",
@@ -68,11 +95,26 @@ export const TESTIMONIALS: Testimonial[] = [
     text: "YEEEEEAAAAHHHHHHH",
   },
   {
-    name: "Marcus Hohlbein",
-    handle: "marcus_hohlbein",
-    url: "https://x.com/marcus_hohlbein/status/2094932609725870220",
-    avatar: "/avatars/marcus_hohlbein.jpg",
+    name: "Jongmin Park",
+    handle: "paakjong",
+    url: "https://x.com/paakjong/status/2098289537768390971",
+    avatar: "/avatars/paakjong.jpg",
     verified: true,
-    text: "Nice 🥵",
+    text: "this is weirdly satisfying",
+  },
+  {
+    name: "KKY",
+    handle: "evilpsycho42",
+    url: "https://x.com/evilpsycho42/status/2098313001644507519",
+    avatar: "/avatars/evilpsycho42.jpg",
+    text: "polished ui and stared.",
+  },
+  {
+    name: "sree.world",
+    handle: "sreedotworld",
+    url: "https://x.com/sreedotworld/status/2098140473458122755",
+    avatar: "/avatars/sreedotworld.jpg",
+    verified: true,
+    text: "@jullerino feel like this should be a feature on t3code too no?",
   },
 ];

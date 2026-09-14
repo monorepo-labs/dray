@@ -6,7 +6,7 @@ import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
-import { Testimonials } from "@/components/Testimonials";
+import { Sponsors } from "@/components/Sponsors";
 import { UsedBy } from "@/components/UsedBy";
 import { DOWNLOAD_SIZE } from "@/lib/links";
 import hero from "../../public/hero-pr-dray.png";
@@ -33,36 +33,43 @@ export default function Home() {
           <Nav />
         </div>
 
-        {/* Headline-sized now that the page is a home page and not a caption
-            over a board. Aeonik at medium — the file is that one weight, so
-            `font-medium` is the only weight that renders as itself. Wraps
-            freely — nowrap at this size clipped on phones, so only each
-            mark-and-name pair holds together: a logo that wrapped away from
-            the word it stands for would read as decoration. Marks are sized
-            in `em` and not in a fixed step, so they follow the headline
-            through its own breakpoint; the baseline nudge is eyeballed
-            against Aeonik's cap height. */}
+        {/* The headline carries the pitch and the line under it carries the
+            list, which is the way round they were not. Naming the three
+            harnesses up here said what the app *runs*; running them at once
+            is what it is for, and that was sitting in small grey text
+            underneath.
+
+            Aeonik at medium — the file is that one weight, so `font-medium`
+            is the only weight that renders as itself. */}
         <h1 className="max-w-2xl font-display text-3xl leading-[1.1] font-medium tracking-tight text-balance sm:text-4xl">
-          Run{" "}
+          Run coding agents in parallel.
+        </h1>
+
+        {/* The marks come with the names, so the subtitle keeps the inline
+            glyphs the headline had: they are what says "the thing you already
+            pay for", which no amount of prose does as fast.
+
+            Each mark-and-name pair holds together and nothing else does —
+            nowrap on the whole line clipped on phones, and a logo that wrapped
+            away from the word it stands for would read as decoration. Sized in
+            `em` rather than a fixed step so they follow the text through its
+            own breakpoint; the baseline nudge is eyeballed. */}
+        <p className="mt-3 max-w-xl text-base text-muted-foreground text-pretty sm:text-lg">
           <span className="whitespace-nowrap">
-            <ClaudeGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            <ClaudeGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
             Claude Code
           </span>
           ,{" "}
           <span className="whitespace-nowrap">
-            <OpenAIGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            <OpenAIGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
             Codex
           </span>{" "}
           and{" "}
           <span className="whitespace-nowrap">
-            <PiGlyph className="mr-1.5 inline-block size-[0.72em] align-[-0.06em]" />
+            <PiGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
             pi
           </span>{" "}
-          in one app.
-        </h1>
-        <p className="mt-3 text-base text-muted-foreground text-pretty sm:text-lg">
-          Fast, feels right, runs agents in parallel — on your existing
-          subscriptions.
+          — on your existing subscriptions. Fast, and it feels right.
         </p>
 
         <div className="mt-5 flex items-center gap-3">
@@ -96,18 +103,22 @@ export default function Home() {
         className="mb-12 block h-auto w-full rounded-lg border border-border sm:mb-16"
       />
 
-      {/* Straight after the capture, where a logo strip always sits — the
-          joke only works in the slot it is imitating. */}
-      <UsedBy className={`${COLUMN} mb-12 sm:mb-16`} />
+      {/* Straight after the capture, in the slot a logo strip always takes —
+          which here holds the two names actually backing the thing. */}
+      <Sponsors className={`${COLUMN} mb-12 sm:mb-16`} />
 
       {/* What the app does, each beside the clip that shows it. A visitor
           who scrolls past four sections has read four features; one who
-          scrolled past seven silent clips had read none. */}
+          scrolled past seven silent clips had read none.
+
+          The quotes live inside here now, one under each feature's clip,
+          rather than as a block of their own further down. */}
       <Features className={COLUMN} />
 
-      {/* After the features, not before: what the app does has to land
-          before a stranger's reaction to it means anything. */}
-      <Testimonials className={`${COLUMN} mb-12 sm:mb-16`} />
+      {/* Last, and the only thing on the page that answers "who else" with a
+          number rather than a name — so it wants every reason to be one of
+          them already read. */}
+      <UsedBy className={`${COLUMN} mb-12 sm:mb-16`} />
 
       <Footer className={COLUMN} />
     </main>

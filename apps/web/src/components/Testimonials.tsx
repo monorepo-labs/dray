@@ -1,4 +1,4 @@
-import { TESTIMONIALS, type Testimonial } from "@/lib/testimonials";
+import { byHandle, type Testimonial } from "@/lib/testimonials";
 
 /// X's verified mark. Local to this file rather than its own glyph component:
 /// nothing else on the page names an account, so a second file would be one
@@ -30,18 +30,13 @@ function VerifiedGlyph({ className }: { className?: string }) {
 /// The whole card is the link, which is also why nothing inside it is one, and
 /// why hovering fills it: the fill is the affordance the resting card gives up
 /// by being a hairline.
-/// `clone` marks a card the marquee only draws to fill the loop. It is hidden
-/// from assistive tech and taken out of the tab order together — hiding it
-/// alone would leave a link that can be focused but not read.
-function Card({ t, clone = false }: { t: Testimonial; clone?: boolean }) {
+function Card({ t }: { t: Testimonial }) {
   return (
     <a
       href={t.url}
       target="_blank"
       rel="noopener noreferrer"
-      aria-hidden={clone || undefined}
-      tabIndex={clone ? -1 : undefined}
-      className="flex w-72 shrink-0 rounded-xl border border-border/50 px-5 pt-5 pb-8 transition-colors hover:border-card hover:bg-card"
+      className="block rounded-xl border border-border/50 p-5 transition-colors hover:border-card hover:bg-card"
     >
       <figure>
         <figcaption className="flex items-center gap-2.5">
@@ -77,7 +72,11 @@ function Card({ t, clone = false }: { t: Testimonial; clone?: boolean }) {
             </span>
           </span>
         </figcaption>
-        <blockquote className="mt-2.5 text-[15px] leading-normal break-words text-pretty">
+        {/* `whitespace-pre-line` because a post can have a blank line in it,
+            and without it the paragraphs run together into one sentence that
+            nobody wrote. Spaces still collapse, so the indented string in
+            testimonials.ts is unaffected. */}
+        <blockquote className="mt-2.5 text-base leading-normal break-words whitespace-pre-line text-pretty sm:text-lg">
           {t.text}
         </blockquote>
       </figure>
@@ -85,67 +84,43 @@ function Card({ t, clone = false }: { t: Testimonial; clone?: boolean }) {
   );
 }
 
-/// One sliding row. The track slides by exactly **half** its own width, so what
-/// it holds has to be the run twice over — hence `run` is already doubled by
-/// the caller and drawn twice here. Doubling rather than laying the run out
-/// once is what a short row needs: three cards are narrower than the window, so
-/// half a two-copy track would leave a gap crossing the screen before the loop
-/// came round.
+/// The pair of quotes that sits under one feature.
 ///
-/// Everything past the first run is a `clone`, hidden from assistive tech, or
-/// the same quote is read out four times.
+/// Takes however many handles it is given rather than exactly two: the count
+/// is an editorial decision and belongs in features.ts, where the pairs are
+/// actually chosen.
 ///
-/// Motion pauses on hover, since the cards are links and a moving link cannot
-/// be clicked. `prefers-reduced-motion` stops it outright, in globals.css.
-function Row({
-  run,
-  reverse = false,
+/// **Not a wall any more.** They were a block of six above the footer, and
+/// before that two marquees running opposite ways. A wall is a pile a reader
+/// scrolls past once; put under the feature it is about, the same sentence is
+/// somebody agreeing with the claim directly above it.
+///
+/// Which is why the pairing lives on the feature ([`Feature.quotes`]) and not
+/// here: what a quote is evidence *for* is a fact about the feature, not about
+/// the post.
+///
+/// Two columns, which is also what keeps a four-word reaction from stretching
+/// across the whole text column and reading as a mistake. One column on a
+/// phone, where half of it is about 150px of text.
+///
+/// A grid rather than the CSS columns the old wall used: a pair reads as a
+/// pair when both start on the same line, and columns would stack the second
+/// under the first.
+export function Quotes({
+  handles,
+  className,
 }: {
-  run: Testimonial[];
-  reverse?: boolean;
+  handles: string[];
+  className?: string;
 }) {
+  const quotes = handles.map(byHandle).filter((t) => t !== undefined);
+  if (quotes.length === 0) return null;
+
   return (
-    <div
-      className={`flex w-max gap-3 animate-marquee hover:[animation-play-state:paused] ${
-        reverse ? "[animation-direction:reverse]" : ""
-      }`}
-    >
-      {run.map((t, i) => (
-        <Card key={`a${i}`} t={t} clone={i >= run.length / 2} />
-      ))}
-      {run.map((t, i) => (
-        <Card key={`b${i}`} t={t} clone />
+    <div className={`grid gap-3 sm:grid-cols-2 ${className ?? ""}`}>
+      {quotes.map((t) => (
+        <Card key={t.url} t={t} />
       ))}
     </div>
-  );
-}
-
-/// The reaction to the app, as two marquees running opposite ways. Hand-rolled
-/// cards rather than embeds — see src/lib/testimonials.ts for why.
-///
-/// Two rows, not one: seven quotes in a single row is a long wait for the one
-/// at the back, and a second row moving the other way is also what stops the
-/// pair reading as one belt sliding the page sideways.
-///
-/// The fade is a `mask-image` on the clipping element rather than two gradient
-/// overlays: an overlay has to name the page's own background to fake a fade,
-/// which is a second place the background colour is written down.
-export function Testimonials({ className }: { className?: string }) {
-  if (TESTIMONIALS.length === 0) return null;
-
-  const half = Math.ceil(TESTIMONIALS.length / 2);
-  const top = TESTIMONIALS.slice(0, half);
-  const bottom = TESTIMONIALS.slice(half);
-
-  return (
-    <section className={className}>
-      <h2 className="mb-4 font-mono text-xs tracking-wide text-muted-foreground uppercase">
-        From X
-      </h2>
-      <div className="flex flex-col gap-3 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
-        <Row run={[...top, ...top]} />
-        <Row run={[...bottom, ...bottom]} reverse />
-      </div>
-    </section>
   );
 }
