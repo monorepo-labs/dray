@@ -68,11 +68,11 @@ only the method vocabulary differs.
 | `agent_thought_chunk` | `Reasoning` (no id — one block per run, closed by the next non-thought update) |
 | `tool_call` | `ToolCallStarted { call_id: toolCallId, name, tool_type: kind→ToolType, input: rawInput (renamed), title }` |
 | `tool_call_update completed\|failed` | `ToolCallCompleted { text: content joined, is_error: failed, exit_code, duration_ms: command_result }` |
-| `tool_call_update in_progress` with content | dropped — the row draws the committed result; streaming shell output is a later PR |
+| `tool_call_update in_progress` with content | accumulated per call and used as the completed row's text — the closing update carries only fx's replay blob |
 | `session/request_permission` | `PermissionRequested` with the server's options carried whole; `Reply::Rpc(id)` |
 | `session_info_update` | `session_title` (side channel, not a transcript event) |
 | `usage_update` | `UsageUpdate` and folded onto the turn's `TurnCompleted.usage.contextWindow` |
-| prompt response | `TurnCompleted { status: Success \| Aborted (cancelled) \| Error (refused) }` |
+| prompt response | `TurnCompleted { status: Success (end_turn, cancelled — a Stop, the reading Codex's interrupted makes) \| Error (refused, max_tokens, max_turn_requests) }` |
 | `available_commands_update`, `user_message_chunk` (load replay) | ignored, modelled |
 
 ## Layout
@@ -103,7 +103,7 @@ Frontend: `Harness` union (generated), `AGENT_LABELS`, `AgentIcon`,
 - A permission card appears only where fx thinks it should; `manual` is not "every write asks".
 - Provider switch writes fx's own settings file.
 - Model ids are not validated by fx; a bad one fails on the first prompt with fx's sentence.
-- One active prompt per connection — a prompt typed mid-turn queues on Dray's side, the Codex path.
+- One active prompt per connection, and no injection point inside a turn — a prompt typed mid-turn always queues to the turn's end and the queue drains one message per turn, where Codex and Claude take several at a tool boundary.
 - `binpath` caches `fx`'s path for the process, like every other CLI.
 - The effort ladder is per provider, not per model. A level fx declines fails the first prompt with fx's own sentence.
 - Every `fx acp` session Dray opens is persisted by fx, prompted or not; a session that failed before its first prompt still leaves a row in `fx sessions`.

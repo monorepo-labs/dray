@@ -310,6 +310,10 @@ pub async fn set_mode(session: &FxSession, mode: ApprovalPolicy) -> Result<()> {
 /// outright still answers on that id, as an error, which the reader draws as
 /// a failed turn.
 pub async fn start_turn(session: &FxSession, text: &str) -> Result<()> {
+    // Held across the send, which only hands the line to the writer task:
+    // an outright refusal can answer before this returns, and `prompt_answer`
+    // takes this same lock, so it cannot read the id before it is written.
+    let mut running = session.prompt_id.lock().expect("fx prompt id poisoned");
     let id = session.client.request_detached(
         "session/prompt",
         json!({
@@ -317,7 +321,7 @@ pub async fn start_turn(session: &FxSession, text: &str) -> Result<()> {
             "prompt": [{"type": "text", "text": text}],
         }),
     )?;
-    *session.prompt_id.lock().expect("fx prompt id poisoned") = Some(id);
+    *running = Some(id);
     Ok(())
 }
 

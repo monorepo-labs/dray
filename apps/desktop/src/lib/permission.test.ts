@@ -38,9 +38,15 @@ describe("stanceFor", () => {
   /// would claim a freedom the session does not have.
   it("falls to the widest stance fx can run, not to bypass", () => {
     expect(honoursMode("fx", "bypassPermissions")).toBe(false);
-    expect(honoursMode("fx", "plan")).toBe(false);
     expect(stanceFor("fx", "bypassPermissions")).toBe("auto");
-    expect(stanceFor("fx", "plan")).toBe("auto");
+    expect(stanceFor("fx", "dontAsk")).toBe("auto");
+  });
+
+  /// `plan` is narrower than anything fx has, so it falls the other way: a
+  /// session inheriting `plan` must not come out freer than it was asked to be.
+  it("never widens plan on fx", () => {
+    expect(honoursMode("fx", "plan")).toBe(false);
+    expect(stanceFor("fx", "plan")).toBe("manual");
   });
 
   /// pi honours nothing, so every stance records as the ungated one it will

@@ -33,10 +33,14 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   fx: ["manual", "auto"],
 };
 
-/// The stance a harness actually runs when handed one it does not honour — its
-/// widest, since that is what describes what the CLI will do.
-const WIDEST: Partial<Record<Harness, ApprovalPolicy>> = {
-  fx: "auto",
+/// The stance a harness actually runs when handed one it does not honour.
+///
+/// fx: a bypass falls to `auto`, the widest it can run. `plan` is narrower
+/// than anything fx has and falls the other way, to `manual` — fx.rs runs
+/// that as `ask`, and a spawned session inheriting `plan` must never come out
+/// freer than its parent.
+const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy>> = {
+  fx: (mode) => (mode === "plan" ? "manual" : "auto"),
 };
 
 /// Whether this harness honours this stance.
@@ -59,5 +63,6 @@ export function honoursMode(harness: Harness, mode: ApprovalPolicy): boolean {
 /// session recorded `plan` that is not passed `--tools` would be the same lie
 /// pointed the other way, and the more alarming direction to be wrong in.
 export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
-  return honoursMode(harness, mode) ? mode : (WIDEST[harness] ?? "bypassPermissions");
+  if (honoursMode(harness, mode)) return mode;
+  return FALLBACK[harness]?.(mode) ?? "bypassPermissions";
 }

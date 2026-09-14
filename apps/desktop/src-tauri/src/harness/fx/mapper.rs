@@ -234,12 +234,23 @@ impl Mapper {
             // `refused` answered a prompt fx declined to run at all — an image
             // on a provider that takes none, on capture. Nothing else on the
             // wire says so, so the sentence is minted here.
-            "refused" => (
+            "refused" | "refusal" => (
                 TurnStatus::Error,
                 Some("fx refused this prompt.".to_string()),
             ),
-            // The reader's own Stop, reported as a success carrying a reason
-            // nothing draws — the reading every other harness makes.
+            // ACP's two other terminal reasons: the turn ended with the work
+            // unfinished, and fx sends no sentence saying so.
+            "max_tokens" => (
+                TurnStatus::Error,
+                Some("fx stopped: the model hit its output token limit.".to_string()),
+            ),
+            "max_turn_requests" => (
+                TurnStatus::Error,
+                Some("fx stopped: the turn hit its request limit.".to_string()),
+            ),
+            // `end_turn`, and `cancelled` — the reader's own Stop, reported as
+            // a success carrying a reason nothing draws, the reading Codex's
+            // `interrupted` makes.
             _ => (TurnStatus::Success, None),
         };
 

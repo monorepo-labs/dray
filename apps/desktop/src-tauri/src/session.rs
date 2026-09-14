@@ -789,7 +789,12 @@ impl SessionManager {
                     });
                 }
 
-                if tool_in_flight {
+                // fx has no injection point at all: `session/prompt` blocks
+                // for the turn and a second one written meanwhile takes over
+                // the one id the read loop settles the turn on, so the first
+                // is never closed. It queues to the turn's end, whatever is
+                // running.
+                if tool_in_flight && !matches!(s.stdin, Transport::Fx(_)) {
                     s.queue_and_flush(prompt, attachment_paths, issues, from, app)
                         .await;
                     return Ok(SendOutcome {
@@ -2184,12 +2189,15 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // safe, and it is at any point inside a turn — a prompt written early
     // waits in the CLI's own buffer for the same main-thread result it
     // would have waited here for.
-    let at_boundary = matches!(
-        agent_event.payload,
-        AgentEventPayload::ToolCallStarted { .. }
-            | AgentEventPayload::ToolCallCompleted { .. }
-            | AgentEventPayload::TurnCompleted { .. }
-    );
+    let at_boundary = match agent_event.payload {
+        AgentEventPayload::TurnCompleted { .. } => true,
+        // A tool boundary is a place to hand over only where the child has a
+        // buffer to absorb the prompt into; fx's next prompt is its next turn.
+        AgentEventPayload::ToolCallStarted { .. } | AgentEventPayload::ToolCallCompleted { .. } => {
+            !matches!(ctx.flush_transport, Transport::Fx(_))
+        }
+        _ => false,
+    };
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
         eprintln!("[emit err] {err}");
@@ -2344,7 +2352,17 @@ pub async fn flush_queued(
     // Drained under one lock so a cancel arriving mid-flush either takes a
     // message back before any of this or finds nothing — never races a
     // half-written batch.
-    let batch: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
+    let batch: Vec<QueuedMessage> = {
+        let mut held = queued.lock().await;
+        // fx runs one prompt per turn, so a batch goes out one message per
+        // turn end; the rest wait for the next. Every other child absorbs
+        // several lines at one boundary.
+        if matches!(transport, Transport::Fx(_)) && !held.is_empty() {
+            vec![held.remove(0)]
+        } else {
+            std::mem::take(&mut *held)
+        }
+    };
 
     if batch.is_empty() {
         return;
