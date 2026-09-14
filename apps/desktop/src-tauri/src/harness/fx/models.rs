@@ -47,30 +47,50 @@ pub async fn list() -> Vec<Model> {
     // The subscription providers serve a handful of models each, fixed and
     // known, so the first read answers from a table with no probe — `fx models`
     // costs ~2s of fx startup whatever it returns. gateway's list is discovered
-    // (247 and unbounded), so it alone is probed, cached per key so a return
-    // trip skips the startup. The manual Refresh calls [`refresh`], which probes
-    // fx even for a table-backed provider and caches it above.
+    // (247 and unbounded), so it alone is probed. The manual Refresh calls
+    // [`refresh`], which probes fx even for a table-backed provider and caches
+    // the answer above.
     if let Some(models) = known_models(&key) {
         return models;
     }
 
-    CACHE.get_or_probe(&key, probe).await.unwrap_or_else(|err| {
-        eprintln!("[fx models] {err:#}");
-        Vec::new()
-    })
+    match probe_stable().await {
+        Some((provider, models)) => {
+            CACHE.insert(&provider, models.clone());
+            models
+        }
+        None => Vec::new(),
+    }
 }
 
 /// Re-queries fx for the active provider and replaces its cached list, so the
 /// next [`list`] returns fx's own answer rather than a static table. For the
 /// reader's manual Refresh: they want fx asked again, worth its ~2s startup,
-/// even for codex or grok. Safe against cross-provider mixups because it probes
-/// the provider that is active *now* and keys the answer by it.
+/// even for codex or grok.
 pub async fn refresh() {
     forget();
-    let key = active_provider().await.unwrap_or_default();
-    if let Err(err) = CACHE.get_or_probe(&key, probe).await {
-        eprintln!("[fx models] refresh: {err:#}");
+    if let Some((provider, models)) = probe_stable().await {
+        CACHE.insert(&provider, models);
     }
+}
+
+/// Probes fx and pairs the models with the provider they belong to, or `None`
+/// if the active provider changed across the probe.
+///
+/// `fx models` reports only whichever provider is active when it runs, so a
+/// switch mid-probe makes the result ambiguous — provider B's models read under
+/// a key of A. Reading the provider on both sides of the probe and caching only
+/// when it held steady is what keeps a concurrent switch or Refresh from
+/// poisoning the cache; an ambiguous result is dropped, and the next read (the
+/// switch reloads one) probes again.
+async fn probe_stable() -> Option<(String, Vec<Model>)> {
+    let before = active_provider().await;
+    let models = probe()
+        .await
+        .map_err(|err| eprintln!("[fx models] {err:#}"))
+        .ok()?;
+    let after = active_provider().await;
+    (before == after).then(|| (after.unwrap_or_default(), models))
 }
 
 /// The fixed model lists for the subscription providers, or `None` for one

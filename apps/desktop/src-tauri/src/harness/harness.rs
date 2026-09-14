@@ -192,6 +192,16 @@ impl<T: Clone> ProbeCache<T> {
         (at.elapsed() < self.fresh_for).then(|| hit.clone())
     }
 
+    /// Stores `value` under `key` as fresh, replacing any entry. For a caller
+    /// that probed outside [`Self::get_or_probe`] and decided for itself whether
+    /// the answer is safe to cache.
+    pub fn insert(&self, key: &str, value: T) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), (Instant::now(), value));
+    }
+
     /// Drops every answer, so the next read probes again.
     pub fn forget(&self) {
         self.entries.lock().unwrap().clear();
