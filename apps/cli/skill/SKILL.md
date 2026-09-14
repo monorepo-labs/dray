@@ -236,6 +236,7 @@ dray browser get text                         # the page's text; or html, value,
 dray browser is visible ".toast"
 dray browser wait ".results"                  # or 1500, or --url /done, --text "Saved", --load load
 dray browser screenshot --full                # prints the PNG's path; a path of your own must be inside the checkout
+                                              # laid out at 1440×900 whatever the pane's width, or the last set viewport/device
 dray browser eval "document.title"
 dray browser console                          # what the page logged since last asked; `errors` for errors alone
 dray browser set device "iPhone 15"           # or: set viewport 375 667
