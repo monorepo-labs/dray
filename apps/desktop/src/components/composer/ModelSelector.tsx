@@ -319,7 +319,15 @@ export default function ModelSelector({
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenuContent align="start" className="min-w-[202px]">
+      <DropdownMenuContent
+        align="start"
+        className="min-w-[202px]"
+        // The trigger is also the tooltip trigger, so Radix returning focus to
+        // it on close reopens the tooltip on that focus and leaves it stuck
+        // until the next click. Don't refocus the trigger — the composer takes
+        // focus back on its own.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         {/* Not menu items: a segmented control says "one of these two" where
             two stacked rows would read as two more models. Plain buttons, so
             the menu stays open — switching agent and then picking one of its
