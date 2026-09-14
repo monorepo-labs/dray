@@ -258,6 +258,15 @@ impl StatusTracker {
         self.open_tool_calls > 0
     }
 
+    /// Gives back a turn reserved by [`Self::on_send`] that never reached the
+    /// child — an fx flush whose whole queue failed to send, or was emptied by
+    /// a cancel between the reservation and the flush. Back to `Completed`, the
+    /// state the ending turn would have left had nothing been queued behind it.
+    pub fn release_reserved_turn(&mut self) -> Option<SessionStatus> {
+        self.model_call_open = false;
+        self.set(SessionStatus::Completed)
+    }
+
     /// The user read the finished session. Only `Completed` clears — selecting
     /// a running session must not stop it reading as busy.
     pub fn mark_seen(&mut self) -> Option<SessionStatus> {
@@ -2207,12 +2216,31 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // `on_event` because the subagent test needs the envelope: a subagent's
     // tool call runs on its own thread, and its result is not a point where
     // the CLI injects a queued prompt.
+    //
+    // fx reserves its next turn here, atomically with the completion. It has a
+    // single prompt id and no injection point, so a turn ending with a prompt
+    // queued must hand straight to it — and between this completion and the
+    // flush below sit two awaits (publish, append). A send racing that gap
+    // would read no turn in flight and start a second fx prompt over the one
+    // id the flush is about to. Folding `on_send` in under the same lock means
+    // the tracker never reads `Completed` while an fx prompt is queued, so a
+    // racing send queues instead. The queue cannot grow past the completion:
+    // a send that sees `Completed` delivers directly rather than queueing.
+    let reserved_fx_turn = matches!(ctx.flush_transport, Transport::Fx(_))
+        && matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
+        && !ctx.queued.lock().await.is_empty();
     let next_status = {
         let mut tracker = ctx.status.lock().await;
+        let before = tracker.status();
         if agent_event.subagent.is_none() {
             tracker.note_tool_call(&agent_event.payload);
         }
-        tracker.on_event(&agent_event.payload)
+        tracker.on_event(&agent_event.payload);
+        if reserved_fx_turn {
+            tracker.on_send();
+        }
+        let after = tracker.status();
+        (after != before).then_some(after)
     };
     if let Some(next) = next_status {
         publish_status(ctx.session_id, next, app).await;
@@ -2385,12 +2413,26 @@ pub async fn flush_queued(
         }
     }
 
-    // A flush at `turn_completed` lands just after the tracker marked the
-    // session finished, and the prompt it just wrote opens a new turn the CLI
-    // has not announced yet. Without this the composer reads idle for the
-    // second or so until `init` arrives — offering to send into a session that
-    // is already working. Redundant at a tool boundary, where the session is
-    // in-progress and `on_send` reports no change.
+    // fx reserved its next turn in `ingest` before this ran, so a delivery that
+    // landed needs no status change — the session is already `InProgress`. What
+    // does need one is the reservation delivering *nothing*: the whole queue
+    // failed to send, or a cancel emptied it after the reservation. Give the
+    // turn back, or the session hangs `InProgress` on a prompt no child holds.
+    if one_per_turn {
+        if delivered == 0 {
+            if let Some(next) = status.lock().await.release_reserved_turn() {
+                publish_status(session_id, next, app).await;
+            }
+        }
+        return;
+    }
+
+    // Every other transport takes the whole batch at a boundary and is not
+    // reserved ahead. A delivered batch at `turn_completed` opens a turn the
+    // CLI has not announced yet, so without this the composer reads idle for
+    // the second or so until `init` arrives — offering to send into a session
+    // that is already working. Redundant at a tool boundary, where the session
+    // is in-progress and `on_send` reports no change.
     //
     // Only where something actually reached the child. A batch that all failed
     // starts no turn, and reporting one would leave the session running forever
@@ -2552,6 +2594,42 @@ mod tests {
         }
 
         assert!(!tracker.tool_in_flight());
+    }
+
+    /// fx reserves its next turn the instant one ends with a prompt queued, so
+    /// the tracker never reads idle in the window before the flush hands the
+    /// queued prompt over — a send racing that window would otherwise start a
+    /// second fx prompt over the one id. The reservation nets `InProgress`, and
+    /// a flush that then delivers nothing gives the turn back to `Completed`.
+    #[test]
+    fn an_fx_reservation_holds_the_turn_across_the_flush() {
+        let done = AgentEventPayload::TurnCompleted {
+            status: crate::events::TurnStatus::Success,
+            stop_reason: None,
+            final_text: None,
+            usage: None,
+            duration_ms: None,
+            head: None,
+            auth_failed: false,
+        };
+
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+
+        // The completion followed at once by the reservation, as `ingest` does
+        // it under one lock: net `InProgress`, and the turn still in flight, so
+        // a racing send queues rather than sending.
+        assert_eq!(tracker.on_event(&done), Some(SessionStatus::Completed));
+        assert_eq!(tracker.on_send(), Some(SessionStatus::InProgress));
+        assert!(tracker.turn_in_flight());
+
+        // The flush delivered nothing — every queued prompt failed, or a cancel
+        // emptied the queue — so the reservation is given back.
+        assert_eq!(
+            tracker.release_reserved_turn(),
+            Some(SessionStatus::Completed)
+        );
+        assert!(!tracker.turn_in_flight());
     }
 
     /// The fixture's second turn spawns a background agent: its `result`
