@@ -139,13 +139,14 @@ function RunRow({
           disabled={!hasContent}
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left text-ui"
         >
-          <ChevronRight
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-90",
-              !hasContent && "invisible",
-            )}
-          />
+          {hasContent && (
+            <ChevronRight
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90",
+              )}
+            />
+          )}
 
           {/* The shimmer stands in for the orb the chat row carries: at this text
               size the orb is taller than the row it sits in, and a list of them
