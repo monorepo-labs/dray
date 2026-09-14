@@ -145,6 +145,8 @@ pub struct StatusTracker {
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
     open_tool_calls: usize,
+    /// The newest turn died for want of a login.
+    auth_failed: bool,
 }
 
 impl StatusTracker {
@@ -173,8 +175,9 @@ impl StatusTracker {
             // a `local_bash` task that never ends: a dev server, a Monitor, a
             // poll loop kept the Stop button, the indicator and the completion
             // notice hanging until the reader clicked Stop.
-            AgentEventPayload::TurnCompleted { .. } => {
+            AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
+                self.auth_failed = *auth_failed;
                 self.set(SessionStatus::Completed)
             }
             // Recorded, never a status input. The set has its own indicator
@@ -215,6 +218,22 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// Whether the newest turn failed on authentication.
+    ///
+    /// The child caches the answer to "am I logged in": once a CLI has decided
+    /// it is not, every later prompt is refused from its own memory — measured
+    /// at ~200ms with no network call — so a reader who logs in next door is
+    /// still refused by the process that was already running. Restarting the
+    /// app was the only cure, because that is the only thing that dropped the
+    /// child. Read by [`SessionManager::send_msg`] as one more reason to
+    /// replace it.
+    ///
+    /// Cleared by the next turn to complete, since that one says so by
+    /// completing — the same rule the composer's notice reads.
+    pub fn auth_failed(&self) -> bool {
+        self.auth_failed
     }
 
     /// The status the sidebar draws from, so a guard here can be checked
@@ -683,16 +702,18 @@ impl SessionManager {
         // anything is working at all decides that the child must not be
         // replaced, while only an open model call means this prompt has a turn
         // to be folded into.
-        let (busy, turn_in_flight, tool_in_flight) = match sessions_guard.get(session_id) {
+        let (busy, turn_in_flight, tool_in_flight, auth_failed) = match sessions_guard.get(session_id)
+        {
             Some(s) => {
                 let tracker = s.status.lock().await;
                 (
                     tracker.has_outstanding_work(),
                     tracker.turn_in_flight(),
                     tracker.tool_in_flight(),
+                    tracker.auth_failed(),
                 )
             }
-            None => (false, false, false),
+            None => (false, false, false, false),
         };
 
         // Effort is fixed at spawn — the CLI has no `set_effort` control request
@@ -712,11 +733,19 @@ impl SessionManager {
         // exactly the half-applied setting that makes a session more or less
         // free than the reader asked for. Respawning settles both at once, and
         // `thread/resume` carries the conversation across it.
+        //
+        // A login that ran out is the other reason, and it is not a setting at
+        // all: the child holds "not logged in" in its own memory and refuses
+        // every later prompt from there, so the reader logging in next door
+        // changes nothing until the process is replaced. No control request
+        // reaches that state on any harness — only a fresh child reads the
+        // credentials that were just written.
         let respawn_needed = !busy
             && sessions_guard.get(session_id).is_some_and(|s| {
                 let caps = s.harness.caps();
 
-                (s.effort != effort && !caps.applies_effort_in_place)
+                auth_failed
+                    || (s.effort != effort && !caps.applies_effort_in_place)
                     || (s.model != model && !caps.applies_model_in_place)
                     || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
             });
@@ -2510,15 +2539,39 @@ mod tests {
     }
 
     fn turn_completed() -> AgentEventPayload {
+        turn_completed_auth(false)
+    }
+
+    fn turn_completed_auth(auth_failed: bool) -> AgentEventPayload {
         AgentEventPayload::TurnCompleted {
             status: crate::events::TurnStatus::Success,
             stop_reason: None,
-            auth_failed: false,
+            auth_failed,
             final_text: None,
             usage: None,
             duration_ms: None,
             head: None,
         }
+    }
+
+    /// What makes a logged-out session curable without restarting the app. The
+    /// child answers every later prompt "not logged in" from its own memory, so
+    /// `send_msg` replaces it — and it must stop doing that the moment a turn
+    /// completes, or every send respawns for the rest of the session.
+    #[test]
+    fn an_auth_failure_lasts_until_the_next_turn_completes() {
+        let mut tracker = StatusTracker::default();
+        assert!(!tracker.auth_failed(), "a fresh session has not failed");
+
+        tracker.on_send();
+        tracker.on_event(&turn_completed_auth(true));
+        assert!(tracker.auth_failed());
+
+        tracker.on_send();
+        assert!(tracker.auth_failed(), "sending is not logging in");
+
+        tracker.on_event(&turn_completed());
+        assert!(!tracker.auth_failed(), "a turn that completed says so itself");
     }
 
     /// The reason the two readings exist separately. A background task keeps
