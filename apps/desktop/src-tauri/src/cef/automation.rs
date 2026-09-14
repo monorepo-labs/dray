@@ -35,6 +35,11 @@ static VIEWPORT: Mutex<Option<HashMap<String, (u32, u32)>>> = Mutex::new(None);
 /// for one; the pane itself is a third of a window and lays a page out at
 /// phone breakpoints.
 const DEFAULT_VIEWPORT: (u32, u32) = (1440, 900);
+/// One capture at a time: the override is tab-wide, so two overlapping
+/// screenshots would clear each other's, and requests off the socket are
+/// not serialized. ponytail: one lock app-wide, per-tab if captures ever
+/// queue behind each other.
+static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -631,11 +636,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Screenshot { path, full } => {
             let tab = active_tab(session)?;
             let (w, h) = screenshot_size(session);
+            let held = CAPTURING.lock().await;
             let bytes = capture(tab, w, h, full).await;
             // Cleared on the failing path too, or one timed-out capture leaves
             // the tab laid out at a width nobody asked for and every later
             // verb reads a page that isn't the one on screen.
             let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+            drop(held);
             let bytes = bytes?;
             let path = match path {
                 Some(p) => screenshot_path(session, &p).await?,
