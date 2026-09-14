@@ -44,6 +44,23 @@ pub struct SlashCommand {
     pub aliases: Vec<String>,
 }
 
+/// The first sentence of a skill's description.
+///
+/// Skill descriptions are written for the *model* — several hundred words of
+/// trigger phrases — where the picker draws one line. Cut at the first full stop
+/// rather than at a character count, so the row ends on a sentence.
+///
+/// Lives beside [`SlashCommand`] rather than in the harness that needed it
+/// first: Codex reads its descriptions off `skills/list` and fx off the
+/// `SKILL.md` on disk, and two copies of this would be two answers to "how long
+/// is a row" in one menu.
+pub fn first_sentence(description: &str) -> String {
+    match description.find(". ") {
+        Some(at) => description[..=at].to_string(),
+        None => description.to_string(),
+    }
+}
+
 /// The `initialize` reply, which carries far more than this — agents, models,
 /// output styles, the account. Only `commands` is read: everything else here is
 /// already sourced from somewhere this app trusts more (`models` from

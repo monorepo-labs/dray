@@ -13,6 +13,7 @@ export default function SlashCommandMenu({
   onHover,
   placement = "above",
   bare = false,
+  emptyNote,
 }: {
   groups: PickerGroup<SlashCommand>[];
   activeIndex: number;
@@ -20,6 +21,8 @@ export default function SlashCommandMenu({
   onHover: (index: number) => void;
   placement?: "above" | "below";
   bare?: boolean;
+  /// Drawn in place of rows where the harness offers none at all.
+  emptyNote?: string;
 }) {
   return (
     <PickerMenu
@@ -31,6 +34,7 @@ export default function SlashCommandMenu({
       onHover={onHover}
       placement={placement}
       bare={bare}
+      emptyNote={emptyNote}
       renderItem={(command) => (
         <>
           <span className="shrink-0 font-medium">/{command.name}</span>

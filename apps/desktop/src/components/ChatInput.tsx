@@ -41,9 +41,13 @@ type ChatInputProps = {
   /// its paths described a second time.
   onSend: (message: string, attachments: Attachment[]) => void;
   /// What the `/` picker offers. Empty until the backend's probe lands, and
-  /// empty forever if it failed — the picker simply never opens, and a command
-  /// typed by hand still works, since the CLI parses the text either way.
+  /// empty forever where the harness publishes none — fx, and Codex with no
+  /// skills installed. A command typed by hand still works either way, since
+  /// the CLI parses the text rather than the picker.
   commands?: SlashCommand[];
+  /// Whether that probe is still out. The picker draws "this agent publishes no
+  /// slash commands" on an empty list, which is only true once it has answered.
+  commandsLoading?: boolean;
   /// Where the `@` picker searches for files. The session's own directory, so a
   /// worktree session mentions paths inside its tree — the CLI resolves `@path`
   /// against the directory it was spawned in, and those are the same one.
@@ -181,9 +185,16 @@ const WORDMARK_MASK = {
   WebkitMaskPosition: "left",
 } as const;
 
+/// What the `/` picker says instead of nothing. Names no agent: it is drawn for
+/// fx, which publishes none at all, and for a Codex session with no skills
+/// installed, and the reader's question — is this list empty or is the app
+/// broken — has the same answer both times.
+const NO_COMMANDS_NOTE = "This agent publishes no slash commands";
+
 export default function ChatInput({
   onSend,
   commands = [],
+  commandsLoading = false,
   cwd = null,
   issuesConnected = false,
   onStop,
@@ -273,13 +284,23 @@ export default function ChatInput({
   // separate all the way to the pick, so nothing has to be narrowed back out of
   // a union that `mention` already decided.
   const rowCount = mention ? files.length : issue ? issues.length : commandMatches.length;
-  // Rows, or the `#` picker waiting on Linear with none yet — the one case a
-  // picker is worth drawing empty, since its placeholder rows are what say the
-  // list is coming rather than absent. The other two read memory and have
-  // nothing to wait for.
+  // A harness that publishes none at all, as against a query matching none of
+  // the ones it does — `/xyzzy` in a Claude session still shuts the picker
+  // quietly, since there the reader can see what the list holds. Silence is
+  // only wrong where the list is empty for good: three of the four harnesses
+  // fill it, so a `/` that does nothing reads as Dray being broken rather than
+  // as fx having no commands. Waits on the probe, and on there being a
+  // directory to probe in — with no project attached the honest answer is
+  // "nobody has been asked" rather than "there are none".
+  const noCommands = query !== null && cwd !== null && !commandsLoading && commands.length === 0;
+  // Rows, or one of the two cases a picker is worth drawing empty: the `#`
+  // picker waiting on Linear, where placeholder rows say the list is coming
+  // rather than absent, and the `/` picker on a harness with none, where one
+  // sentence says the list is never coming. The `@` picker reads an index and
+  // has neither state.
   const menuOpen =
     !dismissed &&
-    (rowCount > 0 || issuesLoading) &&
+    (rowCount > 0 || issuesLoading || noCommands) &&
     (query !== null || mention !== null || issue !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
@@ -777,6 +798,7 @@ export default function ChatInput({
                 onHover={setActiveIndex}
                 placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
+                emptyNote={noCommands ? NO_COMMANDS_NOTE : undefined}
               />
             ))}
 

@@ -64,6 +64,7 @@ export default function PickerMenu<T>({
   placement = "above",
   bare = false,
   loading = false,
+  emptyNote,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -95,6 +96,11 @@ export default function PickerMenu<T>({
   /// somebody is reading with placeholders is the flicker a cache exists to
   /// remove.
   loading?: boolean;
+  /// One line drawn where a picker has no rows and none are coming — today the
+  /// `/` picker on a harness publishing no commands. Read only with no rows,
+  /// like `loading`, and losing to it: a list still being waited on is not one
+  /// that came back empty.
+  emptyNote?: string;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -153,7 +159,10 @@ export default function PickerMenu<T>({
   // group holds nothing is the same empty list as no groups at all, and it is
   // the shape the `#` picker is in on a cold open.
   const rows = groups.reduce((n, group) => n + group.items.length, 0);
-  if (!rows && !loading) return null;
+  if (!rows && !loading && !emptyNote) return null;
+
+  /// Rows, or rows on the way. False only where the note is all there is.
+  const hasList = rows > 0 || loading;
 
   // Runs across the whole list rather than restarting per group, so it lines up
   // with the flat index the composer navigates by.
@@ -260,8 +269,12 @@ export default function PickerMenu<T>({
       >
         <div
           ref={listRef}
-          role="listbox"
-          aria-label={label}
+          // A box holding one sentence and nothing to pick is not a listbox,
+          // and calling it one makes a screen reader announce an empty list
+          // where the sentence is the whole answer. `status` reads it out as it
+          // appears, which is what somebody who just typed `/` is waiting for.
+          role={hasList ? "listbox" : "status"}
+          aria-label={hasList ? label : undefined}
           aria-busy={loading}
           // One inset, not two: `p-1` rather than a taller `py`, so the gap above
           // the first row is the gap beside it. Uneven, the top read as a band
@@ -289,7 +302,16 @@ export default function PickerMenu<T>({
             bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1 pr-0",
           )}
         >
-          {!rows && <Skeleton />}
+          {/* A row's height and inset, so the box is the size one row makes and
+              the sentence sits where a name would. */}
+          {!rows &&
+            (loading ? (
+              <Skeleton />
+            ) : (
+              <div className="flex h-8 items-center px-2 text-ui text-muted-foreground">
+                {emptyNote}
+              </div>
+            ))}
 
           {groups.map((group, g) => (
             <div

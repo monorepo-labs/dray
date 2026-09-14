@@ -42,7 +42,7 @@ only the method vocabulary differs.
 | stop | `session/cancel` | A **notification**, not a request. The running shell died on signal 15, its `tool_call_update` came back `failed`, the prompt answered `stopReason: cancelled` |
 | resume | `session/resume`, `session/load` | Both work. `resume` replays nothing and the next prompt remembers the first; `load` replays history as `user_message_chunk`/`tool_call`/… updates (unneeded — Dray's own log is the replay). One process can hold several sessions; `session/close` works |
 | images | `promptCapabilities.image: true` | A `{type:image, data, mimeType}` block on the Codex provider answered `stopReason: "refused"`, usage `{}`. Not wired in v1 |
-| slash commands | — | `available_commands_update` is empty. Nothing to pick from |
+| slash commands | — | `available_commands_update` is empty, at `session/new`, after a turn, and with a skill present (re-checked on 0.0.10). But **fx expands a leading `/name` itself**: `/hello then also print DONE-8899` as plain prompt text ran the workspace's `hello` skill and honoured the words after it. So the picker walks fx's own skill roots off disk and the send path is unchanged |
 | bad cwd | — | `session/new` with `/nonexistent/dir` succeeds silently |
 | skills | — | The first turn's first `agent_message_chunk` was a `skill discovery warning: …` paragraph, drawn as assistant text. fx's, not ours; noted so nobody files it as a mapper bug |
 

@@ -376,9 +376,11 @@ async fn settings_view() -> settings::SettingsView {
 /// — and typing one sent it as a prompt, because pi expands no command it does
 /// not know.
 ///
-/// Codex answers none, and that is its own fact rather than a gap here: nothing
-/// in `codex app-server` publishes a command list, so an empty picker is the
-/// honest one.
+/// Codex and fx answer with their **skills**, since the rest of what each draws
+/// behind a slash is TUI actions Dray already owns in its chrome. Codex is asked
+/// (`skills/list`); fx publishes nothing on the wire at all, so its roots are
+/// walked on disk. Only `Other` answers none, which is the honest picker for a
+/// CLI this build has never heard of.
 #[tauri::command]
 async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, String> {
     Ok(match harness {
@@ -387,8 +389,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
             .map_err(|e| e.to_string())?,
         Harness::Pi => harness::pi::commands::list_commands(cwd).await,
         Harness::Codex => harness::codex::commands::list_commands(cwd).await,
-        // `available_commands_update` arrived empty on every capture.
-        Harness::Fx | Harness::Other(_) => Vec::new(),
+        Harness::Fx => harness::fx::commands::list_commands(cwd).await,
+        Harness::Other(_) => Vec::new(),
     })
 }
 

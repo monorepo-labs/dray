@@ -12,6 +12,7 @@
 //! Rejected: `fx ask --json` is one JSON object after the turn — no stream, no
 //! permission channel, no cancel. See `apps/desktop/FX-PLAN.md`.
 
+pub mod commands;
 pub mod mapper;
 pub mod models;
 pub mod parser;

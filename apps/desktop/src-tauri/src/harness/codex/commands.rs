@@ -14,7 +14,10 @@
 //! have to agree, and both read the same `skills/list`.
 
 use super::rpc::RpcClient;
-use crate::harness::{claude_code::commands::SlashCommand, ProbeCache};
+use crate::harness::{
+    claude_code::commands::{first_sentence, SlashCommand},
+    ProbeCache,
+};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -167,18 +170,6 @@ fn read_rows(answer: &Value) -> Vec<Skill> {
         .flat_map(|scope| scope.skills)
         .filter(|skill| skill.enabled)
         .collect()
-}
-
-/// The first sentence of a skill's description.
-///
-/// Skill descriptions are written for the *model* — several hundred words of
-/// trigger phrases — where the picker draws one line. Cut at the first full stop
-/// rather than at a character count, so the row ends on a sentence.
-fn first_sentence(description: &str) -> String {
-    match description.find(". ") {
-        Some(at) => description[..=at].to_string(),
-        None => description.to_string(),
-    }
 }
 
 #[cfg(test)]

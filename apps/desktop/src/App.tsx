@@ -824,7 +824,10 @@ function App() {
   // resolves against the same directory for the same reason, and off the same
   // expression so the two can't answer for different trees.
   const composerCwd = selectedSession?.cwd ?? projectPath;
-  const slashCommands = useSlashCommands(composerCwd, harness);
+  const { commands: slashCommands, loading: slashCommandsLoading } = useSlashCommands(
+    composerCwd,
+    harness,
+  );
   // `true` wherever Dray has no answer: the list may not have landed, and pi
   // picks its own model when none is named. A warning drawn on a guess is worse
   // than none, so absence reads as capable.
@@ -1700,6 +1703,7 @@ function App() {
         <ChatInput
           onSend={handleSendMsg}
           commands={slashCommands}
+          commandsLoading={slashCommandsLoading}
           cwd={composerCwd}
           onStop={handleInterrupt}
           onCancelQueued={handleCancelQueued}
