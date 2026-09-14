@@ -14,7 +14,7 @@ use crate::events::{
 };
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
@@ -27,6 +27,18 @@ use super::parser::{
 /// sentence. Read off the live refusal `fx needs a Grok subscription login for
 /// this model. Run fx login grok.`
 const LOGIN_NEEDLES: &[&str] = &["login", "log in", "sign in", "not authenticated"];
+
+/// fx's own diagnostics, which it emits into the agent message stream rather
+/// than to stderr: context-limit truncation and skill-discovery warnings, each
+/// a chunk of its own before the answer. Matched on their fixed machine
+/// prefixes — a real reply opens with neither.
+///
+// ponytail: prefix match on the two observed shapes; a new diagnostic prefix fx
+// adds later shows through until it is listed here.
+fn is_fx_diagnostic(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("[context]") || t.starts_with("skill discovery warning:")
+}
 
 /// A streamed block still open, and the text it has accumulated so far — the
 /// committed event supersedes the deltas, so the whole text is kept.
@@ -59,6 +71,10 @@ pub struct Mapper {
     /// one `in_progress` update per line and its closing update carries only
     /// fx's replay blob, so the result is what accumulated here.
     outputs: HashMap<String, String>,
+    /// Message ids whose chunks are fx diagnostics, not the answer — kept so a
+    /// diagnostic streamed over several chunks is dropped whole, not only its
+    /// first fragment.
+    suppressed: HashSet<String>,
 }
 
 impl Mapper {
@@ -71,6 +87,7 @@ impl Mapper {
             thoughts: 0,
             occupancy: None,
             outputs: HashMap::new(),
+            suppressed: HashSet::new(),
         }
     }
 
@@ -98,6 +115,15 @@ impl Mapper {
                     return Vec::new();
                 };
                 let id = message_id.unwrap_or_else(|| "message".to_string());
+                // fx writes its own startup diagnostics — context-limit
+                // truncation, skill-discovery warnings — into the message
+                // stream as chunks of their own ahead of the answer. Drop them,
+                // remembering the id so a diagnostic split across chunks goes
+                // whole rather than leaving its tail on screen.
+                if self.suppressed.contains(&id) || is_fx_diagnostic(text) {
+                    self.suppressed.insert(id);
+                    return Vec::new();
+                }
                 let mut out = self.ensure_turn();
                 out.extend(self.stream(id, BlockType::Text, text));
                 out
@@ -693,5 +719,44 @@ mod tests {
         );
         assert_eq!(result_text(String::new(), "wrote x".into()), "wrote x");
         assert_eq!(result_text("out\n".into(), "{\"session_id\":null".into()), "out\n");
+    }
+
+    /// fx leaks context and skill-discovery diagnostics into the message stream
+    /// as their own chunks before the answer — dropped, and the real reply is
+    /// the first thing to open the turn.
+    #[test]
+    fn fx_diagnostics_are_dropped_and_never_open_the_turn() {
+        assert!(is_fx_diagnostic(
+            "[context] project instructions omitted 1 source"
+        ));
+        assert!(is_fx_diagnostic("skill discovery warning: candidate x skipped"));
+        assert!(!is_fx_diagnostic("Hi"));
+        assert!(!is_fx_diagnostic("Here is the context I gathered"));
+
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        let chunk = |id: &str, text: &str| SessionUpdate::AgentMessageChunk {
+            message_id: Some(id.to_string()),
+            content: ContentBlock::Text {
+                text: text.to_string(),
+            },
+        };
+
+        assert!(mapper
+            .update(chunk("m1", "[context] project instructions omitted 1 source"))
+            .is_empty());
+        assert!(mapper
+            .update(chunk("m2", "skill discovery warning: candidate x skipped"))
+            .is_empty());
+        // A continuation of a suppressed id stays dropped, not only its head.
+        assert!(mapper
+            .update(chunk("m2", " ...and another was skipped"))
+            .is_empty());
+
+        let out = mapper.update(chunk("m3", "Hi"));
+        assert!(matches!(
+            out.first().map(|e| &e.payload),
+            Some(P::TurnStarted(_))
+        ));
+        assert!(out.iter().any(|e| matches!(&e.payload, P::Delta(_))));
     }
 }
