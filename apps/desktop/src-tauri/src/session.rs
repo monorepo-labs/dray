@@ -2635,6 +2635,67 @@ async fn report_send_failure(
     }
 }
 
+/// A read loop calls this when its child's stdout ends, before ingesting the
+/// closing turn. Two failures to head off: a turn in flight never gets its
+/// answer, so the session would hang `in_progress`; and prompts queued behind
+/// it would be handed to the *dead* child by the turn-end boundary flush —
+/// `start_turn` there sends into a writer whose child is gone and waits on a
+/// response that never comes, hanging the session again. So the queue is
+/// drained and reported here, and the caller ingests the closing turn with the
+/// queue already empty, which is what stops that flush from firing into a
+/// corpse.
+///
+/// Each stranded prompt gets its own bubble and a failure beside it, so a queued
+/// row the composer is showing resolves into the transcript rather than sitting
+/// pending forever, and the reader sees the prompt was lost and can resend it.
+pub async fn strand_queue_on_exit(
+    session_id: &str,
+    harness: Harness,
+    queued: &QueuedMessages,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    app: &AppHandle,
+) {
+    let stranded: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
+    for message in stranded {
+        let bubble = AgentEvent {
+            id: Uuid::now_v7().to_string(),
+            session_id: session_id.to_string(),
+            harness,
+            seq: seq.fetch_add(1, Relaxed),
+            ts: now_rfc3339(),
+            turn_id: None,
+            subagent: None,
+            payload: AgentEventPayload::UserMessage {
+                text: message.text.clone(),
+                issues: message.issues.clone(),
+                images: Vec::new(),
+                baseline: None,
+                queued: true,
+                from: message.from.clone(),
+                cwd: None,
+            },
+            raw: None,
+        };
+        if let Err(err) = app.emit("agent_event", &bubble) {
+            eprintln!("[fx strand emit err] {err}");
+        }
+        events.lock().await.push(bubble.clone());
+        if let Err(err) = append_session_event(session_id, bubble).await {
+            eprintln!("[fx strand log err] {err}");
+        }
+        report_send_failure(
+            session_id,
+            harness,
+            "the agent exited before this queued message was sent — send it again to retry",
+            seq,
+            events,
+            app,
+        )
+        .await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -381,7 +381,17 @@ async fn read_stdout(
     let mut ready = Some(ready);
     let mut transport: Option<Transport> = None;
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            // stdout closed (the child exited) or a read error — either way no
+            // more of this turn is coming. Break to the cleanup below.
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[fx stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -501,6 +511,51 @@ async fn read_stdout(
 
         for agent_event in mapper.map(event) {
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
+        }
+    }
+
+    // The child's stdout has ended. If a prompt was still in flight its answer
+    // will never arrive, so close the turn as a failure — without which the
+    // session hangs `in_progress` forever, its queue with no boundary to drain
+    // at. The queue is stranded *first* (reported and cleared), so the closing
+    // turn's boundary flush finds nothing to hand the dead child.
+    if let Some(transport @ Transport::Fx(session)) = transport.as_ref() {
+        // Clear it either way — the child is gone, so a Stop pressed now names
+        // nothing — and remember whether a turn was open to close it below.
+        let outstanding = session
+            .prompt_id
+            .lock()
+            .expect("fx prompt id poisoned")
+            .take()
+            .is_some();
+
+        crate::session::strand_queue_on_exit(
+            &handles.session_id,
+            Fx,
+            &queued,
+            &seq,
+            &events,
+            &handles.app,
+        )
+        .await;
+
+        if outstanding {
+            let ingest = crate::session::Ingest {
+                session_id: &handles.session_id,
+                harness: Fx,
+                session_cwd: &handles.session_cwd,
+                events: &events,
+                status: &status,
+                queued: &queued,
+                flush_seq: &seq,
+                flush_events: &events,
+                flush_transport: transport,
+            };
+            for agent_event in mapper.map(parser::FxEvent::PromptFailed {
+                message: "fx exited before finishing this turn.".to_string(),
+            }) {
+                crate::session::ingest(&ingest, agent_event, &handles.app).await;
+            }
         }
     }
 

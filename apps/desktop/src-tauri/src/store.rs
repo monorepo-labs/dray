@@ -721,7 +721,16 @@ pub async fn touch_session_index_item(
     };
 
     item.modified = now_rfc3339();
-    item.model = model;
+    // An unset pick means "no explicit model" — the truth for a new session,
+    // but touching an existing one it must not *erase* a model already recorded.
+    // fx's model list is its active provider's and global, so switching provider
+    // drops a session's model out of the list, and the composer repairs an
+    // out-of-list pick to the unset sentinel; persisting that here would lose
+    // the real model and make a later resume omit `--model` and run the new
+    // provider's default. Only a real pick overwrites.
+    if !model.is_unset() {
+        item.model = model;
+    }
     item.effort = effort;
     item.permission_mode = permission_mode;
 
