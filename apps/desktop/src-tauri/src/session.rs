@@ -2658,6 +2658,33 @@ pub async fn strand_queue_on_exit(
 ) {
     let stranded: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
     for message in stranded {
+        // The same preparation delivery does, so the bubble carries exactly what
+        // would have been sent: images resolved to `ImageRef`, non-image
+        // attachments folded into the text as `@path` mentions. Without it the
+        // row retiring the queued prompt would drop its attachments from the
+        // transcript while telling the reader to resend it. Best effort — a
+        // failed prep still surfaces the text rather than losing the prompt.
+        let (text, images) =
+            match attachments::prepare(session_id, &message.text, &message.attachment_paths, harness)
+                .await
+            {
+                Ok(prepared) => (
+                    prepared.text,
+                    prepared
+                        .images
+                        .iter()
+                        .map(|i| ImageRef {
+                            path: Some(i.stored_path.clone()),
+                            url: None,
+                            mime_type: Some(i.mime_type.clone()),
+                        })
+                        .collect(),
+                ),
+                Err(err) => {
+                    eprintln!("[fx strand prepare err] {err:#}");
+                    (message.text.clone(), Vec::new())
+                }
+            };
         let bubble = AgentEvent {
             id: Uuid::now_v7().to_string(),
             session_id: session_id.to_string(),
@@ -2667,9 +2694,9 @@ pub async fn strand_queue_on_exit(
             turn_id: None,
             subagent: None,
             payload: AgentEventPayload::UserMessage {
-                text: message.text.clone(),
+                text,
                 issues: message.issues.clone(),
-                images: Vec::new(),
+                images,
                 baseline: None,
                 queued: true,
                 from: message.from.clone(),
