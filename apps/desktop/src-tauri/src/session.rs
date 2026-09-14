@@ -798,26 +798,42 @@ impl SessionManager {
                     });
                 }
 
-                // fx has no injection point at all: `session/prompt` blocks
-                // for the turn and a second one written meanwhile takes over
-                // the one id the read loop settles the turn on, so the first
-                // is never closed. It queues to the turn's end, whatever is
-                // running.
-                if tool_in_flight && !matches!(s.stdin, Transport::Fx(_)) {
-                    s.queue_and_flush(prompt, attachment_paths, issues, from, app)
-                        .await;
+                // fx has no injection point at all: `session/prompt` blocks for
+                // the turn and a second one written meanwhile takes over the one
+                // id the read loop settles the turn on, so the first is never
+                // closed. It queues to the turn's end, whatever is running — and
+                // the decision is atomic with the turn-end reservation, so a
+                // completion cannot slip between the check and the enqueue.
+                // `None` means the turn ended under this read: fall through and
+                // start a new one.
+                if matches!(s.stdin, Transport::Fx(_)) {
+                    if let Some(queued) = s
+                        .fx_queue_if_in_flight(prompt, attachment_paths, issues, from.clone())
+                        .await
+                    {
+                        return Ok(SendOutcome {
+                            snapshot: None,
+                            queued: Some(queued),
+                            issues: linked,
+                        });
+                    }
+                } else {
+                    if tool_in_flight {
+                        s.queue_and_flush(prompt, attachment_paths, issues, from, app)
+                            .await;
+                        return Ok(SendOutcome {
+                            issues: linked,
+                            ..Default::default()
+                        });
+                    }
+
+                    let queued = s.queue_msg(prompt, attachment_paths, issues, from).await;
                     return Ok(SendOutcome {
+                        snapshot: None,
+                        queued: Some(queued),
                         issues: linked,
-                        ..Default::default()
                     });
                 }
-
-                let queued = s.queue_msg(prompt, attachment_paths, issues, from).await;
-                return Ok(SendOutcome {
-                    snapshot: None,
-                    queued: Some(queued),
-                    issues: linked,
-                });
             }
 
             // The other side of the respawn rule above, and read off the same
@@ -1558,6 +1574,36 @@ impl Session {
         message
     }
 
+    /// fx alone, and the whole of what keeps its two-prompt race shut. Decides,
+    /// **under the status lock**, whether this prompt joins the running turn —
+    /// queued for the turn-end flush — or finds the turn already over and must
+    /// start a fresh one. `Some` was queued; `None` means the turn ended and
+    /// the caller delivers now.
+    ///
+    /// Holding the status lock across the `turn_in_flight` read *and* the
+    /// enqueue is the point: it makes this exclusive with [`ingest`]'s
+    /// completion-and-reservation, which takes the same lock across its own
+    /// `on_event` and queue inspection. Read `turn_in_flight` and enqueue in
+    /// two separate lock holds — as reading it up in `send_msg` and queueing
+    /// later would — and a completion can slip between, marking the turn done
+    /// with a prompt queued behind it and no reservation, which is the race.
+    ///
+    /// fx has no injection point, so a prompt for a live turn only ever waits
+    /// here for its end; there is no write-through path to take.
+    async fn fx_queue_if_in_flight(
+        &self,
+        prompt: &str,
+        attachment_paths: &[String],
+        issues: &[IssueRef],
+        from: Option<MessageSender>,
+    ) -> Option<QueuedMessage> {
+        let _turn = self.status.lock().await;
+        if !_turn.turn_in_flight() {
+            return None;
+        }
+        Some(self.queue_msg(prompt, attachment_paths, issues, from).await)
+    }
+
     /// Takes back the newest held prompt, newest-first because that is the one
     /// the user just typed and the only one the composer is offering to undo.
     ///
@@ -2217,18 +2263,24 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // tool call runs on its own thread, and its result is not a point where
     // the CLI injects a queued prompt.
     //
-    // fx reserves its next turn here, atomically with the completion. It has a
-    // single prompt id and no injection point, so a turn ending with a prompt
-    // queued must hand straight to it — and between this completion and the
-    // flush below sit two awaits (publish, append). A send racing that gap
-    // would read no turn in flight and start a second fx prompt over the one
-    // id the flush is about to. Folding `on_send` in under the same lock means
-    // the tracker never reads `Completed` while an fx prompt is queued, so a
-    // racing send queues instead. The queue cannot grow past the completion:
-    // a send that sees `Completed` delivers directly rather than queueing.
-    let reserved_fx_turn = matches!(ctx.flush_transport, Transport::Fx(_))
-        && matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
-        && !ctx.queued.lock().await.is_empty();
+    // fx reserves its next turn here, atomically with the completion, and the
+    // queue is inspected **under the status lock** — the crux. fx has a single
+    // prompt id and no injection point, so a turn ending with a prompt queued
+    // must hand straight to it, and between this completion and the flush below
+    // sit two awaits (publish, append). A send racing that gap would read no
+    // turn in flight and start a second fx prompt over the one id.
+    //
+    // A send decides queue-vs-deliver in `fx_queue_if_in_flight`, which takes
+    // this same status lock across its `turn_in_flight` read *and* its enqueue.
+    // So this section and that one cannot interleave: whichever holds the lock
+    // runs whole. Either the send queues first and this sees the message and
+    // reserves, or this completes first and the send reads the completed turn
+    // and delivers directly instead of queueing. Inspecting the queue outside
+    // this lock is what reopened the race — a send could enqueue in the gap
+    // between the inspection and this taking the lock.
+    //
+    // Order is status→queued, matching every other holder of both, so no
+    // deadlock: nothing holds `queued` while awaiting `status`.
     let next_status = {
         let mut tracker = ctx.status.lock().await;
         let before = tracker.status();
@@ -2236,7 +2288,10 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
-        if reserved_fx_turn {
+        let reserve = matches!(ctx.flush_transport, Transport::Fx(_))
+            && matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
+            && !ctx.queued.lock().await.is_empty();
+        if reserve {
             tracker.on_send();
         }
         let after = tracker.status();
