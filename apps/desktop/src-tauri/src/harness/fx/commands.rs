@@ -11,7 +11,8 @@
 //! no `fx skills` subcommand, and a promptless `session/new` is persisted — so a
 //! probe through ACP would litter `~/.fx/sessions` and answer nothing anyway.
 //! Walking the roots is a reimplementation of fx's own discovery and is
-//! deliberately chosen over that; [`ROOTS`] is fx's list verbatim, not a guess.
+//! deliberately chosen over that; [`WORKSPACE_ROOTS`] and [`GLOBAL_ROOTS`] are
+//! fx's list verbatim, not a guess.
 //!
 //! **The send path needs nothing, which is the difference from Codex.** fx
 //! expands a leading `/name` itself: `/hello then also print DONE-8899` sent as
@@ -21,10 +22,10 @@
 //!
 //! Cost, stated: this list can only ever be fx's *approximately*. Over-listing
 //! is the unsafe direction — a row fx did not load sends `/name` to a model with
-//! no such skill — so the walk requires a readable `SKILL.md` and a name that
-//! could be typed, which is what a broken symlink and a spaced directory fail.
-//! A skill fx skipped for its own reasons (`FX_SKILL_SYMLINK_AUTHORITIES`) is
-//! the one shape that still gets through.
+//! no such skill — so a skill must be a directory with a readable `SKILL.md`,
+//! under a name that could be typed, and [`authorized`] where it is a link.
+//! What is left over is a reader who has set `FX_SKILL_SYMLINK_AUTHORITIES`,
+//! who loses a row rather than gaining a dead one.
 
 use std::{
     fs::File,
@@ -99,9 +100,17 @@ fn walk(cwd: &Path) -> Vec<SlashCommand> {
             home.as_ref().map(|home| home.join(root))
         }));
 
+    // Canonical, since a link resolves to a real path and `/tmp` comes back
+    // `/private/tmp` — the same trap the worktree lock lookup documents.
+    let authorities: Vec<PathBuf> = [Some(cwd.to_path_buf()), home.clone()]
+        .into_iter()
+        .flatten()
+        .filter_map(|dir| std::fs::canonicalize(dir).ok())
+        .collect();
+
     let mut found: Vec<SlashCommand> = Vec::new();
     for root in roots {
-        for command in skills_in(&root) {
+        for command in skills_in(&root, &authorities) {
             if !found.iter().any(|seen| seen.name == command.name) {
                 found.push(command);
             }
@@ -114,7 +123,7 @@ fn walk(cwd: &Path) -> Vec<SlashCommand> {
 /// The skills directly under one root. A skill is a directory holding a
 /// readable `SKILL.md`, which is fx's own rule and what keeps an ordinary
 /// `skills/` folder of notes out of the picker.
-fn skills_in(root: &Path) -> Vec<SlashCommand> {
+fn skills_in(root: &Path, authorities: &[PathBuf]) -> Vec<SlashCommand> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -129,9 +138,12 @@ fn skills_in(root: &Path) -> Vec<SlashCommand> {
                 return None;
             }
 
-            // Not `entry.file_type()`: a skill root of symlinks into a dotfiles
-            // repo is ordinary, and following them is what fx does too.
-            let frontmatter = read_frontmatter(&entry.path().join("SKILL.md"))?;
+            let path = entry.path();
+            if entry.file_type().ok()?.is_symlink() && !authorized(&path, authorities) {
+                return None;
+            }
+
+            let frontmatter = read_frontmatter(&path.join("SKILL.md"))?;
 
             Some(SlashCommand {
                 name,
@@ -148,6 +160,28 @@ fn skills_in(root: &Path) -> Vec<SlashCommand> {
     // stable between machines or even reads — and the picker draws this order.
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
+}
+
+/// Whether a linked skill directory resolves somewhere fx will follow it to.
+///
+/// fx refuses a link it cannot resolve "to an authorized readable directory",
+/// and the two halves are separate: readable is what a *broken* link fails, and
+/// authorized is what a link out of the tree fails. Both were captured against
+/// 0.0.10 — a skill linked to `/tmp/elsewhere` was absent from fx's catalog and
+/// the model went hunting with `glob_files` for the name it had been handed,
+/// while the same skill linked to a directory inside the workspace ran straight
+/// away.
+///
+/// The authorities are the workspace and home, which are the two roots fx's own
+/// list is written against. `FX_SKILL_SYMLINK_AUTHORITIES` can add more and is
+/// deliberately unread: the variable's separator is not documented anywhere this
+/// was written against, and a misread one drops a row rather than inventing one.
+fn authorized(path: &Path, authorities: &[PathBuf]) -> bool {
+    let Ok(target) = std::fs::canonicalize(path) else {
+        return false;
+    };
+
+    authorities.iter().any(|root| target.starts_with(root))
 }
 
 /// The head of a `SKILL.md`, or `None` where there is no readable file — which
@@ -300,7 +334,7 @@ mod tests {
         fs::create_dir_all(root.join("notes")).unwrap();
         fs::write(root.join("loose.md"), "not a skill").unwrap();
 
-        let found = skills_in(&root);
+        let found = skills_in(&root, &[]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "real");
         assert_eq!(found[0].description, "Real one");
@@ -314,7 +348,7 @@ mod tests {
         skill(&root, "my skill", "---\ndescription: x\n---");
         skill(&root, "fine", "---\ndescription: x\n---");
 
-        let names: Vec<_> = skills_in(&root).into_iter().map(|c| c.name).collect();
+        let names: Vec<_> = skills_in(&root, &[]).into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["fine"]);
     }
 
@@ -327,7 +361,7 @@ mod tests {
             skill(&root, name, "---\ndescription: x\n---");
         }
 
-        let names: Vec<_> = skills_in(&root).into_iter().map(|c| c.name).collect();
+        let names: Vec<_> = skills_in(&root, &[]).into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["alpha", "mike", "zulu"]);
     }
 
@@ -346,6 +380,41 @@ mod tests {
             shared[0].description, "Also project",
             ".fx/skills is the first root fx names, so it resolves first"
         );
+    }
+
+    /// The captured rule, both halves: fx ran a skill linked to a directory
+    /// inside the workspace and did not have one linked outside it — the model
+    /// went hunting with `glob_files` for the name it had been handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_tree_is_not_offered_and_one_inside_it_is() {
+        use std::os::unix::fs::symlink;
+
+        let cwd = tmp("links");
+        let elsewhere = tmp("links-elsewhere");
+        skill(&elsewhere, "outside", "---\ndescription: Linked out\n---");
+        skill(&cwd.join("skill-src"), "inside", "---\ndescription: Linked in\n---");
+
+        let root = cwd.join(".claude/skills");
+        fs::create_dir_all(&root).unwrap();
+        symlink(elsewhere.join("outside"), root.join("outside")).unwrap();
+        symlink(cwd.join("skill-src/inside"), root.join("inside")).unwrap();
+
+        let names: Vec<_> = walk(&cwd).into_iter().map(|c| c.name).collect();
+        assert!(names.contains(&"inside".to_string()), "{names:?}");
+        assert!(!names.contains(&"outside".to_string()), "{names:?}");
+    }
+
+    /// A plain directory is never asked the question, or a skill under a path
+    /// that happens to hold a link — `/tmp` on macOS, every worktree under a
+    /// symlinked home — would drop out for a reason nothing on screen explains.
+    #[cfg(unix)]
+    #[test]
+    fn an_ordinary_directory_needs_no_authority() {
+        let root = tmp("plain-auth");
+        skill(&root, "real", "---\ndescription: Real one\n---");
+
+        assert_eq!(skills_in(&root, &[]).len(), 1, "no authorities, still offered");
     }
 
     /// A directory that is not a repository, or holds no skill roots at all,
