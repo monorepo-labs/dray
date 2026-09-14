@@ -174,8 +174,12 @@ fn skills_in(root: &Path, authorities: &[PathBuf]) -> Vec<SlashCommand> {
 ///
 /// The authorities are the workspace and home, which are the two roots fx's own
 /// list is written against. `FX_SKILL_SYMLINK_AUTHORITIES` can add more and is
-/// deliberately unread: the variable's separator is not documented anywhere this
-/// was written against, and a misread one drops a row rather than inventing one.
+/// deliberately unread — not for want of trying: `fx acp` run with it set to the
+/// link's own target directory still had no catalog entry for that skill, and
+/// the model reached the file by reading it by hand. So the value's shape is
+/// unknown rather than merely undocumented, and a guess at it would be a row
+/// that sends `/name` to a model with no such skill. Read wrongly it costs a
+/// row; unread it costs the same row, and only for a reader who set it.
 fn authorized(path: &Path, authorities: &[PathBuf]) -> bool {
     let Ok(target) = std::fs::canonicalize(path) else {
         return false;
