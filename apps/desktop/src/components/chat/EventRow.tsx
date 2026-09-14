@@ -1,5 +1,3 @@
-import { Archive, CircleAlert, CircleDollarSign, ShieldX, TriangleAlert } from "lucide-react";
-
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
@@ -12,15 +10,10 @@ import type { AgentEvent, FileEdit, ToolResult } from "@/types/events";
 
 /// A quiet single line for the events that are context rather than content.
 function Notice({
-  icon: Icon,
   children,
   tone = "muted",
   wrap = false,
 }: {
-  /// Optional. A failed turn draws none: it carries the harness's own sentence,
-  /// which is already a whole statement, and a warning glyph in front of it
-  /// only repeats what the red says.
-  icon?: typeof Archive;
   children: React.ReactNode;
   tone?: "muted" | "destructive";
   /// Lets the text run onto a second line. Off by default — most notices are
@@ -33,13 +26,9 @@ function Notice({
       className={cn(
         "flex gap-2 text-chat",
         wrap ? "items-start" : "items-center",
-        tone === "destructive" ? "text-destructive" : "text-muted-foreground/70",
+        tone === "destructive" ? "text-destructive" : "text-muted-foreground",
       )}
     >
-      {/* A flat 4px, not an em fraction. `items-start` puts the icon's box at
-          the line's top edge while its glyph sits inset within that box, so it
-          reads high against the first line of text. */}
-      {Icon && <Icon className={cn("size-3.5 shrink-0", wrap && "mt-1")} />}
       <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
     </p>
   );
@@ -119,10 +108,9 @@ export default function EventRow({
 
     case "error":
       return (
-        <div className="flex items-start gap-2 text-chat text-destructive">
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere">{payload.message}</span>
-        </div>
+        <p className="whitespace-pre-wrap wrap-anywhere text-chat text-destructive">
+          {payload.message}
+        </p>
       );
 
     case "turn_completed":
@@ -169,14 +157,14 @@ export default function EventRow({
 
       if (payload.usingOverage) {
         return (
-          <Notice icon={CircleDollarSign} wrap>
+          <Notice wrap>
             Plan limit reached — now billed as usage.{suffix}
           </Notice>
         );
       }
 
       return (
-        <Notice icon={CircleAlert} tone="destructive" wrap>
+        <Notice tone="destructive" wrap>
           Usage limit reached.{suffix}
           {payload.overageDisabledReason === "org_level_disabled" &&
             " Your organization has overage turned off."}
@@ -184,12 +172,23 @@ export default function EventRow({
       );
     }
 
-    case "permission_denied":
+    // First line only, and no red. The auto-mode classifier appends a whole
+    // paragraph of reasoning nobody reads, and the refusal is already visible
+    // in the tool it refused. Led with the verdict, since the harness buries it
+    // at the end of a sentence long enough to be truncated away — "Permission to
+    // run `rm -rf /Users/…" on its own reads as a command that ran.
+    case "permission_denied": {
+      const line = payload.message.split("\n")[0];
+      // ponytail: a character count standing in for "does the verdict survive
+      // the truncation". Measure the row if a message ever lands near the edge.
+      const led = line.slice(0, 40).toLowerCase().includes("denied");
+
       return (
-        <Notice icon={ShieldX} tone="destructive" wrap>
-          {payload.message}
+        <Notice>
+          {led ? line : `Permission denied. ${line}`}
         </Notice>
       );
+    }
 
     // Shaped like a settled tool call — label then detail — because that is what
     // it is: work the harness did on the conversation, reported after the fact.
