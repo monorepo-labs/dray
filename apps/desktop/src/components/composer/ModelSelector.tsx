@@ -27,7 +27,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { HARNESS_ORDER, isUnsetModel } from "@/lib/model";
+import { invoke } from "@tauri-apps/api/core";
+import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -47,6 +48,7 @@ const AGENT_LABELS: Record<Harness, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
   pi: "pi",
+  fx: "fx",
 };
 const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 
@@ -296,6 +298,42 @@ export default function ModelSelector({
                 have to hover to find is one nobody finds. */}
             <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
           </div>
+        )}
+
+        {/* fx's list is its *active provider's*, and the provider is a global
+            fx setting (`fx provider …`, written to `~/.fx/settings.json`) — so
+            switching here moves fx everywhere, not just this composer, and the
+            row says so. Creation-time only, beside the agent control: a live
+            session's model is applied in place and a cross-provider pick there
+            is unverified. The active one is read off the rows fx answered
+            with, since `fx models` names the source on every row. */}
+        {harness === "fx" && canSwitchHarness && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-ui text-muted-foreground">
+              Provider
+              <span className="ml-1 text-muted-foreground/60">
+                {FX_PROVIDERS.find((p) => p.id === models[0]?.provider)?.label ?? ""}
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {FX_PROVIDERS.map((provider) => (
+                <DropdownMenuItem
+                  key={provider.id}
+                  className="text-ui"
+                  onSelect={() => {
+                    invoke("set_fx_provider", { provider: provider.id })
+                      .catch((e) => console.error("[fx provider]", e))
+                      .finally(() => onRefreshModels?.());
+                  }}
+                >
+                  {provider.label}
+                </DropdownMenuItem>
+              ))}
+              <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground/60">
+                Changes fx's provider everywhere
+              </p>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
         )}
 
         {/* Grouped only where a heading says something: pi answers with a

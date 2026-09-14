@@ -605,7 +605,7 @@ unreadable: Unreadable | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi";
+export type Harness = "claude_code" | "codex" | "pi" | "fx";
 
 export type HookPhase = "started" | "finished";
 

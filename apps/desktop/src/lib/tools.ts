@@ -106,6 +106,12 @@ const TOOL_VERBS: Record<string, Verbs> = {
   grep: ["Searching", "Searched", "pattern"],
   find: ["Searching", "Searched", "pattern"],
   ls: ["Listing", "Listed", "directory"],
+
+  // fx's own, snake_cased. `shell` above already covers its command tool.
+  read_file: ["Reading", "Read", "file"],
+  write_file: ["Writing", "Wrote", "file"],
+  edit_file: ["Editing", "Edited", "file"],
+  glob_files: ["Searching", "Searched", "pattern"],
 };
 
 /// The brief a `Skill` call was given — the sentence the model wrote for the

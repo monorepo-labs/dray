@@ -92,12 +92,34 @@ impl RpcClient {
         Self::over(spawn_writer(stdin))
     }
 
-    fn over(tx: mpsc::UnboundedSender<Outbound>) -> Self {
+    /// A client over a writer that already exists. `pub(crate)` for tests
+    /// elsewhere that want a client with no child behind it.
+    pub(crate) fn over(tx: mpsc::UnboundedSender<Outbound>) -> Self {
         Self {
             tx,
             next_id: Arc::new(AtomicI64::new(1)),
             pending: Pending::new(),
         }
+    }
+
+    /// Sends a request and registers **no** waiter, answering the id it went
+    /// out under.
+    ///
+    /// For the one request whose answer is not an acknowledgement: fx's
+    /// `session/prompt` blocks for the whole turn, minutes rather than the
+    /// [`REQUEST_TIMEOUT`] every other request is bounded by. Its caller reads
+    /// the response off the line itself, by this id, ahead of [`Self::accept`]
+    /// — which would otherwise file it as a stray.
+    pub fn request_detached(&self, method: &str, params: Value) -> Result<i64> {
+        let id = self.next_id.fetch_add(1, Relaxed);
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        Ok(id)
+    }
+
+    /// Hands the child an EOF. Every later write is refused by the writer
+    /// having gone.
+    pub fn close(&self) {
+        let _ = self.tx.send(Outbound::Close);
     }
 
     /// Sends a request and waits for its answer, up to [`REQUEST_TIMEOUT`].

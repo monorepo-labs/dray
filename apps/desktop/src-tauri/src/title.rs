@@ -220,6 +220,10 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // the probe that discovers the list lands. `models.rs` says why there
         // is no constant to reach for here.
         Harness::Pi => bail!("pi has no cheap model to title with yet"),
+        // fx titles the session itself — `session_info_update` after the first
+        // turn — and `fx.rs` writes that through the same `session_title`
+        // event this module emits. No second model call wanted.
+        Harness::Fx => bail!("fx titles its own sessions"),
         // A harness only some other build knows, so there is no binary to name
         // — the same refusal `Session::init` makes, one turn earlier.
         Harness::Other(name) => bail!("no title model for {name}"),

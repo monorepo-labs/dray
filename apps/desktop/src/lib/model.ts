@@ -31,7 +31,17 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   claude_code: "opus",
   codex: "gpt56_sol",
   pi: UNSET_MODEL,
+  // Multi-provider like pi, and its settings file already names a model.
+  fx: UNSET_MODEL,
 };
+
+/// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
+/// (`fx provider <gateway|codex|grok>`), not discovered — the *models* are.
+export const FX_PROVIDERS: { id: string; label: string }[] = [
+  { id: "codex", label: "Codex subscription" },
+  { id: "gateway", label: "Vercel AI Gateway" },
+  { id: "grok", label: "Grok subscription" },
+];
 
 /// Which model each harness was last left on. Absent key = never picked one.
 export type ModelByHarness = Partial<Record<Harness, ModelId>>;
@@ -81,7 +91,7 @@ export function usableModel(models: Model[], picked: ModelId, harness: Harness):
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi"];
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx"];
 
 /// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
 /// first, the same place the picker parks its thumb.

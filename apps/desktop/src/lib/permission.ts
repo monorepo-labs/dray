@@ -22,9 +22,21 @@ import type { ApprovalPolicy, Harness } from "@/types/events";
 /// and beside it `bypassPermissions` named a bypass Dray does not perform. The
 /// enforcement stays in `pi.rs`, so a session already recorded `plan` still
 /// runs read-only rather than quietly running ungated.
+///
+/// fx exposes two modes over ACP — `ask` and `code` — and no bypass:
+/// `full-access` is neither a session mode nor reachable by env or flag on
+/// `fx acp`. So `auto` is the widest stance fx can run, and it is what an
+/// unhonoured one falls to there.
 const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   codex: ["bypassPermissions", "manual", "auto"],
   pi: [],
+  fx: ["manual", "auto"],
+};
+
+/// The stance a harness actually runs when handed one it does not honour — its
+/// widest, since that is what describes what the CLI will do.
+const WIDEST: Partial<Record<Harness, ApprovalPolicy>> = {
+  fx: "auto",
 };
 
 /// Whether this harness honours this stance.
@@ -47,5 +59,5 @@ export function honoursMode(harness: Harness, mode: ApprovalPolicy): boolean {
 /// session recorded `plan` that is not passed `--tools` would be the same lie
 /// pointed the other way, and the more alarming direction to be wrong in.
 export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
-  return honoursMode(harness, mode) ? mode : "bypassPermissions";
+  return honoursMode(harness, mode) ? mode : (WIDEST[harness] ?? "bypassPermissions");
 }

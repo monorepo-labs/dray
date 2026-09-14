@@ -48,6 +48,22 @@ function OpenAiIcon({ className }: { className?: string }) {
 /// second contour in the same path, and the default `nonzero` fills it in —
 /// which reads as a slightly wrong solid blob rather than as a bug.
 ///
+/// Vercel's mark, which is fx's: one triangle, and nothing else on the row is
+/// that shape. Monochrome by design, so `brand` leaves it on `currentColor`.
+function FxIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={cn("size-4 shrink-0", className)}
+      fill="currentColor"
+      role="img"
+      aria-label="fx"
+    >
+      <path d="M12 3L22 20H2L12 3Z" />
+    </svg>
+  );
+}
+
 /// MIT, © Earendil Inc. & Contributors. Credited in the root README beside the
 /// ported themes.
 function PiIcon({ className }: { className?: string }) {
@@ -98,6 +114,8 @@ export default function AgentIcon({
     // `currentColor` and the row still reads as one set.
     case "pi":
       return <PiIcon className={className} />;
+    case "fx":
+      return <FxIcon className={className} />;
     default:
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }

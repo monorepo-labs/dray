@@ -30,6 +30,17 @@ describe("stanceFor", () => {
   it("keeps a stance the harness honours", () => {
     expect(stanceFor("claude_code", "plan")).toBe("plan");
     expect(stanceFor("codex", "manual")).toBe("manual");
+    expect(stanceFor("fx", "manual")).toBe("manual");
+  });
+
+  /// fx has no bypass to fall to — ACP exposes `ask` and `code` and nothing
+  /// wider — so its widest is `auto`, and recording `bypassPermissions` there
+  /// would claim a freedom the session does not have.
+  it("falls to the widest stance fx can run, not to bypass", () => {
+    expect(honoursMode("fx", "bypassPermissions")).toBe(false);
+    expect(honoursMode("fx", "plan")).toBe(false);
+    expect(stanceFor("fx", "bypassPermissions")).toBe("auto");
+    expect(stanceFor("fx", "plan")).toBe("auto");
   });
 
   /// pi honours nothing, so every stance records as the ungated one it will

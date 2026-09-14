@@ -398,6 +398,7 @@ impl SessionManager {
         // key for is the worst possible first run.
         let model_spec = match harness {
             Harness::Pi => crate::harness::pi::models::find(&model).await,
+            Harness::Fx => crate::harness::fx::models::find(&model).await,
             _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
         };
 
@@ -817,13 +818,18 @@ impl SessionManager {
             let caps = s.harness.caps();
 
             if caps.applies_model_in_place && s.model != model {
-                // A harness that applies a model in place is one Dray names a
-                // default for, so the spec is there by construction — the table
-                // and `default_model_for` agree on which harnesses those are.
-                let spec = model_spec
-                    .as_ref()
-                    .context("no model to switch the session to")?;
-                s.set_model(spec).await?;
+                // Claude Code names a default, so the spec is there by
+                // construction. fx does not — a pick falling to "let fx
+                // decide" has nothing to switch to, and the session stays on
+                // whatever it is running, which is what the unset pick means.
+                match model_spec.as_ref() {
+                    Some(spec) => s.set_model(spec).await?,
+                    None if model.is_unset() => {}
+                    None => bail!("no model to switch the session to"),
+                }
+            }
+            if caps.applies_effort_in_place && s.effort != effort {
+                s.set_effort(effort).await?;
             }
             if caps.applies_permission_in_place && s.permission_mode != permission_mode {
                 s.set_permission_mode(permission_mode).await?;
@@ -1295,6 +1301,9 @@ pub enum Transport {
     /// to address a write to: pi has one conversation per process, so the
     /// client is the whole of it.
     Pi(crate::harness::pi::rpc::PiClient),
+    /// fx's connection: JSON-RPC like Codex's, addressed to the session fx
+    /// minted. See [`FxSession`](crate::harness::fx::FxSession).
+    Fx(crate::harness::fx::FxSession),
 }
 
 impl Transport {
@@ -1307,7 +1316,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -1427,6 +1436,28 @@ impl Session {
                 // there, which is the honest answer for a multi-provider CLI
                 // whose user has already configured one.
                 crate::harness::pi::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
+            Harness::Fx => {
+                // Same two refusals as pi's, for the same reasons: fx has no
+                // `-w`, so the tree is made before this; and it has no fork.
+                if worktree_name.is_some() {
+                    bail!("fx cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("fx sessions cannot be forked");
+                }
+
+                crate::harness::fx::init(
                     session_id,
                     model,
                     effort,
@@ -1602,12 +1633,36 @@ impl Session {
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
     pub async fn set_model(&mut self, model: &Model) -> Result<()> {
+        if let Transport::Fx(session) = &self.stdin {
+            crate::harness::fx::set_model(session, model).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetModel { model: &model.arg }),
         )
         .await?;
         self.model = model.id.clone();
+
+        Ok(())
+    }
+
+    /// Switches the effort of a running child — fx alone, whose ACP session
+    /// takes it as a config option. Every other harness respawns for one, and
+    /// `caps().applies_effort_in_place` is what keeps them off this path.
+    ///
+    /// `None` is fx's own `auto`, which nothing here can spell back onto the
+    /// wire, so it is recorded and left to the next respawn.
+    pub async fn set_effort(&mut self, effort: Option<Effort>) -> Result<()> {
+        let Transport::Fx(session) = &self.stdin else {
+            bail!("this harness has no in-place effort switch");
+        };
+        if let Some(effort) = effort {
+            crate::harness::fx::set_effort(session, effort).await?;
+        }
+        self.effort = effort;
 
         Ok(())
     }
@@ -1624,6 +1679,12 @@ impl Session {
         // reports the stop — nothing waits here for the turn to actually end.
         if let Transport::Rpc(thread) = &self.stdin {
             return crate::harness::codex::interrupt_turn(thread).await;
+        }
+
+        // A notification: fx answers the prompt itself with `cancelled`, and
+        // the reader reports the stop off that.
+        if let Transport::Fx(session) = &self.stdin {
+            return crate::harness::fx::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -1671,6 +1732,12 @@ impl Session {
     /// Switches the permission stance of a running child. Unlike effort, the CLI
     /// does have a `set_permission_mode` subtype, so this needs no respawn.
     pub async fn set_permission_mode(&mut self, mode: ApprovalPolicy) -> Result<()> {
+        if let Transport::Fx(session) = &self.stdin {
+            crate::harness::fx::set_mode(session, mode).await?;
+            self.permission_mode = mode;
+            return Ok(());
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetPermissionMode {
@@ -1728,6 +1795,15 @@ impl Session {
                     .clone()
                     .context("this option carries no decision to send")?;
                 thread.client.respond(*rpc_id, json!({"decision": decision}))?;
+            }
+            // fx's decision is the whole ACP outcome envelope, built by the
+            // button, so it goes back as the result itself.
+            (Transport::Fx(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
             }
             _ => {
                 write_line(
@@ -1842,6 +1918,12 @@ impl Session {
             // reader an answer still fails honestly: `close` breaks the writer,
             // so the reply errors rather than being claimed as delivered.
             crate::harness::pi::shutdown(&mut self.child, client).await;
+            return Ok(());
+        }
+
+        // fx holds a `session.lock` per session, released on a clean exit.
+        if let Transport::Fx(session) = &self.stdin {
+            crate::harness::fx::shutdown(&mut self.child, session).await;
             return Ok(());
         }
 
@@ -2006,6 +2088,12 @@ async fn deliver_prompt(
     // schedule.
     if let Transport::Pi(client) = transport {
         return crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await;
+    }
+    // fx takes a prompt as a request that blocks for the turn, so the write
+    // is the send and the reader settles the answer. Images not wired: the
+    // Codex provider answered `refused` to one on capture.
+    if let Transport::Fx(session) = transport {
+        return crate::harness::fx::start_turn(session, &text).await;
     }
     let stdin = transport.lines()?;
 

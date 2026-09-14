@@ -12,6 +12,9 @@ pub mod codex;
 #[path = "pi/pi.rs"]
 pub mod pi;
 
+#[path = "fx/fx.rs"]
+pub mod fx;
+
 pub mod rpc;
 
 use serde::{Deserialize, Serialize};
@@ -235,7 +238,7 @@ mod wire_tests {
     /// recognise — the worse half of this failure, not a lesser one.
     #[test]
     fn an_unknown_name_survives_a_round_trip() {
-        for name in ["some_future_agent", "claude_code", "codex", "pi"] {
+        for name in ["some_future_agent", "claude_code", "codex", "pi", "fx"] {
             let json = format!("\"{name}\"");
             let parsed: Harness = serde_json::from_str(&json).expect("parses");
 
@@ -302,17 +305,21 @@ mod capability_tests {
         }
     }
 
-    /// No CLI here has a `set_effort`, so an effort change always replaces the
-    /// child. Stated because it is the one field that is `false` for a reason
-    /// nothing else in the table shares, and a `true` here would silently drop
-    /// the change.
+    /// fx is the one CLI with an in-place effort switch —
+    /// `session/set_config_option {configId: "effort"}`, verified live — so
+    /// every other effort change replaces the child. Stated because `true`
+    /// here silently drops the change on a harness whose wire cannot carry it.
     #[test]
-    fn an_effort_change_always_replaces_the_child() {
+    fn only_fx_applies_effort_in_place() {
+        assert!(Harness::Fx.caps().applies_effort_in_place);
+
         for harness in Harness::ALL {
-            assert!(
-                !harness.caps().applies_effort_in_place,
-                "{harness:?} claims an effort route no CLI here has"
-            );
+            if harness != Harness::Fx {
+                assert!(
+                    !harness.caps().applies_effort_in_place,
+                    "{harness:?} claims an effort route its CLI does not have"
+                );
+            }
         }
     }
 }
@@ -410,6 +417,7 @@ pub enum Harness {
     ClaudeCode,
     Codex,
     Pi,
+    Fx,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -464,7 +472,7 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::Pi];
+    pub const ALL: [Harness; 4] = [Harness::ClaudeCode, Harness::Codex, Harness::Pi, Harness::Fx];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
     /// index entry holds.
@@ -482,6 +490,7 @@ impl Harness {
             Harness::ClaudeCode => "claude_code".to_string(),
             Harness::Codex => "codex".to_string(),
             Harness::Pi => "pi".to_string(),
+            Harness::Fx => "fx".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -617,6 +626,24 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: false,
             },
+            // ACP carries all three as session settings —
+            // `session/set_config_option` for model and effort,
+            // `session/set_mode` for the stance — each verified live to move
+            // the session's own `currentValue` and to write nothing to fx's
+            // settings file. So fx is the one harness where an effort change
+            // is a request rather than a respawn.
+            //
+            // Not forkable: fx has no fork and its resume handle is an id it
+            // minted, not a file to copy. No `-w` either; Dray makes the tree.
+            Harness::Fx => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
+                applies_permission_in_place: true,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -639,6 +666,7 @@ impl Harness {
             Harness::ClaudeCode => "Claude Code",
             Harness::Codex => "Codex",
             Harness::Pi => "pi",
+            Harness::Fx => "fx",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -666,6 +694,8 @@ impl Harness {
             // anyone who wants it. This is the one that needs nothing already
             // installed, which is the rule the other two follow.
             Harness::Pi => "curl -fsSL https://pi.dev/install.sh | sh",
+            // Vercel's own installer, off fx.sh/docs/getting-started/installation.
+            Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -682,6 +712,7 @@ impl Harness {
             Harness::ClaudeCode => "https://code.claude.com/docs/en/quickstart",
             Harness::Codex => "https://learn.chatgpt.com/docs/codex/cli",
             Harness::Pi => "https://pi.dev/docs/latest",
+            Harness::Fx => "https://fx.sh/docs/getting-started/installation",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -706,6 +737,9 @@ impl Harness {
             // lands the reader in a TUI with no idea what to type next, which
             // is a cure that does not cure.
             Harness::Pi => "pi",
+            // `fx login [vercel|codex|grok]` — bare, it asks which. Verified
+            // against `fx --help`.
+            Harness::Fx => "fx login",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -724,6 +758,7 @@ impl Harness {
             Harness::ClaudeCode => &["auth", "login"],
             Harness::Codex => &["login"],
             Harness::Pi => &[],
+            Harness::Fx => &["login"],
             Harness::Other(_) => &[],
         }
     }
@@ -744,6 +779,9 @@ impl Harness {
     pub fn login_hint(self) -> Option<&'static str> {
         match self {
             Harness::Pi => Some("then type /login and pick the provider"),
+            // Per provider too, and the command asks which. A working Codex
+            // login says nothing about fx: it keeps its own store.
+            Harness::Fx => Some("and pick the provider it asks for"),
             Harness::ClaudeCode | Harness::Codex | Harness::Other(_) => None,
         }
     }

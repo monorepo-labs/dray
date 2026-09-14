@@ -47,7 +47,7 @@ Options:
 | `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku` on Claude Code; a `provider/model` id on pi. Defaults to the current session's model — see *Model and effort*. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Defaults to the current session's — see *Model and effort*. |
-| `--harness <name>` | `claude_code`, `codex` or `pi`. Defaults to the current session's. |
+| `--harness <name>` | `claude_code`, `codex`, `pi` or `fx`. Defaults to the current session's. |
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
 

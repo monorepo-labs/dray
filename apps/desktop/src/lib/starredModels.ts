@@ -11,12 +11,12 @@ export const STARRED_MODELS_KEY = "ade.starredModels";
 
 /// Harnesses whose picker draws the shortlist rather than the whole list.
 ///
-/// pi alone, and not as a preference. Its list is *discovered* — every model
-/// every provider the reader has logged into serves — so it has no bound, and
-/// a menu of everything is a menu nobody reads. Claude Code and Codex each ship
-/// a handful of models Dray names itself, where a shortlist would be one more
-/// thing to set up before the picker works at all.
-const SHORTLISTED: Harness[] = ["pi"];
+/// pi and fx, and not as a preference. Their lists are *discovered* — every
+/// model the reader's providers serve, 247 on fx's gateway — so they have no
+/// bound, and a menu of everything is a menu nobody reads. Claude Code and
+/// Codex each ship a handful of models Dray names itself, where a shortlist
+/// would be one more thing to set up before the picker works at all.
+const SHORTLISTED: Harness[] = ["pi", "fx"];
 
 export function usesShortlist(harness: Harness): boolean {
   return SHORTLISTED.includes(harness);

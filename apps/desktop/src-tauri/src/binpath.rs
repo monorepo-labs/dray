@@ -142,6 +142,14 @@ pub async fn pi() -> PathBuf {
     cached(&PI_PATH, or_bare("pi")).await
 }
 
+static FX_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where `fx` is, or the bare name as a last resort — [`claude`]'s shape.
+/// Vercel's installer puts it in `~/.local/bin`, one of the known dirs.
+pub async fn fx() -> PathBuf {
+    cached(&FX_PATH, or_bare("fx")).await
+}
+
 #[cfg(test)]
 mod pi_resolution_tests {
     /// Prints what the resolver found rather than asserting about this machine,
@@ -201,6 +209,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::ClaudeCode => claude().await,
         Harness::Codex => codex().await,
         Harness::Pi => pi().await,
+        Harness::Fx => fx().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the
