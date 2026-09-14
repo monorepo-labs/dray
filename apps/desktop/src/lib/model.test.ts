@@ -6,12 +6,13 @@ import {
   nextHarness,
   rememberedModel,
   UNSET_MODEL,
+  usableFxModel,
   usableModel,
 } from "./model";
 import type { Model } from "@/types/events";
 
-const model = (id: string): Model =>
-  ({ id, label: id, efforts: [], defaultEffort: null }) as unknown as Model;
+const model = (id: string, provider?: string): Model =>
+  ({ id, label: id, efforts: [], defaultEffort: null, provider }) as unknown as Model;
 
 const CODEX = [model("gpt56_sol"), model("gpt55")];
 const CLAUDE = [model("fable"), model("opus"), model("haiku")];
@@ -108,15 +109,45 @@ describe("the unset model", () => {
   });
 });
 
+describe("usableFxModel", () => {
+  const GATEWAY = [model("anthropic/fable", "gateway"), model("openai/gpt6", "gateway")];
+
+  it("keeps a pick the provider still serves", () => {
+    expect(usableFxModel(GATEWAY, "openai/gpt6" as never, {})).toBe("openai/gpt6");
+  });
+
+  /// The whole point: a pick from another provider restores this provider's
+  /// last model rather than dropping to "let fx decide".
+  it("restores this provider's last model over an out-of-provider pick", () => {
+    const picks = { gateway: "anthropic/fable" };
+    expect(usableFxModel(GATEWAY, "gpt56_sol" as never, picks)).toBe("anthropic/fable");
+  });
+
+  /// A remembered model the provider no longer serves is not forced back on.
+  it("falls to the sentinel when the remembered model is gone", () => {
+    const picks = { gateway: "xai/grok" };
+    expect(usableFxModel(GATEWAY, "gpt56_sol" as never, picks)).toBe(UNSET_MODEL);
+  });
+
+  it("falls to the sentinel when the provider was never picked in", () => {
+    expect(usableFxModel(GATEWAY, "gpt56_sol" as never, {})).toBe(UNSET_MODEL);
+  });
+
+  /// An empty list has not arrived yet, so the pick stands.
+  it("leaves the pick alone until the list lands", () => {
+    expect(usableFxModel([], "gpt56_sol" as never, { gateway: "x" })).toBe("gpt56_sol");
+  });
+});
+
 describe("nextHarness", () => {
   /// Toggling between two was written when there were two, and silently never
   /// reached the third. The chord steps the picker's own row instead.
   it("steps through every harness in the picker's order and wraps", () => {
-    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi", "fx"]);
+    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "fx", "pi"]);
     expect(nextHarness("claude_code")).toBe("codex");
-    expect(nextHarness("codex")).toBe("pi");
-    expect(nextHarness("pi")).toBe("fx");
-    expect(nextHarness("fx")).toBe("claude_code");
+    expect(nextHarness("codex")).toBe("fx");
+    expect(nextHarness("fx")).toBe("pi");
+    expect(nextHarness("pi")).toBe("claude_code");
   });
 
   it("parks an unknown harness on the first", () => {

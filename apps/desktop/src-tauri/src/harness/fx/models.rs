@@ -35,10 +35,47 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 /// own empty state, and a reader with no provider logged in is in an ordinary
 /// state rather than a broken one.
 pub async fn list() -> Vec<Model> {
-    CACHE.get_or_probe("", probe).await.unwrap_or_else(|err| {
+    let key = active_provider().await.unwrap_or_default();
+
+    // The subscription providers serve a handful of models each, fixed and
+    // known, so they need no probe at all — `fx models` costs ~2s of fx startup
+    // whatever it returns, and a table answers instantly. gateway is the one
+    // whose list is discovered (247 and unbounded), so it alone is asked, and
+    // its answer is cached per key so a return trip skips the startup.
+    if let Some(models) = known_models(&key) {
+        return models;
+    }
+
+    CACHE.get_or_probe(&key, probe).await.unwrap_or_else(|err| {
         eprintln!("[fx models] {err:#}");
         Vec::new()
     })
+}
+
+/// The fixed model lists for the subscription providers, or `None` for one
+/// whose list must be discovered (gateway).
+///
+// ponytail: hardcoded from fx's own output — a subscription tier changes its
+// models rarely, and the cost of a stale row here is one line to edit against
+// two seconds off every switch. gateway is left to the probe precisely because
+// its list is the one that moves.
+fn known_models(provider: &str) -> Option<Vec<Model>> {
+    let ids: &[&str] = match provider {
+        "codex" => &[
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+        ],
+        "grok" => &["grok-4.6", "grok-4.5"],
+        _ => return None,
+    };
+    Some(
+        ids.iter()
+            .map(|id| id_to_model(id.to_string(), provider))
+            .collect(),
+    )
 }
 
 /// The model with this id, from whatever fx last reported. `None` for the
@@ -57,16 +94,54 @@ pub fn forget() {
     CACHE.forget();
 }
 
-/// Moves fx onto another provider — `fx provider <name>`, which is fx's global
-/// setting and writes `~/.fx/settings.json`. The composer says so out loud.
+/// Moves fx onto another provider — fx's global setting, held in the `provider`
+/// field of `~/.fx/settings.json`. The composer says so out loud.
 ///
-/// Refused where fx would refuse it, with fx's own sentence: a provider with no
-/// login answers `Run fx login grok.`
+/// Written directly rather than through `fx provider <name>`, which costs 2-3s
+/// of fx startup to set one JSON field — the whole reason a switch felt broken.
+/// `fx provider` does no more than write that field (it prints "Provider set"
+/// even for a provider with no login), and [`active_provider`] already reads
+/// the same file, so this is symmetric. On any read/parse trouble it falls back
+/// to the CLI, which keeps correctness where the file shape is not what we
+/// expect.
 pub async fn set_provider(provider: &str) -> Result<()> {
     if !["gateway", "codex", "grok"].contains(&provider) {
         anyhow::bail!("fx has no provider named {provider:?}");
     }
 
+    if write_active_provider(provider).await.is_err() {
+        set_provider_via_cli(provider).await?;
+    }
+
+    // No `forget()`: the cache is keyed by provider, so the list this switch
+    // moves *to* is read under its own key — cached from a previous visit or
+    // probed once — and the list it moves *from* stays warm for the trip back.
+    Ok(())
+}
+
+/// Sets the `provider` field in `~/.fx/settings.json`, preserving every other
+/// field. Errors — no home dir, missing or unparseable file — hand the caller
+/// back to the CLI path.
+async fn write_active_provider(provider: &str) -> Result<()> {
+    let path = std::env::home_dir()
+        .context("no home dir")?
+        .join(".fx/settings.json");
+    let bytes = tokio::fs::read(&path).await.context("reading fx settings")?;
+    let mut settings: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parsing fx settings")?;
+    settings
+        .as_object_mut()
+        .context("fx settings is not an object")?
+        .insert("provider".into(), provider.into());
+    tokio::fs::write(&path, serde_json::to_vec(&settings)?)
+        .await
+        .context("writing fx settings")?;
+    Ok(())
+}
+
+/// The slow, robust switch: `fx provider <name>`, kept as the fallback for when
+/// the settings file cannot be edited by hand.
+async fn set_provider_via_cli(provider: &str) -> Result<()> {
     let bin = crate::binpath::fx().await;
     let output = Command::new(&bin)
         .args(["provider", provider])
@@ -78,34 +153,53 @@ pub async fn set_provider(provider: &str) -> Result<()> {
     if !output.status.success() {
         anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }
-
-    forget();
     Ok(())
 }
 
 #[derive(Deserialize)]
 struct Listing {
+    /// Every model of the active provider, always present. The richer `models`
+    /// array below is dropped above a few dozen rows — gateway's 247 come back
+    /// as `ids` only — so this is the list, and the provider comes from fx's
+    /// settings rather than a per-row `source`.
+    #[serde(default)]
+    ids: Vec<String>,
+    /// Present only for short lists, and carries a per-row `source`. Kept as a
+    /// fallback for reading the provider when fx's settings can't be.
     #[serde(default)]
     models: Vec<Row>,
 }
 
 #[derive(Deserialize)]
 struct Row {
-    id: String,
     /// Prose — "Codex subscription", "Vercel AI Gateway" — not the key
     /// `fx provider` takes. [`provider_key`] maps it.
     #[serde(default)]
     source: String,
 }
 
+/// Bounds the probe. `fx models` hangs indefinitely on a provider that is
+/// selected but not signed in — grok, when its login is missing — reaching for
+/// an API that never answers. Without this the composer's model refresh hangs
+/// with it. Timing out degrades to the empty list, which reads as "No models
+/// available", the same as any other failed read.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn probe() -> Result<Vec<Model>> {
     let bin = crate::binpath::fx().await;
-    let output = Command::new(&bin)
-        .args(["models", "--json"])
-        .env("PATH", crate::harness::agent_path(&bin))
-        .output()
-        .await
-        .context("couldn't run fx to ask for its models")?;
+    let output = tokio::time::timeout(
+        PROBE_TIMEOUT,
+        Command::new(&bin)
+            .args(["models", "--json"])
+            .env("PATH", crate::harness::agent_path(&bin))
+            // Killed if the timeout drops the future, or the hung `fx models`
+            // outlives the probe as a zombie reaching for an API forever.
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("fx models timed out — a provider may be selected but not signed in")?
+    .context("couldn't run fx to ask for its models")?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -117,20 +211,42 @@ async fn probe() -> Result<Vec<Model>> {
     let listing: Listing =
         serde_json::from_slice(&output.stdout).context("fx models answered something else")?;
 
-    Ok(listing.models.into_iter().map(row_to_model).collect())
+    // `fx models` lists the *active* provider alone, so every id belongs to it.
+    // The provider is read from fx's settings — the one place it is recorded
+    // for every list size — falling back to the `source` on a short list's rows
+    // when the settings can't be read.
+    let provider = active_provider()
+        .await
+        .or_else(|| listing.models.first().map(|r| provider_key(&r.source)))
+        .unwrap_or_default();
+
+    Ok(listing
+        .ids
+        .into_iter()
+        .map(|id| id_to_model(id, &provider))
+        .collect())
 }
 
-fn row_to_model(row: Row) -> Model {
-    let provider = provider_key(&row.source);
+/// The provider `fx provider` last wrote, read from `~/.fx/settings.json`.
+/// `None` if the file is missing or unreadable, which the caller answers with
+/// the row `source` or an empty key.
+async fn active_provider() -> Option<String> {
+    let path = std::env::home_dir()?.join(".fx/settings.json");
+    let bytes = tokio::fs::read(path).await.ok()?;
+    let settings: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    settings.get("provider")?.as_str().map(str::to_string)
+}
+
+fn id_to_model(id: String, provider: &str) -> Model {
     Model {
-        id: ModelId::new(&row.id),
-        label: row.id.clone(),
-        efforts: ladder_for(&provider),
+        id: ModelId::new(&id),
+        label: id.clone(),
+        efforts: ladder_for(provider),
         // fx has its own, in its settings. Naming one here would override a
         // choice this app never made.
         default_effort: None,
-        arg: row.id,
-        provider,
+        arg: id,
+        provider: provider.to_string(),
         // A gateway model may well take one; the Codex provider answered
         // `refused` to a 1×1 PNG on capture. Off until a model says otherwise.
         accepts_images: false,
@@ -163,19 +279,59 @@ fn ladder_for(provider: &str) -> Vec<Effort> {
 mod tests {
     use super::*;
 
-    /// The real `fx models --json` answer, verbatim.
-    const LISTING: &str = r#"{"kind":"models","count":5,"shown_count":5,"more_count":0,"private_models_hidden":false,"ids":["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5"],"models":[{"id":"gpt-6-astra","source":"Codex subscription"},{"id":"gpt-5.6-sol","source":"Codex subscription"},{"id":"gpt-5.6-terra","source":"Codex subscription"},{"id":"gpt-5.6-luna","source":"Codex subscription"},{"id":"gpt-5.5","source":"Codex subscription"}]}"#;
+    /// The real `fx models --json` for the codex provider — few enough rows to
+    /// carry the rich `models` array beside `ids`.
+    const CODEX_LISTING: &str = r#"{"kind":"models","count":5,"shown_count":5,"more_count":0,"private_models_hidden":false,"ids":["gpt-6-astra","gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5"],"models":[{"id":"gpt-6-astra","source":"Codex subscription"},{"id":"gpt-5.6-sol","source":"Codex subscription"},{"id":"gpt-5.6-terra","source":"Codex subscription"},{"id":"gpt-5.6-luna","source":"Codex subscription"},{"id":"gpt-5.5","source":"Codex subscription"}]}"#;
+
+    /// The real gateway shape: 247 models come back as `ids` alone, with no
+    /// `models` array and so no per-row `source`. What the id-driven path fixes.
+    const GATEWAY_LISTING: &str = r#"{"kind":"models","count":3,"shown_count":3,"more_count":0,"private_models_hidden":false,"ids":["anthropic/claude-fable-5.1","openai/gpt-5.6","xai/grok-5"]}"#;
 
     #[test]
-    fn the_listing_becomes_rows_under_their_provider() {
-        let listing: Listing = serde_json::from_str(LISTING).unwrap();
-        let models: Vec<Model> = listing.models.into_iter().map(row_to_model).collect();
+    fn ids_become_models_under_the_active_provider() {
+        let listing: Listing = serde_json::from_str(CODEX_LISTING).unwrap();
+        let models: Vec<Model> = listing
+            .ids
+            .into_iter()
+            .map(|id| id_to_model(id, "codex"))
+            .collect();
 
         assert_eq!(models.len(), 5);
         assert!(models.iter().all(|m| m.provider == "codex"));
         assert_eq!(models[1].arg, "gpt-5.6-sol");
         assert!(models[1].efforts.contains(&Effort::Ultra));
         assert!(!ladder_for("gateway").contains(&Effort::Ultra));
+    }
+
+    #[test]
+    fn a_models_less_listing_still_yields_every_id() {
+        let listing: Listing = serde_json::from_str(GATEWAY_LISTING).unwrap();
+        assert!(listing.models.is_empty(), "gateway sends no models array");
+
+        let models: Vec<Model> = listing
+            .ids
+            .into_iter()
+            .map(|id| id_to_model(id, "gateway"))
+            .collect();
+
+        assert_eq!(models.len(), 3);
+        assert!(models.iter().all(|m| m.provider == "gateway"));
+        assert_eq!(models[0].arg, "anthropic/claude-fable-5.1");
+    }
+
+    #[test]
+    fn subscription_providers_answer_from_a_table_gateway_does_not() {
+        let codex = known_models("codex").expect("codex is known");
+        assert_eq!(codex.len(), 5);
+        assert_eq!(codex[1].arg, "gpt-5.6-sol");
+        assert!(codex[0].efforts.contains(&Effort::Ultra));
+
+        let grok = known_models("grok").expect("grok is known");
+        assert_eq!(grok.len(), 2);
+        assert!(!grok[0].efforts.contains(&Effort::Ultra));
+
+        // gateway's list is discovered, so it falls through to the probe.
+        assert!(known_models("gateway").is_none());
     }
 
     #[test]

@@ -188,9 +188,13 @@ function DropdownMenuSubTrigger({
   className,
   inset,
   children,
+  trailingIcon,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
   inset?: boolean
+  // Replaces the default submenu chevron when set, so a caller can mark the row
+  // (e.g. the selected model) without a second trailing glyph beside the arrow.
+  trailingIcon?: React.ReactNode
 }) {
   return (
     <DropdownMenuPrimitive.SubTrigger
@@ -203,7 +207,7 @@ function DropdownMenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ml-auto" />
+      {trailingIcon ?? <ChevronRightIcon className="ml-auto" />}
     </DropdownMenuPrimitive.SubTrigger>
   )
 }

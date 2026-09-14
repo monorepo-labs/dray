@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Sliders } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Sliders } from "lucide-react";
 import AgentIcon from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
@@ -85,6 +85,8 @@ export default function ModelSelector({
   effort,
   onChange,
   onRefreshModels,
+  onReloadModels,
+  onSeedProvider,
   loadingModels = false,
 }: {
   harness: Harness;
@@ -97,15 +99,41 @@ export default function ModelSelector({
   modelId: ModelId;
   effort: Effort | null;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
-  /// Asks the harness for its list again. Only pi has one that can change
-  /// under the reader — the other two are tables — so it is optional here.
+  /// Asks the harness for its list again, dropping the backend cache first.
+  /// Only pi has one that can change under the reader — the other two are
+  /// tables — so it is optional here.
   onRefreshModels?: () => void;
+  /// Re-reads the current list *without* dropping the cache. The fx provider
+  /// switch uses it: the new provider's list is keyed server-side, so this
+  /// reads it cached rather than re-paying fx's startup on every hop.
+  onReloadModels?: () => void;
+  /// Shows a provider's cached fx models the instant it is picked, before the
+  /// fresh read lands. A provider never visited seeds nothing and waits.
+  onSeedProvider?: (provider: string) => void;
   loadingModels?: boolean;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
   const [open, setOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  // The provider fx is switching *to*, held so the segmented control moves the
+  // instant it is clicked: `fx provider` plus a re-read of the list is ~3s on a
+  // large provider, and a control that sits still that long reads as broken.
+  // Cleared when the refreshed list lands, which is when the real state governs.
+  const [pendingProvider, setPendingProvider] = useState<string | null>(null);
+  // Clear the optimistic thumb only once the *new* provider's list has landed,
+  // never on any list change: the switch fires a seed and then a reload, and an
+  // intermediate update still naming the old provider would otherwise clear the
+  // thumb and snap it back to where the switch came from. Also cleared when the
+  // reload settles on nothing — a provider with no models — so the thumb can't
+  // hang on a list that will never name it. A switch that errors clears it in
+  // the click's own catch.
+  useEffect(() => {
+    if (pendingProvider == null) return;
+    const landed = models[0]?.provider === pendingProvider;
+    const settledEmpty = models.length === 0 && !loadingModels;
+    if (landed || settledEmpty) setPendingProvider(null);
+  }, [models, pendingProvider, loadingModels]);
 
   // One copy, held here and handed down: the dialog and the menu both read it,
   // and `useLocalStorage` is per-hook state rather than a store, so two
@@ -120,9 +148,39 @@ export default function ModelSelector({
     [models, starred, harness, modelId],
   );
   const more = useMemo(() => underMore(models, harness), [models, harness]);
+  // Headings earn their place only when two providers share the list — pi's
+  // multi-provider answer. fx serves one provider at a time, so its single
+  // group's heading names what nothing disputes and is dropped.
+  const providerGroups = useMemo(() => byProvider(listed), [listed]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
   const activeAgent = AGENTS.findIndex((a) => a.id === harness);
+  // fx lists one provider at a time, so every row shares its provider — the
+  // active one, which is what the segmented control marks. A pending switch
+  // wins so the thumb moves at once; `undefined` before the first read, or when
+  // no provider is signed in, leaves the thumb hidden and nothing checked.
+  const currentProvider = pendingProvider ?? models[0]?.provider;
+  const activeProvider = FX_PROVIDERS.findIndex((p) => p.id === currentProvider);
+  // A switch whose new provider's list has not landed yet: the rows still name
+  // the *old* provider's models.
+  const awaitingProvider = pendingProvider != null && models[0]?.provider !== pendingProvider;
+  // A known provider's list lands in tens of ms, so blanking to a loading row
+  // on every switch only flashes. Wait a beat first: if the new list still has
+  // not arrived, the switch is a real probe (gateway, seconds long), and *that*
+  // is worth a loading state over a list still naming the old provider. A fast
+  // swap clears `awaitingProvider` before the timer, so its old rows hold for
+  // the one frame nobody sees.
+  const [switchStalled, setSwitchStalled] = useState(false);
+  useEffect(() => {
+    if (!awaitingProvider) {
+      setSwitchStalled(false);
+      return;
+    }
+    const t = setTimeout(() => setSwitchStalled(true), 200);
+    return () => clearTimeout(t);
+  }, [awaitingProvider]);
+  const blanked = awaitingProvider && switchStalled;
+  const shown = blanked ? [] : listed;
   // `null` until the first read lands, which is why the mark is drawn from an
   // explicit `!a.available` rather than from "not found in the list": an
   // unanswered read must mark nothing, not mark everything.
@@ -142,6 +200,12 @@ export default function ModelSelector({
       <DropdownMenuSub key={model.id}>
         <DropdownMenuSubTrigger
           className="cursor-pointer gap-1 text-ui"
+          // The picked model takes a check where the submenu chevron would sit,
+          // no leading indent and no background tint fighting the hover.
+          // Unpicked rows keep the chevron that says "opens an effort submenu".
+          trailingIcon={
+            model.id === modelId ? <Check className="ml-auto size-3.5" /> : undefined
+          }
           onClick={() => {
             onChange(model.id, null);
             setOpen(false);
@@ -173,6 +237,7 @@ export default function ModelSelector({
               }}
             >
               {EFFORT_LABELS[level]}
+              {level === rowEffort(model) && <Check className="ml-auto size-3.5" />}
             </DropdownMenuItem>
           ))}
         </DropdownMenuSubContent>
@@ -185,6 +250,7 @@ export default function ModelSelector({
         onSelect={() => onChange(model.id, null)}
       >
         {model.label}
+        {model.id === modelId && <Check className="ml-auto size-3.5" />}
       </DropdownMenuItem>
     );
 
@@ -208,7 +274,7 @@ export default function ModelSelector({
                   draw, so the placeholder stands in. pi is the one harness
                   that reaches this: Dray names no default for it, and the
                   spawn omits the flag so pi's own settings decide. */}
-              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Model" : modelId)}</span>
+              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}</span>
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
@@ -225,7 +291,7 @@ export default function ModelSelector({
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenuContent align="start" className="min-w-48">
+      <DropdownMenuContent align="start" className="min-w-[202px]">
         {/* Not menu items: a segmented control says "one of these two" where
             two stacked rows would read as two more models. Plain buttons, so
             the menu stays open — switching agent and then picking one of its
@@ -301,48 +367,68 @@ export default function ModelSelector({
         )}
 
         {/* fx's list is its *active provider's*, and the provider is a global
-            fx setting (`fx provider …`, written to `~/.fx/settings.json`) — so
-            switching here moves fx everywhere, not just this composer, and the
-            row says so. Creation-time only, beside the agent control: a live
-            session's model is applied in place and a cross-provider pick there
-            is unverified. The active one is read off the rows fx answered
-            with, since `fx models` names the source on every row. */}
+            fx setting (`fx provider …`, written to `~/.fx/settings.json`).
+            Creation-time only, beside the agent control and built the same way:
+            a segmented control says "one of these" where stacked rows read as
+            more models. Text, not icons — the providers have no brand mark here.
+            The active one is read off the rows fx answered with. */}
         {harness === "fx" && canSwitchHarness && (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-ui text-muted-foreground">
-              Provider
-              <span className="ml-1 text-muted-foreground/60">
-                {FX_PROVIDERS.find((p) => p.id === models[0]?.provider)?.label ?? ""}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              {FX_PROVIDERS.map((provider) => (
-                <DropdownMenuItem
-                  key={provider.id}
-                  className="text-ui"
-                  onSelect={() => {
-                    invoke("set_fx_provider", { provider: provider.id })
-                      .catch((e) => console.error("[fx provider]", e))
-                      .finally(() => onRefreshModels?.());
+          <div
+            role="radiogroup"
+            aria-label="Provider"
+            className="mb-1 flex items-center rounded-md bg-surface-well p-1"
+          >
+            <div className="relative flex flex-1 items-center">
+              {/* The moving thumb, one segment wide, placed by index — the
+                  switch slides across rather than blinking between pills. Hidden
+                  until a provider is known, so first run reads as "none picked"
+                  rather than the first segment being silently selected. */}
+              {activeProvider >= 0 && (
+                <span
+                  aria-hidden
+                  className="absolute top-0 left-0 h-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+                  style={{
+                    width: `${100 / FX_PROVIDERS.length}%`,
+                    transform: `translateX(${activeProvider * 100}%)`,
                   }}
+                />
+              )}
+              {FX_PROVIDERS.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={provider.id === currentProvider}
+                  aria-label={provider.label}
+                  onClick={() => {
+                    setPendingProvider(provider.id);
+                    // Cached rows on screen at once; the reload below refreshes
+                    // them. A provider never visited seeds nothing and falls to
+                    // the loading state instead.
+                    onSeedProvider?.(provider.id);
+                    invoke("set_fx_provider", { provider: provider.id })
+                      .catch((e) => {
+                        console.error("[fx provider]", e);
+                        setPendingProvider(null);
+                      })
+                      .finally(() => onReloadModels?.());
+                  }}
+                  className="relative z-10 flex h-6 flex-1 items-center justify-center rounded-sm text-ui opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
                 >
-                  {provider.label}
-                </DropdownMenuItem>
+                  {provider.short}
+                </button>
               ))}
-              <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground/60">
-                Changes fx's provider everywhere
-              </p>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+            </div>
+          </div>
         )}
 
         {/* Grouped only where a heading says something: pi answers with a
             provider per model, and a reader picking between two providers'
-            models needs to know which is which. The other two harnesses have
-            one vendor each, so a heading there names what the agent mark on
-            the trigger already said. */}
-        {shortlisted
-          ? byProvider(listed).map((group) => (
+            models needs to know which is which. A one-provider list — fx, or
+            any harness with a single vendor — draws its rows flat, the heading
+            naming what the agent mark on the trigger already said. */}
+        {shortlisted && providerGroups.length > 1 && !blanked
+          ? providerGroups.map((group) => (
               <div key={group.provider}>
                 <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
                   {group.provider}
@@ -350,7 +436,7 @@ export default function ModelSelector({
                 {group.models.map(modelRow)}
               </div>
             ))
-          : listed.map(modelRow)}
+          : shown.map(modelRow)}
 
         {/* The agent control keeps this menu open on purpose, so a switch to an
             agent whose list is a *read* rather than a table lands here with
@@ -358,9 +444,13 @@ export default function ModelSelector({
             the wait; collapsing to nothing and springing back is the glitch
             this replaces. Not a `DropdownMenuItem` — there is nothing to
             select, and one would take arrow focus. */}
-        {listed.length === 0 && (
+        {shown.length === 0 && (
           <p className="px-2 py-1.5 text-ui text-muted-foreground">
-            {loadingModels ? "Loading models…" : "No models"}
+            {loadingModels || blanked
+              ? "Loading models…"
+              : models.length === 0
+                ? "No models available"
+                : "No models shortlisted yet"}
           </p>
         )}
 
@@ -387,14 +477,21 @@ export default function ModelSelector({
             onSelect={() => setLibraryOpen(true)}
           >
             <Sliders className="size-3.5" />
-            {listed.length > 0 ? "Choose models…" : "Select models…"}
+            Choose models…
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
 
       <ModelLibraryDialog
         open={libraryOpen}
-        onOpenChange={setLibraryOpen}
+        // Opening the library closed the menu (it opens from a menu item), so
+        // closing it drops the reader back with nothing open — one shortlist
+        // edit and they have to reopen the picker to actually pick. Reopen the
+        // menu on close, where the freshly-starred models are waiting.
+        onOpenChange={(next) => {
+          setLibraryOpen(next);
+          if (!next) setOpen(true);
+        }}
         models={models}
         starred={starred}
         onStarredChange={setStarred}

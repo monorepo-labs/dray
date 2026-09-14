@@ -109,10 +109,14 @@ export default function ModelLibraryDialog({
           {groups.map((group) => (
             <div key={group.provider} className="mb-1">
               {/* Muted, no fill and no glyph, the sidebar's project heading:
-                  a tinted band draws a box round the quietest line on screen. */}
-              <p className="px-3 pt-2 pb-1 text-ui text-muted-foreground">
-                {group.provider}
-              </p>
+                  a tinted band draws a box round the quietest line on screen.
+                  Drawn only when two providers share the list — fx serves one
+                  at a time, so its lone heading names what nothing disputes. */}
+              {groups.length > 1 && (
+                <p className="px-3 pt-2 pb-1 text-ui text-muted-foreground">
+                  {group.provider}
+                </p>
+              )}
               {group.models.map((model) => {
                 const isStarred = stars.has(model.id);
                 return (

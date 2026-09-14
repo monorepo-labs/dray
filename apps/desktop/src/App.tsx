@@ -124,6 +124,8 @@ function App() {
     setShowArchived,
     models,
     refreshModels,
+    reloadModels,
+    seedFxModels,
     loadingModels,
     harness,
     setHarness,
@@ -1781,6 +1783,8 @@ function App() {
               effort={effort}
               onModelChange={handleModelChange}
               onRefreshModels={refreshModels}
+              onReloadModels={reloadModels}
+              onSeedProvider={seedFxModels}
               loadingModels={loadingModels}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}

@@ -37,10 +37,12 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
 
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
 /// (`fx provider <gateway|codex|grok>`), not discovered — the *models* are.
-export const FX_PROVIDERS: { id: string; label: string }[] = [
-  { id: "codex", label: "Codex subscription" },
-  { id: "gateway", label: "Vercel AI Gateway" },
-  { id: "grok", label: "Grok subscription" },
+/// `label` is fx's own full name for the tooltip; `short` is our own text for
+/// the segmented provider control, where three full names would not fit.
+export const FX_PROVIDERS: { id: string; label: string; short: string }[] = [
+  { id: "gateway", label: "Vercel AI Gateway", short: "Vercel" },
+  { id: "codex", label: "Codex subscription", short: "Codex" },
+  { id: "grok", label: "Grok subscription", short: "Grok" },
 ];
 
 /// Which model each harness was last left on. Absent key = never picked one.
@@ -88,10 +90,30 @@ export function usableModel(models: Model[], picked: ModelId, harness: Harness):
   return models.some((m) => m.id === fallback) ? fallback : models[0].id;
 }
 
+/// fx's model repair, per provider. fx lists one provider at a time, so a pick
+/// made under another provider names a model this list cannot run — and unlike
+/// [`usableModel`], the fall-back is not the unset sentinel outright but the
+/// model this provider was **last left on**, so switching providers and back
+/// returns to where you were. Only when that too is gone does it fall to the
+/// sentinel (fx picks for itself), never to the head of the list.
+///
+/// `picks` is the reader's last model per provider; the caller reads it, so this
+/// stays pure and testable.
+export function usableFxModel(
+  list: Model[],
+  picked: ModelId,
+  picks: Record<string, ModelId>,
+): ModelId {
+  if (list.length === 0 || list.some((m) => m.id === picked)) return picked;
+  const remembered = picks[list[0]?.provider ?? ""];
+  if (remembered && list.some((m) => m.id === remembered)) return remembered;
+  return UNSET_MODEL;
+}
+
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx"];
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "fx", "pi"];
 
 /// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
 /// first, the same place the picker parks its thumb.

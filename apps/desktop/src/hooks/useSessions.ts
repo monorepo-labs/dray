@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
-import { readLocalStorage } from "@/hooks/useLocalStorage";
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -13,7 +13,7 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
@@ -21,6 +21,45 @@ import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/sp
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
+
+/// fx's model list per provider, kept in local storage so a switch to a
+/// provider visited before shows its shortlist instantly — the same way a
+/// starred list is a fact the reader carries. Gateway's 247 come back from a
+/// ~2s probe, so without this every switch to it blanks the shortlist while it
+/// reloads; with it the cached rows are on screen at once and the probe just
+/// refreshes them.
+const FX_MODELS_KEY = "ade.fxModels";
+
+function readFxModelCache(): Record<string, Model[]> {
+  return readLocalStorage<Record<string, Model[]>>(FX_MODELS_KEY, {});
+}
+
+/// Stores fx's freshly-read list under its own provider (read off the rows, all
+/// of which share it), leaving every other provider's cache untouched.
+function cacheFxModels(list: Model[]): void {
+  const provider = list[0]?.provider;
+  if (!provider) return;
+  writeLocalStorage(FX_MODELS_KEY, { ...readFxModelCache(), [provider]: list });
+}
+
+/// The reader's last-picked fx model per provider, so switching providers
+/// restores the model that provider was left on rather than dropping to "let fx
+/// decide". A provider never picked in has no entry — the honest "nothing to
+/// restore" — and falls to the unset sentinel.
+const FX_PICK_KEY = "ade.fxModelPick";
+
+function readFxPicks(): Record<string, ModelId> {
+  return readLocalStorage<Record<string, ModelId>>(FX_PICK_KEY, {});
+}
+
+function recordFxPick(provider: string | undefined, id: ModelId): void {
+  if (!provider || isUnsetModel(id)) return;
+  writeLocalStorage(FX_PICK_KEY, { ...readFxPicks(), [provider]: id });
+}
+
+/// [`usableFxModel`] with the reader's stored picks read for it.
+const repairFxModel = (list: Model[], picked: ModelId): ModelId =>
+  usableFxModel(list, picked, readFxPicks());
 
 /// Images for a prompt the backend has not archived yet, through `url` and never
 /// `path`: the copy the asset protocol's scope allows is written at flush, so
@@ -275,6 +314,10 @@ const effort: Effort | null = model
 // on it earlier. Only an explicit level writes to the map.
 const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
   setModelId(nextModelId);
+  // fx's list is per-provider, so a pick also belongs to the provider on screen
+  // — remembered under it so a round trip through another provider comes back
+  // to this model rather than to "let fx decide".
+  if (harness === "fx") recordFxPick(models[0]?.provider, nextModelId);
   // Filed under the harness on screen, which is the only one that could have
   // offered this model — so coming back to that agent finds this pick rather
   // than whatever the other agent was left on.
@@ -1340,10 +1383,16 @@ useEffect(() => {
       // Filed under the harness it was read for, so it is still here — and
       // still right — when the reader comes back to that agent.
       setModelsByHarness((prev) => ({ ...prev, [harness]: list }));
+      // fx's list is per-provider, so persist it under its provider for the
+      // instant seed a later switch back reads.
+      if (harness === "fx") cacheFxModels(list);
       // A model belongs to exactly one harness, so switching harness leaves the
       // pick naming something the new one cannot run. Repaired here, where the
       // real list has just landed, rather than guessed at when the toggle moved.
-      setModelId((current) => usableModel(list, current, harness));
+      // fx repairs per provider, restoring that provider's last model.
+      setModelId((current) =>
+        harness === "fx" ? repairFxModel(list, current) : usableModel(list, current, harness),
+      );
     })
     .finally(() => {
       if (!cancelled) setLoadingModels(false);
@@ -1364,6 +1413,25 @@ const refreshModels = () => {
   invoke("refresh_models")
     .catch(() => {})
     .finally(() => setModelsGeneration((n) => n + 1));
+};
+
+/// Re-reads the current harness's model list without dropping the backend
+/// cache. What an fx provider switch wants: the new provider's list is already
+/// keyed under its own name server-side, so a bump reads it — cached from a
+/// prior visit, or probed once — where `refreshModels` would wipe every
+/// provider and pay fx's ~2s startup again on the very next hop back.
+const reloadModels = () => setModelsGeneration((n) => n + 1);
+
+/// Shows a provider's cached fx models at once, before its fresh read lands.
+/// Nothing happens for a provider never visited (gateway on a cold install),
+/// which is the one case that still waits on the probe's loading state.
+const seedFxModels = (provider: string) => {
+  const cached = readFxModelCache()[provider];
+  if (!cached?.length) return;
+  setModelsByHarness((prev) => ({ ...prev, fx: cached }));
+  // Restore this provider's last model at once too, so the trigger and the
+  // list's own mark are right on the same frame the rows appear.
+  setModelId((current) => repairFxModel(cached, current));
 };
 
 useEffect(() => {
@@ -2162,6 +2230,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

@@ -36,7 +36,37 @@ function OpenAiIcon({ className }: { className?: string }) {
   );
 }
 
-/// pi's own mark, from its press kit, redrawn on `currentColor`.
+/// fx's own wordmark, the `fx` glyph from fx.sh's nav, redrawn on
+/// `currentColor`. The triangle it replaces was Vercel's — right while fx rode
+/// the gateway, wrong as fx's own mark now that the agent is the subject.
+///
+/// Its native viewBox is kept (`166.241 0 155.861 156`): the coordinates are
+/// the glyph's own, and rescaling to 24 to match the others buys nothing but
+/// rounding. `fill-rule="evenodd"` is load-bearing — the counter inside the
+/// glyph is a hole cut by a second contour in the one path, which the default
+/// `nonzero` fills in as a slightly wrong solid blob. Monochrome by design, so
+/// `brand` leaves it on `currentColor`.
+function FxIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="166.241 0 155.861 156"
+      className={cn("size-4 shrink-0", className)}
+      fill="currentColor"
+      role="img"
+      aria-label="fx"
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M237.89 0C243.18 0 249.38 1.42 253.03 3.07L255.09 4.01L250.08 18.63L247.68 17.75C244.9 16.72 241.94 15.8 238.49 15.8C234.98 15.8 232.79 16.56 231.08 18.32C229.23 20.23 227.63 23.64 226.23 29.76L226.23 29.76L226.23 29.76L225.14 34.85H241.67L260.43 34.95L260.69 34.95L260.84 35.17L278.85 61.63L296.74 34.95H320.87L291.68 76.74L322.1 119.75H299.33L299.18 119.55L241.14 40.48L239.35 49.4H222.07L205.69 127.21C203.93 135.71 201.19 142.84 196.78 147.87C192.27 153.01 186.2 155.75 178.34 155.75C174.18 155.75 170.75 155.11 167.91 154.11L166.24 153.52V137.18L166.9 137.4L169.53 138.28C172.18 139.16 174.41 139.8 177.14 139.8C178.53 139.8 179.7 139.53 180.73 138.98C181.76 138.43 182.68 137.6 183.52 136.44C185.3 133.99 186.72 130.13 187.9 124.67L203.76 49.4H189.87L191.76 39.44L192.04 39.35L206.82 34.47L208.15 28.64C210.52 18.21 213.77 10.94 218.71 6.32C223.74 1.61 230.13 0 237.89 0ZM273.99 99.08L260.07 120.25H234.54L261 82.02L273.99 99.08Z"
+      />
+    </svg>
+  );
+}
+
+/// pi's own mark, from its press kit, redrawn on `currentColor`. MIT,
+/// © Earendil Inc. & Contributors, credited in the root README beside the
+/// ported themes.
 ///
 /// The primary logo rather than the badge: the badge carries its own `#09090b`
 /// rounded plate, which is a second surface inside a row of chrome that already
@@ -47,25 +77,6 @@ function OpenAiIcon({ className }: { className?: string }) {
 /// `fill-rule="evenodd"` is load-bearing: the P's counter is a hole cut by a
 /// second contour in the same path, and the default `nonzero` fills it in —
 /// which reads as a slightly wrong solid blob rather than as a bug.
-///
-/// Vercel's mark, which is fx's: one triangle, and nothing else on the row is
-/// that shape. Monochrome by design, so `brand` leaves it on `currentColor`.
-function FxIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={cn("size-4 shrink-0", className)}
-      fill="currentColor"
-      role="img"
-      aria-label="fx"
-    >
-      <path d="M12 3L22 20H2L12 3Z" />
-    </svg>
-  );
-}
-
-/// MIT, © Earendil Inc. & Contributors. Credited in the root README beside the
-/// ported themes.
 function PiIcon({ className }: { className?: string }) {
   return (
     <svg
