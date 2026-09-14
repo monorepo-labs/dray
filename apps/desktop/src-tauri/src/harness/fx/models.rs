@@ -37,11 +37,19 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 pub async fn list() -> Vec<Model> {
     let key = active_provider().await.unwrap_or_default();
 
+    // A real probe already cached for this provider wins over the static table
+    // below — that is how [`refresh`] lets a changed subscription catalog reach
+    // the picker despite the tables. Fresh only; a stale entry falls through.
+    if let Some(fresh) = CACHE.peek(&key) {
+        return fresh;
+    }
+
     // The subscription providers serve a handful of models each, fixed and
-    // known, so they need no probe at all — `fx models` costs ~2s of fx startup
-    // whatever it returns, and a table answers instantly. gateway is the one
-    // whose list is discovered (247 and unbounded), so it alone is asked, and
-    // its answer is cached per key so a return trip skips the startup.
+    // known, so the first read answers from a table with no probe — `fx models`
+    // costs ~2s of fx startup whatever it returns. gateway's list is discovered
+    // (247 and unbounded), so it alone is probed, cached per key so a return
+    // trip skips the startup. The manual Refresh calls [`refresh`], which probes
+    // fx even for a table-backed provider and caches it above.
     if let Some(models) = known_models(&key) {
         return models;
     }
@@ -50,6 +58,19 @@ pub async fn list() -> Vec<Model> {
         eprintln!("[fx models] {err:#}");
         Vec::new()
     })
+}
+
+/// Re-queries fx for the active provider and replaces its cached list, so the
+/// next [`list`] returns fx's own answer rather than a static table. For the
+/// reader's manual Refresh: they want fx asked again, worth its ~2s startup,
+/// even for codex or grok. Safe against cross-provider mixups because it probes
+/// the provider that is active *now* and keys the answer by it.
+pub async fn refresh() {
+    forget();
+    let key = active_provider().await.unwrap_or_default();
+    if let Err(err) = CACHE.get_or_probe(&key, probe).await {
+        eprintln!("[fx models] refresh: {err:#}");
+    }
 }
 
 /// The fixed model lists for the subscription providers, or `None` for one
@@ -119,10 +140,24 @@ pub async fn set_provider(provider: &str) -> Result<()> {
     Ok(())
 }
 
+/// Serializes Dray's own writers of `~/.fx/settings.json`, so two provider
+/// switches can't interleave their read-modify-write and lose one's change.
+static SETTINGS_WRITE: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Sets the `provider` field in `~/.fx/settings.json`, preserving every other
 /// field. Errors — no home dir, missing or unparseable file — hand the caller
 /// back to the CLI path.
+///
+/// The replace is atomic: the new bytes go to a temp file beside the target and
+/// then `rename` over it, so fx (or any reader) sees the old file or the whole
+/// new one, never a half-written truncation. The lock serializes Dray's writers
+/// against each other; it cannot order fx's own writes, so a rewrite fx makes
+/// between this read and rename is still lost — a temp+rename shrinks that
+/// window to a single syscall.
 async fn write_active_provider(provider: &str) -> Result<()> {
+    let _guard = SETTINGS_WRITE.lock().await;
+
     let path = std::env::home_dir()
         .context("no home dir")?
         .join(".fx/settings.json");
@@ -133,9 +168,15 @@ async fn write_active_provider(provider: &str) -> Result<()> {
         .as_object_mut()
         .context("fx settings is not an object")?
         .insert("provider".into(), provider.into());
-    tokio::fs::write(&path, serde_json::to_vec(&settings)?)
+
+    let dir = path.parent().context("fx settings has no parent dir")?;
+    let tmp = dir.join(format!(".settings.json.dray.{}", std::process::id()));
+    tokio::fs::write(&tmp, serde_json::to_vec(&settings)?)
         .await
         .context("writing fx settings")?;
+    tokio::fs::rename(&tmp, &path)
+        .await
+        .context("replacing fx settings")?;
     Ok(())
 }
 

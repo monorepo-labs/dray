@@ -266,7 +266,10 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
 #[tauri::command]
 async fn refresh_models() {
     harness::pi::models::forget();
-    harness::fx::models::forget();
+    // Not just `forget`: fx serves the subscription providers from static
+    // tables, so dropping the cache alone would still answer from a table. A
+    // manual Refresh means "ask fx again", so probe the active provider now.
+    harness::fx::models::refresh().await;
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.

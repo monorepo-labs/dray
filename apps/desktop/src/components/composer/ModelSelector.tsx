@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Sliders } from "lucide-react";
 import AgentIcon from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
@@ -185,6 +185,34 @@ export default function ModelSelector({
   // explicit `!a.available` rather than from "not found in the list": an
   // unanswered read must mark nothing, not mark everything.
   const availability = useAgentAvailability();
+
+  // Provider switches are serialized: each `set_fx_provider` is chained after
+  // the previous, so the settings file ends on the *last* click rather than
+  // whichever fx call happened to finish last. Only the latest click reloads or
+  // clears the thumb — a superseded click's completion is ignored, so a slow
+  // earlier switch can't reload the picker onto a provider the reader left.
+  const switchQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const latestProvider = useRef<string | null>(null);
+
+  const switchProvider = (id: string) => {
+    setPendingProvider(id);
+    // Cached rows on screen at once; the reload below refreshes them. A provider
+    // never visited seeds nothing and falls to the loading state instead.
+    onSeedProvider?.(id);
+    latestProvider.current = id;
+    switchQueue.current = switchQueue.current
+      .catch(() => {})
+      .then(() => invoke("set_fx_provider", { provider: id }))
+      .then(
+        () => {
+          if (latestProvider.current === id) onReloadModels?.();
+        },
+        (e) => {
+          console.error("[fx provider]", e);
+          if (latestProvider.current === id) setPendingProvider(null);
+        },
+      );
+  };
 
   /// What a row would resolve to if clicked: the live effort for the model
   /// already selected, each other model's own default. Mirrors the resolution
@@ -400,19 +428,7 @@ export default function ModelSelector({
                   role="radio"
                   aria-checked={provider.id === currentProvider}
                   aria-label={provider.label}
-                  onClick={() => {
-                    setPendingProvider(provider.id);
-                    // Cached rows on screen at once; the reload below refreshes
-                    // them. A provider never visited seeds nothing and falls to
-                    // the loading state instead.
-                    onSeedProvider?.(provider.id);
-                    invoke("set_fx_provider", { provider: provider.id })
-                      .catch((e) => {
-                        console.error("[fx provider]", e);
-                        setPendingProvider(null);
-                      })
-                      .finally(() => onReloadModels?.());
-                  }}
+                  onClick={() => switchProvider(provider.id)}
                   className="relative z-10 flex h-6 flex-1 items-center justify-center rounded-sm text-ui opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
                 >
                   {provider.short}

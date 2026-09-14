@@ -183,6 +183,15 @@ impl<T: Clone> ProbeCache<T> {
         Ok(answer)
     }
 
+    /// The cached answer for `key` if still fresh, without ever probing. Lets a
+    /// caller prefer a real probe result over a cheaper fallback it would
+    /// otherwise return.
+    pub fn peek(&self, key: &str) -> Option<T> {
+        let entries = self.entries.lock().unwrap();
+        let (at, hit) = entries.get(key)?;
+        (at.elapsed() < self.fresh_for).then(|| hit.clone())
+    }
+
     /// Drops every answer, so the next read probes again.
     pub fn forget(&self) {
         self.entries.lock().unwrap().clear();
