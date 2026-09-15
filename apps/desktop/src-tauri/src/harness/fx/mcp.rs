@@ -146,20 +146,22 @@ async fn resolve_env(key: &str) -> Option<String> {
     login_shell_var(key).await
 }
 
-/// `printenv` inside the user's login shell. The name rides as `$1`, never
-/// interpolated into the command string, and is checked against a variable's
-/// grammar first — it comes out of a config file.
+/// `printenv` inside the user's login shell.
+///
+/// The name is interpolated into the command string, and that is safe only
+/// because it is checked against a variable's grammar first — it comes out of
+/// a config file. Passing it as `$1` looked tidier and is wrong on fish, which
+/// has no `$1`: the argument expands to nothing, `printenv` prints the whole
+/// environment, and the last line is some other variable's value sent as a
+/// bearer token.
 async fn login_shell_var(key: &str) -> Option<String> {
-    let valid = !key.is_empty()
-        && !key.starts_with(|c: char| c.is_ascii_digit())
-        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if !valid {
+    if !is_env_name(key) {
         return None;
     }
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let output = Command::new(shell)
-        .args(["-l", "-c", "printenv \"$1\"", "_", key])
+        .args(["-l", "-c", &format!("printenv {key}")])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -176,6 +178,14 @@ async fn login_shell_var(key: &str) -> Option<String> {
         .rev()
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_string())
+}
+
+/// A POSIX variable name and nothing else — the only thing that may reach a
+/// shell command line.
+fn is_env_name(key: &str) -> bool {
+    !key.is_empty()
+        && !key.starts_with(|c: char| c.is_ascii_digit())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Server name → fx's own `auth=` reading, off `fx mcp list`.
@@ -474,6 +484,18 @@ mod tests {
 
         assert!(to_acp(parse(bearer), &none(), &none()).is_empty());
         assert!(to_acp(parse(named), &none(), &none()).is_empty());
+    }
+
+    /// The one string that reaches a shell command line, and what it refuses:
+    /// anything a config file could smuggle past `printenv`.
+    #[test]
+    fn only_a_variable_name_reaches_the_shell() {
+        for ok in ["LINEAR_API_KEY", "_x", "A1"] {
+            assert!(is_env_name(ok), "{ok}");
+        }
+        for bad in ["", "1ABC", "A B", "A;rm", "$(x)", "A-B", "é"] {
+            assert!(!is_env_name(bad), "{bad:?}");
+        }
     }
 
     /// Every variable the config names, once, so a login shell is asked at
