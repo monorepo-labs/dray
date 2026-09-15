@@ -188,8 +188,16 @@ export default function BrowserPane({
   );
 }
 
-/// Stands in for the native view while a modal has it hidden. Fills the
-/// same rect the view did, so the capture lands with no scaling.
+/// Stands in for the native view while a modal has it hidden, and while a
+/// shot is under way. Fills the same rect the view did, so the capture
+/// lands with no scaling.
+///
+/// **A shot draws this and nothing else.** A scrim and a camera sat over it
+/// for a while, and they were the only thing anybody could see: the still
+/// is the page, pixel for pixel, so freezing it is invisible by
+/// construction and anything drawn on top is a flash where there was none.
+/// A screenshot is not an event the reader has to be told about — they
+/// asked for it, and the file lands in the transcript.
 function Snapshot({ of }: { of: BrowserSnapshot | null }) {
   if (!of?.url) return null;
   return (

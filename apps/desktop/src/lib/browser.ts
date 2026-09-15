@@ -82,11 +82,21 @@ function start() {
       }),
     );
   });
-  // `dray browser set viewport|device`: the agent's size lands in the same
-  // store the device bar writes, so the bar shows what the agent set.
-  void listen<{ sessionId: string; preset: string; width: number; height: number }>("browser_viewport", (e) => {
-    const { sessionId, preset, width, height } = e.payload;
-    setViewport(sessionId, { preset, width, height });
+  // `dray browser screenshot` opening and closing its shutter. The view
+  // hides for the shot and the page's own still stands in its place, so the
+  // reflow the capture needs happens where nobody is looking. Nothing is
+  // drawn on top of that still: it is the page pixel for pixel, so the
+  // whole shot is invisible, which is the point.
+  void listen<{ sessionId: string; shooting: boolean }>("browser_shooting", (e) => {
+    shooting = e.payload.shooting ? e.payload.sessionId : null;
+    const winner = presenter();
+    // Nothing of this session's page is on screen, so there is no reflow to
+    // hide and nothing to wait for. Answered before `present`, which in
+    // that case does no work and would leave the shot waiting on a hide
+    // that is never going to happen.
+    if (shooting && (!shown || winner?.sessionId !== shooting)) shutterReady();
+    present();
+    notify();
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
   // the browser, which leaves `null` and both surfaces silent. The listener
@@ -369,6 +379,26 @@ export type Snapshot = { sessionId: string; url: string | null };
 let snapshot: Snapshot | null = null;
 let capturing = false;
 
+/// The session whose page `dray browser screenshot` is photographing, or
+/// `null`. The capture lays the page out at the asked-for size, which is a
+/// visible reflow in the pane the reader is watching — so the view hides
+/// for the shot and the page's own still is drawn in its place. The still
+/// is what makes it a cover rather than a hole: the shutter opens *before*
+/// the override lands, so what is photographed is the page as the reader
+/// last saw it, and the swap is invisible.
+let shooting: string | null = null;
+
+/// Whether the native view is off screen: a modal landed on it, or a shot
+/// is under way on the session presenting it. One predicate, because the
+/// still, the paint callback and the layout call must all agree about it —
+/// they each asked `occluded` separately before, which left a shot drawing
+/// a still nothing would hide behind.
+function hiding(): boolean {
+  if (occluded) return true;
+  const winner = presenter();
+  return !!winner && shooting === winner.sessionId;
+}
+
 export function useBrowserSnapshot(sessionId: string): Snapshot | null {
   return useSyncExternalStore(subscribe, () => (snapshot?.sessionId === sessionId ? snapshot : null));
 }
@@ -385,7 +415,7 @@ function captureSnapshot(sessionId: string) {
     .catch(() => null)
     .then((url) => {
       capturing = false;
-      if (!occluded) return;
+      if (!hiding()) return;
       const taken: Snapshot = { sessionId, url };
       snapshot = taken;
       notify();
@@ -396,7 +426,7 @@ function captureSnapshot(sessionId: string) {
 
 /// The pane's image is decoded: two frames on so it has painted, then hide.
 export function snapshotPainted(of: Snapshot) {
-  if (snapshot !== of || !occluded) return;
+  if (snapshot !== of || !hiding()) return;
   requestAnimationFrame(() => requestAnimationFrame(present));
 }
 
@@ -419,7 +449,10 @@ function presenter(): Claim | null {
 function present() {
   const winner = presenter();
   if (winner && modalOpen && occluded === null && !shown) return;
-  if (winner && !occluded) {
+  // A shot hides the view the same way a modal does, and only for the
+  // session being photographed: another session's page is not reflowing.
+  const hidden = hiding();
+  if (winner && !hidden) {
     shown = true;
     lastSession = winner.sessionId;
     const r = winner.rect;
@@ -436,18 +469,28 @@ function present() {
     })
       .catch(() => undefined)
       .then(() => {
-        if (held && snapshot === held && !occluded) {
+        if (held && snapshot === held && !hiding()) {
           snapshot = null;
           notify();
         }
       });
   } else if (lastSession) {
     // Hold the view up until its picture is in; the capture calls back here.
-    if (occluded && winner && !snapshot) {
+    if (hidden && winner && !snapshot) {
       if (!capturing) captureSnapshot(winner.sessionId);
       return;
     }
     shown = false;
+    // Nothing claims the view, so nothing is drawing the still either — the
+    // pane that was is gone. Dropped here because the only other place that
+    // clears one is the view coming *back*, which for a withdrawn pane
+    // never happens: the picture would sit in memory until the next shot
+    // replaced it. Never where a winner remains, since there the still is
+    // what is on screen.
+    if (!winner && snapshot) {
+      snapshot = null;
+      notify();
+    }
     void invoke("browser_layout", {
       sessionId: lastSession,
       x: 0,
@@ -455,8 +498,22 @@ function present() {
       width: 0,
       height: 0,
       visible: false,
-    }).catch(() => undefined);
+    })
+      .catch(() => undefined)
+      // The shot is held until here, so it photographs a page the reader
+      // is no longer looking at. Answered after the hide lands, never
+      // before: the whole point is that the reflow happens off screen.
+      .then(shutterReady);
   }
+}
+
+/// Tells a waiting shot the page is covered. Also the answer when there is
+/// nothing to cover — no pane presenting this session, so no reflow anybody
+/// can see — since otherwise every screenshot taken with the browser tab
+/// shut would sit out the full timeout for a cover it never needed.
+function shutterReady() {
+  if (!shooting) return;
+  void invoke("browser_shutter_ready").catch(() => undefined);
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks

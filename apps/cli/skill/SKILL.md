@@ -257,7 +257,8 @@ dray browser screenshot --full                # prints the PNG's path; a path of
                                               # laid out at 1440×900 whatever the pane's width, or the last set viewport/device
 dray browser eval "document.title"
 dray browser console                          # what the page logged since last asked; `errors` for errors alone
-dray browser set device "iPhone 15"           # or: set viewport 375 667
+dray browser set device "iPhone 15"           # or: set viewport 375 667 — what screenshots are
+                                              # laid out at; the pane on screen is left alone
 dray browser tab                              # list tabs; also: tab new [url], tab <id>, tab close [id]
 dray browser back                             # also: forward, reload, close
 ```

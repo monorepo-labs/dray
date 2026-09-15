@@ -1188,6 +1188,22 @@ pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f6
     on_main(apply_layout)
 }
 
+/// The pane reporting that the page is covered and the shot may proceed —
+/// the still is painted and the view is off screen, or there was nothing of
+/// this session's page on screen to cover. Answering late is safe and
+/// answering never costs the shot its timeout, nothing more.
+///
+/// **Queued on the main thread, and that is the whole of it being true.**
+/// `browser_layout` hands `apply_layout` to `run_on_main_thread` and returns
+/// at once, so the pane's own "the hide landed" is really "the hide was
+/// asked for" — it acked, the override went on, and the reader watched the
+/// page reflow in a view still on screen. The main thread runs what it is
+/// given in order, so arriving *here* means that hide has actually run.
+#[tauri::command]
+pub fn browser_shutter_ready() {
+    let _ = on_main(automation::shutter_ready);
+}
+
 /// Loads `url` in the session's active tab, or in a new one. A tab that
 /// cannot be made is the caller's error, not a log line: the pane leaves
 /// its pending tab standing otherwise, with nothing to say why.
