@@ -72,6 +72,7 @@ pub async fn init(
     model: Option<&Model>,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    fast: bool,
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
@@ -85,6 +86,15 @@ pub async fn init(
     } else {
         next_seq_by_session_id(session_id).await?
     };
+
+    // Before the spawn, and only on one: fx reads `fast_mode` out of its
+    // settings file at `session/new` and stamps it onto the session record it
+    // keeps, where a `session/resume` then honours the stamp whatever the file
+    // says since. So this is the only moment it can be set, and a resume asking
+    // again would be a write that changes nothing.
+    if is_new_session {
+        set_fast_mode(fast).await;
+    }
 
     let bin = crate::binpath::fx().await;
     let mut command = Command::new(&bin);
@@ -184,12 +194,31 @@ pub async fn init(
         model: model.map(|m| m.id.clone()).unwrap_or_default(),
         effort,
         permission_mode,
+        fast,
         events,
         seq,
         status,
         pending_permissions: pending,
         queued,
     })
+}
+
+/// Puts fx's fast mode where the next `session/new` will read it.
+///
+/// **fx's own global setting, and there is no narrower place to put it.** ACP's
+/// `configOptions` are provider, model, mode and effort and nothing else (fx
+/// 0.0.10), `fx acp` takes `--model` and `--log-file` and nothing else, and no
+/// `FX_*` variable names it — so the settings file is the only surface, exactly
+/// as it is for the provider switch next door. The composer's row says so.
+///
+/// Best effort, deliberately. A session must not fail to start because another
+/// tool's config file could not be edited, and the cost of a failed write is a
+/// session running at ordinary speed — which is the safe direction, since the
+/// faster tier is the one that spends more.
+async fn set_fast_mode(fast: bool) {
+    if let Err(error) = models::write_setting("fast_mode", fast.into()).await {
+        eprintln!("[fx] couldn't set fast mode: {error:#}");
+    }
 }
 
 /// `initialize`, then `session/new` or `session/resume`. Answers fx's own id.

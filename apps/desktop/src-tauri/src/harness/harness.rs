@@ -305,7 +305,7 @@ mod wire_tests {
 
 #[cfg(test)]
 mod capability_tests {
-    use super::Harness;
+    use super::{FastMode, Harness};
 
     /// Claude Code is the only CLI with a worktree flag, and a harness wrongly
     /// marked here never gets a tree at all — it bails inside `Session::init`
@@ -340,6 +340,20 @@ mod capability_tests {
                 );
             }
         }
+    }
+
+    /// Each answer was captured, not chosen, and each is a different shape —
+    /// which is why one enum holds them rather than a pair of bools that could
+    /// spell a combination nothing has. Stated because the wrong arm fails
+    /// *silently*: a pick recorded in the index that never reaches the child.
+    #[test]
+    fn each_harness_reaches_fast_mode_its_own_way() {
+        assert_eq!(Harness::ClaudeCode.caps().fast_mode, FastMode::InPlace);
+        assert_eq!(Harness::Codex.caps().fast_mode, FastMode::OnSpawn);
+        assert_eq!(Harness::Fx.caps().fast_mode, FastMode::AtCreation);
+        assert_eq!(Harness::Pi.caps().fast_mode, FastMode::Unsupported);
+        assert!(!Harness::Pi.caps().fast_mode.offered());
+        assert!(Harness::Fx.caps().fast_mode.offered());
     }
 }
 
@@ -531,6 +545,49 @@ impl Harness {
     }
 }
 
+/// When a fast-mode pick can reach the child, if at all.
+///
+/// One enum rather than a pair of bools, because the four answers are not two
+/// independent questions: "offered" and "changeable" would let a harness claim
+/// a combination no CLI has, and fx's is exactly the one a bool pair spells
+/// wrong — it *has* fast mode and a running session can never be moved onto it,
+/// not even by replacing the child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FastMode {
+    /// No route to it on this CLI's wire. pi plumbs `serviceTier` through its
+    /// provider layer and populates it from nowhere: no flag, no settings key,
+    /// and `set_model`/`set_session_name` are the only setters its RPC has.
+    Unsupported,
+    /// Reaches a running child. Claude Code's `apply_flag_settings` carries
+    /// `{"fastMode": <bool>}` both ways, verified against v2.1.270 — the reply
+    /// is `success` and the next `init`/`result` reports the new state.
+    InPlace,
+    /// Rides the spawn, so changing it replaces the child.
+    ///
+    /// Codex's `serviceTier` does have a turn-level form — `turn/start` takes
+    /// it and it persists to later turns, exactly like `effort` — but
+    /// [`TurnSettings`](crate::harness::codex::TurnSettings) is fixed for the
+    /// life of the child by design, and every other Codex setting respawns for
+    /// the same reason. One more is cheaper than a second mutation path into a
+    /// struct that is cloned.
+    OnSpawn,
+    /// Settled when the session is first created and unreachable after.
+    ///
+    /// fx alone. It reads `fast_mode` out of `~/.fx/settings.json` at
+    /// `session/new` and **stamps it onto its own session record**; a
+    /// `session/resume` keeps the stamp whatever the settings file says since,
+    /// verified live. So a respawn would not move it either, and the composer
+    /// draws the row on a new session alone.
+    AtCreation,
+}
+
+impl FastMode {
+    /// Whether the reader can be offered it here at all.
+    pub fn offered(self) -> bool {
+        self != FastMode::Unsupported
+    }
+}
+
 /// What [`crate::session`] has to know about a harness, in one place.
 ///
 /// Every field here was an equality test against a *named* harness scattered
@@ -565,6 +622,8 @@ pub struct Capabilities {
     pub applies_effort_in_place: bool,
     /// Whether a running child can be moved onto another permission mode.
     pub applies_permission_in_place: bool,
+    /// Where this harness's fast mode can be reached from, if anywhere.
+    pub fast_mode: FastMode,
     /// Whether the CLI expands an `@path` mention in a prompt into the file's
     /// contents.
     ///
@@ -605,6 +664,7 @@ impl Harness {
                 applies_model_in_place: true,
                 applies_effort_in_place: false,
                 applies_permission_in_place: true,
+                fast_mode: FastMode::InPlace,
                 expands_at_mentions: true,
                 forkable: true,
                 fork_needs_cli: true,
@@ -622,6 +682,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                fast_mode: FastMode::OnSpawn,
                 expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,
@@ -641,6 +702,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                fast_mode: FastMode::Unsupported,
                 expands_at_mentions: false,
                 forkable: true,
                 fork_needs_cli: false,
@@ -659,6 +721,7 @@ impl Harness {
                 applies_model_in_place: true,
                 applies_effort_in_place: true,
                 applies_permission_in_place: true,
+                fast_mode: FastMode::AtCreation,
                 expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,
@@ -672,6 +735,7 @@ impl Harness {
                 applies_model_in_place: false,
                 applies_effort_in_place: false,
                 applies_permission_in_place: false,
+                fast_mode: FastMode::Unsupported,
                 expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,

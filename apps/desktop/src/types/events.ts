@@ -908,7 +908,17 @@ acceptsImages: boolean,
  * added. A reader who picks one from the submenu keeps it: the flag
  * decides where a row is *drawn*, never what may be run.
  */
-secondary: boolean, };
+secondary: boolean, 
+/**
+ * Whether this model has a fast mode to ask for.
+ *
+ * Per *model*, never per family, because both CLIs that have one answer it
+ * that way: Claude Code offers fast mode on Opus alone, and Codex reports
+ * `serviceTiers` row by row. A row wrongly marked here draws a switch that
+ * silently changes nothing — Codex accepts an unknown `serviceTier` with
+ * no error at all — so it follows the wire wherever the wire answers.
+ */
+supportsFast: boolean, };
 
 /**
  * What an index entry records for a session's model.
@@ -1335,6 +1345,21 @@ effort: Effort | null,
  */
 permissionMode: ApprovalPolicy, 
 /**
+ * Whether the session runs at its harness's faster tier.
+ *
+ * **A bool and not an enum, deliberately.** Every harness with a fast mode
+ * has exactly one of them — Claude Code's `fastMode` flag setting, Codex's
+ * `priority` service tier, fx's `fast_mode` — and a two-valued switch is
+ * the honest shape for all three. A variant is also what an older build
+ * sharing `~/.dray` cannot spell, which fails the line and reads the whole
+ * index as no sessions at all; `false` is what a bool degrades to there,
+ * which is a session running at ordinary speed and nothing worse.
+ *
+ * `#[serde(default)]` for that same rule: an entry written before this
+ * field reads as off rather than failing.
+ */
+fast: boolean, 
+/**
  * Defaulted so index entries written before this field parse as `Idle`.
  */
 status: SessionStatus, 
@@ -1431,6 +1456,21 @@ effort: Effort | null,
  * default rather than failing the whole index.
  */
 permissionMode: ApprovalPolicy, 
+/**
+ * Whether the session runs at its harness's faster tier.
+ *
+ * **A bool and not an enum, deliberately.** Every harness with a fast mode
+ * has exactly one of them — Claude Code's `fastMode` flag setting, Codex's
+ * `priority` service tier, fx's `fast_mode` — and a two-valued switch is
+ * the honest shape for all three. A variant is also what an older build
+ * sharing `~/.dray` cannot spell, which fails the line and reads the whole
+ * index as no sessions at all; `false` is what a bool degrades to there,
+ * which is a session running at ordinary speed and nothing worse.
+ *
+ * `#[serde(default)]` for that same rule: an entry written before this
+ * field reads as off rather than failing.
+ */
+fast: boolean, 
 /**
  * Defaulted so index entries written before this field parse as `Idle`.
  */

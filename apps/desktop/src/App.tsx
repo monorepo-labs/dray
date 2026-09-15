@@ -131,6 +131,8 @@ function App() {
     setHarness,
     modelId,
     effort,
+    fast,
+    setFast,
     permissionMode,
     projects,
     projectPath,
@@ -1785,6 +1787,8 @@ function App() {
               models={models}
               modelId={modelId}
               effort={effort}
+              fast={fast}
+              onFastChange={setFast}
               onModelChange={handleModelChange}
               onRefreshModels={refreshModels}
               onReloadModels={reloadModels}

@@ -49,6 +49,7 @@ pub async fn init(
     model: &Model,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    fast: bool,
     cwd: &str,
     // Where the session's tree lives — differs from `cwd` on a worktree
     // creation, where the child spawns at the project root but the turn's
@@ -80,6 +81,17 @@ pub async fn init(
     }
 
     args.extend(["--permission-mode", permission_mode.as_arg()]);
+
+    // Fast mode's SDK opt-in, and the reason it has to ride every spawn rather
+    // than being sent once: `flagSettings` is per process, so a resume — or the
+    // respawn an effort change makes — starts a child that has not opted in and
+    // silently drops back to standard speed. Only when on: absent is what the
+    // CLI already means by off, and the flag is a settings layer rather than a
+    // switch, so writing one to say "no" is a layer for nothing.
+    let flag_settings = fast.then(|| control::FlagSettings { fast_mode: true }.as_arg());
+    if let Some(settings) = &flag_settings {
+        args.extend(["--settings", settings]);
+    }
 
     args.extend(["--append-system-prompt", APPEND_SYSTEM_PROMPT]);
 
@@ -222,6 +234,7 @@ pub async fn init(
         model: model.id.clone(),
         effort,
         permission_mode,
+        fast,
         events,
         seq,
         status,

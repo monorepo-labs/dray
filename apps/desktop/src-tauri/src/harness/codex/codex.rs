@@ -93,10 +93,36 @@ pub struct TurnSettings {
     pub effort: Option<&'static str>,
     pub approval_policy: &'static str,
     pub sandbox: &'static str,
+    /// Which speed the turns run at: `priority` is Codex's own id for the tier
+    /// it calls "Fast", `default` is ordinary.
+    ///
+    /// **Always sent, where `effort` is omitted when unset, and the asymmetry
+    /// is the whole care.** A `serviceTier` on `turn/start` sticks to the
+    /// thread, so a turn that once asked for `priority` leaves every later turn
+    /// on it until something says otherwise — omitting the field is "keep what
+    /// you have", not "ordinary speed". Verified live: a thread started on
+    /// `priority` reported `default` again only once a turn passed that word
+    /// explicitly.
+    pub service_tier: &'static str,
 }
 
+/// Codex's id for the faster tier, as `model/list` names it in `serviceTiers`.
+///
+/// Not `fast`, which is the name of the *speed* in `additionalSpeedTiers`;
+/// `thread/start` accepts either and answers `priority` for both, so the tier's
+/// own id is what goes on the wire. An id neither of them spells is accepted
+/// with **no error at all** and simply runs the turn at ordinary speed, which
+/// is why nothing here builds one from a string.
+const FAST_TIER: &str = "priority";
+const STANDARD_TIER: &str = "default";
+
 impl TurnSettings {
-    fn new(model: &Model, effort: Option<Effort>, permission_mode: ApprovalPolicy) -> Self {
+    fn new(
+        model: &Model,
+        effort: Option<Effort>,
+        permission_mode: ApprovalPolicy,
+        fast: bool,
+    ) -> Self {
         let (approval_policy, sandbox) = approval_for(permission_mode);
 
         Self {
@@ -104,6 +130,7 @@ impl TurnSettings {
             effort: effort.map(Effort::as_arg),
             approval_policy,
             sandbox,
+            service_tier: if fast { FAST_TIER } else { STANDARD_TIER },
         }
     }
 
@@ -115,6 +142,12 @@ impl TurnSettings {
             "model": self.model,
             "approvalPolicy": self.approval_policy,
             "sandbox": self.sandbox,
+            // Honoured here, unlike `effort` — `thread/start` answers back the
+            // tier it took. Restated on every turn below all the same, since
+            // `thread/resume` is the one that drops it: a resume carrying
+            // `serviceTier` answered with whatever the thread's last turn had
+            // set, not with what was asked for.
+            "serviceTier": self.service_tier,
             "developerInstructions": DEVELOPER_INSTRUCTIONS,
         })
     }
@@ -125,6 +158,7 @@ pub async fn init(
     model: &Model,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    fast: bool,
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
@@ -134,7 +168,7 @@ pub async fn init(
     // and the kill-wrapped `open_thread` below has to be infallible, or a `?`
     // returns leaving a child nothing can reach. An unreadable log is a
     // refusal that owes the caller no process.
-    let settings = TurnSettings::new(model, effort, permission_mode);
+    let settings = TurnSettings::new(model, effort, permission_mode, fast);
     let seq_start = if is_new_session {
         0
     } else {
@@ -248,6 +282,7 @@ pub async fn init(
         model: model.id.clone(),
         effort,
         permission_mode,
+        fast,
         events,
         seq,
         status,
@@ -597,6 +632,7 @@ pub async fn start_turn(thread: &Thread, input: Value) -> Result<()> {
         "input": input,
         "model": thread.settings.model,
         "approvalPolicy": thread.settings.approval_policy,
+        "serviceTier": thread.settings.service_tier,
     });
 
     // Absent means "whatever the model defaults to", which is not the same as
@@ -1373,6 +1409,9 @@ mod tests {
     /// for `sandbox` and `approvalPolicy` are ones this build of Codex takes.
     /// That last one is why this exists — a rejected value fails the spawn and
     /// nothing else, so the first sign of it is a session that will not start.
+    /// `serviceTier` is the sharpest case of it: an id Codex does not recognise
+    /// is accepted with **no error**, so the only way to know a fast-mode
+    /// session is actually fast is to read the tier back off the answer.
     #[tokio::test]
     #[ignore = "needs codex installed and logged in"]
     async fn handshake_against_a_live_server() {
@@ -1403,7 +1442,7 @@ mod tests {
         let default = crate::models::default_model_for(Codex).expect("Codex names a default model");
         let model =
             crate::models::find_model(&default).expect("the default Codex model should be listed");
-        let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto);
+        let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto, false);
 
         let thread_id = start_thread(
             &client,
@@ -1415,6 +1454,26 @@ mod tests {
 
         assert!(!thread_id.is_empty(), "a thread id came back");
         println!("live thread: {thread_id}");
+
+        // Both halves of the fast-mode switch, read back off the server rather
+        // than assumed. A wrong or unknown tier is taken silently and runs the
+        // turn at ordinary speed, so "no error" proves nothing here.
+        for (fast, want) in [(true, FAST_TIER), (false, STANDARD_TIER)] {
+            let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto, fast);
+            let mut params = settings.thread_params();
+            params["cwd"] = json!(std::env::temp_dir().to_str().unwrap());
+
+            let answer = client
+                .request("thread/start", params)
+                .await
+                .expect("thread/start should succeed");
+
+            assert_eq!(
+                answer.get("serviceTier").and_then(Value::as_str),
+                Some(want),
+                "codex did not take the service tier we sent for fast={fast}"
+            );
+        }
 
         // The shape of Stop, checked without paying for a turn. A request
         // carrying the thread alone is refused with `missing field turnId`, so

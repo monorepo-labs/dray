@@ -93,6 +93,11 @@ struct New {
     /// The issue this work is against, like DRA-53. Repeat for several.
     #[arg(long = "issue", value_name = "ISSUE")]
     issues: Vec<String>,
+
+    /// Run at the agent's faster tier, which costs more usage. Defaults to the
+    /// calling session's setting when the agent is the same.
+    #[arg(long)]
+    fast: bool,
 }
 
 #[derive(Args)]
@@ -264,6 +269,10 @@ fn new(args: New) -> Result<(), String> {
         parent_session_id: parent_session_id(),
         from: args.from,
         issues: args.issues,
+        // Absent rather than `false`, so leaving the flag off inherits the
+        // parent's rather than turning fast mode *off* for a session spawned by
+        // one running on it. clap has no other spelling for a bare flag.
+        fast: args.fast.then_some(true),
     });
 
     match send(request)? {

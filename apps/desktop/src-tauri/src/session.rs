@@ -8,9 +8,10 @@ use crate::{
     harness::{
         claude_code::{
             self,
-            control::{ControlLine, ControlRequest},
+            control::{ControlLine, ControlRequest, FlagSettings},
             permissions::{answer_response, decision_response, PendingPermissions, Reply},
         },
+        FastMode,
     },
     issues::{self, IssueRef},
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
@@ -422,6 +423,10 @@ impl SessionManager {
         model: ModelId,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        // The composer's fast-mode pick. Where a harness cannot honour it this
+        // is clamped rather than obeyed — see `fast` below — so what reaches
+        // the index is always what the child was actually told.
+        fast: bool,
         cwd: &str,
         // Recorded, not acted on: the picker checks the branch out when the
         // user picks it, so by here the tree is already on it.
@@ -489,6 +494,13 @@ impl SessionManager {
         let effort = model_spec
             .as_ref()
             .and_then(|spec| resolve_effort(spec, effort));
+
+        // Clamped to what this harness has a route to, and clamped *here* so
+        // the index records what the child was told rather than what was asked
+        // for. pi is the one with nothing to ask, and a `true` sitting on its
+        // entry would draw a lit switch over a session running at ordinary
+        // speed for the rest of its life.
+        let fast = fast && harness.caps().fast_mode.offered();
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -601,6 +613,7 @@ impl SessionManager {
                 model,
                 effort,
                 permission_mode,
+                fast,
                 parent_session_id,
             );
             // Written with the entry rather than linked after it: the row
@@ -646,6 +659,7 @@ impl SessionManager {
                     "model": item.model.as_str(),
                     "effort": item.effort,
                     "permission_mode": item.permission_mode,
+                    "fast": item.fast,
                     "worktree": item.worktree_name.is_some(),
                     "spawned": item.parent_session_id.is_some(),
                 }),
@@ -690,6 +704,7 @@ impl SessionManager {
                 model_spec.as_ref(),
                 effort,
                 permission_mode,
+                fast,
                 spawn_cwd,
                 &session_cwd,
                 spawn_worktree,
@@ -781,6 +796,13 @@ impl SessionManager {
             (s.effort != effort && !caps.applies_effort_in_place)
                 || (s.model != model && !caps.applies_model_in_place)
                 || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
+                // Only the harness whose fast mode rides the spawn. `InPlace`
+                // is applied below without replacing anything, and `AtCreation`
+                // is fx — where a respawn would *not* move it, since a resumed
+                // fx session carries the stamp it was created with, so killing
+                // the child would cost the reader a running conversation and
+                // change nothing at all.
+                || (s.fast != fast && caps.fast_mode == FastMode::OnSpawn)
         });
 
         if respawn_needed(auth_failed, turn_in_flight, busy, settings_changed) {
@@ -825,7 +847,7 @@ impl SessionManager {
         if let Some(s) = sessions_guard.get_mut(session_id) {
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode).await?;
+            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
 
             // A model call is open, so this prompt is held rather than sent, and
             // none of the live controls below fire with it. `set_model` and
@@ -928,6 +950,9 @@ impl SessionManager {
             if caps.applies_permission_in_place && s.permission_mode != permission_mode {
                 s.set_permission_mode(permission_mode).await?;
             }
+            if caps.fast_mode == FastMode::InPlace && s.fast != fast {
+                s.set_fast(fast).await?;
+            }
 
             // Last thing before the prompt goes down the pipe: the child is idle
             // but alive, so the narrower the gap the less of the user's own
@@ -941,7 +966,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode).await?;
+        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -1017,6 +1042,7 @@ impl SessionManager {
             model_spec.as_ref(),
             effort,
             permission_mode,
+            fast,
             &spawn_cwd,
             &session_cwd,
             pending_worktree.as_deref(),
@@ -1429,6 +1455,11 @@ pub struct Session {
     pub model: ModelId,
     pub effort: Option<Effort>,
     pub permission_mode: ApprovalPolicy,
+    /// What the child was last told about fast mode — the spawn's flag for
+    /// Claude Code and Codex, and for fx the value stamped onto its session,
+    /// which nothing can move after. Compared against the composer's pick to
+    /// decide whether anything has to happen at all.
+    pub fast: bool,
     pub events: Arc<Mutex<Vec<AgentEvent>>>,
     pub seq: Arc<AtomicU64>,
     /// Shared with the stdout task: sends flip it here, `result` and
@@ -1454,6 +1485,7 @@ impl Session {
         model: Option<&Model>,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        fast: bool,
         cwd: &str,
         // The session's own tree, for the turn-end snapshot. Differs from `cwd`
         // on a worktree creation, where the child spawns at the project root.
@@ -1470,6 +1502,7 @@ impl Session {
                     model.context("a Claude Code session needs a model")?,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     worktree_name,
@@ -1499,6 +1532,7 @@ impl Session {
                     model.context("a Codex session needs a model")?,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1556,6 +1590,7 @@ impl Session {
                     model,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1769,6 +1804,27 @@ impl Session {
         )
         .await?;
         self.model = model.id.clone();
+
+        Ok(())
+    }
+
+    /// Moves a running child on or off its harness's faster tier — Claude Code
+    /// alone, whose `apply_flag_settings` carries the same `flagSettings` layer
+    /// `--settings` fills at spawn.
+    ///
+    /// `Capabilities::fast_mode` is what keeps the other three off this path:
+    /// Codex's rides its spawn, fx's is stamped on its session at creation, and
+    /// pi has none. The recorded value moves only once the write has, so a
+    /// failed control leaves the session describing what the child is still on.
+    pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
+        write_line(
+            self.stdin.lines()?,
+            &ControlLine::new(ControlRequest::ApplyFlagSettings {
+                settings: FlagSettings { fast_mode: fast },
+            }),
+        )
+        .await?;
+        self.fast = fast;
 
         Ok(())
     }

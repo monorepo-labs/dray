@@ -349,6 +349,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
         .as_ref()
         .map(|p| p.permission_mode)
         .unwrap_or_else(ApprovalPolicy::default);
+    let fast = resolve_fast(create.fast, parent.as_ref(), harness);
 
     // Resolved before anything is written, so a `--from` naming a session or a
     // ref that cannot be found costs an error rather than a session sitting in
@@ -371,6 +372,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             model,
             effort,
             permission_mode,
+            fast,
             &project_path,
             None,
             // Always. Sessions created this way are meant to run at the same
@@ -572,6 +574,17 @@ fn resolve_effort(
     Ok(parent.filter(|p| p.harness == harness).and_then(|p| p.effort))
 }
 
+/// The new session's fast mode: the flag if given, else the parent's, else off.
+///
+/// Inherited **within one harness only**, the boundary `model` and `effort`
+/// already stop at. Their reason is that the two ladders share every name while
+/// meaning different things; this one's is plainer — a `true` carried from a
+/// Claude parent onto a Codex child turns on a paid tier on another vendor's
+/// account, which is more than "run this one like me" can be read to ask for.
+fn resolve_fast(requested: Option<bool>, parent: Option<&SessionIndexItem>, harness: Harness) -> bool {
+    requested.unwrap_or_else(|| parent.is_some_and(|p| p.harness == harness && p.fast))
+}
+
 /// Sends a prompt into a session that already exists.
 ///
 /// The target's *own* recorded model, effort and permission mode are passed
@@ -613,6 +626,9 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
             target.model,
             target.effort,
             target.permission_mode,
+            // The target's own, like everything beside it: a relayed message
+            // must not move the session it arrives at onto another tier.
+            target.fast,
             &target.cwd,
             None,
             false,
@@ -754,6 +770,7 @@ mod tests {
             ModelId::new("opus"),
             Some(Effort::High),
             ApprovalPolicy::Auto,
+            false,
             parent,
         )
     }
@@ -776,6 +793,25 @@ mod tests {
             resolve_effort(Some("max"), Some(&parent), Harness::Codex).unwrap(),
             Some(Effort::Max)
         );
+    }
+
+    /// Same boundary the effort above stops at, for a nearer reason: a `true`
+    /// carried onto a child on another harness turns on a paid tier on a
+    /// different vendor's account. And the bare flag means "yes", never "no" —
+    /// `--fast` absent has to inherit, or a session spawned by one already
+    /// running fast would quietly drop to ordinary speed.
+    #[test]
+    fn fast_mode_inherits_within_one_harness_and_no_further() {
+        let mut parent = item("a", None);
+        parent.fast = true;
+
+        assert!(resolve_fast(None, Some(&parent), Harness::ClaudeCode));
+        assert!(!resolve_fast(None, Some(&parent), Harness::Codex));
+        // Named outright, it stands whatever the parent ran — both ways.
+        assert!(resolve_fast(Some(true), Some(&parent), Harness::Codex));
+        assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
+        // No parent at all is the ordinary terminal call: off.
+        assert!(!resolve_fast(None, None, Harness::ClaudeCode));
     }
 
     #[test]

@@ -22,6 +22,7 @@ function model(id: string, over: Partial<Model> = {}): Model {
     provider: provider ?? "",
     acceptsImages: true,
     secondary: false,
+    supportsFast: false,
     ...over,
   };
 }

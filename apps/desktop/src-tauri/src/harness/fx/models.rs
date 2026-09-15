@@ -150,7 +150,7 @@ pub async fn set_provider(provider: &str) -> Result<()> {
         anyhow::bail!("fx has no provider named {provider:?}");
     }
 
-    if write_active_provider(provider).await.is_err() {
+    if write_setting("provider", provider.into()).await.is_err() {
         set_provider_via_cli(provider).await?;
     }
 
@@ -165,9 +165,16 @@ pub async fn set_provider(provider: &str) -> Result<()> {
 static SETTINGS_WRITE: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-/// Sets the `provider` field in `~/.fx/settings.json`, preserving every other
-/// field. Errors — no home dir, missing or unparseable file — hand the caller
-/// back to the CLI path.
+/// Sets one field in `~/.fx/settings.json`, preserving every other. Errors —
+/// no home dir, missing or unparseable file — are the caller's to answer for:
+/// the provider switch falls back to the CLI, the fast-mode write carries on
+/// without it.
+///
+/// **Read, modify, write — never write a whole object built here.** The file is
+/// fx's, holding its provider, its per-provider model picks, its effort and its
+/// onboarding flags, and a field this build has never heard of is one it must
+/// hand back untouched. Same bargain `SessionIndexItem.unknown` makes with
+/// Dray's own index, kept for free by editing a `Value`.
 ///
 /// The replace is atomic: the new bytes go to a temp file beside the target and
 /// then `rename` over it, so fx (or any reader) sees the old file or the whole
@@ -175,7 +182,7 @@ static SETTINGS_WRITE: LazyLock<tokio::sync::Mutex<()>> =
 /// against each other; it cannot order fx's own writes, so a rewrite fx makes
 /// between this read and rename is still lost — a temp+rename shrinks that
 /// window to a single syscall.
-async fn write_active_provider(provider: &str) -> Result<()> {
+pub(super) async fn write_setting(key: &str, value: serde_json::Value) -> Result<()> {
     let _guard = SETTINGS_WRITE.lock().await;
 
     let path = std::env::home_dir()
@@ -184,10 +191,19 @@ async fn write_active_provider(provider: &str) -> Result<()> {
     let bytes = tokio::fs::read(&path).await.context("reading fx settings")?;
     let mut settings: serde_json::Value =
         serde_json::from_slice(&bytes).context("parsing fx settings")?;
-    settings
+    let fields = settings
         .as_object_mut()
-        .context("fx settings is not an object")?
-        .insert("provider".into(), provider.into());
+        .context("fx settings is not an object")?;
+
+    // Nothing to do, and that is worth checking rather than writing anyway:
+    // every fx session creation asks for the fast-mode field, and a rename over
+    // somebody else's config file is not a thing to do for no change. It also
+    // keeps the one window this cannot close — an fx write landing between the
+    // read and the rename — shut for the overwhelmingly common case.
+    if fields.get(key) == Some(&value) {
+        return Ok(());
+    }
+    fields.insert(key.to_string(), value);
 
     let dir = path.parent().context("fx settings has no parent dir")?;
     let tmp = dir.join(format!(".settings.json.dray.{}", std::process::id()));
@@ -312,6 +328,12 @@ fn id_to_model(id: String, provider: &str) -> Model {
         // `refused` to a 1×1 PNG on capture. Off until a model says otherwise.
         accepts_images: false,
         secondary: false,
+        // fx's own answer is "when the model supports it" and it publishes no
+        // list of which — `fx models --json` carries an id and a provider and
+        // nothing else. So the row is offered everywhere and fx decides: an
+        // unsupported model simply runs at its ordinary speed, which is what it
+        // does in fx's own TUI too.
+        supports_fast: true,
     }
 }
 

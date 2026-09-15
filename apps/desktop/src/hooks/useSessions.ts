@@ -12,6 +12,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
+import { fastFor } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
@@ -240,6 +241,11 @@ export function useSessions() {
     );
     const [effortByModel, setEffortByModel] = useState<EffortByModel>(() => prefs.effortByModel);
     const [permissionMode, setPermissionModeState] = useState<ApprovalPolicy>(() => prefs.permissionMode);
+    // The pick as *asked for*, not as it will be honoured. Kept whole so a trip
+    // through a model or agent with no faster tier comes back to it, exactly
+    // the way `effortByModel` keeps a level for a model not on screen; `fastFor`
+    // is what settles what actually goes out.
+    const [fastState, setFastState] = useState(() => prefs.fast);
     const [projects, setProjects] = useState<Project[]>([]);
     const [projectPath, setProjectPath] = useState<string | null>(null);
     // Derived from the selected project, not a preference — refetched on switch
@@ -308,6 +314,16 @@ const effort: Effort | null = model
     ? effortByModel[modelId] ?? model.defaultEffort ?? DEFAULT_EFFORT
     : null
   : effortByModel[modelId] ?? null;
+
+// What the composer draws and what the send carries — the pick narrowed to what
+// this agent and this model can honour. One value, so the row cannot be lit over
+// a model with no faster tier and the send cannot carry one the row never showed.
+const fast = fastFor(fastState, harness, models, modelId);
+
+const setFast = (next: boolean) => {
+  setFastState(next);
+  setPrefs({ fast: next });
+};
 
 // A null effort means "just switch to this model" — it must leave the model's
 // remembered pick alone, or coming back to Sonnet would lose the Extra High set
@@ -673,6 +689,7 @@ const handleSendMsg = async (
       model: modelId,
       effort,
       permissionMode: stanceFor(harness, permissionMode),
+      fast,
       status: "in_progress",
       forkFrom: null,
       threadId: null,
@@ -700,6 +717,11 @@ const handleSendMsg = async (
       // `dray new` inheriting it, so a stance nothing enforces is worse there
       // than on screen, where the control is at least hidden.
       permissionMode: stanceFor(harness, permissionMode),
+      // Already narrowed to this agent and model, for the same reason the
+      // stance above is: the index is read back by a later build and by
+      // `dray new` inheriting it, so a `true` nothing can honour is worse on
+      // disk than on screen.
+      fast,
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
       // worktree session, whose branch the CLI names itself.
@@ -757,7 +779,7 @@ const handleSendMsg = async (
     setSessionIndexItems((prev) =>
       prev.map((i) =>
         i.sessionId === sessionId
-          ? { ...i, model: modelId, effort, permissionMode, modified: new Date().toISOString() }
+          ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
           : i,
       ),
     );
@@ -919,6 +941,7 @@ const handleNewSession = () => {
   );
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
+  setFastState(prefs.fast);
   setUseWorktreeState(prefs.useWorktree);
   setBranch(branches?.current ?? null);
 };
@@ -951,6 +974,7 @@ const restoreSessionControls = (item: SessionIndexItem) => {
     setEffortByModel((prev) => ({ ...prev, [restored]: item.effort! }));
   }
   setPermissionModeState(item.permissionMode);
+  setFastState(item.fast);
 };
 
 const handleSelectSessionIndexItem = async (sessionId: string) => {
@@ -2232,6 +2256,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

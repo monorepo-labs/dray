@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Sliders } from "lucide-react";
+import { Check, Sliders, Zap } from "lucide-react";
 import AgentIcon from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { invoke } from "@tauri-apps/api/core";
+import { FAST_MODE_NOTE, offersFast } from "@/lib/fastMode";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
@@ -83,6 +84,9 @@ export default function ModelSelector({
   models,
   modelId,
   effort,
+  fast,
+  onFastChange,
+  isNewSession,
   onChange,
   onRefreshModels,
   onReloadModels,
@@ -98,6 +102,14 @@ export default function ModelSelector({
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
+  /// The session's fast-mode pick, as asked for rather than as clamped — the
+  /// row below is drawn only where it can be honoured, so the two agree on
+  /// screen, and `fastFor` is what settles it at the send.
+  fast: boolean;
+  onFastChange: (fast: boolean) => void;
+  /// fx's fast mode is settled when its session is created and unreachable
+  /// after, so the row it draws has to go once one exists.
+  isNewSession: boolean;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
   /// Asks the harness for its list again, dropping the backend cache first.
   /// Only pi has one that can change under the reader — the other two are
@@ -490,6 +502,33 @@ export default function ModelSelector({
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>{more.map(modelRow)}</DropdownMenuSubContent>
           </DropdownMenuSub>
+        )}
+
+        {/* Under the models and above "Choose models…", because it qualifies
+            the model the way effort does rather than being one — and inside
+            this menu rather than beside it in the toolbar, since which models
+            have a faster tier is exactly what this menu is already about.
+
+            A toggling `DropdownMenuItem` rather than a checkbox item: the menu
+            closes on the pick like every other row here, and the switch is what
+            says on or off. Drawn only where the harness *and* the model have
+            one, so it is never a control that acks and changes nothing. */}
+        {offersFast(harness, selected, isNewSession) && (
+          <DropdownMenuItem
+            className="cursor-pointer gap-2 text-ui"
+            onSelect={() => onFastChange(!fast)}
+          >
+            <Zap className={fast ? "size-3.5" : "size-3.5 text-muted-foreground"} />
+            <span className="flex flex-col">
+              Fast mode
+              {/* The vendor's own cost sentence, not ours. Codex publishes
+                  "2x speed, increased usage" on every row of `model/list`, and
+                  a switch that says only "faster" is one the reader finds out
+                  about from a bill. */}
+              <span className="text-muted-foreground/60">{FAST_MODE_NOTE[harness]}</span>
+            </span>
+            {fast && <Check className="ml-auto size-3.5 self-start" />}
+          </DropdownMenuItem>
         )}
 
         {/* No rule above it. The row is already a different shape to the models
