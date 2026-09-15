@@ -1,7 +1,8 @@
-import type { ReactNode, SyntheticEvent } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
 import { useChatSession } from "@/hooks/useChatSession";
 import { openPath } from "@/hooks/useDocs";
+import { openFile } from "@/lib/openWith";
 import { cn } from "@/lib/utils";
 
 /// A path anywhere in the chat, drawn as something that opens.
@@ -30,12 +31,13 @@ export default function FileLink({
   children,
 }: {
   /// Absolute, and already resolved. This draws whatever it is given and asks
-  /// nothing about whether the file is there: a markdown path that names
-  /// nothing opens a doc whose panel says so, and every other one falls through
-  /// to a reveal, where revealing something gone is a click that does nothing.
+  /// nothing about whether the file is there: both panels this opens into say
+  /// so in their own words, and a ⌘-click on something gone falls through to a
+  /// reveal that does nothing.
   path: string;
-  /// The line the reference named, where it named one. Honoured by an editor
-  /// and ignored by a reveal, which can only select the file.
+  /// The line the reference named, where it named one. Scrolled to and marked
+  /// in the Files view, honoured by an editor, and ignored by a reveal, which
+  /// can only select the file.
   line?: number;
   title?: string;
   /// This was a markdown link before it was a file link, so draw it as one.
@@ -49,10 +51,13 @@ export default function FileLink({
   // the link is the right answer even where it is not the selected session.
   const { sessionId } = useChatSession();
 
-  const open = (e: SyntheticEvent) => {
+  const open = (e: MouseEvent | KeyboardEvent) => {
     e.stopPropagation();
-    // Markdown opens in the Docs panel and everything else in the reader's
-    // editor. A file this app can already render is not one to leave Dray for.
+    // ⌘-click (Ctrl elsewhere) means "out there, not here" — the same thing it
+    // means on an issue row and in the link dialog — so it goes straight to the
+    // reader's own editor, line and all. A plain click stays in the app:
+    // markdown in the Docs panel, everything else in the Files view.
+    if (e.metaKey || e.ctrlKey) return void openFile(path, line);
     openPath(sessionId, path, line);
   };
 

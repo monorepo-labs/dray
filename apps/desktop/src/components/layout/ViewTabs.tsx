@@ -6,7 +6,7 @@ import type { ShortcutId } from "@/lib/shortcuts";
 /// Which view fills the main column. Set and order in one, unlike the right
 /// panel's tabs: none of these are conditional, so a Terminal view joins by
 /// being added here and given a body.
-export const VIEW_TABS = ["chat", "changes", "browser"] as const;
+export const VIEW_TABS = ["chat", "changes", "browser", "files"] as const;
 
 export type ViewTab = (typeof VIEW_TABS)[number];
 
@@ -14,6 +14,7 @@ const LABELS: Record<ViewTab, string> = {
   chat: "Chat",
   changes: "Diff",
   browser: "Browser",
+  files: "Files",
 };
 
 /// Per tab rather than by position, since a rebinding names the view and not
@@ -22,6 +23,7 @@ const VIEW_SHORTCUTS: Record<ViewTab, ShortcutId> = {
   chat: "view.chat",
   changes: "view.changes",
   browser: "view.browser",
+  files: "view.files",
 };
 
 /// The main column's tab row, drawn in the titlebar beside the session's name.

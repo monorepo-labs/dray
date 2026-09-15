@@ -10,6 +10,7 @@ import "./App.css";
 import Chat from "@/components/Chat";
 import ChangesPanel from "@/components/ChangesPanel";
 import ChangesView from "@/components/changes/ChangesView";
+import FilesView from "@/components/files/FilesView";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import DocsPanel from "@/components/DocsPanel";
@@ -73,6 +74,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
+import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -755,6 +757,9 @@ function App() {
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
   const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs(selectedSessionId);
+  // Only the counter: which files are open is the view's own business, where a
+  // doc's tab row has to exist in the panel before the panel is drawn.
+  const { opened: filesOpened } = useOpenFiles(selectedSessionId);
   const hasDocsTab = docs.length > 0;
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
@@ -1004,6 +1009,19 @@ function App() {
     setPanelTab("docs");
     setPanelOpen(true);
   }, [docsOpened, setPanelTab, setPanelOpen]);
+
+  // The same signal for the other half of a file link: a path that is not
+  // markdown opens in the Files view, which is a whole column rather than a
+  // pane, so this flips the view instead of opening one. A counter for the
+  // docs panel's reason — reopening a file already on screen leaves the list
+  // unchanged, so only a count of *clicks* can say the reader asked.
+  const lastFileOpened = useRef(filesOpened);
+  useEffect(() => {
+    if (filesOpened === lastFileOpened.current) return;
+    lastFileOpened.current = filesOpened;
+    if (!issuesOpen) setViewTab("files");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesOpened]);
 
   // A link in the transcript opens as a new tab in the session's browser and
   // brings the pane up on it, unless the full view already has it. ⌘-click,
@@ -1394,6 +1412,7 @@ function App() {
   useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
   useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
   useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
+  useHotkey("view.files", () => !issuesOpen && setViewTab("files"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
@@ -1906,6 +1925,21 @@ function App() {
             active={fullBrowserOpen}
             mode="full"
             onCollapse={collapseBrowser}
+          />
+        </TabBody>
+      )}
+
+      {selectedSession && (
+        // Keyed by session so the expanded tree resets with it. The tab strip
+        // does not: its store is per session and outlives the remount, so what
+        // comes back is that session's own files.
+        <TabBody active={!issuesOpen && viewTab === "files"}>
+          <FilesView
+            key={selectedSession.sessionId}
+            sessionId={selectedSession.sessionId}
+            cwd={selectedSession.cwd}
+            active={!issuesOpen && viewTab === "files"}
+            revision={revision}
           />
         </TabBody>
       )}

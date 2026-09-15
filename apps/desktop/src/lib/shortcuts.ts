@@ -50,6 +50,7 @@ export const SHORTCUTS = [
   { id: "view.chat", label: "Chat view", group: "Panels and views", chord: k("1", { alt: true, code: "Digit1" }) },
   { id: "view.changes", label: "Changes view", group: "Panels and views", chord: k("2", { alt: true, code: "Digit2" }) },
   { id: "view.browser", label: "Browser view", group: "Panels and views", chord: k("3", { alt: true, code: "Digit3" }) },
+  { id: "view.files", label: "Files view", group: "Panels and views", chord: k("4", { alt: true, code: "Digit4" }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
   { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },

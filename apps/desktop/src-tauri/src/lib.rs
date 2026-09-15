@@ -699,6 +699,8 @@ pub fn run() {
             list_slash_commands,
             files::warm_file_index,
             files::search_files,
+            files::list_dir,
+            files::read_file,
             store::list_session_index_items,
             store::get_session_by_id,
             projects::list_projects,

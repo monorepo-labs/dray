@@ -490,6 +490,21 @@ export type ContextWindow = { usedTokens: number, maxTokens: number, };
 export type DeltaEvent = { "delta": "block_start", block: BlockRef, blockType: BlockType, } | { "delta": "text_delta", block: BlockRef, text: string, } | { "delta": "input_delta", block: BlockRef, partialJson: string, } | { "delta": "block_stop", block: BlockRef, };
 
 /**
+ * One row in the Files view's tree.
+ */
+export type DirEntry = { name: string, 
+/**
+ * Relative to the session's directory, `/`-joined. The key the tree caches
+ * its listings under and the one it expands on, so it is the whole of what
+ * a row has to carry back.
+ */
+path: string, isDir: boolean, 
+/**
+ * Dimmed rather than hidden, the way VS Code draws one.
+ */
+ignored: boolean, };
+
+/**
  * Progress for the settings tab's bar.
  *
  * Emitted rather than returned because a download outlives the dialog that
@@ -541,6 +556,20 @@ icon: string | null, };
  * "open in Ghostty" are different asks, and a flat list of both reads as one.
  */
 export type ExternalAppKind = "editor" | "terminal" | "files";
+
+/**
+ * What the viewer draws, or the sentence saying why it draws nothing.
+ *
+ * No `unknown` catch-all, unlike the persisted types: this never reaches disk,
+ * so an older build can never be asked to read a shape it has not heard of.
+ */
+export type FileBody = { "kind": "text", text: string, } | { "kind": "image", 
+/**
+ * A `data:` URL rather than a path: the asset protocol is scoped to
+ * the attachments directory and must stay scoped, so a file anywhere
+ * else has no URL the webview can fetch.
+ */
+dataUrl: string, };
 
 export type FileChange = "add" | "update" | "delete";
 

@@ -33,7 +33,7 @@ const IMAGE_TYPES: &[(&str, &str)] = &[
 /// The API's per-image ceiling. Over it the send would be rejected outright, so
 /// the file degrades to a mention here rather than failing the turn — the model
 /// can still open it with a tool.
-const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 
 /// One thing the user attached, as the composer needs to draw it.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -76,7 +76,7 @@ pub struct Prepared {
     pub images: Vec<PreparedImage>,
 }
 
-fn image_mime(path: &Path) -> Option<&'static str> {
+pub(crate) fn image_mime(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     IMAGE_TYPES
         .iter()
