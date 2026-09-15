@@ -188,7 +188,9 @@ function renderItem(
       ? subagentById.get(item.payload.callId)
       : undefined;
 
-  return run ? (
+  // An `inline` run draws its spawning tool row, which for a harness that
+  // reports nothing about the child is the whole run — see `SubagentRun`.
+  return run && !run.inline ? (
     <SubagentRow key={item.id} run={run} onOpen={onOpenSubagent} />
   ) : (
     <EventRow

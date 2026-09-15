@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, toolLabel, toolSummary } from "./tools";
+import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, subagentBrief, toolLabel, toolSummary } from "./tools";
 
 // Every input here is a real `Skill` call taken out of `~/.dray/sessions`. The
 // harness classifies the tool as `other` and leaves `title` null, so the name
@@ -117,5 +117,98 @@ describe("mcpCall", () => {
   // still needs something to draw.
   it("falls back to the bare name", () => {
     expect(mcpCall("query", null)).toEqual({ label: "Query", detail: "query" });
+  });
+});
+
+/// fx names a call's subject under keys no other harness uses — a skill's
+/// opaque location, and an object called `request` holding the real argument —
+/// so these rows read as their wire names with nothing beside them until the
+/// two rules here fire.
+describe("fx's own tools", () => {
+  it("names a skill by the tail of its location", () => {
+    expect(
+      toolSummary("skill", "other", { location: "skill:68130a4a3e6c5614:0/find-skills" }),
+    ).toBe("find-skills");
+    expect(toolSummary("skill", "other", {})).toBe(null);
+  });
+
+  it("reads a nested request's task and query", () => {
+    expect(
+      toolSummary("subagent", "subagent_spawn", {
+        request: { action: "run", task: "Run only `pwd`" },
+      }),
+    ).toBe("Run only `pwd`");
+    expect(
+      toolSummary("read_tool_result", "other", {
+        request: { handle: "fx-command-replay-abc.bin", query: "37" },
+      }),
+    ).toBe("37");
+    // A `request` that names neither falls through rather than answering with
+    // the dispatch field beside them.
+    expect(toolSummary("subagent", "subagent_spawn", { request: { action: "run" } })).toBe(
+      null,
+    );
+  });
+
+  it("names a search by its pattern, not the directory it scoped", () => {
+    expect(
+      toolSummary("grep_files", "search", {
+        pattern: "needle",
+        path: ".",
+        include: "*.md",
+      }),
+    ).toBe("needle");
+    // Same for a glob, which ACP classifies as a read.
+    expect(toolSummary("glob_files", "file_read", { pattern: "*.txt", path: "src" })).toBe(
+      "*.txt",
+    );
+    // And a tool whose subject really is the file is untouched.
+    expect(toolSummary("read_file", "file_read", { path: "src/app.ts" })).toBe("src/app.ts");
+  });
+
+  it("conjugates its wire names", () => {
+    expect(toolLabel("grep_files", true)).toBe("Searching");
+    expect(toolLabel("web_fetch", false)).toBe("Fetched");
+    expect(toolLabel("subagent", false)).toBe("Delegated");
+    expect(toolLabel("read_tool_result", false)).toBe("Read output");
+    // The row's verb carries the noun, so the count must not say it twice.
+    expect(groupLabel("skill", 2, false)).toBe("Read 2 skills");
+    expect(groupLabel("capability_search", 3, false)).toBe("Searched 3 capabilities");
+  });
+});
+
+/// What a delegated run was asked to do, and what it was asked to do it with.
+/// The row shows a truncated task, so the brief is what the expander draws —
+/// and the model and effort are only there where the agent chose them for the
+/// child, which is exactly when they are worth a slot on the row.
+describe("subagentBrief", () => {
+  it("reads the task, model and effort out of fx's request", () => {
+    expect(
+      subagentBrief({
+        request: {
+          action: "run",
+          effort: "high",
+          model: "gpt-5.6-luna",
+          task: "Reply with exactly: hi",
+        },
+      }),
+    ).toEqual({ task: "Reply with exactly: hi", model: "gpt-5.6-luna", effort: "high" });
+  });
+
+  it("leaves model and effort null where the child took the session's own", () => {
+    expect(subagentBrief({ request: { action: "run", task: "Run `pwd`" } })).toEqual({
+      task: "Run `pwd`",
+      model: null,
+      effort: null,
+    });
+  });
+
+  // Every other harness briefs its child under a different key, and a spawn
+  // with no task at all is not a brief.
+  it("answers null for anything that nests no task", () => {
+    expect(subagentBrief({ prompt: "Review the diff" })).toBeNull();
+    expect(subagentBrief({ request: { action: "run", task: "   " } })).toBeNull();
+    expect(subagentBrief({ request: "run" })).toBeNull();
+    expect(subagentBrief(null)).toBeNull();
   });
 });

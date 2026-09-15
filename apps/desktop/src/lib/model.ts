@@ -144,7 +144,7 @@ export function usableEffort(
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "fx", "pi"];
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx"];
 
 /// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
 /// first, the same place the picker parks its thumb.
