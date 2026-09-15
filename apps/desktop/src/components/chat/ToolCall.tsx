@@ -208,12 +208,14 @@ export default function ToolCall({
   // nothing beside it — and then the row has nothing to open at all.
   const skill = name === "Skill" && !rawInput ? skillBrief(input) : null;
 
-  // A delegated run's brief is prose for the same reason, and its whole point:
-  // the row truncates the task to one line and the child was briefed in
-  // paragraphs. Null for a harness that does not nest one, which is every
-  // harness but fx.
+  // A delegated run's brief is the row's own text rather than a block under it.
+  // The brief *is* the summary here, so drawing both put the task on screen
+  // twice in the chat and three times in the panel, under a row title that is
+  // also the task. Carried whole instead — see the summary span, which stops
+  // truncating for one of these. Null for every harness but fx, which is the
+  // only one that nests a brief.
   const delegated = toolType === "subagent_spawn" && !rawInput ? subagentBrief(input) : null;
-  const brief = skill ?? delegated?.task ?? null;
+  const brief = skill;
 
   // Drawn on the row rather than behind the caret: a child put on a different
   // model or a different effort is a fact about the run, and the reader should
@@ -256,7 +258,14 @@ export default function ToolCall({
   // alone deliberately — it answers with a model's summary written for the
   // reader, not the page. A failure still shows, as everywhere here.
   const fetched = name === "web_fetch" && !failed;
-  const shownOutput = echoesViewer || echoesHeader || fetched ? "" : output;
+
+  // A delegated run reports back *to the agent*, which then says what it made
+  // of it in the next message — so drawing the report here puts the child's
+  // answer on screen twice, once as tool output and once as the conversation.
+  // A failure still shows: the agent may carry on without mentioning it, and
+  // then this is the only place the reason lives.
+  const reported = delegated !== null && !failed;
+  const shownOutput = echoesViewer || echoesHeader || fetched || reported ? "" : output;
   const shown = truncate(shownOutput, PREVIEW_CHARS);
 
   // Output stays behind the expander regardless of length. Auto-showing short
@@ -266,6 +275,10 @@ export default function ToolCall({
     Boolean(body) ||
     Boolean(shown) ||
     Boolean(brief) ||
+    // Opening a delegated run un-clamps its brief in place. Nothing else is
+    // revealed — the report is the agent's to relay — so this is the one row
+    // whose expander changes the row rather than adding anything under it.
+    delegated !== null ||
     sides !== null ||
     range !== null ||
     Boolean(edits?.length);
@@ -278,7 +291,14 @@ export default function ToolCall({
         type="button"
         disabled={!expandable}
         onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center gap-2 text-left text-chat"
+        className={cn(
+          "flex w-full gap-2 text-left text-chat",
+          // An opened brief makes the row several lines tall, and centring then
+          // floats the orb against the middle of a paragraph. Everything else
+          // here is one line, where centring is what keeps the orb and the text
+          // on the same baseline.
+          delegated && open ? "items-start" : "items-center",
+        )}
       >
         {/* The shimmer is the running state; it stops the moment the result
             lands, so a settled row is plain text again. The label carries the
@@ -290,43 +310,87 @@ export default function ToolCall({
           <Orb state="listening" size={20} aria-hidden />
         )}
 
-        {showLabel && (
-          <span
-            className={cn(
-              "shrink-0",
-              alarming ? "text-destructive" : "text-foreground/80",
-              pending && "shimmer-text",
-            )}
-          >
-            {mcp ? "MCP" : toolLabel(name, pending)}
-          </span>
-        )}
+        {/* One inline flow for a delegated run, three flex items for everything
+            else. A brief runs past the row, and as a flex item of its own its
+            second line starts where the first did — hanging off the label
+            rather than returning under it. Inside one wrapping block the label
+            is just the line's first word, so the text wraps the way a sentence
+            does. `contents` is what lets the two share this markup: it takes
+            the wrapper out of layout entirely, leaving the three spans as the
+            button's own flex items exactly as before. */}
+        <span
+          className={
+            delegated ? cn("min-w-0", !open && "max-w-fit line-clamp-1") : "contents"
+          }
+        >
+          {showLabel && (
+            <span
+              className={cn(
+                "shrink-0",
+                // A space alone is tighter than the flex gap every other row
+                // has, and the label then crowds the brief it introduces. The
+                // space stays — it is what keeps the words apart to anything
+                // reading the text rather than the pixels — and this makes up
+                // the difference.
+                delegated && "mr-1",
+                alarming ? "text-destructive" : "text-foreground/80",
+                pending && "shimmer-text",
+              )}
+            >
+              {mcp ? "MCP" : toolLabel(name, pending)}
+            </span>
+          )}
 
-        {settings && (
-          <span className="shrink-0 font-mono text-muted-foreground/70">{settings}</span>
-        )}
+          {/* Real spaces rather than the flex gap these had, because inside one
+              flow they are the words of a line: margin left the row reading
+              `Delegatinggpt 5.6 luna highReply with…` to anything that takes
+              the text rather than the pixels. */}
+          {showLabel && delegated && " "}
+
+          {settings && (
+            <span className="mr-1 shrink-0 font-mono text-muted-foreground/70">
+              {settings}
+            </span>
+          )}
+
+          {settings && delegated && " "}
 
         {/* `min-w-0` lets it shrink and `max-w-fit` stops it claiming the row's
             free space, which would push the caret out to the far right. With the
             label hidden this is the whole row, so it inherits the shimmer and
             the failure color the label would have carried. */}
-        {summary && (
-          <span
-            className={cn(
-              "min-w-0 max-w-fit truncate font-mono",
-              !showLabel && alarming ? "text-destructive" : "text-muted-foreground",
-              !showLabel && pending && "shimmer-text",
-            )}
-            title={mcp?.detail ?? target ?? undefined}
-          >
-            {/* A span, not an anchor: this sits inside the row's own expand
-                button, so nesting a second interactive element would be
-                invalid markup and the click would toggle the row instead of
-                opening anything. `stopPropagation` is what keeps the two
-                apart. */}
-            {target ? <FileLink path={target}>{fileName(target)}</FileLink> : summary}
-          </span>
-        )}
+          {/* `min-w-0` lets it shrink and `max-w-fit` stops it claiming the
+              row's free space, which would push the caret out to the far right.
+              With the label hidden this is the whole row, so it inherits the
+              shimmer and the failure color the label would have carried. */}
+          {summary && (
+            <span
+              className={cn(
+                "min-w-0 font-mono",
+                // A delegated run's brief is the whole of what the row says and
+                // is written in sentences, so opening the row lets it wrap
+                // instead of adding a block underneath — drawn twice it put the
+                // task on screen three times in the panel, whose row title is
+                // the task as well. Collapsed it is one line like every other
+                // row, clamped by the wrapper rather than here, since the label
+                // is part of that line.
+                delegated
+                  ? open && "whitespace-pre-wrap break-words"
+                  : "max-w-fit truncate",
+                !showLabel && alarming ? "text-destructive" : "text-muted-foreground",
+                !showLabel && pending && "shimmer-text",
+              )}
+              title={mcp?.detail ?? target ?? undefined}
+            >
+              {/* A span, not an anchor: this sits inside the row's own expand
+                  button, so nesting a second interactive element would be
+                  invalid markup and the click would toggle the row instead of
+                  opening anything. `stopPropagation` is what keeps the two
+                  apart. */}
+              {target ? <FileLink path={target}>{fileName(target)}</FileLink> : summary}
+            </span>
+          )}
+        </span>
 
         {/* Sits with the path rather than at the row's end, so it reads as part
             of the filename the way `git --stat` prints it. A side with no lines

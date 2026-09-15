@@ -125,6 +125,14 @@ function RunRow({
   // the button would be one the CLI answers success to and nothing happens.
   const stoppable = live && !run.done && run.taskId !== null;
 
+  // The brief a harness nests rather than streams — fx's, and the whole of what
+  // it says about the child. Null everywhere else, where the spawning call's own
+  // row is what carries the prompt.
+  const brief =
+    run.spawn?.payload.type === "tool_call_started"
+      ? (subagentBrief(run.spawn.payload.input)?.task ?? null)
+      : null;
+
   // A run whose spawn carries no brief and which has filed no events of its own
   // expands onto an empty box. Events arrive as it works, so this flips back on
   // by itself.
@@ -203,8 +211,19 @@ function RunRow({
               nothing. Expanded on arrival: it is what the reader opened the run
               for, and a second click to reach it reveals nothing they hadn't
               already asked for. */}
-          {run.spawn && hasBrief(run.spawn) && (
-            <EventRow event={run.spawn} resultByCallId={resultByCallId} openTool />
+          {/* A run whose whole account is the brief it was given draws that
+              brief, as text. The spawning call's own row would do it too, but
+              it comes with a caret of its own — a second thing to open inside
+              the pane the reader has just opened — and with a tool name and a
+              report beside it, where the row above is already the one and the
+              other is the agent's to relay. */}
+          {brief ? (
+            <p className="whitespace-pre-wrap text-ui text-sidebar-foreground">{brief}</p>
+          ) : (
+            run.spawn &&
+            hasBrief(run.spawn) && (
+              <EventRow event={run.spawn} resultByCallId={resultByCallId} openTool />
+            )
           )}
 
           {run.events.map((event) => (

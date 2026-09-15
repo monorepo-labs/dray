@@ -72,7 +72,7 @@ const CASES: {
       },
     },
     result: "hi",
-    note: "Where the agent chose a model and an effort for the child, both sit on the row — the work went somewhere else, and that should not need a click to find out. Absent otherwise, which is the common case.",
+    note: "Where the agent chose a model and an effort for the child, both sit on the row — the work went somewhere else, and that should not need a click to find out. Absent otherwise, which is the common case. The report is not drawn at all: it goes to the agent, which says what it made of it in the next message.",
   },
   {
     name: "subagent",
@@ -85,7 +85,7 @@ const CASES: {
     },
     result:
       "Completed successfully. All commands exited 0.\n\nCommands run:\n- `pwd`\n- `git branch --show-current`\n- `git status --short`\n- `mkdir .subagent-test`\n- Created `report.txt`\n",
-    note: "A long brief, real from `~/.dray/sessions`. The row truncates it to a line and the expander has it whole — a delegated task is a spec, and the half that fits beside the tool name is not the half that says what the child was for. The report below it is the whole of what fx says about the run: nothing of the child's own work streams over ACP, and its 200-character cap cuts the `{\"ok\":true,\"result\":\"…\"}` envelope mid-string, which is why it is unwrapped by shape rather than parsed.",
+    note: "A long brief, real from `~/.dray/sessions`. One line collapsed like every other row; opening it un-clamps the brief in place rather than repeating it in a block underneath, which put the task on screen twice in the chat and three times in the Subagents panel, whose row title is the task as well. It wraps back under the label, since the label is the first word of the line rather than a column beside it.",
   },
   {
     name: "shell",
