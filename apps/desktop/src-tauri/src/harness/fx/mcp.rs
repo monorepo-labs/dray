@@ -5,33 +5,18 @@
 //! servers" and fx honours it. That is what left Dray's fx sessions with none
 //! while the same machine's `fx` shell had all of them (DRA-220). So the list
 //! is read here, off `~/.fx/mcp.json`, the file `fx mcp add` writes and
-//! `fx mcp path` names. fx's docs state both halves: "ACP never inherits
-//! servers from `~/.fx/mcp.json`" and "ACP is noninteractive, so an ACP host
-//! must supply headers for a protected MCP server".
+//! `fx mcp path` names.
 //!
-//! **Dray forwards only what the user already wrote into their own fx config,
-//! plus one credential that is Dray's own.** A literal `headers` entry, or a
-//! `header_env`/`bearer_token_env` naming an environment variable. fx's OAuth
-//! credential store is never read: a server authenticated by `fx mcp auth`
-//! keeps its token in the keychain, and fx deliberately refuses to lend those
-//! credentials to an ACP-supplied server — one handed over with no usable
-//! header fails with "Authentication required; supply an Authorization header
-//! in the ACP MCP server configuration", even for a name fx itself holds a live
-//! authenticated connection for. Nor to an *approved project* server: the same
-//! entry in a workspace `.mcp.json`, trusted, logs `McpAuthenticationRequired`
-//! in an ACP session. Measured both ways. Extracting that token and
-//! re-injecting it would cross the boundary fx drew, and a snapshot access
-//! token would expire with no refresh path anyway.
-//!
-//! **Linear is the one server Dray can authenticate itself, with its own key.**
-//! `mcp.linear.app` takes an API key as `Authorization: Bearer` beside OAuth
-//! (Linear's docs say so outright), and the Issues panel already holds one the
-//! reader gave *Dray* — `~/.dray/credentials.json`, the same key already sent
-//! to that host on every panel read. So a configured server at exactly that
-//! host with no headers of its own goes over with that key. Host compared
-//! parsed and whole, scheme checked, the same bargain `is_upload` makes: the
-//! URL comes out of a config file, and a prefix match would post the key to
-//! `mcp.linear.app.evil.test`.
+//! **Dray forwards only what the user already wrote into their own fx config.**
+//! A literal `headers` entry, or a `header_env`/`bearer_token_env` naming an
+//! environment variable. fx's OAuth credential store is never read: a server
+//! authenticated by `fx mcp auth` keeps its token in the keychain, and fx
+//! deliberately refuses to lend those credentials to an ACP-supplied server —
+//! one handed over with no usable header fails with "Authentication required;
+//! supply an Authorization header in the ACP MCP server configuration", even
+//! for a name fx itself holds a live authenticated connection for. Extracting
+//! that token and re-injecting it as a header would cross the boundary fx drew,
+//! and a snapshot access token would expire with no refresh path anyway.
 //!
 //! **A headerless HTTP server is two cases the config cannot tell apart, so fx
 //! is asked.** An endpoint that wants no auth at all takes `headers: []` and
@@ -53,7 +38,6 @@
 //! names a command to execute, so honouring one would make cloning a hostile
 //! repo enough to run it, and Dray has no trust prompt to put in front of that.
 
-use crate::issues::{read_key, IssueTracker};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,33 +45,9 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Linear's MCP endpoint, the one host Dray's own key may be sent to.
-const LINEAR_MCP_HOST: &str = "mcp.linear.app";
-
 /// `~/.fx/mcp.json`, the path `fx mcp path` prints.
 fn config_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".fx/mcp.json"))
-}
-
-/// Whether `url` is Linear's MCP endpoint — host whole and scheme checked,
-/// never a prefix, since the URL is config text and names where a key goes.
-fn is_linear_mcp(url: &str) -> bool {
-    reqwest::Url::parse(url)
-        .ok()
-        .map(|u| u.scheme() == "https" && u.host_str() == Some(LINEAR_MCP_HOST))
-        .unwrap_or(false)
-}
-
-/// Everything Dray can authenticate a server with that is not in the config
-/// line itself.
-#[derive(Default)]
-struct Secrets {
-    /// Resolved values of every environment variable the config names.
-    env: BTreeMap<String, String>,
-    /// Server name → fx's own `auth=` reading, off `fx mcp list`.
-    auth: BTreeMap<String, String>,
-    /// The Issues panel's Linear key, for `mcp.linear.app` alone.
-    linear_key: Option<String>,
 }
 
 /// What fx writes under `mcp`. Entries stay `Value` so each is parsed on its
@@ -134,16 +94,15 @@ pub async fn configured_servers() -> Vec<Value> {
         return Vec::new();
     };
 
-    let mut secrets = Secrets::default();
+    let mut env = BTreeMap::new();
     for key in referenced_env(&config) {
         if let Some(value) = resolve_env(&key).await {
-            secrets.env.insert(key, value);
+            env.insert(key, value);
         }
     }
-    secrets.auth = auth_states().await;
-    secrets.linear_key = read_key(IssueTracker::Linear).await;
 
-    to_acp(config, &secrets)
+    let auth = auth_states().await;
+    to_acp(config, &env, &auth)
 }
 
 /// Every environment variable the config names, so each is resolved once.
@@ -250,9 +209,13 @@ fn parse_auth_states(listing: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The mapping, with every secret passed in so it is testable with nothing
-/// spawned and nothing read.
-fn to_acp(config: ConfigFile, secrets: &Secrets) -> Vec<Value> {
+/// The mapping, with the environment and fx's auth reading passed in so it is
+/// testable with nothing spawned.
+fn to_acp(
+    config: ConfigFile,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
+) -> Vec<Value> {
     config
         .mcp
         .into_iter()
@@ -265,15 +228,20 @@ fn to_acp(config: ConfigFile, secrets: &Secrets) -> Vec<Value> {
         // Absent means on, which is how fx reads it; only an explicit `false`
         // is a disabled server.
         .filter(|(_, server)| server.enabled.unwrap_or(true))
-        .filter_map(|(name, server)| server_to_acp(&name, server, secrets))
+        .filter_map(|(name, server)| server_to_acp(&name, server, env, auth))
         .collect()
 }
 
-fn server_to_acp(name: &str, server: ServerConfig, secrets: &Secrets) -> Option<Value> {
+fn server_to_acp(
+    name: &str,
+    server: ServerConfig,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
+) -> Option<Value> {
     match server.r#type.as_deref() {
         Some(kind @ ("http" | "sse")) => {
-            let url = server.url.clone()?;
-            let headers = headers_for(name, &url, &server, secrets)?;
+            let headers = headers_for(name, &server, env, auth)?;
+            let url = server.url?;
             Some(json!({"type": kind, "name": name, "url": url, "headers": headers}))
         }
         // Absent is stdio, fx's own default for a server added with a command.
@@ -299,13 +267,12 @@ fn server_to_acp(name: &str, server: ServerConfig, secrets: &Secrets) -> Option<
 /// shape and refuses a map with "MCP server headers must be valid unique
 /// name/value string entries". An empty array is a real answer, for a server
 /// fx reports no credentials for; a headerless server fx *does* hold
-/// credentials for is OAuth-backed and cannot be served from here — unless it
-/// is Linear's, where Dray's own key stands in.
+/// credentials for is OAuth-backed and cannot be served from here.
 fn headers_for(
     name: &str,
-    url: &str,
     server: &ServerConfig,
-    secrets: &Secrets,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
 ) -> Option<Vec<Value>> {
     let mut headers: BTreeMap<String, String> = server.headers.clone();
 
@@ -313,25 +280,14 @@ fn headers_for(
         // A named variable that is not set is a missing credential, not an
         // empty one — sending a blank header would turn a skip into a session
         // that fails to open.
-        headers.insert(header.clone(), secrets.env.get(key)?.clone());
+        headers.insert(header.clone(), env.get(key)?.clone());
     }
 
     if let Some(key) = &server.bearer_token_env {
-        headers.insert(
-            "Authorization".to_string(),
-            format!("Bearer {}", secrets.env.get(key)?),
-        );
+        headers.insert("Authorization".to_string(), format!("Bearer {}", env.get(key)?));
     }
 
-    // The reader's own config wins; Dray's key fills the gap only where the
-    // config named no credential at all.
-    if headers.is_empty() && is_linear_mcp(url) {
-        if let Some(key) = &secrets.linear_key {
-            headers.insert("Authorization".to_string(), format!("Bearer {key}"));
-        }
-    }
-
-    if headers.is_empty() && secrets.auth.get(name).map(String::as_str) != Some("none") {
+    if headers.is_empty() && auth.get(name).map(String::as_str) != Some("none") {
         return None;
     }
 
@@ -351,40 +307,16 @@ mod tests {
         serde_json::from_str(json).expect("fixture parses")
     }
 
+    fn none() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
-
-    fn nothing() -> Secrets {
-        Secrets::default()
-    }
-
-    fn with_env(pairs: &[(&str, &str)]) -> Secrets {
-        Secrets {
-            env: map(pairs),
-            ..Secrets::default()
-        }
-    }
-
-    fn with_auth(pairs: &[(&str, &str)]) -> Secrets {
-        Secrets {
-            auth: map(pairs),
-            ..Secrets::default()
-        }
-    }
-
-    fn with_linear_key(key: &str) -> Secrets {
-        Secrets {
-            linear_key: Some(key.to_string()),
-            ..Secrets::default()
-        }
-    }
-
-    /// `fx mcp add --transport http` + `fx mcp auth`, verbatim.
-    const LINEAR: &str = r#"{"mcp":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp","enabled":true,"startup_timeout_ms":30000,"operation_timeout_ms":60000}}}"#;
 
     /// The shape fx accepts for a stdio server, pinned end to end: `env` is a
     /// name/value **array**, not the map fx writes it as, and `args` is always
@@ -395,7 +327,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"probe":{"command":"node","args":["s.mjs"],"env":{"TOKEN":"t"}}}}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         assert_eq!(
@@ -417,7 +350,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"api":{"type":"http","url":"https://e.test/mcp","headers":{"Authorization":"Bearer t"}}}}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         assert_eq!(
@@ -431,75 +365,31 @@ mod tests {
         );
     }
 
-    /// The motivating case, and the one server Dray can answer for itself:
-    /// with the Issues panel connected, the reader's own Linear key rides as
-    /// the bearer. Verified live — 66 tools where the same session answered
-    /// `NO-MCP-TOOLS` with the key withheld.
+    /// The motivating case: an OAuth-authenticated HTTP server carries no
+    /// header Dray may fill, and fx will not lend its own credentials. It has
+    /// to be **skipped** — passing it fails the whole `session/new`, since
+    /// every ACP server is required. fx's own reading is what says so.
     #[test]
-    fn linear_goes_over_with_drays_own_key() {
-        let servers = to_acp(parse(LINEAR), &with_linear_key("lin_api_k"));
+    fn an_oauth_backed_http_server_is_skipped_not_passed() {
+        // `fx mcp add --transport http` + `fx mcp auth`, verbatim.
+        let config = r#"{"mcp":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp","enabled":true,"startup_timeout_ms":30000,"operation_timeout_ms":60000}}}"#;
 
-        assert_eq!(
-            servers,
-            vec![json!({
-                "type": "http",
-                "name": "linear-server",
-                "url": "https://mcp.linear.app/mcp",
-                "headers": [{"name": "Authorization", "value": "Bearer lin_api_k"}],
-            })]
-        );
-    }
+        let authenticated = map(&[("linear-server", "authenticated")]);
+        assert!(to_acp(parse(config), &none(), &authenticated).is_empty());
 
-    /// With no key stored, Linear is an OAuth-backed server like any other:
-    /// fx will not lend its credentials, and passing it fails the whole
-    /// `session/new`, so it is **skipped**. fx's own reading says so.
-    #[test]
-    fn linear_with_no_key_is_skipped_not_passed() {
-        assert!(to_acp(parse(LINEAR), &with_auth(&[("linear-server", "authenticated")])).is_empty());
         // A probe that answered nothing reads the same way: skip.
-        assert!(to_acp(parse(LINEAR), &nothing()).is_empty());
+        assert!(to_acp(parse(config), &none(), &none()).is_empty());
     }
 
-    /// The key goes to Linear's host and nowhere else. The URL is config text,
-    /// so the host is compared parsed and whole: a look-alike, a subdomain
-    /// carrying the real name as a prefix, and plain http are all refused.
-    #[test]
-    fn drays_key_is_sent_to_linears_host_alone() {
-        for url in [
-            "https://mcp.linear.app.evil.test/mcp",
-            "https://evil.test/mcp.linear.app",
-            "http://mcp.linear.app/mcp",
-            "https://linear.app/mcp",
-        ] {
-            let config = parse(&format!(r#"{{"mcp":{{"x":{{"type":"http","url":"{url}"}}}}}}"#));
-            assert!(to_acp(config, &with_linear_key("k")).is_empty(), "{url}");
-        }
-        assert!(is_linear_mcp("https://mcp.linear.app/mcp/readonly"));
-    }
-
-    /// A header the reader wrote outranks Dray's key — they chose it, and a
-    /// read-only key of their own is a real choice a stronger one must not
-    /// override.
-    #[test]
-    fn a_configured_header_outranks_drays_key() {
-        let config = parse(
-            r#"{"mcp":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp","headers":{"Authorization":"Bearer theirs"}}}}"#,
-        );
-
-        assert_eq!(
-            to_acp(config, &with_linear_key("drays"))[0]["headers"],
-            json!([{"name": "Authorization", "value": "Bearer theirs"}])
-        );
-    }
-
-    /// A headerless server fx holds no credentials for is an endpoint that
-    /// wants none, and goes over with an empty header list — which fx requires
-    /// to be present.
+    /// The other half of the same config line: a headerless server fx holds no
+    /// credentials for is an endpoint that wants none, and goes over with an
+    /// empty header list — which fx requires to be present.
     #[test]
     fn a_headerless_server_fx_holds_no_credentials_for_goes_over_with_empty_headers() {
         let servers = to_acp(
             parse(r#"{"mcp":{"local":{"type":"http","url":"http://127.0.0.1:8787/mcp"}}}"#),
-            &with_auth(&[("local", "none")]),
+            &none(),
+            &map(&[("local", "none")]),
         );
 
         assert_eq!(
@@ -539,11 +429,12 @@ mod tests {
         let servers = to_acp(
             parse(
                 r#"{"mcp":{
-                    "oauth-thing":{"type":"http","url":"https://mcp.example.test/mcp"},
+                    "linear-server":{"type":"http","url":"https://mcp.linear.app/mcp"},
                     "files":{"command":"mcp-fs"}
                 }}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);
@@ -557,19 +448,19 @@ mod tests {
         let bearer = r#"{"mcp":{"api":{"type":"http","url":"https://e.test","bearer_token_env":"TOK"}}}"#;
         let named = r#"{"mcp":{"api":{"type":"http","url":"https://e.test","header_env":{"X-Key":"TOK"}}}}"#;
 
-        let present = with_env(&[("TOK", "secret")]);
+        let present = map(&[("TOK", "secret")]);
 
         assert_eq!(
-            to_acp(parse(bearer), &present)[0]["headers"],
+            to_acp(parse(bearer), &present, &none())[0]["headers"],
             json!([{"name": "Authorization", "value": "Bearer secret"}])
         );
         assert_eq!(
-            to_acp(parse(named), &present)[0]["headers"],
+            to_acp(parse(named), &present, &none())[0]["headers"],
             json!([{"name": "X-Key", "value": "secret"}])
         );
 
-        assert!(to_acp(parse(bearer), &nothing()).is_empty());
-        assert!(to_acp(parse(named), &nothing()).is_empty());
+        assert!(to_acp(parse(bearer), &none(), &none()).is_empty());
+        assert!(to_acp(parse(named), &none(), &none()).is_empty());
     }
 
     /// Every variable the config names, once, so a login shell is asked at
@@ -599,7 +490,8 @@ mod tests {
                     "unsaid":{"command":"c"}
                 }}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         let names: Vec<_> = servers.iter().map(|s| s["name"].as_str().unwrap()).collect();
@@ -622,7 +514,8 @@ mod tests {
                     "good":{"command":"ok"}
                 }}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);
@@ -630,24 +523,18 @@ mod tests {
     }
 
     /// What this machine's own `~/.fx/mcp.json` maps to, printed rather than
-    /// asserted, **header values masked** — one of them may be a key.
-    /// Everything above reads a fixture, so it proves the mapping and nothing
-    /// about whether the reader's real file still parses through it — which is
-    /// the half a new fx release can break. Ignored by default: the answer is
-    /// whatever this machine happens to be configured with.
+    /// asserted. Everything above reads a fixture, so it proves the mapping and
+    /// nothing about whether the reader's real file still parses through it —
+    /// which is the half a new fx release can break. Ignored by default: the
+    /// answer is whatever this machine happens to be configured with.
     ///
     /// Read it beside `fx mcp list`: a server healthy there and absent here is
-    /// one Dray is skipping, and for an `auth=authenticated` HTTP server other
-    /// than Linear's that is the documented outcome, not a defect.
+    /// one Dray is skipping, and for an `auth=authenticated` HTTP server that
+    /// is the documented outcome, not a defect.
     #[tokio::test]
     #[ignore]
     async fn what_the_installed_fx_config_maps_to() {
-        for mut server in configured_servers().await {
-            if let Some(headers) = server["headers"].as_array_mut() {
-                for header in headers {
-                    header["value"] = json!("<masked>");
-                }
-            }
+        for server in configured_servers().await {
             println!("  {server}");
         }
     }
@@ -660,7 +547,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"probe":{"command":"node","policy":"optional","restart_limit":3,"trust":"approved"}},"schema_version":9}"#,
             ),
-            &nothing(),
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);
