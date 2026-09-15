@@ -128,6 +128,26 @@ That is one model switch in the TUI, and it moved **two** fields in one write: t
 
 Nothing over ACP does any of this: probed byte- and mtime-identical across `fx acp` spawn, `initialize`, `session/new`, `set_config_option` for model *and* provider, `set_mode`, `session/prompt`, exit, `fx models --json`, `fx status`, `fx doctor`, and a cross-provider `fx acp --model <id>` in all three directions. It is the TUI alone.
 
+## Fast mode is per provider, and each one answers differently
+
+Measured 2026-09-15 against fx 0.0.10. DRA-218 shipped on "fx publishes no list of which models support it"; that is true of two providers and false of the one where it matters.
+
+| provider | how fast mode is published | standing |
+|---|---|---|
+| gateway | a **separate model id** with a `-fast` suffix — 25 of its 247 ids | measured |
+| codex | offered on the model itself, and codex lists **no** `-fast` ids at all | measured, through the TUI |
+| grok | — | **untested**, not measured |
+
+So on gateway, `supports_fast(id)` is "`id` does not end in `-fast` **and** `<id>-fast` is in the list", off `Listing.ids`, which `probe` already reads. `anthropic/claude-opus-5` has a twin and takes the toggle; `anthropic/claude-fable-5.1` has none and the TUI says so and turns fast mode off. It also names `fast_mode_model_bound`: fast mode is bound to the model having a bound twin.
+
+- **A `-fast` id takes no toggle because it *is* the fast tier.** The rule answers `false` for one — there is no `…-fast-fast` — but *by accident*, so the reason belongs in the code and both directions belong in tests, or a tidy-up breaks it without failing anything.
+- **The same model answers differently by route.** Sol on the codex subscription takes a toggle; Sol through gateway is reached by picking `openai/gpt-5.6-sol-fast`. Anything written here has to be per provider and say so, or the next reader generalises one route onto the other.
+- **grok keeps `true`, and the word for that is untested.** Not measured, not inferred from codex — the two are different subscriptions and codex's answer says nothing about grok's.
+
+**The decision (DRA-224): hide every `-fast` id from the picker on gateway, never send one, and draw the toggle on a model whose twin exists.** What fx does behind that to make a base model fast is fx's own, and Dray deliberately does not model it — since no `-fast` id is ever picked, how fx routes cannot change what Dray sends. That is why the routing question in DRA-224 is closed rather than answered.
+
+**Hiding a row is not making it unrunnable, and the difference is load-bearing.** A session already created on a `-fast` id must keep naming its own model — in the composer, in the index and on the wire. The picker decides what can be *started*, never what a live session *is*, the same split `secondary` already makes for Claude Code's pinned ids.
+
 ## Reading `set_config_option`'s answers
 
 **Two traps, and together they are what stop `-32602` being misread.**
