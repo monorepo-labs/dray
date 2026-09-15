@@ -565,30 +565,48 @@ mod tests {
         assert!(codexish[0].supports_fast);
     }
 
-    /// Hidden from the picker, still runnable — the silent failure this split
-    /// exists for.
+    /// Hidden from the picker, still runnable — the silent failure the
+    /// [`list`]/[`all`] split exists for.
     ///
-    /// A session already recorded on a `-fast` id resolves through [`find`],
-    /// which reads [`all`]. Were that filtered too, `find` would answer `None`,
-    /// `init` would omit `--model` entirely and the session's own model would
-    /// be recorded as unset: the conversation moves to fx's default and forgets
-    /// which model it was having been held with, with nothing on screen or in
-    /// the log saying so.
-    #[test]
-    fn a_hidden_fast_tier_is_dropped_from_the_picker_but_still_resolves() {
-        let all = gateway_models();
-        let drawn: Vec<&Model> = all.iter().filter(|m| visible(m)).collect();
+    /// A session already recorded on a `-fast` id resolves through [`find`].
+    /// Were that reading the *filtered* list it would answer `None`, and `None`
+    /// is not a refusal that reports itself here: [`super::init`] omits
+    /// `--model` entirely and the session's own model is recorded as unset, so
+    /// the conversation moves to fx's default and forgets which model it had
+    /// been held with, with nothing on screen or in the log saying so.
+    ///
+    /// **Goes through the real [`list`] and [`find`]**, because which of the
+    /// two `find` reads is the entire thing being guarded: a test asserting
+    /// over a `Vec` built here still passes with `find` reverted to `list`,
+    /// which would leave every recorded `-fast` session unresolvable and
+    /// nothing failing.
+    ///
+    /// Seeded through [`CACHE`] under whatever key [`all`] computes on this
+    /// machine, since the peek is the first thing it does — ahead of
+    /// [`known_models`] and of any probe, so no `fx` is spawned and the answer
+    /// does not depend on which provider the reader happens to be on.
+    #[tokio::test]
+    async fn a_hidden_fast_tier_is_dropped_from_the_picker_but_still_resolves() {
+        let key = active_provider().await.unwrap_or_default();
+        CACHE.insert(&key, gateway_models());
 
+        let drawn = list().await;
         assert_eq!(drawn.len(), 3, "both -fast twins are kept out of the picker");
         assert!(!drawn.iter().any(|m| is_fast_tier(&m.arg)));
 
-        // What `find` does, against the list `list` does not draw.
         let recorded = ModelId::new("openai/gpt-5.6-sol-fast");
-        let found = all
-            .iter()
-            .find(|m| m.id == recorded)
+        assert!(
+            !drawn.iter().any(|m| m.id == recorded),
+            "the picker does not draw the row this session is recorded on",
+        );
+
+        let found = find(&recorded)
+            .await
             .expect("a session recorded on a fast tier still resolves");
         assert_eq!(found.arg, "openai/gpt-5.6-sol-fast", "and names its own model");
+        assert!(!found.supports_fast, "it is the fast tier, so there is no toggle on it");
+
+        CACHE.forget();
 
         // A row off the gateway is never filtered, whatever it is called.
         assert!(visible(&ids_to_models(vec!["gpt-fast".to_string()], "codex")[0]));
