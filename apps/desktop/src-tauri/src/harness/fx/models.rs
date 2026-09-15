@@ -13,11 +13,17 @@
 //! `configOptions` on capture: codex offers `auto low medium high xhigh max
 //! ultra`, gateway stops at `xhigh`. `auto` is fx's own default and is what an
 //! unset effort leaves it on.
+//!
+//! Fast mode, by contrast, **is** in this list: the gateway names a fast tier
+//! as a model of its own with `-fast` on the end, so [`supports_fast`] is a
+//! lookup in the ids already in hand and [`visible`] keeps the twins out of the
+//! picker.
 
 use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::process::Command;
@@ -29,12 +35,29 @@ const FRESH_FOR: Duration = Duration::from_secs(120);
 
 static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::new(FRESH_FOR));
 
-/// Every model fx reports for its active provider, newest answer or cached.
+/// Every model fx reports for its active provider that the picker should draw.
+///
+/// [`visible`] is the difference between this and [`all`], and the split is
+/// load-bearing rather than tidy: a row kept out of the menu must still be
+/// runnable, so [`find`] reads the unfiltered list.
+pub async fn list() -> Vec<Model> {
+    all().await.into_iter().filter(visible).collect()
+}
+
+/// Every model fx reports for its active provider, hidden rows included,
+/// newest answer or cached.
+///
+/// **For resolving an id that already exists, never for offering a choice.**
+/// [`list`] is the one to reach for anywhere a reader is being shown models;
+/// this one is for [`find`] alone, whose job is to answer for a model some
+/// session is *already recorded on* — including a gateway `-fast` id the
+/// picker deliberately does not draw. Offering from here would put the twins
+/// back in the menu, which is the whole thing [`visible`] exists to stop.
 ///
 /// Failure answers an empty list rather than an error: the picker draws its
 /// own empty state, and a reader with no provider logged in is in an ordinary
 /// state rather than a broken one.
-pub async fn list() -> Vec<Model> {
+async fn all() -> Vec<Model> {
     let key = active_provider().await.unwrap_or_default();
 
     // A real probe already cached for this provider wins over the static table
@@ -112,22 +135,30 @@ fn known_models(provider: &str) -> Option<Vec<Model>> {
         "grok" => &["grok-4.6", "grok-4.5"],
         _ => return None,
     };
-    Some(
-        ids.iter()
-            .map(|id| id_to_model(id.to_string(), provider))
-            .collect(),
-    )
+    Some(ids_to_models(
+        ids.iter().map(|id| id.to_string()).collect(),
+        provider,
+    ))
 }
 
 /// The model with this id, from whatever fx last reported. `None` for the
 /// unset sentinel — fx picking for itself — and for an id the active provider
 /// does not serve. The second is not refused here: fx's own sentence on the
 /// first prompt names exactly what was wrong.
+///
+/// Reads [`all`] and not [`list`], and that is the whole reason the two exist.
+/// **Hiding a row from the picker must not make it unspawnable.** A session
+/// already recorded on a gateway `-fast` id has to keep running and keep naming
+/// its own model, and `None` here is not a refusal that says so: it is what
+/// makes [`super::init`] omit `--model` altogether and record the session's
+/// model as *unset*. So the session would quietly move onto fx's own default
+/// and forget which model it had been having its conversation with — invisible
+/// on screen, silent in the log. Codex's hidden rows make the same bargain.
 pub async fn find(id: &ModelId) -> Option<Model> {
     if id.is_unset() {
         return None;
     }
-    list().await.into_iter().find(|m| &m.id == id)
+    all().await.into_iter().find(|m| &m.id == id)
 }
 
 /// Drops the cached answer, so the next read asks fx again.
@@ -297,11 +328,7 @@ async fn probe() -> Result<Vec<Model>> {
         .or_else(|| listing.models.first().map(|r| provider_key(&r.source)))
         .unwrap_or_default();
 
-    Ok(listing
-        .ids
-        .into_iter()
-        .map(|id| id_to_model(id, &provider))
-        .collect())
+    Ok(ids_to_models(listing.ids, &provider))
 }
 
 /// The provider `fx provider` last wrote, read from `~/.fx/settings.json`.
@@ -314,8 +341,80 @@ async fn active_provider() -> Option<String> {
     settings.get("provider")?.as_str().map(str::to_string)
 }
 
-fn id_to_model(id: String, provider: &str) -> Model {
+/// A provider's whole id list as models.
+///
+/// Mapped over the set rather than one id at a time because [`supports_fast`]
+/// is a lookup *in* that set — a model's fast tier is another row in the same
+/// list, so nothing can answer for one id alone.
+fn ids_to_models(ids: Vec<String>, provider: &str) -> Vec<Model> {
+    let siblings: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    ids.iter()
+        .map(|id| id_to_model(id.clone(), provider, &siblings))
+        .collect()
+}
+
+/// The gateway's own spelling of a fast tier.
+const FAST_SUFFIX: &str = "-fast";
+
+fn is_fast_tier(id: &str) -> bool {
+    id.ends_with(FAST_SUFFIX)
+}
+
+/// Whether a row is drawn in the picker at all.
+///
+/// The gateway's `-fast` twins are not. They are the same models in another
+/// gear, so listing them puts 25 models in twice — once as a model and once as
+/// a mode — and picking one directly gives fast speed with an inert fast-mode
+/// toggle beside it, which reads as broken. The toggle on the base model is the
+/// way to reach them, and whatever fx does behind the scenes to serve one is
+/// fx's business.
+///
+/// **Scoped to gateway, not to the suffix.** codex and grok list no `-fast` id
+/// today, so a filter on the suffix alone would be a no-op — which is exactly
+/// what makes it the wrong code to leave behind. The day a provider ships a
+/// model legitimately named something-fast it would vanish from the picker with
+/// nobody able to say why.
+///
+/// **Hidden is not unrunnable** — see [`find`], which reads the unfiltered list.
+fn visible(model: &Model) -> bool {
+    !(model.provider == "gateway" && is_fast_tier(&model.arg))
+}
+
+/// Whether this model has a faster tier to ask for — per provider, because only
+/// one of them publishes the answer.
+///
+/// **gateway names its fast tiers as models**, a separate id with `-fast` on
+/// the end, 25 of the 247 on the probe box. So a model has fast mode exactly
+/// where its twin is in the list: `anthropic/claude-opus-5` has one and fx's
+/// TUI offers the toggle, `anthropic/claude-fable-5.1` has none and the TUI
+/// says *"This model does not come with a fast mode"* and turns fast mode off.
+/// Unlike the effort ladder next door, no session is needed to learn this and
+/// there is nothing to announce — the list Dray already fetches *is* the answer.
+///
+/// **A `-fast` id itself takes no toggle, because it *is* the fast tier** — not
+/// because it lacks one. The twin lookup would answer `false` for it anyway,
+/// since no `…-fast-fast` exists, but only by accident: that is the list
+/// happening not to hold a row where the real reason is what the id means. Its
+/// own arm, so a tidy-up deleting it as redundant fails a test.
+///
+/// **The rule stops at the gateway boundary, measured.** codex lists no `-fast`
+/// id and `gpt-5.6-sol` on that subscription *does* offer the toggle in the
+/// TUI, so the twin rule applied there would mark every model as having no fast
+/// mode. grok is **untested** — nobody has checked either half — and keeps
+/// `true` for codex's reason rather than on a measurement of its own.
+fn supports_fast(id: &str, provider: &str, siblings: &HashSet<&str>) -> bool {
+    if provider != "gateway" {
+        return true;
+    }
+    if is_fast_tier(id) {
+        return false;
+    }
+    siblings.contains(format!("{id}{FAST_SUFFIX}").as_str())
+}
+
+fn id_to_model(id: String, provider: &str, siblings: &HashSet<&str>) -> Model {
     Model {
+        supports_fast: supports_fast(&id, provider, siblings),
         id: ModelId::new(&id),
         label: id.clone(),
         efforts: ladder_for(provider),
@@ -328,12 +427,6 @@ fn id_to_model(id: String, provider: &str) -> Model {
         // `refused` to a 1×1 PNG on capture. Off until a model says otherwise.
         accepts_images: false,
         secondary: false,
-        // fx's own answer is "when the model supports it" and it publishes no
-        // list of which — `fx models --json` carries an id and a provider and
-        // nothing else. So the row is offered everywhere and fx decides: an
-        // unsupported model simply runs at its ordinary speed, which is what it
-        // does in fx's own TUI too.
-        supports_fast: true,
     }
 }
 
@@ -373,11 +466,7 @@ mod tests {
     #[test]
     fn ids_become_models_under_the_active_provider() {
         let listing: Listing = serde_json::from_str(CODEX_LISTING).unwrap();
-        let models: Vec<Model> = listing
-            .ids
-            .into_iter()
-            .map(|id| id_to_model(id, "codex"))
-            .collect();
+        let models = ids_to_models(listing.ids, "codex");
 
         assert_eq!(models.len(), 5);
         assert!(models.iter().all(|m| m.provider == "codex"));
@@ -391,11 +480,7 @@ mod tests {
         let listing: Listing = serde_json::from_str(GATEWAY_LISTING).unwrap();
         assert!(listing.models.is_empty(), "gateway sends no models array");
 
-        let models: Vec<Model> = listing
-            .ids
-            .into_iter()
-            .map(|id| id_to_model(id, "gateway"))
-            .collect();
+        let models = ids_to_models(listing.ids, "gateway");
 
         assert_eq!(models.len(), 3);
         assert!(models.iter().all(|m| m.provider == "gateway"));
@@ -415,6 +500,98 @@ mod tests {
 
         // gateway's list is discovered, so it falls through to the probe.
         assert!(known_models("gateway").is_none());
+    }
+
+    /// The real gateway shape for fast tiers: a twin is a row of its own,
+    /// beside the model it makes fast. Opus has one, Fable does not.
+    const GATEWAY_FAST_LISTING: &str = r#"{"kind":"models","ids":["anthropic/claude-opus-5","anthropic/claude-opus-5-fast","anthropic/claude-fable-5.1","openai/gpt-5.6-sol","openai/gpt-5.6-sol-fast"]}"#;
+
+    fn gateway_models() -> Vec<Model> {
+        let listing: Listing = serde_json::from_str(GATEWAY_FAST_LISTING).unwrap();
+        ids_to_models(listing.ids, "gateway")
+    }
+
+    fn model<'a>(models: &'a [Model], arg: &str) -> &'a Model {
+        models.iter().find(|m| m.arg == arg).expect("model is listed")
+    }
+
+    /// A gateway model has fast mode exactly where the list carries its twin.
+    /// fx's TUI offers the toggle on `claude-opus-5` and refuses it on
+    /// `claude-fable-5.1`, which is the pair this reproduces.
+    #[test]
+    fn a_gateway_model_has_fast_mode_where_its_twin_is_listed() {
+        let models = gateway_models();
+
+        assert!(model(&models, "anthropic/claude-opus-5").supports_fast);
+        assert!(model(&models, "openai/gpt-5.6-sol").supports_fast);
+        assert!(
+            !model(&models, "anthropic/claude-fable-5.1").supports_fast,
+            "no twin in the list, so fx turns fast mode off for it",
+        );
+    }
+
+    /// A `-fast` id takes no toggle **because it is the fast tier**, not
+    /// because the list happens to hold no `…-fast-fast` beside it.
+    ///
+    /// The twin lookup alone answers `false` here by accident, so this feeds it
+    /// a list where the accident does not hold: with `…-fast-fast` present, a
+    /// rule that were only a twin lookup would light the toggle on a row that
+    /// already *is* the fast tier.
+    #[test]
+    fn a_fast_tier_is_refused_for_being_one_not_for_want_of_a_twin() {
+        assert!(!gateway_models()[1].supports_fast, "claude-opus-5-fast");
+
+        let contrived = ids_to_models(
+            vec!["x/m-fast".to_string(), "x/m-fast-fast".to_string()],
+            "gateway",
+        );
+        assert!(
+            !contrived[0].supports_fast,
+            "a fast tier takes no toggle even where a twin of it is listed",
+        );
+    }
+
+    /// The rule stops at the gateway. codex offers fast mode and lists no
+    /// `-fast` id, so a twin lookup applied there would mark every model as
+    /// having none — the whole reason this is per provider.
+    #[test]
+    fn the_twin_rule_does_not_reach_the_subscription_providers() {
+        assert!(known_models("codex").unwrap().iter().all(|m| m.supports_fast));
+        assert!(known_models("grok").unwrap().iter().all(|m| m.supports_fast));
+
+        // And the suffix means nothing off the gateway: a codex model named
+        // this way keeps its toggle rather than being read as a tier.
+        let codexish = ids_to_models(vec!["gpt-fast".to_string()], "codex");
+        assert!(codexish[0].supports_fast);
+    }
+
+    /// Hidden from the picker, still runnable — the silent failure this split
+    /// exists for.
+    ///
+    /// A session already recorded on a `-fast` id resolves through [`find`],
+    /// which reads [`all`]. Were that filtered too, `find` would answer `None`,
+    /// `init` would omit `--model` entirely and the session's own model would
+    /// be recorded as unset: the conversation moves to fx's default and forgets
+    /// which model it was having been held with, with nothing on screen or in
+    /// the log saying so.
+    #[test]
+    fn a_hidden_fast_tier_is_dropped_from_the_picker_but_still_resolves() {
+        let all = gateway_models();
+        let drawn: Vec<&Model> = all.iter().filter(|m| visible(m)).collect();
+
+        assert_eq!(drawn.len(), 3, "both -fast twins are kept out of the picker");
+        assert!(!drawn.iter().any(|m| is_fast_tier(&m.arg)));
+
+        // What `find` does, against the list `list` does not draw.
+        let recorded = ModelId::new("openai/gpt-5.6-sol-fast");
+        let found = all
+            .iter()
+            .find(|m| m.id == recorded)
+            .expect("a session recorded on a fast tier still resolves");
+        assert_eq!(found.arg, "openai/gpt-5.6-sol-fast", "and names its own model");
+
+        // A row off the gateway is never filtered, whatever it is called.
+        assert!(visible(&ids_to_models(vec!["gpt-fast".to_string()], "codex")[0]));
     }
 
     #[test]
