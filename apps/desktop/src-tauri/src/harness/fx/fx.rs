@@ -91,9 +91,19 @@ pub struct FxSession {
     /// [`parser::ConfigOptions::model_effort_levels`] for why this is the
     /// place that may, and the model list is not.
     efforts: Arc<std::sync::Mutex<Option<Vec<Effort>>>>,
-    /// Whether [`SYSTEM_PROMPT`] still has to ride a prompt. True on a
-    /// creation and false on every resume, since a resumed thread already
-    /// carries the turn that took it.
+    /// Whether [`SYSTEM_PROMPT`] still has to ride a prompt.
+    ///
+    /// **Not `is_new_session`, and the gap is a real one.** `open_session`
+    /// records fx's thread id *before* the first prompt, so an `init` failing
+    /// after it — a refused stance, a child dying — leaves a session that
+    /// resumes onto a thread no prompt ever reached. Read off
+    /// `is_new_session` alone, that retry resumes with the flag already false
+    /// and the rules are lost for the life of the conversation.
+    ///
+    /// So a resume that has logged nothing counts as owing them too. The
+    /// signal is already on disk: [`crate::session`] writes `user_message`
+    /// before the send, so `seq` still at 0 means no prompt was ever
+    /// delivered and the rules cannot have gone with one.
     preamble: Arc<AtomicBool>,
 }
 
@@ -255,7 +265,7 @@ pub async fn init(
         id: fx_id,
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
         efforts: Arc::new(std::sync::Mutex::new(None)),
-        preamble: Arc::new(AtomicBool::new(is_new_session)),
+        preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
     };
     note_config(&session, &config, None, app);
 
@@ -695,6 +705,16 @@ pub async fn set_mode(session: &FxSession, mode: ApprovalPolicy) -> Result<()> {
     Ok(())
 }
 
+/// Whether this spawn still owes [`SYSTEM_PROMPT`] — see [`FxSession::preamble`].
+///
+/// A creation always does. A resume does only where nothing has ever been
+/// logged for the session, which is the shape an `init` that failed after
+/// `session/new` leaves: a thread id on the index, an empty conversation, and
+/// a retry that would otherwise resume with the rules already written off.
+fn owes_preamble(is_new_session: bool, seq_start: u64) -> bool {
+    is_new_session || seq_start == 0
+}
+
 /// The reader's text with [`SYSTEM_PROMPT`] behind it, wrapped in
 /// [`PREAMBLE_TAG`] so where the rules start and stop is mechanical.
 ///
@@ -1125,6 +1145,21 @@ mod tests {
         assert!(sent.trim_end().ends_with("</dray_system_prompt>"));
         // The rules themselves, not just an empty envelope.
         assert!(sent.contains("You run inside Dray"));
+    }
+
+    /// A resume that has logged nothing never delivered a prompt, so it still
+    /// owes the rules — the state an `init` failing after `session/new`
+    /// leaves, where reading `is_new_session` alone lost them for good.
+    #[test]
+    fn a_resume_onto_a_thread_no_prompt_reached_still_owes_the_rules() {
+        assert!(owes_preamble(true, 0));
+        // The failed-creation retry: thread id recorded, nothing logged.
+        assert!(owes_preamble(false, 0));
+        // An ordinary resume — `user_message` is logged before the send, so a
+        // conversation that ran has moved the counter and took the rules with
+        // its first turn.
+        assert!(!owes_preamble(false, 1));
+        assert!(!owes_preamble(false, 420));
     }
 
     /// fx's refusal names the server in quotes, and that is the whole match:
