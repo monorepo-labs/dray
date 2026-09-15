@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -50,7 +50,7 @@ pub async fn read_doc(path: String) -> Result<String, String> {
         return Err(TOO_LARGE.to_string());
     }
 
-    let bytes = read_capped(&path).await?;
+    let bytes = read_capped(&path, MAX_DOC).await?;
     // Withheld rather than mangled: `from_utf8_lossy` would swap every invalid
     // byte for U+FFFD and draw a confident view of a file that never existed —
     // which the reader could then save back over the real one.
@@ -94,7 +94,7 @@ pub async fn save_doc(
     }
 
     if let Some(base) = expect {
-        let current = read_capped(&path).await?;
+        let current = read_capped(&path, MAX_DOC).await?;
         if current != base.as_bytes() {
             return Ok(SaveOutcome::Stale);
         }
@@ -104,15 +104,22 @@ pub async fn save_doc(
     Ok(SaveOutcome::Saved)
 }
 
-/// The live watcher, held so it is not dropped — dropping one stops it.
+/// The live watchers, held so they are not dropped — dropping one stops it.
 ///
-/// One for the whole panel, replaced outright whenever the open set changes.
-/// Re-arming is cheaper to get right than adding and removing paths one at a
-/// time, and the set is a handful of files.
-static WATCH: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
+/// One per **scope**, never one for the app: the Docs panel and the Files view
+/// each hold their own open set, and a single watcher replaced outright by
+/// whichever opened last would silently take the other's watch away. The
+/// `doc_changed` event stays shared, since each listener already filters on the
+/// paths it holds.
+///
+/// Within a scope the watcher is still replaced outright whenever that set
+/// changes. Re-arming is cheaper to get right than adding and removing paths
+/// one at a time, and the set is a handful of files.
+static WATCH: LazyLock<Mutex<HashMap<String, RecommendedWatcher>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Watches the panel's open docs, emitting `doc_changed` with the path of any
-/// that moves. An empty list stops watching.
+/// Watches one scope's open docs, emitting `doc_changed` with the path of any
+/// that moves. An empty list stops watching that scope alone.
 ///
 /// **The watch is on each file's parent directory, not on the file.** A save is
 /// usually a write to a temp file and a rename over the target — what every
@@ -123,10 +130,10 @@ static WATCH: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
 /// Best effort throughout: a path whose directory cannot be watched is skipped,
 /// and the panel is left with the Refresh button it already had.
 #[tauri::command]
-pub fn watch_docs(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+pub fn watch_docs(app: AppHandle, scope: String, paths: Vec<String>) -> Result<(), String> {
     let mut held = WATCH.lock().map_err(|e| e.to_string())?;
     if paths.is_empty() {
-        *held = None;
+        held.remove(&scope);
         return Ok(());
     }
 
@@ -157,7 +164,7 @@ pub fn watch_docs(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    *held = Some(watcher);
+    held.insert(scope, watcher);
     Ok(())
 }
 
@@ -208,22 +215,23 @@ fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>)
 }
 
 /// One sentence for both directions: a file too large to open is also one too
-/// large to write, and the reader meets the same limit either way.
-const TOO_LARGE: &str = "File is too large to open here.";
+/// large to write, and the reader meets the same limit either way. Shared with
+/// the Files view, which reads to a larger cap and says the same sentence.
+pub(crate) const TOO_LARGE: &str = "File is too large to open here.";
 
-/// Reads at most `MAX_DOC`, refusing anything longer rather than truncating it.
+/// Reads at most `cap`, refusing anything longer rather than truncating it.
 ///
 /// Reading one byte past the cap is what tells the two apart: a full buffer on
 /// its own only says the file is *at least* this long.
-async fn read_capped(path: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn read_capped(path: &str, cap: u64) -> Result<Vec<u8>, String> {
     let file = fs::File::open(path).await.map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.take(MAX_DOC + 1)
+    file.take(cap + 1)
         .read_to_end(&mut bytes)
         .await
         .map_err(|e| e.to_string())?;
 
-    if bytes.len() as u64 > MAX_DOC {
+    if bytes.len() as u64 > cap {
         return Err(TOO_LARGE.to_string());
     }
     Ok(bytes)

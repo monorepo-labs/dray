@@ -3,8 +3,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { openInFiles } from "@/hooks/useOpenFiles";
 import { isMarkdownPath } from "@/lib/markdown";
-import { openFile } from "@/lib/openWith";
 import type { SaveOutcome } from "@/types/events";
 
 /// Whether the reader is reading the file or writing it. Per doc, not one
@@ -188,16 +188,19 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 
 /// What a click on a path in the transcript does.
 ///
-/// Markdown is something this app already renders, so handing it to an external
-/// editor would be a trip out of Dray to read a file Dray can show. Everything
-/// else falls through to the reader's own editor, unchanged.
+/// Neither kind leaves Dray any more: markdown opens in the Docs panel, which
+/// renders and edits it, and everything else opens in the Files view, which
+/// highlights it and takes the line the link named. A file this app can already
+/// show is not one to leave the app for — and the reader who wants their own
+/// editor asks for it by ⌘-clicking, which [FileLink](../components/chat/FileLink.tsx)
+/// answers with `openFile` before this is ever reached.
 ///
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
-/// store would put the docs feature's own rule somewhere it cannot be read from.
+/// store would put this rule somewhere it cannot be read from.
 export function openPath(sid: string | null, path: string, line?: number): void {
   if (isMarkdownPath(path)) return openDoc(sid, path);
-  void openFile(path, line);
+  openInFiles(sid, path, line);
 }
 
 /// Opens a markdown file in the panel, reading it if it is not already open.
@@ -465,7 +468,12 @@ function getVersion() {
 let watching: Promise<unknown> = Promise.resolve();
 
 function watch(paths: string[]): Promise<unknown> {
-  watching = watching.then(() => invoke("watch_docs", { paths })).catch(() => {});
+  watching = watching
+    // Scoped, since the Files view holds its own open set: one watcher for both
+    // would mean whichever panel opened last silently took the other's watch
+    // away.
+    .then(() => invoke("watch_docs", { scope: "docs", paths }))
+    .catch(() => {});
   return watching;
 }
 

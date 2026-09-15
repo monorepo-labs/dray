@@ -19,18 +19,24 @@
 //! without a restart.
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use fff_search::{
     FFFMode, FilePicker, FilePickerOptions, FileSearchConfig, FuzzySearchOptions, PaginationArgs,
     QueryParser, SharedFilePicker, SharedFrecency,
 };
 use serde::Serialize;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    path::Path,
+    process::Stdio,
     sync::{Mutex, OnceLock},
     time::Duration,
 };
+use tokio::{io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
 
+use crate::attachments::{image_mime, MAX_IMAGE_BYTES};
+use crate::docs::{read_capped, TOO_LARGE};
 use crate::Fail;
 
 /// One row in the picker. `path` is relative to the indexed directory, which is
@@ -207,6 +213,222 @@ fn search(cwd: &str, query: &str, limit: usize) -> Result<Vec<FileMatch>> {
         .collect())
 }
 
+/// One row in the Files view's tree.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    /// Relative to the session's directory, `/`-joined. The key the tree caches
+    /// its listings under and the one it expands on, so it is the whole of what
+    /// a row has to carry back.
+    pub path: String,
+    pub is_dir: bool,
+    /// Dimmed rather than hidden, the way VS Code draws one.
+    pub ignored: bool,
+}
+
+/// Dropped from every listing: VS Code's `files.exclude` defaults, and nothing
+/// else. `node_modules` and `target` list like any other directory — the ignore
+/// flag is what says they are not the reader's own work, and hiding them
+/// outright would make the view lie about what is on disk.
+const HIDDEN: &[&str] = &[".git", ".svn", ".hg", ".DS_Store", "Thumbs.db"];
+
+/// Past this a file is refused rather than read. Four times the doc panel's cap
+/// and for a different reason: a lockfile is the file most likely opened here,
+/// and the renderer already falls back to plain text past 100KB, so the cost of
+/// a big one is scrolling rather than freezing.
+const MAX_FILE: u64 = 4 << 20;
+
+/// One directory's entries, directories first and then case-insensitive by
+/// name — which is VS Code's order, and the one anybody arriving from an editor
+/// reads without being told.
+///
+/// `dir` is relative to `cwd`, empty for the root. A directory that cannot be
+/// read answers with the reason, since the tree has a row to draw it in.
+#[tauri::command]
+pub async fn list_dir(cwd: String, dir: String) -> Result<Vec<DirEntry>, String> {
+    let target = if dir.is_empty() {
+        Path::new(&cwd).to_path_buf()
+    } else {
+        Path::new(&cwd).join(&dir)
+    };
+
+    let mut reader = tokio::fs::read_dir(&target)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+    while let Some(entry) = reader.next_entry().await.map_err(|e| e.to_string())? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if HIDDEN.contains(&name.as_str()) {
+            continue;
+        }
+
+        // Read off the link's *target*, so a symlinked directory expands like
+        // any other and a broken link lists as a file rather than as a folder
+        // that answers nothing when opened.
+        let is_dir = tokio::fs::metadata(entry.path())
+            .await
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false);
+
+        let path = if dir.is_empty() {
+            name.clone()
+        } else {
+            format!("{dir}/{name}")
+        };
+
+        entries.push(DirEntry {
+            name,
+            path,
+            is_dir,
+            ignored: false,
+        });
+    }
+
+    sort_entries(&mut entries);
+    mark_ignored(&cwd, &mut entries).await;
+    Ok(entries)
+}
+
+/// Directories first, then case-insensitive by name, with the raw name as the
+/// tie-break so two entries differing only in case keep a stable order.
+fn sort_entries(entries: &mut [DirEntry]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+/// Flags the entries git ignores, in one spawn for the whole listing.
+///
+/// `check-ignore` answers nested `.gitignore`s, `.git/info/exclude` and the
+/// user's global ignore together, which is why this is a process rather than
+/// the single-file matcher the `ignore` crate already in the lock file offers.
+/// Exit 1 means "none of them", which is an answer; only a directory that is no
+/// repository, or a git that will not run, leaves every flag as it was — and
+/// nothing dimmed is the right picture there.
+async fn mark_ignored(cwd: &str, entries: &mut [DirEntry]) {
+    if entries.is_empty() {
+        return;
+    }
+
+    let mut input = String::new();
+    for entry in entries.iter() {
+        input.push_str(&entry.path);
+        input.push('\0');
+    }
+
+    let Ok(mut child) = Command::new("git")
+        .args(["check-ignore", "--stdin", "-z"])
+        .current_dir(cwd)
+        // A listing shouldn't contend with a background index refresh.
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+
+    // Written from its own task, since git streams its answer as it reads: on a
+    // directory big enough to fill both pipes, writing the whole input first
+    // and only then draining stdout is a deadlock. The pipe is dropped at the
+    // end of the task, which is what lets git see EOF and exit.
+    let mut pipe = child.stdin.take();
+    let writing = tokio::spawn(async move {
+        if let Some(mut pipe) = pipe.take() {
+            let _ = pipe.write_all(input.as_bytes()).await;
+        }
+    });
+
+    let out = child.wait_with_output().await;
+    let _ = writing.await;
+
+    let Ok(out) = out else { return };
+    let ignored: HashSet<&str> = std::str::from_utf8(&out.stdout)
+        .unwrap_or_default()
+        .split('\0')
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    for entry in entries.iter_mut() {
+        entry.ignored = ignored.contains(entry.path.as_str());
+    }
+}
+
+/// What the viewer draws, or the sentence saying why it draws nothing.
+///
+/// No `unknown` catch-all, unlike the persisted types: this never reaches disk,
+/// so an older build can never be asked to read a shape it has not heard of.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FileBody {
+    Text {
+        text: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Image {
+        /// A `data:` URL rather than a path: the asset protocol is scoped to
+        /// the attachments directory and must stay scoped, so a file anywhere
+        /// else has no URL the webview can fetch.
+        data_url: String,
+    },
+}
+
+/// Reads one file for the viewer, or names why it can't.
+///
+/// `read_doc`'s three checks — metadata first, a capped read, UTF-8 refused
+/// rather than mangled — against a larger cap, with images answered before the
+/// text branch since their bytes are never text.
+#[tauri::command]
+pub async fn read_file(path: String) -> Result<FileBody, String> {
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| "No file at this path.".to_string())?;
+    if !meta.is_file() {
+        return Err("Not a file — nothing to show here.".to_string());
+    }
+
+    if let Some(mime) = viewable_image(Path::new(&path)) {
+        if meta.len() > MAX_IMAGE_BYTES {
+            return Err(TOO_LARGE.to_string());
+        }
+        let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+        return Ok(FileBody::Image {
+            data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
+        });
+    }
+
+    if meta.len() > MAX_FILE {
+        return Err(TOO_LARGE.to_string());
+    }
+
+    let bytes = read_capped(&path, MAX_FILE).await?;
+    String::from_utf8(bytes)
+        .map(|text| FileBody::Text { text })
+        .map_err(|_| "Not text — nothing to show.".to_string())
+}
+
+/// The image types this view draws.
+///
+/// [`image_mime`]'s table is the *model's* — what the API accepts as an image
+/// block — plus SVG, which the API refuses and a webview renders perfectly
+/// well. Kept as one extra arm rather than a second table, so a type added for
+/// the composer arrives here too.
+fn viewable_image(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if ext == "svg" {
+        return Some("image/svg+xml");
+    }
+    image_mime(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +537,136 @@ mod tests {
             "second search took {:?}, so the index was rebuilt",
             started.elapsed()
         );
+    }
+
+    fn scratch() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dray-files-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Directories first, then case-insensitively by name — the order is the
+    /// whole of what a tree's rows are arranged by, and a plain byte sort puts
+    /// every capital ahead of every lowercase name.
+    #[tokio::test]
+    async fn lists_directories_first_then_by_name_ignoring_case() {
+        let dir = scratch();
+        for name in ["beta.txt", "Alpha.txt", "zed.txt"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        for name in ["src", "Assets"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+        }
+
+        let entries = list_dir(dir.to_str().unwrap().into(), String::new())
+            .await
+            .unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, ["Assets", "src", "Alpha.txt", "beta.txt", "zed.txt"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The exclusion list is what keeps a repository's own plumbing out of a
+    /// tree of the reader's files. Nothing else is hidden — `node_modules` is
+    /// dimmed, not dropped.
+    #[tokio::test]
+    async fn drops_the_vcs_directory_and_the_desktop_droppings() {
+        let dir = scratch();
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::create_dir(dir.join("node_modules")).unwrap();
+        std::fs::write(dir.join(".DS_Store"), "x").unwrap();
+        std::fs::write(dir.join("Thumbs.db"), "x").unwrap();
+        std::fs::write(dir.join("keep.txt"), "x").unwrap();
+
+        let entries = list_dir(dir.to_str().unwrap().into(), String::new())
+            .await
+            .unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, ["node_modules", "keep.txt"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The flag is read from git itself, so this asserts against a real
+    /// `.gitignore` in a real repository rather than against a matcher of ours.
+    #[tokio::test]
+    async fn flags_what_git_ignores() {
+        let dir = scratch();
+        let cwd = dir.to_str().unwrap().to_string();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&cwd)
+            .status()
+            .is_ok_and(|s| s.success()));
+        std::fs::write(dir.join(".gitignore"), "build/\n*.log\n").unwrap();
+        std::fs::create_dir(dir.join("build")).unwrap();
+        std::fs::write(dir.join("run.log"), "x").unwrap();
+        std::fs::write(dir.join("keep.txt"), "x").unwrap();
+
+        let entries = list_dir(cwd, String::new()).await.unwrap();
+        let ignored: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.ignored)
+            .map(|e| e.name.as_str())
+            .collect();
+
+        assert_eq!(ignored, ["build", "run.log"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The cap is the whole of what stops the viewer pulling a multi-gigabyte
+    /// file across the bridge, and a file one byte over it has to be refused
+    /// rather than truncated into something that reads as the file.
+    #[tokio::test]
+    async fn refuses_a_file_over_the_cap() {
+        let dir = scratch();
+        let path = dir.join("huge.txt");
+        std::fs::write(&path, vec![b'a'; MAX_FILE as usize + 1]).unwrap();
+
+        assert!(read_file(path.to_str().unwrap().into()).await.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An image is bytes, so it must never reach the UTF-8 branch — and an SVG
+    /// is an image here though the composer's own table calls it a file.
+    #[tokio::test]
+    async fn reads_an_image_as_a_data_url() {
+        let dir = scratch();
+        let png = dir.join("shot.png");
+        std::fs::write(&png, [0x89, b'P', b'N', b'G']).unwrap();
+        let svg = dir.join("mark.svg");
+        std::fs::write(&svg, "<svg/>").unwrap();
+
+        let body = read_file(png.to_str().unwrap().into()).await.unwrap();
+        let FileBody::Image { data_url } = body else {
+            panic!("a png read as text");
+        };
+        assert!(data_url.starts_with("data:image/png;base64,"), "{data_url}");
+
+        let body = read_file(svg.to_str().unwrap().into()).await.unwrap();
+        assert!(
+            matches!(body, FileBody::Image { data_url } if data_url.starts_with("data:image/svg+xml;base64,")),
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Bytes that are not text are refused rather than mangled, the reading
+    /// `read_doc` takes — `from_utf8_lossy` would draw a confident view of a
+    /// file that never existed.
+    #[tokio::test]
+    async fn refuses_bytes_that_are_not_text() {
+        let dir = scratch();
+        let path = dir.join("blob.bin");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+
+        assert!(read_file(path.to_str().unwrap().into()).await.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
