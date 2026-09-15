@@ -1020,11 +1020,8 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the
     // scroll offset from the metrics.
-    let (size, metrics) = tokio::join!(
-        eval(tab, "({ w: innerWidth, h: innerHeight })"),
-        cdp(tab, "Page.getLayoutMetrics", json!({}))
-    );
-    let (size, metrics) = (size?, metrics?);
+    let size = eval(tab, "({ w: innerWidth, h: innerHeight })").await?;
+    let metrics = cdp(tab, "Page.getLayoutMetrics", json!({})).await?;
     let vp = &metrics["cssVisualViewport"];
     let clip = json!({
         "x": vp["pageX"], "y": vp["pageY"],

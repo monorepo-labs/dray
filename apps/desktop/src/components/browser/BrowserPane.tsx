@@ -195,7 +195,6 @@ function Snapshot({ url }: { url: string | null }) {
     <img
       src={url}
       alt=""
-      decoding="sync"
       className="absolute inset-0 h-full w-full"
       onLoad={(e) => {
         void e.currentTarget

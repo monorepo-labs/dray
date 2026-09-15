@@ -132,7 +132,7 @@ function judgeOcclusion() {
   if (!modalOpen || occluded) return;
   const view = presenter()?.rect;
   if (!view) return;
-  const open = Array.from(document.querySelectorAll(OPEN_SURFACES));
+  const open = [...document.querySelectorAll(OPEN_SURFACES)];
   occluded =
     open.length === 0 ||
     open.some((el) => {
@@ -344,8 +344,8 @@ export function setViewport(sessionId: string, viewport: Viewport | null) {
 type Claim = { priority: number; sessionId: string; rect: DOMRectReadOnly };
 const claims = new Map<string, Claim>();
 let modalOpen = false;
-/// Something open lands on the view, judged once per modal; the view hides
-/// only while both hold.
+/// Something open lands on the view, judged once per modal and cleared with
+/// it, so this alone says whether the view hides.
 let occluded = false;
 let lastSession: string | null = null;
 
@@ -361,11 +361,9 @@ export function useBrowserSnapshot(sessionId: string): string | null {
 
 /// Captured *before* the view hides, so the pane never blanks; a menu over
 /// the page lands a few frames late instead. Capped so a stuck capture
-/// cannot leave that menu under the view. The hide then waits on
-/// `snapshotPainted` from the mounted `<img>` itself: WebKit keeps no
-/// decoded cache for a data URL, so decoding a detached `Image` first
-/// bought nothing and the pane's own element still decoded async after the
-/// view had gone. A pane that never mounts one hides on the fallback clock.
+/// cannot leave that menu under the view. WebKit keeps no decoded cache for
+/// a data URL, so the hide waits on the mounted `<img>` itself, with a
+/// fallback clock for a pane that never mounts one.
 function captureSnapshot(sessionId: string) {
   capturing = true;
   const timeout = new Promise<null>((r) => setTimeout(() => r(null), 400));
@@ -373,7 +371,7 @@ function captureSnapshot(sessionId: string) {
     .catch(() => null)
     .then((url) => {
       capturing = false;
-      if (!(modalOpen && occluded)) return;
+      if (!occluded) return;
       snapshot = { sessionId, url };
       notify();
       if (url) setTimeout(() => snapshotPainted(url), 500);
@@ -383,7 +381,7 @@ function captureSnapshot(sessionId: string) {
 
 /// The pane's image is decoded: two frames on so it has painted, then hide.
 export function snapshotPainted(url: string) {
-  if (snapshot?.url !== url || !(modalOpen && occluded)) return;
+  if (snapshot?.url !== url || !occluded) return;
   requestAnimationFrame(() => requestAnimationFrame(present));
 }
 
@@ -404,8 +402,7 @@ function presenter(): Claim | null {
 
 function present() {
   const winner = presenter();
-  const hidden = modalOpen && occluded;
-  if (winner && !hidden) {
+  if (winner && !occluded) {
     lastSession = winner.sessionId;
     const r = winner.rect;
     // The picture stays until the view is back over it, or the pane is a
@@ -421,14 +418,14 @@ function present() {
     })
       .catch(() => undefined)
       .then(() => {
-        if (shown && snapshot === shown && !(modalOpen && occluded)) {
+        if (shown && snapshot === shown && !occluded) {
           snapshot = null;
           notify();
         }
       });
   } else if (lastSession) {
     // Hold the view up until its picture is in; the capture calls back here.
-    if (hidden && winner && !snapshot) {
+    if (occluded && winner && !snapshot) {
       if (!capturing) captureSnapshot(winner.sessionId);
       return;
     }
