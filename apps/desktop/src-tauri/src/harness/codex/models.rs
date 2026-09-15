@@ -93,6 +93,11 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
         provider: String::new(),
         accepts_images: true,
         secondary: true,
+        // Nothing here names the model, so nothing here knows whether it has a
+        // faster tier. Off: a switch drawn over a guess is accepted silently by
+        // `turn/start`, where an absent one only costs a model nobody has
+        // heard of its speed.
+        supports_fast: false,
     })
 }
 
@@ -175,8 +180,8 @@ async fn probe() -> Result<Vec<Model>> {
 }
 
 /// One row of `model/list`, which answers far more than this — an upgrade
-/// notice, a first-run blurb, service tiers. Only what the picker draws and what
-/// a spawn needs is read.
+/// notice, a first-run blurb, a personality flag. Only what the picker draws and
+/// what a spawn needs is read.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Row {
@@ -190,6 +195,19 @@ struct Row {
     supported_reasoning_efforts: Vec<Rung>,
     #[serde(default)]
     input_modalities: Vec<String>,
+    /// The speeds this model can be run at above its ordinary one — `["fast"]`
+    /// on every row captured so far, and the two spellings are one thing: the
+    /// name here is `fast` while the tier it selects is `priority`, which is
+    /// what `serviceTier` takes. Both are read because either alone would be a
+    /// guess about which one a later Codex drops.
+    #[serde(default)]
+    additional_speed_tiers: Vec<String>,
+    /// Left untyped because only its *length* is read. Codex's own `id`, `name`
+    /// and `description` are drawn nowhere — the switch says one thing and the
+    /// wording beside it is Dray's — and a shape typed for a field nobody reads
+    /// is one more way for a changed row to cost the whole picker.
+    #[serde(default)]
+    service_tiers: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,7 +292,33 @@ fn row_to_model(row: &Row, at: usize) -> Model {
         provider: String::new(),
         accepts_images: accepts_images(row),
         secondary: at >= TOP_LEVEL,
+        supports_fast: supports_fast(row),
     }
+}
+
+/// Whether this row has a faster tier to ask for.
+///
+/// **Absent means no, the opposite reading to `accepts_images` next door, and
+/// the asymmetry is the point.** A wrongly offered attachment is refused with
+/// Codex's own sentence; a wrongly offered speed switch is *accepted silently*
+/// — `turn/start` takes an unknown `serviceTier` with no error, records it on
+/// the thread and runs the turn at ordinary speed — so a fast mode that does
+/// nothing looks exactly like one that works.
+///
+/// Which is why the question is **"does it offer the tier the spawn sends"**
+/// and not "does it offer any tier". The spawn sends the literal
+/// [`FAST_TIER`](super::FAST_TIER) whatever this answers, so a model serving
+/// some other tier and nothing else would draw a switch that changes nothing at
+/// all. Both spellings are checked because Codex publishes both and either
+/// alone would be a guess about which one it keeps.
+fn supports_fast(row: &Row) -> bool {
+    row.additional_speed_tiers
+        .iter()
+        .any(|speed| speed == super::FAST_SPEED)
+        || row
+            .service_tiers
+            .iter()
+            .any(|tier| tier.get("id").and_then(Value::as_str) == Some(super::FAST_TIER))
 }
 
 fn display_name(row: &Row) -> String {
@@ -458,6 +502,49 @@ mod tests {
 
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].efforts, vec![Effort::High]);
+    }
+
+    /// Every row of the real capture offers the `priority` tier, so the whole
+    /// picker draws the switch.
+    #[test]
+    fn the_capture_says_every_model_has_a_faster_tier() {
+        let models = read_rows(&captured());
+
+        assert!(!models.is_empty());
+        assert!(models.iter().all(|m| m.supports_fast), "{models:#?}");
+    }
+
+    /// Absent means no, the opposite reading to `acceptsImages` beside it: a
+    /// `serviceTier` Codex does not recognise is accepted with no error and the
+    /// turn runs at ordinary speed, so a wrongly offered switch is
+    /// indistinguishable from a working one.
+    #[test]
+    fn a_row_naming_no_tier_offers_no_fast_mode() {
+        let rows = json!({"data": [
+            {"id": "plain"},
+            {"id": "speed-only", "additionalSpeedTiers": ["fast"]},
+            {"id": "tier-only", "serviceTiers": [{"id": "priority"}]},
+            // A tier that is not the one the spawn sends. The switch would run
+            // every turn at ordinary speed and say nothing about it.
+            {"id": "some-other-tier", "additionalSpeedTiers": ["turbo"],
+             "serviceTiers": [{"id": "flex"}]},
+        ]});
+
+        let models = read_rows(&rows);
+        let offered: Vec<(&str, bool)> = models
+            .iter()
+            .map(|m| (m.arg.as_str(), m.supports_fast))
+            .collect();
+
+        assert_eq!(
+            offered,
+            [
+                ("plain", false),
+                ("speed-only", true),
+                ("tier-only", true),
+                ("some-other-tier", false),
+            ]
+        );
     }
 
     /// A list longer than one page is paged, not halved — and the tier is

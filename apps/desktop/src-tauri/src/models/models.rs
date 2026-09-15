@@ -199,6 +199,15 @@ pub struct Model {
     /// decides where a row is *drawn*, never what may be run.
     #[serde(default)]
     pub secondary: bool,
+    /// Whether this model has a fast mode to ask for.
+    ///
+    /// Per *model*, never per family, because both CLIs that have one answer it
+    /// that way: Claude Code offers fast mode on Opus alone, and Codex reports
+    /// `serviceTiers` row by row. A row wrongly marked here draws a switch that
+    /// silently changes nothing — Codex accepts an unknown `serviceTier` with
+    /// no error at all — so it follows the wire wherever the wire answers.
+    #[serde(default)]
+    pub supports_fast: bool,
 }
 
 impl Model {
@@ -219,6 +228,7 @@ impl Model {
             provider: String::new(),
             accepts_images: true,
             secondary: false,
+            supports_fast: false,
         }
     }
 
@@ -226,6 +236,14 @@ impl Model {
     fn under_more(self) -> Self {
         Self {
             secondary: true,
+            ..self
+        }
+    }
+
+    /// Marks the row as having a fast mode.
+    fn with_fast(self) -> Self {
+        Self {
+            supports_fast: true,
             ..self
         }
     }
@@ -254,7 +272,11 @@ pub fn claude_models() -> Vec<Model> {
 
     vec![
         Model::new("fable", "fable", "Fable 5.1", all.clone(), Some(High)),
-        Model::new("opus", "opus", "Opus 5", all.clone(), Some(High)),
+        // Opus alone, and that is the CLI's own rule rather than a choice here:
+        // it gates fast mode on the resolved model naming `opus-5` or
+        // `opus-4-8`, and reports `fast_mode_state: "off"` beside a reason for
+        // anything else. Verified against v2.1.270.
+        Model::new("opus", "opus", "Opus 5", all.clone(), Some(High)).with_fast(),
         Model::new(
             "claude-fable-5",
             "claude-fable-5",
@@ -290,6 +312,10 @@ pub fn codex_models() -> Vec<Model> {
     let all = vec![Low, Medium, High, Xhigh, Max];
     let with_ultra = vec![Low, Medium, High, Xhigh, Max, Ultra];
 
+    // Fast on every row, which is what `model/list` answers — each one carries
+    // `serviceTiers: [{id: "priority", name: "Fast", …}]`, Luna and the hidden
+    // rows included. This table is only what a missing or broken `codex` leaves
+    // the picker drawing; a real read overwrites it row by row.
     vec![
         Model::new(
             "gpt6_astra",
@@ -297,14 +323,16 @@ pub fn codex_models() -> Vec<Model> {
             "Astra",
             with_ultra.clone(),
             Some(Medium),
-        ),
+        )
+        .with_fast(),
         Model::new(
             "gpt56_sol",
             "gpt-5.6-sol",
             "Sol",
             with_ultra.clone(),
             Some(Medium),
-        ),
+        )
+        .with_fast(),
         Model::new(
             "gpt56_terra",
             "gpt-5.6-terra",
@@ -312,8 +340,11 @@ pub fn codex_models() -> Vec<Model> {
             with_ultra,
             Some(Medium),
         )
+        .with_fast()
         .under_more(),
-        Model::new("gpt56_luna", "gpt-5.6-luna", "Luna", all, Some(Medium)).under_more(),
+        Model::new("gpt56_luna", "gpt-5.6-luna", "Luna", all, Some(Medium))
+            .with_fast()
+            .under_more(),
     ]
 }
 
@@ -773,6 +804,30 @@ mod wire_tests {
         assert_eq!(
             serde_json::to_string(&ModelId::new("opus")).unwrap(),
             "\"opus\""
+        );
+    }
+
+    /// Opus alone, which is the CLI's own gate rather than a taste — it refuses
+    /// fast mode to anything whose resolved model does not name `opus-5` or
+    /// `opus-4-8`. Pinned because `send_msg` clamps the pick against this: a row
+    /// wrongly marked here would persist `fast: true` on a session running at
+    /// ordinary speed, and `dray new` hands that down to every child.
+    #[test]
+    fn claude_offers_fast_mode_on_opus_alone() {
+        let offered: Vec<(String, bool)> = claude_models()
+            .into_iter()
+            .map(|m| (m.id.to_string(), m.supports_fast))
+            .collect();
+
+        assert_eq!(
+            offered,
+            [
+                ("fable".to_string(), false),
+                ("opus".to_string(), true),
+                ("claude-fable-5".to_string(), false),
+                ("sonnet".to_string(), false),
+                ("haiku".to_string(), false),
+            ]
         );
     }
 }

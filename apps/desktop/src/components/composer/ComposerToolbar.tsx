@@ -30,6 +30,13 @@ type ComposerToolbarProps = {
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
+  /// Whether the session runs at its agent's faster tier. Sits beside the model
+  /// rather than in a control of its own: it is per *model* on both agents that
+  /// have one, so the picker that names the model is where it belongs.
+  fast: boolean;
+  onFastChange: (fast: boolean) => void;
+  /// What the harness said about fast mode last turn, if it said anything.
+  fastNote: string | null;
   onModelChange: (modelId: ModelId, effort: Effort | null) => void;
   onRefreshModels: () => void;
   onReloadModels: () => void;
@@ -82,6 +89,9 @@ export default function ComposerToolbar({
   models,
   modelId,
   effort,
+  fast,
+  fastNote,
+  onFastChange,
   onModelChange,
   onRefreshModels,
   onReloadModels,
@@ -135,6 +145,10 @@ export default function ComposerToolbar({
         models={models}
         modelId={modelId}
         effort={effort}
+        fast={fast}
+        fastNote={fastNote}
+        onFastChange={onFastChange}
+        isNewSession={isNewSession}
         onChange={onModelChange}
         onRefreshModels={onRefreshModels}
         onReloadModels={onReloadModels}

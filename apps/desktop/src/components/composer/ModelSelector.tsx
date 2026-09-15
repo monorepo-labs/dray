@@ -22,12 +22,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { invoke } from "@tauri-apps/api/core";
+import { offersFast } from "@/lib/fastMode";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
@@ -83,6 +85,10 @@ export default function ModelSelector({
   models,
   modelId,
   effort,
+  fast,
+  onFastChange,
+  fastNote,
+  isNewSession,
   onChange,
   onRefreshModels,
   onReloadModels,
@@ -98,6 +104,17 @@ export default function ModelSelector({
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
+  /// The session's fast-mode pick, as asked for rather than as clamped — the
+  /// row below is drawn only where it can be honoured, so the two agree on
+  /// screen, and `fastFor` is what settles it at the send.
+  fast: boolean;
+  onFastChange: (fast: boolean) => void;
+  /// The harness's own sentence about fast mode on the newest turn, drawn under
+  /// the row. Never reconciled into `fast` above — see `fastNotice`.
+  fastNote: string | null;
+  /// fx's fast mode is settled when its session is created and unreachable
+  /// after, so the row it draws has to go once one exists.
+  isNewSession: boolean;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
   /// Asks the harness for its list again, dropping the backend cache first.
   /// Only pi has one that can change under the reader — the other two are
@@ -306,6 +323,13 @@ export default function ModelSelector({
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
+              {/* The second qualifier on the model, drawn exactly like the
+                  first: its *presence* is what says fast mode is on, so colour
+                  would be a second way to say one thing — and an accent here
+                  competes with the yellow the sidebar spends on sessions
+                  wanting the reader. A glyph was the other try; among two words
+                  it read as a badge stuck on the label. */}
+              {fast && <span className="text-muted-foreground/60">Fast</span>}
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -476,6 +500,55 @@ export default function ModelSelector({
                 ? "No models available"
                 : "No models shortlisted yet"}
           </p>
+        )}
+
+        {/* Straight under the models it qualifies, and above "More models",
+            which is a *fold of the same list* — putting this between the list
+            and its own continuation would read as the fold belonging to it.
+            Inside this menu rather than beside it in the toolbar, since which
+            models have a faster tier is what this menu is already about.
+
+            A real switch and not a check: every other row here is a *pick* out
+            of a set, where this is one thing on or off, and a tick that appears
+            and disappears says that in half the space and none of the clarity.
+            No glyph either — the rows above carry none, and one here would make
+            this look like a model with a mark rather than a control. Drawn only
+            where the harness *and* the model have one, so it is never a control
+            that acks and changes nothing. */}
+        {offersFast(harness, selected, isNewSession) && (
+          <>
+            <DropdownMenuItem
+              className="cursor-pointer text-ui"
+              // The row is the control and the switch is its picture: a `Switch`
+              // that took its own click would fire beside this one and toggle
+              // twice. So the state is stated here — `role`/`aria-checked` over
+              // the item's own `menuitem` — and the track below is inert.
+              role="switch"
+              aria-checked={fast}
+              // Held open, unlike every other row in this menu. A switch that
+              // vanishes on the press never shows the reader which way it went,
+              // and a second thought about it costs reopening the picker.
+              onSelect={(e) => {
+                e.preventDefault();
+                onFastChange(!fast);
+              }}
+            >
+              Fast mode
+              <Switch checked={fast} tabIndex={-1} aria-hidden className="pointer-events-none ml-auto" />
+            </DropdownMenuItem>
+
+            {/* The harness's own sentence, verbatim — "Fast mode disabled ·
+                usage credits exhausted" says the whole thing, so nothing here
+                frames it. Under the switch only while the switch is on: it is
+                there to explain a lit control that changed nothing, and beside
+                an off one it would be a stale complaint about a setting the
+                reader has already left. Not a `DropdownMenuItem` — there is
+                nothing to pick, and one would take arrow focus on the way past
+                the row it belongs to. */}
+            {fastNote && fast && (
+              <p className="px-2 pb-1.5 text-ui text-muted-foreground">{fastNote}</p>
+            )}
+          </>
         )}
 
         {/* A submenu rather than a second block under a heading, because the

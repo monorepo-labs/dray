@@ -8,9 +8,10 @@ use crate::{
     harness::{
         claude_code::{
             self,
-            control::{ControlLine, ControlRequest},
+            control::{ControlLine, ControlRequest, FlagSettings},
             permissions::{answer_response, decision_response, PendingPermissions, Reply},
         },
+        FastMode,
     },
     issues::{self, IssueRef},
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
@@ -422,6 +423,10 @@ impl SessionManager {
         model: ModelId,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        // The composer's fast-mode pick. Where a harness cannot honour it this
+        // is clamped rather than obeyed — see `fast` below — so what reaches
+        // the index is always what the child was actually told.
+        fast: bool,
         cwd: &str,
         // Recorded, not acted on: the picker checks the branch out when the
         // user picks it, so by here the tree is already on it.
@@ -489,6 +494,31 @@ impl SessionManager {
         let effort = model_spec
             .as_ref()
             .and_then(|spec| resolve_effort(spec, effort));
+
+        // Clamped to what this harness *and this model* have a route to, and
+        // clamped **here** so the index records what the child was told rather
+        // than what was asked for. A `true` sitting on an entry that cannot
+        // honour it is not a cosmetic lie: it draws a lit switch over a session
+        // running at ordinary speed, and `dray new` hands it down to every
+        // same-harness child the session spawns.
+        //
+        // Both halves are needed and the composer is not one of them. It runs
+        // the same narrowing in `fastFor`, but `dray new --fast --model haiku`
+        // never goes near it — the orchestration socket reaches this function
+        // directly, which is the whole reason the rule is restated on this side.
+        //
+        // `None` means no model was named at all, since a model that *is* named
+        // and cannot run here already bailed above. fx is the one harness where
+        // that is ordinary and still fast: it applies fast mode per model itself
+        // and publishes no list of which, so "let fx decide" is as able to run
+        // fast as any named model. `standsWithNoModel` in `fastMode.ts` is the
+        // same reading, stated there because neither side can call the other.
+        let fast = fast
+            && harness.caps().fast_mode.offered()
+            && model_spec.as_ref().map_or(
+                harness.caps().fast_mode == FastMode::AtCreation,
+                |spec| spec.supports_fast,
+            );
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -601,6 +631,7 @@ impl SessionManager {
                 model,
                 effort,
                 permission_mode,
+                fast,
                 parent_session_id,
             );
             // Written with the entry rather than linked after it: the row
@@ -646,6 +677,7 @@ impl SessionManager {
                     "model": item.model.as_str(),
                     "effort": item.effort,
                     "permission_mode": item.permission_mode,
+                    "fast": item.fast,
                     "worktree": item.worktree_name.is_some(),
                     "spawned": item.parent_session_id.is_some(),
                 }),
@@ -690,6 +722,7 @@ impl SessionManager {
                 model_spec.as_ref(),
                 effort,
                 permission_mode,
+                fast,
                 spawn_cwd,
                 &session_cwd,
                 spawn_worktree,
@@ -781,6 +814,13 @@ impl SessionManager {
             (s.effort != effort && !caps.applies_effort_in_place)
                 || (s.model != model && !caps.applies_model_in_place)
                 || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
+                // Only the harness whose fast mode rides the spawn. `InPlace`
+                // is applied below without replacing anything, and `AtCreation`
+                // is fx — where a respawn would *not* move it, since a resumed
+                // fx session carries the stamp it was created with, so killing
+                // the child would cost the reader a running conversation and
+                // change nothing at all.
+                || (s.fast != fast && caps.fast_mode == FastMode::OnSpawn)
         });
 
         if respawn_needed(auth_failed, turn_in_flight, busy, settings_changed) {
@@ -825,14 +865,19 @@ impl SessionManager {
         if let Some(s) = sessions_guard.get_mut(session_id) {
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode).await?;
+            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
 
             // A model call is open, so this prompt is held rather than sent, and
-            // none of the live controls below fire with it. `set_model` and
-            // `set_permission_mode` were verified switching an *idle* child;
-            // what they do to a turn mid-flight is unknown, and a queued prompt
-            // is not worth finding out on. The index above has the user's pick
-            // either way, so the next idle send applies it.
+            // none of the live controls below fire with it — `set_model`,
+            // `set_permission_mode` and `set_fast` alike. The first two were
+            // verified switching an *idle* child; what any of them do to a turn
+            // mid-flight is unknown, and a queued prompt is not worth finding
+            // out on. The index above has the user's pick either way, so the
+            // next idle send applies it.
+            //
+            // The cost is stated under _Known issues_ and is the same for all
+            // three: the pick is on screen and in the index from here, while the
+            // prompt this queue delivers still runs under the old one.
             //
             // Gated on the turn, not on `busy`: a session holding a background
             // task reads busy with its main thread idle, and queueing there left
@@ -917,16 +962,49 @@ impl SessionManager {
                 // decide" has nothing to switch to, and the session stays on
                 // whatever it is running, which is what the unset pick means.
                 match model_spec.as_ref() {
-                    Some(spec) => s.set_model(spec).await?,
+                    Some(spec) => s.set_model(spec, app).await?,
                     None if model.is_unset() => {}
                     None => bail!("no model to switch the session to"),
                 }
             }
             if caps.applies_effort_in_place && s.effort != effort {
-                s.set_effort(effort).await?;
+                // A declined effort must not take the prompt down with it. fx
+                // refuses one on a model that does no reasoning, and losing the
+                // message over a level is a far worse answer than running the
+                // turn on fx's own default and saying so — which is the whole
+                // of DRA-221: the refusal used to reach the reader as a raw
+                // `-32602` where it reached them at all, with the index and the
+                // picker both left naming a level the session was not on.
+                if let Err(err) = s.set_effort(effort, app).await {
+                    report_session_error(
+                        session_id,
+                        s.harness,
+                        &format!("{err:#}"),
+                        &s.seq,
+                        &s.events,
+                        app,
+                    )
+                    .await;
+                    // Written back over the optimistic touch above, so the row
+                    // and `dray ls` name the effort that is running rather than
+                    // the one that was asked for. Every other field is still
+                    // the pick: fast mode is applied below this block, so
+                    // recording the child's current value here would drop it.
+                    touch_session_index_item(
+                        session_id,
+                        model.clone(),
+                        s.effort,
+                        permission_mode,
+                        fast,
+                    )
+                    .await?;
+                }
             }
             if caps.applies_permission_in_place && s.permission_mode != permission_mode {
                 s.set_permission_mode(permission_mode).await?;
+            }
+            if caps.fast_mode == FastMode::InPlace && s.fast != fast {
+                s.set_fast(fast).await?;
             }
 
             // Last thing before the prompt goes down the pipe: the child is idle
@@ -941,7 +1019,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode).await?;
+        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -1017,6 +1095,7 @@ impl SessionManager {
             model_spec.as_ref(),
             effort,
             permission_mode,
+            fast,
             &spawn_cwd,
             &session_cwd,
             pending_worktree.as_deref(),
@@ -1429,6 +1508,11 @@ pub struct Session {
     pub model: ModelId,
     pub effort: Option<Effort>,
     pub permission_mode: ApprovalPolicy,
+    /// What the child was last told about fast mode — the spawn's flag for
+    /// Claude Code and Codex, and for fx the value stamped onto its session,
+    /// which nothing can move after. Compared against the composer's pick to
+    /// decide whether anything has to happen at all.
+    pub fast: bool,
     pub events: Arc<Mutex<Vec<AgentEvent>>>,
     pub seq: Arc<AtomicU64>,
     /// Shared with the stdout task: sends flip it here, `result` and
@@ -1454,6 +1538,7 @@ impl Session {
         model: Option<&Model>,
         effort: Option<Effort>,
         permission_mode: ApprovalPolicy,
+        fast: bool,
         cwd: &str,
         // The session's own tree, for the turn-end snapshot. Differs from `cwd`
         // on a worktree creation, where the child spawns at the project root.
@@ -1470,6 +1555,7 @@ impl Session {
                     model.context("a Claude Code session needs a model")?,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     worktree_name,
@@ -1499,6 +1585,7 @@ impl Session {
                     model.context("a Codex session needs a model")?,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1556,6 +1643,7 @@ impl Session {
                     model,
                     effort,
                     permission_mode,
+                    fast,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1756,9 +1844,12 @@ impl Session {
     /// reply after this arrives from the new model, so no respawn is needed.
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
-    pub async fn set_model(&mut self, model: &Model) -> Result<()> {
+    pub async fn set_model(&mut self, model: &Model, app: &AppHandle) -> Result<()> {
         if let Transport::Fx(session) = &self.stdin {
-            crate::harness::fx::set_model(session, model).await?;
+            // `app` reaches fx alone, and for one reason: its reply restates
+            // the new model's effort ladder, which the composer's picker has to
+            // be told about or it keeps offering the old model's levels.
+            crate::harness::fx::set_model(session, model, app).await?;
             self.model = model.id.clone();
             return Ok(());
         }
@@ -1773,18 +1864,43 @@ impl Session {
         Ok(())
     }
 
+    /// Moves a running child on or off its harness's faster tier — Claude Code
+    /// alone, whose `apply_flag_settings` carries the same `flagSettings` layer
+    /// `--settings` fills at spawn.
+    ///
+    /// `Capabilities::fast_mode` is what keeps the other three off this path:
+    /// Codex's rides its spawn, fx's is stamped on its session at creation, and
+    /// pi has none. The recorded value moves only once the write has, so a
+    /// failed control leaves the session describing what the child is still on.
+    pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
+        write_line(
+            self.stdin.lines()?,
+            &ControlLine::new(ControlRequest::ApplyFlagSettings {
+                settings: FlagSettings { fast_mode: fast },
+            }),
+        )
+        .await?;
+        self.fast = fast;
+
+        Ok(())
+    }
+
     /// Switches the effort of a running child — fx alone, whose ACP session
     /// takes it as a config option. Every other harness respawns for one, and
     /// `caps().applies_effort_in_place` is what keeps them off this path.
     ///
     /// `None` is fx's own `auto`, which nothing here can spell back onto the
     /// wire, so it is recorded and left to the next respawn.
-    pub async fn set_effort(&mut self, effort: Option<Effort>) -> Result<()> {
+    pub async fn set_effort(&mut self, effort: Option<Effort>, app: &AppHandle) -> Result<()> {
         let Transport::Fx(session) = &self.stdin else {
             bail!("this harness has no in-place effort switch");
         };
         if let Some(effort) = effort {
-            crate::harness::fx::set_effort(session, effort).await?;
+            // `app` is here for the same reason `set_model` has it: fx accepting
+            // the level is what proves the active model takes it, and the
+            // picker is drawn from a list that cannot otherwise learn so.
+            let config = crate::harness::fx::set_effort(session, effort).await?;
+            crate::harness::fx::note_effort(session, &config, effort, app);
         }
         self.effort = effort;
 
@@ -2674,6 +2790,25 @@ async fn report_send_failure(
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
+    let message = format!("This message could not be sent: {message}");
+    report_session_error(session_id, harness, &message, seq, events, app).await;
+}
+
+/// Files a sentence about the session itself — not about a turn — as a
+/// non-fatal error row, emitted and persisted like any other event.
+///
+/// For what went wrong *around* the conversation rather than in it: a prompt
+/// that never reached the child, a setting the harness declined. Non-fatal
+/// because the session is intact either way, and the reader needs the sentence
+/// far more than the turn needs to be marked failed.
+pub(crate) async fn report_session_error(
+    session_id: &str,
+    harness: Harness,
+    message: &str,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    app: &AppHandle,
+) {
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),
         session_id: session_id.to_string(),
@@ -2684,18 +2819,18 @@ async fn report_send_failure(
         subagent: None,
         payload: AgentEventPayload::Error {
             source: ErrorSource::Process,
-            message: format!("This message could not be sent: {message}"),
+            message: message.to_string(),
             fatal: false,
         },
         raw: None,
     };
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
-        eprintln!("[queued flush emit err] {err}");
+        eprintln!("[session error emit err] {err}");
     }
     events.lock().await.push(agent_event.clone());
     if let Err(err) = append_session_event(session_id, agent_event).await {
-        eprintln!("[queued flush log err] {err}");
+        eprintln!("[session error log err] {err}");
     }
 }
 

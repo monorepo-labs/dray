@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -60,6 +60,49 @@ pub struct FxSession {
     /// The JSON-RPC id of the `session/prompt` now running, or `None` between
     /// turns. The read loop settles the turn on that id's response.
     prompt_id: Arc<std::sync::Mutex<Option<i64>>>,
+    /// What the **active model** takes, as the session's own `configOptions`
+    /// state it. Three answers, and they are not two: `Some(levels)` for a
+    /// model that reasons, `Some(vec![])` for one fx says has no `effort`
+    /// option at all, and `None` for a reply this build could not read — which
+    /// means "unknown, send it and let fx judge" and must never collapse into
+    /// the empty list, or an unfamiliar shape silently turns effort off.
+    ///
+    /// Moves with the model: `session/set_config_option model` answers the new
+    /// model's whole list back, so an in-place switch re-reads it for free.
+    /// Taken whole, carried-over level included — see
+    /// [`parser::ConfigOptions::model_effort_levels`] for why this is the
+    /// place that may, and the model list is not.
+    efforts: Arc<std::sync::Mutex<Option<Vec<Effort>>>>,
+}
+
+impl FxSession {
+    /// The active model's ladder, or `None` where fx has not said.
+    fn efforts(&self) -> Option<Vec<Effort>> {
+        self.efforts.lock().expect("fx efforts poisoned").clone()
+    }
+}
+
+/// The `--model` argument a spawn carries, or `None` where the flag must be
+/// withheld — which is **every resume**, and that is the whole of DRA-223's
+/// resume failure.
+///
+/// fx persists a session's provider *and* its model and restores both on
+/// `session/resume`. `--model` on a **resuming** spawn overrides that and drags
+/// the session onto whatever `settings.json` names *now* — so a session created
+/// on codex, resumed after the reader started a grok chat, came back on grok
+/// while still holding a codex model. The model call then answered `-32602
+/// "Model is not available for the active provider"` and the turn came back
+/// `refused`, with nothing on screen saying why. Measured both ways on one
+/// session: without the flag it resumes on codex, the model call succeeds and
+/// the turn runs. The model half was pinned separately, against a settings file
+/// pointed at a *different* model of the same provider — resume still answered
+/// with the session's own.
+///
+/// A creation still needs it, since nothing else names the model there, and fx
+/// saves it nowhere: a spawn with `--model` leaves `settings.json` byte-identical
+/// and a later `set_config_option model` still moves the session.
+fn model_arg(model: Option<&Model>, is_new_session: bool) -> Option<&str> {
+    model.filter(|_| is_new_session).map(|m| m.arg.as_str())
 }
 
 /// Spawns a session's `fx acp`, handshakes it and opens or resumes its session.
@@ -73,6 +116,7 @@ pub async fn init(
     model: Option<&Model>,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    fast: bool,
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
@@ -87,6 +131,30 @@ pub async fn init(
         next_seq_by_session_id(session_id).await?
     };
 
+    // Before the spawn, and only on one: fx reads `fast_mode` out of its
+    // settings file at `session/new` and stamps it onto the session record it
+    // keeps, where a `session/resume` then honours the stamp whatever the file
+    // says since. So this is the only moment it can be set, and a resume asking
+    // again would be a write that changes nothing.
+    //
+    // **The guard has to outlive the write, and that is the whole of it.** What
+    // reads the file is `session/new`, seconds later and a process away — so a
+    // lock around the rewrite alone leaves two creations free to interleave
+    // write, write, read, read, and one session is permanently stamped with the
+    // other's speed while Dray's index records the value that was asked for. A
+    // fan-out of `dray new` is exactly where two land at once.
+    //
+    // Named, not `_`: a plain underscore drops the guard on the spot and puts
+    // the race straight back. It falls at the end of `init`, which is wider than
+    // `open_session` by one handshake and costs nothing worth a narrower scope.
+    let _creating = if is_new_session {
+        let guard = FX_CREATING.lock().await;
+        set_fast_mode(fast).await;
+        Some(guard)
+    } else {
+        None
+    };
+
     let bin = crate::binpath::fx().await;
     let mut command = Command::new(&bin);
 
@@ -95,11 +163,8 @@ pub async fn init(
     }
 
     command.arg("acp");
-    // A process-level override, which fx saves nowhere — verified: a spawn
-    // with `--model` left `~/.fx/settings.json` byte-identical, and a later
-    // `set_config_option model` on the same session still moved it.
-    if let Some(model) = model {
-        command.args(["--model", &model.arg]);
+    if let Some(arg) = model_arg(model, is_new_session) {
+        command.args(["--model", arg]);
     }
 
     let mut child = command
@@ -152,8 +217,9 @@ pub async fn init(
         }
     });
 
-    let fx_id = match open_session(&client, session_id, session_cwd, is_new_session).await {
-        Ok(id) => id,
+    let (fx_id, config) = match open_session(&client, session_id, session_cwd, is_new_session).await
+    {
+        Ok(opened) => opened,
         Err(error) => {
             // Post-spawn, so the child is running with nobody left to talk to
             // it. A `Child` is not reaped on drop.
@@ -166,11 +232,51 @@ pub async fn init(
         client,
         id: fx_id,
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
+        efforts: Arc::new(std::sync::Mutex::new(None)),
     };
+    note_config(&session, &config, None, app);
 
-    // Effort and stance are session settings, applied in place on a session
-    // that now exists. The model rode the spawn above.
-    if let Err(error) = apply_settings(&session, effort, permission_mode).await {
+    // Session settings, applied in place on a session that now exists. The model
+    // is among them on a **resume**, where it did not ride the spawn — see
+    // [`model_arg`] — and on a creation it did, so it is left alone there.
+    //
+    // **Before the effort, and that ordering is load-bearing rather than
+    // incidental**: a ladder is per model, so a level sent first is asked of the
+    // model fx restored rather than the one the reader picked, and a rung the
+    // new model does not have is refused for the old one's sake. Re-sending the
+    // model fx already restored is a no-op that answers ok, so this needs no
+    // comparison — and the reply is what teaches the session the new model's
+    // ladder, which is what the effort below is judged against.
+    if !is_new_session {
+        if let Some(model) = model {
+            if let Err(error) = set_model(&session, model, app).await {
+                let _ = child.kill().await;
+                return Err(error);
+            }
+        }
+    }
+
+    // A refused effort is **not** fatal, where a refused stance is. fx declines
+    // one on a model that does no reasoning, and killing the child over that
+    // means a session whose recorded level its model has since stopped taking
+    // cannot be resumed at all. So the level is dropped, the session runs on
+    // fx's own default, and the transcript says so — the same answer the
+    // in-place path in [`crate::session`] gives, by design, since the reader
+    // cannot tell the two moments apart.
+    let (applied, refusal, accepted) = open_effort(&session, effort).await;
+    // fx taking the level is proof this model has it, which no reply can say
+    // on its own — every reading has the level in use subtracted out of it.
+    if let (Some(level), Some(config)) = (applied, accepted) {
+        note_effort(&session, &config, level, app);
+    }
+    if let Some(refusal) = refusal {
+        crate::session::report_session_error(session_id, Fx, &refusal, &seq, &events, app).await;
+    }
+
+    // A stance that will not apply is the fatal one: the session would run
+    // freer or narrower than the reader asked, which is not something to
+    // report and carry on from.
+    if let Err(error) = set_mode(&session, permission_mode).await {
         let _ = child.kill().await;
         return Err(error);
     }
@@ -183,8 +289,12 @@ pub async fn init(
         stdin: Transport::Fx(session),
         harness: Fx,
         model: model.map(|m| m.id.clone()).unwrap_or_default(),
-        effort,
+        // What the session is running on, not what was asked for — the index
+        // is written from this, and a level recorded that fx declined is the
+        // whole of DRA-221's second half.
+        effort: applied,
         permission_mode,
+        fast,
         events,
         seq,
         status,
@@ -193,13 +303,170 @@ pub async fn init(
     })
 }
 
-/// `initialize`, then `session/new` or `session/resume`. Answers fx's own id.
+/// Serializes fx session *creation*, so a global setting written for one cannot
+/// be read by another.
+///
+/// Only creation: a resume reads nothing out of the settings file, since fx
+/// honours the stamp on its own session record instead. Two resumes, or a resume
+/// beside a creation, still run side by side.
+static FX_CREATING: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Puts fx's fast mode where the next `session/new` will read it.
+///
+/// **fx's own global setting, and there is no narrower place to put it.** ACP's
+/// `configOptions` are provider, model, mode and effort and nothing else (fx
+/// 0.0.10), `fx acp` takes `--model` and `--log-file` and nothing else, and no
+/// `FX_*` variable names it — so the settings file is the only surface, exactly
+/// as it is for the provider switch next door. The composer's row says so.
+///
+/// Best effort, deliberately. A session must not fail to start because another
+/// tool's config file could not be edited, and the cost of a failed write is a
+/// session running at ordinary speed — which is the safe direction, since the
+/// faster tier is the one that spends more.
+async fn set_fast_mode(fast: bool) {
+    if let Err(error) = models::write_setting("fast_mode", fast.into()).await {
+        eprintln!("[fx] couldn't set fast mode: {error:#}");
+    }
+}
+
+/// The effort a session opening should record: the level asked for where fx
+/// took it, `None` where fx would not, with the sentence to report beside it.
+///
+/// The refusal is **handed back rather than raised**, and that is the half of
+/// DRA-221 with teeth. `init` used to `?` on it and kill the child, so a
+/// session resumed onto a model that no longer takes its recorded level could
+/// not be opened *at all* — a conversation the reader cannot get back into,
+/// not a menu that offers the wrong thing. Nothing about an effort is worth a
+/// session for.
+/// The accepted reply rides back with them rather than being recorded here, so
+/// this answers with no `AppHandle` and can be tested without one.
+async fn open_effort(
+    session: &FxSession,
+    asked: Option<Effort>,
+) -> (Option<Effort>, Option<String>, Option<parser::ConfigOptions>) {
+    // Absent means fx's `auto`, which is its own default and not a level
+    // Dray's ladder spells — so it is left alone rather than sent.
+    let Some(level) = asked else {
+        return (None, None, None);
+    };
+    match set_effort(session, level).await {
+        Ok(config) => (Some(level), None, Some(config)),
+        Err(err) => (None, Some(format!("{err:#}")), None),
+    }
+}
+
+/// The sentence a refused effort draws, written here rather than passed
+/// through from fx.
+///
+/// fx has two refusals one word apart — "Reasoning effort is unavailable for
+/// the active model" for a model with none, "is not available" for a rung
+/// above one that has some — and neither says which level was refused, what
+/// the model does take, or what the session ended up on. All three are what
+/// the reader needs, and the ladder is right here.
+fn effort_refusal(session: &FxSession, asked: Effort) -> String {
+    let levels: Vec<&str> = session
+        .efforts()
+        .unwrap_or_default()
+        .iter()
+        .map(|e| e.as_arg())
+        .collect();
+
+    if levels.is_empty() {
+        return format!(
+            "This model takes no reasoning effort, so {} was not applied and the effort is unchanged.",
+            asked.as_arg()
+        );
+    }
+    format!(
+        "This model does not take {} — it offers {}. The effort is unchanged.",
+        asked.as_arg(),
+        levels.join(", ")
+    )
+}
+
+/// Records what a reply said the active model takes, on the session and in the
+/// model list both, and nudges the composer when that is news.
+///
+/// The picker builds its effort submenu from [`models::list`], which for a
+/// model nobody has run can only guess by provider — so without the nudge it
+/// keeps offering a control fx has just refused for the rest of the run.
+fn note_config(
+    session: &FxSession,
+    config: &parser::ConfigOptions,
+    accepted: Option<Effort>,
+    app: &AppHandle,
+) {
+    // A reply carrying no `configOptions` at all is fx saying nothing, not fx
+    // saying "no effort" — a shape this build cannot read must leave the
+    // judgement with fx rather than silently disable the control.
+    if config.config_options.is_empty() {
+        return;
+    }
+
+    // The session takes the list as fx gave it, carried level and all: fx is
+    // the judge of its own session, and over-offering here costs one refusal
+    // that is now reported, where withholding a level costs one fx would have
+    // taken.
+    *session.efforts.lock().expect("fx efforts poisoned") = Some(rungs(config.effort_levels()));
+
+    // The model list outlives this session, so it only takes the part of that
+    // list which cannot be this session's own level leaking in — with the whole
+    // list beside it as the upper bound, or a rung fx has stopped offering
+    // would be cached for the life of the process.
+    let Some(model) = config.model() else {
+        return;
+    };
+    let reading = match config.model_effort_levels() {
+        None => None,
+        Some(levels) => {
+            let mut takes = rungs(Some(levels));
+            // fx *taking* a level is the one proof this model has it, and the
+            // reply cannot say so on its own: the level in use is subtracted
+            // out of every reading, since a carried-over one is refused just
+            // the same. Without it, opening a session on a valid level teaches
+            // the picker that level is unsupported — and `usableEffort` then
+            // moves the reader off it silently.
+            if let Some(effort) = accepted.filter(|e| !takes.contains(e)) {
+                takes.push(effort);
+            }
+            Some(models::LadderReading { takes, may_take: rungs(config.effort_levels()) })
+        }
+    };
+    announce_ladder(model, reading, app);
+}
+
+/// fx's level names as rungs Dray can spell.
+///
+/// `auto` and `none` are fx's own and are dropped — the ladder must not grow a
+/// variant for them, since an older build reading a level it cannot spell
+/// fails the whole index (DRA-140). Dropping leaves an effort-capable model
+/// whose every level is unspellable reading as one with no effort, and fx's
+/// `auto` is where both land, so the two agree where it matters.
+fn rungs(levels: Option<Vec<&str>>) -> Vec<Effort> {
+    levels
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|level| Effort::from_arg(level))
+        .collect()
+}
+
+fn announce_ladder(model_arg: &str, reading: Option<models::LadderReading>, app: &AppHandle) {
+    if models::learn_ladder(model_arg, reading) {
+        if let Err(err) = app.emit("models_changed", ()) {
+            eprintln!("[fx models_changed emit err] {err}");
+        }
+    }
+}
+
+/// `initialize`, then `session/new` or `session/resume`. Answers fx's own id
+/// and the settings it opened with — both replies carry `configOptions`,
+/// captured, which is the only statement of what the active model takes.
 async fn open_session(
     client: &RpcClient,
     session_id: &str,
     session_cwd: &str,
     is_new_session: bool,
-) -> Result<String> {
+) -> Result<(String, parser::ConfigOptions)> {
     client
         .request(
             "initialize",
@@ -232,7 +499,7 @@ async fn open_session(
         // Before the first prompt, so a child dying mid-turn still leaves a
         // session to resume rather than one that silently starts over.
         store::set_session_thread_id(session_id, &id).await?;
-        return Ok(id);
+        return Ok((id, parser::ConfigOptions::of(&answer)));
     }
 
     let recorded = store::get_session_index_item(session_id)
@@ -240,14 +507,14 @@ async fn open_session(
         .and_then(|item| item.thread_id)
         .context("this session has no fx session to resume")?;
 
-    open_with_servers(
+    let answer = open_with_servers(
         client,
         "session/resume",
         json!({"sessionId": recorded, "cwd": session_cwd}),
         mcp_servers,
     )
     .await?;
-    Ok(recorded)
+    Ok((recorded, parser::ConfigOptions::of(&answer)))
 }
 
 /// `session/new` or `session/resume` with the MCP list, shedding servers fx
@@ -322,39 +589,60 @@ fn refused_server(servers: &[Value], message: &str) -> Option<usize> {
     })
 }
 
-async fn apply_settings(
-    session: &FxSession,
-    effort: Option<Effort>,
-    permission_mode: ApprovalPolicy,
-) -> Result<()> {
-    // Absent means fx's `auto`, which is its own default and not a level
-    // Dray's ladder spells — so it is left alone rather than sent.
-    if let Some(effort) = effort {
-        set_effort(session, effort).await?;
-    }
-    set_mode(session, permission_mode).await
-}
-
 /// Moves a live session onto another model.
-pub async fn set_model(session: &FxSession, model: &Model) -> Result<()> {
-    set_config(session, "model", &model.arg).await
+///
+/// The reply restates the whole `configOptions` list for the model just
+/// switched to, so this is also where the new model's effort ladder is read —
+/// captured, and the reason an in-place switch costs no extra round trip.
+pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> Result<()> {
+    let answer = set_config(session, "model", &model.arg).await?;
+    // No accepted level to record: the reply's current effort is the one
+    // carried over from the model just left, which the new one may refuse.
+    note_config(session, &parser::ConfigOptions::of(&answer), None, app);
+    Ok(())
 }
 
 /// Moves a live session onto another effort — the one in-place effort switch
 /// any harness here has.
-pub async fn set_effort(session: &FxSession, effort: Effort) -> Result<()> {
-    set_config(session, "effort", effort.as_arg()).await
+///
+/// A level outside what the session said it takes is **refused here rather
+/// than sent**. fx answers `-32602` to both an effort set on a model that does
+/// no reasoning and a rung above one that does, and the caller has to tell the
+/// reader either way — so asking the session's own list first turns the common
+/// case into a sentence naming the model's real levels instead of fx's
+/// "Reasoning effort is unavailable for the active model".
+/// The reply is handed back rather than dropped: it restates the whole list
+/// for the level fx has just taken, and that acceptance is the only proof this
+/// model has that level. [`note_effort`] is what records it, and both callers
+/// do — this one cannot, having no `AppHandle` to nudge the composer with.
+pub async fn set_effort(session: &FxSession, effort: Effort) -> Result<parser::ConfigOptions> {
+    if let Some(levels) = session.efforts() {
+        if !levels.contains(&effort) {
+            anyhow::bail!("{}", effort_refusal(session, effort));
+        }
+    }
+    let answer = set_config(session, "effort", effort.as_arg()).await?;
+    Ok(parser::ConfigOptions::of(&answer))
 }
 
-async fn set_config(session: &FxSession, config_id: &str, value: &str) -> Result<()> {
+/// Records a [`set_effort`] reply against the level it accepted.
+pub fn note_effort(
+    session: &FxSession,
+    config: &parser::ConfigOptions,
+    accepted: Effort,
+    app: &AppHandle,
+) {
+    note_config(session, config, Some(accepted), app);
+}
+
+async fn set_config(session: &FxSession, config_id: &str, value: &str) -> Result<Value> {
     session
         .client
         .request(
             "session/set_config_option",
             json!({"sessionId": session.id, "configId": config_id, "value": value}),
         )
-        .await?;
-    Ok(())
+        .await
 }
 
 /// Dray's stance onto ACP's two modes.
@@ -751,6 +1039,7 @@ async fn raise_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::rpc::Outbound;
 
     /// Every stance lands on one of fx's two modes, and the wide ones land on
     /// the wider — recording `ask` for a `bypassPermissions` session would
@@ -808,17 +1097,160 @@ mod tests {
         }
     }
 
+    /// Only `arg` is read by what is under test; the rest is what fx's own
+    /// `id_to_model` builds for a codex row.
+    fn model(arg: &str) -> Model {
+        Model {
+            id: crate::models::ModelId::new(arg),
+            label: arg.into(),
+            efforts: Vec::new(),
+            default_effort: None,
+            arg: arg.into(),
+            provider: "codex".into(),
+            accepts_images: false,
+            secondary: false,
+            supports_fast: true,
+        }
+    }
+
+    /// A creation carries `--model`, because nothing else names the model there.
+    #[test]
+    fn a_new_session_spawns_with_the_model_named() {
+        let m = model("gpt-5.6-sol");
+        assert_eq!(model_arg(Some(&m), true), Some("gpt-5.6-sol"));
+        // No pick is fx's own settings deciding, which is an ordinary state here.
+        assert_eq!(model_arg(None, true), None);
+    }
+
+    /// A resume carries it **never**, whatever the pick — fx restores the
+    /// session's own provider and model, and the flag overrides both onto
+    /// whatever `settings.json` names now. That is what left a resumed codex
+    /// session on grok, its model refused `-32602` and its next turn `refused`.
+    #[test]
+    fn a_resume_spawns_without_it_so_the_session_keeps_its_own_provider() {
+        let m = model("gpt-5.6-sol");
+        assert_eq!(model_arg(Some(&m), false), None);
+        assert_eq!(model_arg(None, false), None);
+    }
+
+    fn session_on(
+        efforts: Option<Vec<Effort>>,
+    ) -> (FxSession, tokio::sync::mpsc::UnboundedReceiver<Outbound>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            FxSession {
+                client: RpcClient::over(tx),
+                id: "s".into(),
+                prompt_id: Arc::new(std::sync::Mutex::new(None)),
+                efforts: Arc::new(std::sync::Mutex::new(efforts)),
+            },
+            rx,
+        )
+    }
+
+    /// A level the session said it cannot take never reaches the wire — which
+    /// is DRA-221's cure rather than its report: fx answers `-32602` to it, and
+    /// an unsent request is one that cannot fail a send.
+    #[tokio::test]
+    async fn an_effort_outside_the_ladder_is_never_sent() {
+        let (session, mut rx) = session_on(Some(vec![Effort::Low, Effort::Medium]));
+
+        let refused = set_effort(&session, Effort::Max).await.unwrap_err();
+        let sentence = format!("{refused:#}");
+        assert!(sentence.contains("max"), "names the level asked for: {sentence}");
+        assert!(sentence.contains("low, medium"), "names what it does take: {sentence}");
+        assert!(rx.try_recv().is_err(), "nothing was written");
+
+        // A model with no `effort` option at all gets its own sentence, since
+        // "it offers nothing" and "not that rung" are different news.
+        let (none, mut rx) = session_on(Some(Vec::new()));
+        let sentence = format!("{:#}", set_effort(&none, Effort::High).await.unwrap_err());
+        assert!(sentence.contains("takes no reasoning effort"), "{sentence}");
+        assert!(rx.try_recv().is_err(), "nothing was written");
+    }
+
+    /// Unknown is not the same as none. A reply that carried no
+    /// `configOptions` must leave the judgement to fx rather than refuse
+    /// locally, or a shape this build has not seen silently disables effort.
+    #[tokio::test]
+    async fn an_unread_ladder_sends_and_lets_fx_judge() {
+        let (session, mut rx) = session_on(None);
+        // The request blocks on fx's answer, which never comes here — what is
+        // under test is that the line goes out at all.
+        let sent = tokio::time::timeout(Duration::from_millis(50), set_effort(&session, Effort::Max)).await;
+        assert!(sent.is_err(), "still waiting on fx, so it was sent");
+
+        let Outbound::Line(line) = rx.try_recv().expect("a line was written") else {
+            panic!("a close, not a line");
+        };
+        assert!(line.contains("set_config_option"), "{line}");
+        assert!(line.contains("\"max\""), "{line}");
+    }
+
+    /// A level a model has stopped taking must not make its session
+    /// unopenable. This is the resume path: `init` used to `?` on the refusal
+    /// and kill the child, so the conversation could not be reached at all.
+    /// The level is dropped, the refusal is handed back to be drawn, and the
+    /// session opens recording what it is actually on.
+    #[tokio::test]
+    async fn a_refused_effort_does_not_stop_a_session_opening() {
+        let (session, mut rx) = session_on(Some(Vec::new()));
+
+        let (applied, refusal, accepted) = open_effort(&session, Some(Effort::High)).await;
+        assert_eq!(applied, None, "records what is running, not what was asked");
+        assert!(accepted.is_none(), "nothing fx took, so nothing to learn from");
+        assert!(
+            refusal.expect("says so").contains("takes no reasoning effort"),
+            "the reader is told why the level on their row is not the one in force",
+        );
+        assert!(rx.try_recv().is_err(), "nothing was written");
+
+        // No effort asked for is no refusal and nothing sent — fx's own `auto`.
+        let (applied, refusal, accepted) = open_effort(&session, None).await;
+        assert_eq!((applied, refusal), (None, None));
+        assert!(accepted.is_none());
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// The ladder rides `configOptions`, and `auto`/`none` are fx's own levels
+    /// rather than rungs Dray may spell — a new `Effort` variant is an index
+    /// an older build cannot parse (DRA-140), so they are dropped here.
+    ///
+    /// What the *session* may try is the list whole; what is remembered
+    /// against the *model* is that list minus the level in use, since fx
+    /// unions the two.
+    #[test]
+    fn a_config_reply_teaches_the_session_its_models_levels() {
+        let reply = json!({"configOptions": [
+            {"id": "model", "currentValue": "openai/gpt-5.4-nano", "options": []},
+            {"id": "effort", "currentValue": "max", "options": [
+                {"value": "auto"}, {"value": "none"}, {"value": "low"},
+                {"value": "medium"}, {"value": "high"}, {"value": "xhigh"},
+                {"value": "max"},
+            ]},
+        ]});
+        let config = parser::ConfigOptions::of(&reply);
+
+        assert_eq!(
+            rungs(config.effort_levels()),
+            vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max],
+            "the session may try any of them — fx judges its own session",
+        );
+        assert_eq!(
+            rungs(config.model_effort_levels()),
+            vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh],
+            "`max` is the carried level, so it is not remembered against the model",
+        );
+        assert_eq!(config.model(), Some("openai/gpt-5.4-nano"));
+    }
+
     /// The prompt's answer is read off its id and nothing else — a response
     /// to some other request, or one arriving after the turn was cleared,
     /// must not close a turn.
     #[test]
     fn only_the_running_prompts_answer_closes_the_turn() {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let session = FxSession {
-            client: RpcClient::over(tx),
-            id: "s".into(),
-            prompt_id: Arc::new(std::sync::Mutex::new(Some(7))),
-        };
+        let (session, _rx) = session_on(None);
+        *session.prompt_id.lock().unwrap() = Some(7);
 
         assert!(prompt_answer(&session, r#"{"jsonrpc":"2.0","id":6,"result":{}}"#).is_none());
         assert!(prompt_answer(&session, r#"{"jsonrpc":"2.0","id":7,"method":"x","params":{}}"#).is_none());

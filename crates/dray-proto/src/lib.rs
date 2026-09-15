@@ -32,7 +32,7 @@ use std::path::PathBuf;
 /// damage in. See [`Envelope`] and the app's own `mismatch`, which names which
 /// half is behind so the reader — usually an agent, reading it as tool output —
 /// runs the cure that applies rather than the one that doesn't.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -293,6 +293,21 @@ pub struct CreateSession {
     /// has the tracker's own MCP server for the rest.
     #[serde(default)]
     pub issues: Vec<String>,
+    /// Whether the session runs at its harness's faster, dearer tier.
+    ///
+    /// `None` inherits the parent's, and only within one harness — the same
+    /// boundary `model` and `effort` stop at, for a nearer reason: a `true`
+    /// carried from a Claude parent onto a Codex child turns on a paid tier on
+    /// a different vendor's account, which is not what inheriting "run this one
+    /// like me" can be taken to mean.
+    ///
+    /// **This is what earns the v6 bump.** An old app ignores the field and
+    /// runs the session at ordinary speed — which answers *identically to a
+    /// success*, since nothing in the transcript says which tier served it. An
+    /// agent told to fan a deadline out fast would read every session back as
+    /// fine and none of them would have been.
+    #[serde(default)]
+    pub fast: Option<bool>,
 }
 
 /// Tagging a session that already exists — or untagging it.

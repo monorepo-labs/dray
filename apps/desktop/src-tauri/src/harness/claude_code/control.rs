@@ -40,9 +40,51 @@ pub enum ControlRequest<'a> {
     StopTask {
         task_id: &'a str,
     },
+    /// Writes the CLI's `flagSettings` layer — the same one `--settings` fills
+    /// at spawn — on a child already running.
+    ///
+    /// The one live control here that is not a `set_*`: the CLI takes a whole
+    /// settings object rather than a named field, so what it can move is
+    /// whatever that layer holds. Only `fastMode` is sent, because only
+    /// `fastMode` is a thing this app offers; the CLI replaces the layer it is
+    /// given, so a second key added later has to go in the *same* request
+    /// rather than a second one after it.
+    ///
+    /// Verified against v2.1.270 both ways — `true` moves an `off` child to
+    /// `fast_mode_state: "on"` and `false` moves it back to `off` with
+    /// `sdk_opt_in_required` beside it, each reported on the next `init` and
+    /// `result`, and each acked with `{"subtype": "success"}`.
+    ApplyFlagSettings {
+        settings: FlagSettings,
+    },
     /// Asked of a throwaway child rather than a session's, and answered without
     /// a model call. See [`commands`](super::commands).
     Initialize,
+}
+
+/// The `flagSettings` layer, as both `--settings` and
+/// [`ControlRequest::ApplyFlagSettings`] spell it.
+///
+/// **`fastMode` is the SDK's opt-in and nothing else turns it on.** A child
+/// spawned without it reports `fast_mode_state: "off"` with
+/// `fast_mode_disabled_reason: "sdk_opt_in_required"` however the reader's own
+/// settings files are written — the CLI refuses fast mode to an SDK session
+/// that has not asked — so this is not a convenience over `~/.claude/settings`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlagSettings {
+    pub fast_mode: bool,
+}
+
+impl FlagSettings {
+    /// What `--settings` takes: the layer as one JSON argument.
+    ///
+    /// Infallible in practice — a struct of bools cannot fail to serialize —
+    /// and an empty string would be refused by the CLI rather than silently
+    /// ignored, so the fallback is loud enough.
+    pub fn as_arg(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
 }
 
 /// A [`ControlRequest`] in the envelope the CLI reads it from. The struct's own
@@ -98,6 +140,30 @@ mod tests {
         assert_eq!(
             value["request"],
             json!({"subtype": "stop_task", "task_id": "bhkk97xab"})
+        );
+    }
+
+    /// Pins the camelCase key and the nesting. The CLI answers what it
+    /// recognizes and stays quiet otherwise, so `fast_mode` here would present
+    /// as a switch that acks and changes nothing.
+    #[test]
+    fn flag_settings_ride_the_request_as_one_object() {
+        let line = ControlLine::new(ControlRequest::ApplyFlagSettings {
+            settings: FlagSettings { fast_mode: true },
+        });
+
+        assert_eq!(
+            serde_json::to_value(&line).unwrap()["request"],
+            json!({"subtype": "apply_flag_settings", "settings": {"fastMode": true}})
+        );
+    }
+
+    /// `--settings` takes the same layer, so the two routes cannot drift.
+    #[test]
+    fn the_spawn_flag_spells_it_the_same_way() {
+        assert_eq!(
+            FlagSettings { fast_mode: false }.as_arg(),
+            r#"{"fastMode":false}"#
         );
     }
 

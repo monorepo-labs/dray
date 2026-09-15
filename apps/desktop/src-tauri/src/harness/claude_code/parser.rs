@@ -468,6 +468,24 @@ pub enum SystemEvent {
         uuid: String,
         session_id: String,
     },
+    /// A sentence the CLI wants said, keyed rather than typed — the shape is
+    /// one channel and `key` is what says which notice it is. Captured:
+    /// `fast-mode-overage-rejected` / "Fast mode disabled · usage credits
+    /// exhausted", twice in one session, once per turn it refused.
+    ///
+    /// `uuid`, `priority` (`immediate`) and `color` (`error`) ride the line too
+    /// and are deliberately unmodelled. Not tidiness: a field nothing reads can
+    /// only fail the line it rides on, and this is the one system subtype whose
+    /// *whole* value is a sentence read at the moment a refusal happens, so a
+    /// notice dropped for want of a field no consumer wants is the refusal
+    /// going unsaid again. The siblings above keep their `uuid` because they
+    /// were modelled whole before anything asked the question, not because
+    /// something reads it.
+    Notification {
+        key: String,
+        text: String,
+        session_id: String,
+    },
     /// A subtype this build doesn't model. The CLI adds subtypes over time
     /// (`thinking_tokens` arrived unannounced), and without this every such
     /// line failed whole — the loop logged a parse error and dropped it.
@@ -1385,6 +1403,38 @@ mod tests {
             event,
             ClaudeCodeEvent::System(SystemEvent::PermissionDenied { .. })
         )));
+    }
+
+    /// The notice channel, captured on the one key Dray reads. `priority` and
+    /// `color` ride the line and are unmodelled, so this also pins that the
+    /// line still parses with them there.
+    #[test]
+    fn parses_the_notification_channel() {
+        let events = parse_fixture(include_str!("fixtures/fast_mode_refused.jsonl"));
+
+        let keyed: Vec<(&str, &str)> = events
+            .iter()
+            .filter_map(|event| match event {
+                ClaudeCodeEvent::System(SystemEvent::Notification { key, text, .. }) => {
+                    Some((key.as_str(), text.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            keyed,
+            [
+                (
+                    "fast-mode-overage-rejected",
+                    "Fast mode disabled · usage credits exhausted"
+                ),
+                (
+                    "fast-mode-overage-rejected",
+                    "Fast mode disabled · usage credits exhausted"
+                ),
+            ]
+        );
     }
 
     /// The same `touch` with no answer channel open. The CLI refuses on its own

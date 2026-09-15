@@ -5,6 +5,35 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.18.2
+
+### Added
+
+- **Fast mode**, a row in the model picker, on Claude Code, Codex and
+  fx. Each vendor charges for it differently, so the row carries their
+  own sentence about what it costs. Claude Code and Codex can be moved
+  in place; fx settles at creation. pi has none.
+- **`dray new --fast`** starts a spawned session on that tier. A
+  session inherits its parent's setting only within the same agent.
+- **Claude Code says when it refuses fast mode**, and that sentence is
+  drawn under the row rather than the switch sitting lit while the
+  turn runs at ordinary speed.
+
+### Fixed
+
+- **An fx session resumed after a provider switch keeps its own
+  provider**, rather than coming back on whatever fx points at now and
+  failing the turn with nothing on screen saying why.
+- **An fx model that refuses the effort it was left on now opens.**
+  The level is dropped, the prompt still sends, and the transcript
+  names the levels that model does take.
+- **fx's fast tiers are read off the gateway's own list**, so the
+  toggle is offered where it works and the duplicate `-fast` rows stay
+  out of the picker.
+- **Switching fx provider leaves `~/.fx/settings.json` at the
+  permissions it found**, where it used to hand the file back
+  world-readable on every switch.
+
 ## 0.18.1
 
 ### Added

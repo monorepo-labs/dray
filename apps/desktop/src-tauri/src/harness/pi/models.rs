@@ -227,6 +227,10 @@ fn row_to_model(row: &Value, efforts: Vec<Effort>) -> Option<Model> {
         // so it already has its own answer to "which few of these do I want in
         // front of me" and a second tier here would be a second one.
         secondary: false,
+        // pi has `serviceTier` in its provider layer and nothing that sets it:
+        // no flag, no settings key, and `set_model`/`set_session_name` are the
+        // only setters its RPC answers.
+        supports_fast: false,
     })
 }
 

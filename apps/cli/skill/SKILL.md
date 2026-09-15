@@ -50,6 +50,24 @@ Options:
 | `--harness <name>` | `claude_code`, `codex`, `pi` or `fx`. Defaults to the current session's. |
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
+| `--fast` | Run at the agent's faster tier, which spends more usage. Inherits this session's when the harness is the same — see *Fast mode*. |
+
+### Fast mode
+
+Claude Code, Codex and fx each have a faster tier, and each charges for it —
+Codex's own words for it are "2x speed, increased usage". pi has none, and the
+flag is ignored there.
+
+**Pass `--fast` when the user asked for speed, and not otherwise.** Inheriting
+covers the ordinary case on its own: a session already on it spawns children on
+it, within the same harness. What earns a question is the same one raised effort
+earns — fanning out multiplies the cost by however many sessions you are about
+to start, so if this session is on fast mode and the user has asked for several,
+ask once whether they all want it.
+
+It is not available on every model. Claude Code offers it on Opus alone, and the
+others answer per model; a session started with `--fast` on a model without one
+simply runs at ordinary speed, with nothing said about it.
 
 ### Model and effort
 

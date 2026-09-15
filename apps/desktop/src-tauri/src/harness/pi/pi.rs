@@ -308,6 +308,9 @@ pub async fn init(
         model: model.map(|m| m.id.clone()).unwrap_or_default(),
         effort,
         permission_mode,
+        // pi has no fast mode to be on, and `Capabilities::fast_mode` says so,
+        // so nothing above ever asks this session to change it.
+        fast: false,
         events,
         seq,
         status,
