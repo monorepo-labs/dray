@@ -307,9 +307,14 @@ export function useSessions() {
     // after the reader has moved on, and an unguarded catch would write the
     // previous session's failure into the composer they moved to.
     const navGen = useRef(0);
-    /// A catch handler for an action starting now. Reports into the slot only
-    /// while the reader has not navigated since — taken at the *start* of the
-    /// action, since the rejection lands after any move.
+    /// A catch handler for a *session-scoped* action starting now. Reports into
+    /// the slot only while the reader has not navigated since — taken at the
+    /// start of the action, since the rejection lands after any move.
+    ///
+    /// Only for actions about one session. App-wide loads and actions — the
+    /// index, projects, branches, a checkout — stay on the raw setter: their
+    /// failure is as true after a move as before it, and dropping one leaves a
+    /// list stale or empty with nothing on screen saying why.
     const failUnlessLeft = () => {
       const gen = navGen.current;
       return (e: unknown) => {
@@ -410,7 +415,6 @@ const setUseWorktree = (next: boolean | ((prev: boolean) => boolean)) => {
 // Attaching a known project just selects it, so this doubles as "switch to one
 // I already have" without the picker growing duplicates.
 const handleAttachProject = async () => {
-  const fail = failUnlessLeft();
   const picked = await open({ directory: true, multiple: false });
   if (typeof picked !== "string") return;
 
@@ -419,7 +423,7 @@ const handleAttachProject = async () => {
     setProjects(await invoke<Project[]>("add_project", { path: picked }));
     setProjectPath(picked);
   } catch (e) {
-    fail(e);
+    setError(String(e));
   }
 };
 
@@ -427,13 +431,12 @@ const handleAttachProject = async () => {
 // stay in the sidebar — this is the picker's list, not the work. The composer
 // moves to whatever is left, since a pick nothing lists can still be sent in.
 const handleRemoveProject = async (path: string) => {
-  const fail = failUnlessLeft();
   try {
     const left = await invoke<Project[]>("remove_project", { path });
     setProjects(left);
     if (projectPath === path) setProjectPath(left[0]?.path ?? null);
   } catch (e) {
-    fail(e);
+    setError(String(e));
   }
 };
 
@@ -441,11 +444,10 @@ const handleRemoveProject = async (path: string) => {
 // caller: the sidebar's switcher moves the reader between spaces, never a
 // project between them.
 const setProjectSpace = async (path: string, space: string | null) => {
-  const fail = failUnlessLeft();
   try {
     setProjects(await invoke<Project[]>("set_project_space", { path, space }));
   } catch (e) {
-    fail(e);
+    setError(String(e));
   }
 };
 
@@ -454,12 +456,11 @@ const setProjectSpace = async (path: string, space: string | null) => {
 // nothing was written, which is what lets the caller keep its own record of
 // which spaces exist in step with the tags.
 const retagSpace = async (from: string, to: string | null) => {
-  const fail = failUnlessLeft();
   try {
     setProjects(await invoke<Project[]>("retag_space", { from, to }));
     return true;
   } catch (e) {
-    fail(e);
+    setError(String(e));
     return false;
   }
 };
@@ -477,7 +478,6 @@ const handleSelectProject = (path: string | null) => {
 // Checks the branch out for real, so the picker is the only thing that moves the
 // working tree — by send time the repo is already where the session expects it.
 const runCheckout = async (target: string, stash: boolean) => {
-  const fail = failUnlessLeft();
   if (!projectPath) return;
 
   try {
@@ -491,7 +491,7 @@ const runCheckout = async (target: string, stash: boolean) => {
   } catch (e) {
     // Git refuses rather than clobbering, so the tree is untouched and the
     // message names the files in the way.
-    fail(e);
+    setError(String(e));
   } finally {
     setPendingBranch(null);
   }
@@ -504,7 +504,6 @@ const runCheckout = async (target: string, stash: boolean) => {
 // fetched when the project was selected, and the user has been editing files
 // since. A stale zero silently skips the dialog and moves their work.
 const handleSelectBranch = async (target: string) => {
-  const fail = failUnlessLeft();
   if (!projectPath || target === branches?.current) return;
 
   let list: BranchList;
@@ -512,7 +511,7 @@ const handleSelectBranch = async (target: string) => {
     list = await invoke<BranchList>("list_branches", { cwd: projectPath });
     setBranches(list);
   } catch (e) {
-    fail(e);
+    setError(String(e));
     return;
   }
 
@@ -647,7 +646,6 @@ const handleSendMsg = async (
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
 ) => {
-  const fail = failUnlessLeft();
   const attachmentPaths = attachments.map((a) => a.path);
 
   let sessionId = selectedSessionId;
@@ -669,7 +667,12 @@ const handleSendMsg = async (
     // from an earlier click can land afterwards and roll this one away.
     selectionRequestRef.current = sessionId;
     setSelectedSessionId(sessionId);
+    // A move like any other: the composer now belongs to this session, so an
+    // action still out from the new-task view must not report into it.
+    navGen.current++;
   }
+  // Taken after the mint, so this send's own failure still reports.
+  const fail = failUnlessLeft();
 
   setError(null);
   // Read before the optimistic write below overwrites it. A send onto a running
@@ -1404,6 +1407,9 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   // fork it is about to show.
   selectionRequestRef.current = snapshot.sessionId;
   setSelectedSessionId(snapshot.sessionId);
+  // A fork opens selected, so this is a move: an action still out on the
+  // parent must not report into the fork's composer.
+  navGen.current++;
   restoreSessionControls(snapshot);
 };
 
@@ -1451,7 +1457,7 @@ useEffect(() => {
       setSessionIndexItems(items);
       setIndexSide(showArchived);
     })
-    .catch(failUnlessLeft());
+    .catch((e) => setError(String(e)));
 }, [showArchived])
 
 useEffect(() => {
@@ -1530,7 +1536,7 @@ useEffect(() => {
     })
     // Without this a failed read leaves the picker silently empty, and the
     // reason only reaches the console.
-    .catch(failUnlessLeft());
+    .catch((e) => setError(String(e)));
 }, [])
 
 // Refetched per project rather than cached: branches change outside the app.
@@ -1544,7 +1550,6 @@ useEffect(() => {
   }
 
   let cancelled = false;
-  const fail = failUnlessLeft();
 
   invoke<BranchList>("list_branches", { cwd: projectPath })
     .then((list) => {
@@ -1558,7 +1563,7 @@ useEffect(() => {
       // previous project's branches for this one.
       setBranches(null);
       setBranch(null);
-      fail(e);
+      setError(String(e));
     });
 
   return () => {
