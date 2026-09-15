@@ -26,6 +26,18 @@ export type SubagentRun = {
   usage: Usage | null;
   /// The subagent's own work, excluding its lifecycle events.
   events: AgentEvent[];
+  /// Whether the chat draws this run's spawning tool row instead of a link into
+  /// the panel.
+  ///
+  /// fx reports nothing at all about a child — no events, no progress — so the
+  /// spawning call *is* the whole run, and a row that only navigates would send
+  /// the reader to a panel holding what they were already looking at. Every
+  /// other harness streams the child's work, where the link is the point.
+  ///
+  /// Keyed on the harness rather than on "has this run filed any events yet",
+  /// which is true of every run for its first frame and would flip the row out
+  /// from under a Claude subagent the moment it started working.
+  inline: boolean;
   /// The main-thread `tool_call_started` that spawned this run. It is the only
   /// place a `local_bash` task's command and output live — such a task reports
   /// no events of its own, so a run built from the envelope alone is empty —
@@ -675,6 +687,7 @@ export function buildTranscript(
         done: false,
         background: false,
         usage: null,
+        inline: event.harness === "fx",
         events: [],
         spawn: null,
       };
@@ -686,18 +699,23 @@ export function buildTranscript(
     run.label ??= ref.label;
 
     switch (event.payload.type) {
+      // An empty `agentId` is "this harness names no handle for the child",
+      // which is not the same as a handle that has not arrived yet — but both
+      // mean the same thing to the Stop button, which is that there is nothing
+      // to name in the request. fx is the case: its children are reported only
+      // through the call that spawned them.
       case "subagent_started":
-        run.taskId = event.payload.agentId;
+        run.taskId = event.payload.agentId || null;
         run.label ??= event.payload.label;
         run.description = event.payload.description;
         break;
       case "subagent_progress":
-        run.taskId = event.payload.agentId;
+        run.taskId = event.payload.agentId || null;
         run.status = event.payload.description;
         run.lastTool = event.payload.lastTool;
         break;
       case "subagent_completed":
-        run.taskId = event.payload.agentId;
+        run.taskId = event.payload.agentId || null;
         run.done = true;
         run.usage = event.payload.usage;
         break;

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
+import Orb from "@/components/Orb";
+
 import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
@@ -14,6 +16,7 @@ import {
   mcpCall,
   isRoutineError,
   skillBrief,
+  subagentBrief,
   toolLabel,
   toolSummary,
 } from "@/lib/tools";
@@ -37,6 +40,11 @@ const SUMMARY_FIELDS = [
   "url",
   "description",
   "timeout",
+  // fx's two spellings of the same thing: a skill's `location` is the header,
+  // and `request` is the object it nests a subagent's task or a stored result's
+  // query inside — the dispatch fields left in there name no work.
+  "location",
+  "request",
 ];
 
 // Dropped from the body when a diff stands in for it: the diff already shows
@@ -198,7 +206,26 @@ export default function ToolCall({
   // A `Skill` call hands the skill a brief in the model's own words, so it reads
   // as prose and not as arguments. Null is the common case — a skill named with
   // nothing beside it — and then the row has nothing to open at all.
-  const brief = name === "Skill" && !rawInput ? skillBrief(input) : null;
+  const skill = name === "Skill" && !rawInput ? skillBrief(input) : null;
+
+  // A delegated run's brief is prose for the same reason, and its whole point:
+  // the row truncates the task to one line and the child was briefed in
+  // paragraphs. Null for a harness that does not nest one, which is every
+  // harness but fx.
+  const delegated = toolType === "subagent_spawn" && !rawInput ? subagentBrief(input) : null;
+  const brief = skill ?? delegated?.task ?? null;
+
+  // Drawn on the row rather than behind the caret: a child put on a different
+  // model or a different effort is a fact about the run, and the reader should
+  // not have to open a row to find out the work went somewhere else.
+  //
+  // Hyphens go and no separator is added, so the pair reads as words in the
+  // sentence the row already is — "Delegating gpt 5.6 luna high Reply with…".
+  // An id punctuated for a machine, or a `·` between two words, both frame this
+  // as a field rather than as part of the line.
+  const settings = [delegated?.model?.replace(/-/g, " "), delegated?.effort]
+    .filter(Boolean)
+    .join(" ");
 
   const omit = sides
     ? EDIT_FIELDS
@@ -219,7 +246,17 @@ export default function ToolCall({
   // label and summary read back. A refusal still shows — that text is the only
   // place the reason lives.
   const echoesHeader = name === "Skill" && !failed;
-  const shownOutput = echoesViewer || echoesHeader ? "" : output;
+
+  // A fetched page is the agent pulling something into context, not showing it
+  // to the reader — the same reading a whole-file `Read` takes, and the row
+  // collapses to the URL for the same reason. fx also caps what it sends at 200
+  // characters, so expanding offered a fragment of somebody else's web page.
+  // Name-keyed, not `toolType === "web"`: a web *search* answers with the
+  // results themselves, which are worth reading. Claude's `WebFetch` is left
+  // alone deliberately — it answers with a model's summary written for the
+  // reader, not the page. A failure still shows, as everywhere here.
+  const fetched = name === "web_fetch" && !failed;
+  const shownOutput = echoesViewer || echoesHeader || fetched ? "" : output;
   const shown = truncate(shownOutput, PREVIEW_CHARS);
 
   // Output stays behind the expander regardless of length. Auto-showing short
@@ -246,6 +283,13 @@ export default function ToolCall({
         {/* The shimmer is the running state; it stops the moment the result
             lands, so a settled row is plain text again. The label carries the
             same information in its tense — "Reading" then "Read". */}
+        {/* A delegated run gets the orb the subagent row carries, for the same
+            reason: the reader is waiting on a whole agent rather than on a
+            call, and this is the one tool row where that is true. */}
+        {pending && toolType === "subagent_spawn" && (
+          <Orb state="listening" size={20} aria-hidden />
+        )}
+
         {showLabel && (
           <span
             className={cn(
@@ -256,6 +300,10 @@ export default function ToolCall({
           >
             {mcp ? "MCP" : toolLabel(name, pending)}
           </span>
+        )}
+
+        {settings && (
+          <span className="shrink-0 font-mono text-muted-foreground/70">{settings}</span>
         )}
 
         {/* `min-w-0` lets it shrink and `max-w-fit` stops it claiming the row's

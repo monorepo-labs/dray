@@ -10,7 +10,7 @@
 
 use crate::events::{
     usage::ContextWindow, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent,
-    SessionInfo, ToolResult, ToolType, TurnStatus, Usage,
+    SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Value};
@@ -75,6 +75,16 @@ pub struct Mapper {
     /// diagnostic streamed over several chunks is dropped whole, not only its
     /// first fragment.
     suppressed: HashSet<String>,
+    /// Calls that opened a subagent run, so the closing update can close it —
+    /// a `tool_call_update` names an id and nothing else.
+    ///
+    /// The run is Dray's, not fx's: nothing about a child streams over ACP, so
+    /// the spawning call *is* the whole account and the panel row holds only
+    /// what that call already said. Filed anyway, since a session that
+    /// delegated six times otherwise reports none of them; the chat draws the
+    /// tool row rather than a link into the panel, which is what
+    /// `SubagentRun.inline` is for.
+    subagents: HashSet<String>,
 }
 
 impl Mapper {
@@ -88,6 +98,7 @@ impl Mapper {
             occupancy: None,
             outputs: HashMap::new(),
             suppressed: HashSet::new(),
+            subagents: HashSet::new(),
         }
     }
 
@@ -158,11 +169,14 @@ impl Mapper {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
                 let name = name.unwrap_or_else(|| kind_name(kind).to_string());
+                let tool_type = tool_type(kind, &name);
+                let input = tool_input(kind, raw_input);
+                let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
                 out.push(self.event(AgentEventPayload::ToolCallStarted {
-                    call_id: tool_call_id,
+                    call_id: tool_call_id.clone(),
                     name,
-                    tool_type: tool_type(kind),
-                    input: tool_input(kind, raw_input),
+                    tool_type,
+                    input,
                     raw_input: None,
                     // fx's own title is a bare verb — "Writing", "Running" —
                     // and the row already conjugates the tool name. Left unset
@@ -170,6 +184,27 @@ impl Mapper {
                     // path or command off the input.
                     title: None,
                 }));
+                // fx sends no subagent lifecycle of its own, so the run is
+                // minted from the call that spawned it — otherwise the panel
+                // lists nothing however many children a session delegates to.
+                // See [`Self::subagents`] for what this costs.
+                if let Some(task) = task {
+                    self.subagents.insert(tool_call_id.clone());
+                    out.push(self.subagent_event(
+                        &tool_call_id,
+                        AgentEventPayload::SubagentStarted {
+                            // Empty, and that is the honest answer: `agent_id`
+                            // is the handle a stop request names, and fx
+                            // publishes none for a child. Filled with the call
+                            // id it would read as stoppable and the panel would
+                            // offer a button whose request fx cannot take.
+                            agent_id: String::new(),
+                            label: SUBAGENT_LABEL.to_string(),
+                            description: Some(task),
+                            prompt: None,
+                        },
+                    ));
+                }
                 out
             }
 
@@ -213,15 +248,29 @@ impl Mapper {
                     images: Vec::new(),
                 };
 
-                vec![
-                    self.event(AgentEventPayload::ToolCallCompleted {
-                        call_id: tool_call_id,
-                        result,
-                    }),
-                    // The model reads the result next. Same reading Codex's
-                    // mapper makes, for the same working indicator.
-                    self.event(AgentEventPayload::ModelRequestStarted),
-                ]
+                let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
+                    call_id: tool_call_id.clone(),
+                    result,
+                })];
+                // Closes the run the spawning call opened, or the panel row
+                // shimmers for the rest of the session.
+                if self.subagents.remove(&tool_call_id) {
+                    out.push(self.subagent_event(
+                        &tool_call_id,
+                        AgentEventPayload::SubagentCompleted {
+                            agent_id: String::new(),
+                            status: status_word(status).to_string(),
+                            summary: None,
+                            // fx reports no per-child usage; the turn's own
+                            // figures cover the parent and child together.
+                            usage: None,
+                        },
+                    ));
+                }
+                // The model reads the result next. Same reading Codex's mapper
+                // makes, for the same working indicator.
+                out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                out
             }
 
             SessionUpdate::UsageUpdate { used, size } => {
@@ -423,6 +472,18 @@ impl Mapper {
         self.event(payload)
     }
 
+    /// A lifecycle event belonging to a run rather than to the conversation.
+    /// The envelope's `id` is the spawning call's, which is what the transcript
+    /// correlates a run on.
+    fn subagent_event(&self, call_id: &str, payload: AgentEventPayload) -> AgentEvent {
+        let mut event = self.event(payload);
+        event.subagent = Some(Subagent {
+            id: call_id.to_string(),
+            label: Some(SUBAGENT_LABEL.to_string()),
+        });
+        event
+    }
+
     fn event(&self, payload: AgentEventPayload) -> AgentEvent {
         AgentEvent::mint(
             self.session_id.clone(),
@@ -448,7 +509,25 @@ fn block_ref(id: &str) -> BlockRef {
 
 /// ACP's kind onto Dray's, which is what lets a tool fx renames tomorrow still
 /// draw as what it is.
-fn tool_type(kind: ToolKind) -> ToolType {
+///
+/// The name is consulted for the two calls ACP's kinds get wrong, and each is
+/// wrong in a way that costs the row something:
+///
+/// - `subagent` is `other`, so a run of them collapsed into "subagent 2 calls"
+///   and hid the two tasks, which is the whole of what a delegated run is.
+/// - `glob_files` is `read`, and a successful file read is drawn as a dead end
+///   — no body, no output — since its result is the file the agent just pulled
+///   into context. A glob's result is a list of matches and the only thing the
+///   row has to show, so typed that way it drew nothing at all.
+///
+/// Keyed on the name because there is no kind to key on; a rename costs these
+/// two readings and nothing else.
+fn tool_type(kind: ToolKind, name: &str) -> ToolType {
+    match name {
+        "subagent" => return ToolType::SubagentSpawn,
+        "glob_files" => return ToolType::Search,
+        _ => {}
+    }
     match kind {
         ToolKind::Read => ToolType::FileRead,
         ToolKind::Edit | ToolKind::Delete | ToolKind::Move => ToolType::FileEdit,
@@ -456,6 +535,27 @@ fn tool_type(kind: ToolKind) -> ToolType {
         ToolKind::Execute => ToolType::Shell,
         ToolKind::Fetch => ToolType::Web,
         ToolKind::Think | ToolKind::SwitchMode | ToolKind::Other => ToolType::Other,
+    }
+}
+
+/// What a delegated run is called where a label is wanted. fx names its tool
+/// `subagent` and nothing on the wire names the child.
+const SUBAGENT_LABEL: &str = "Subagent";
+
+/// The brief a `subagent` call was given, which is the run's own description.
+/// fx nests it under `request` beside the dispatch fields.
+fn subagent_task(input: &Value) -> Option<String> {
+    let task = input.get("request")?.get("task")?.as_str()?.trim();
+    (!task.is_empty()).then(|| task.to_string())
+}
+
+/// How a run ended, in the vocabulary [`AgentEventPayload::SubagentCompleted`]
+/// already uses.
+fn status_word(status: ToolStatus) -> &'static str {
+    if status == ToolStatus::Failed {
+        "failed"
+    } else {
+        "completed"
     }
 }
 
@@ -498,21 +598,45 @@ fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
     input
 }
 
-/// What a finished call reports: what it streamed where it streamed anything,
-/// else its closing text — minus fx's replay blob.
+/// What a finished call reports: its closing text, falling back to what it
+/// streamed where the closing update carried nothing a reader wants.
 ///
-/// A shell's closing update carries `{"session_id":null,"state":"completed",
-/// "backend":"captured",…}` as its text, fx's own bookkeeping for `fx
-/// background`, with the real stdout having arrived line by line before it.
-/// Drawn, it read as the command having printed JSON it never printed.
+/// The closing text wins because a streamed update is not always output. A
+/// shell's is — stdout arrives line by line and its closing update carries only
+/// `{"session_id":null,"state":"completed","backend":"captured",…}`, fx's own
+/// bookkeeping for `fx background`, which drawn read as the command having
+/// printed JSON it never printed. But `web_fetch` streams `Fetching <url>` and
+/// `Converting <url>` as progress and puts the page in its closing update, so
+/// preferring the stream drew the progress chatter and dropped the answer.
 fn result_text(streamed: String, closing: String) -> String {
-    if !streamed.is_empty() {
-        return streamed;
+    if !closing.is_empty() && !is_replay_blob(&closing) {
+        return unwrap_report(&closing).unwrap_or(closing);
     }
-    if is_replay_blob(&closing) {
-        return String::new();
-    }
-    closing
+    streamed
+}
+
+/// fx wraps a subagent's report in `{"ok":true,"result":"…","error_code":null}`,
+/// and its report is the only account of the run there is: nothing about the
+/// child streams over ACP, and the whole transcript fx keeps for it lives in
+/// its own session store, which Dray does not read.
+///
+/// Unwrapped by **shape rather than by parsing**, because fx caps tool content
+/// at 200 characters and that cut usually lands mid-string — so the envelope is
+/// invalid JSON exactly when it carries something worth reading, and the row
+/// drew the brace and the escapes instead of the sentences. A failed report
+/// (`"ok":false`) is left whole: the envelope is then the whole of what it said.
+fn unwrap_report(text: &str) -> Option<String> {
+    let body = text.strip_prefix(r#"{"ok":true,"result":""#)?;
+    let body = body.strip_suffix(r#"","error_code":null}"#).unwrap_or(body);
+    // serde does the unescaping, by making the fragment a JSON string again. A
+    // cut landing inside an escape leaves a tail nothing can read, so the last
+    // few bytes are dropped until it parses — `\uXXXX` and its surrogate pair
+    // are the longest either can be.
+    (0..=body.len())
+        .rev()
+        .take(13)
+        .filter(|end| body.is_char_boundary(*end))
+        .find_map(|end| serde_json::from_str::<String>(&format!("\"{}\"", &body[..end])).ok())
 }
 
 // ponytail: prefix sniff on fx's private blob shape; a typed field would need
@@ -531,6 +655,7 @@ mod tests {
     const LIVE_TURN: &str = include_str!("fixtures/live_turn.jsonl");
     const CANCEL: &str = include_str!("fixtures/cancel.jsonl");
     const EDIT: &str = include_str!("fixtures/edit_file.jsonl");
+    const TOOLS: &str = include_str!("fixtures/tools.jsonl");
 
     /// Replays one capture's first prompt through the mapper: every
     /// `session/update`, then the prompt's own response.
@@ -708,17 +833,156 @@ mod tests {
         assert!(auth_failed);
     }
 
+    /// The tools beyond read/write/edit/shell, off one capture that runs all
+    /// seven. What it pins is the split `result_text` makes: `web_fetch`
+    /// streams progress and answers in its closing update, `shell` streams its
+    /// stdout and closes with fx's replay blob, and each has to draw the half
+    /// the other does not.
+    #[test]
+    fn fxs_remaining_tools_map_to_named_rows_carrying_their_answers() {
+        let events = replay(TOOLS);
+        let calls: Vec<(&str, ToolType)> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallStarted {
+                    name, tool_type, ..
+                } => Some((name.as_str(), *tool_type)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("grep_files", ToolType::Search),
+                ("web_fetch", ToolType::Web),
+                ("skill", ToolType::Other),
+                ("capability_search", ToolType::Other),
+                // ACP calls this `other`; the name is what says otherwise, and
+                // it is what keeps a run of them from collapsing into a count.
+                ("subagent", ToolType::SubagentSpawn),
+                ("shell", ToolType::Shell),
+                ("read_tool_result", ToolType::Other),
+            ]
+        );
+
+        let results: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(results[0].starts_with("[grep] 1 matches"));
+        // The page, not the `Fetching …`/`Converting …` the call streamed
+        // while it worked.
+        assert!(results[1].starts_with("Web fetch result."));
+        assert!(results[2].contains("skill_content name=\"find-skills\""));
+        // The subagent's own words, with fx's envelope taken off.
+        assert_eq!(results[4], "hi");
+        // The shell's own stdout, which arrived before a closing update
+        // carrying only the replay blob.
+        assert_eq!(results[5].trim(), "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40");
+        assert!(results[6].starts_with("<command_output_query"));
+    }
+
+    /// A delegated run is filed as a run, so the panel lists it — fx sends no
+    /// lifecycle of its own, so both ends are minted here. The envelope's id is
+    /// the spawning call's, which is what the transcript correlates on, and
+    /// `agent_id` is empty because fx names no handle a stop could use.
+    #[test]
+    fn a_subagent_call_opens_and_closes_a_run() {
+        let events = replay(TOOLS);
+        let lifecycle: Vec<(&str, Option<&str>)> = events
+            .iter()
+            .filter_map(|e| {
+                let id = e.subagent.as_ref()?.id.as_str();
+                match &e.payload {
+                    P::SubagentStarted {
+                        agent_id,
+                        description,
+                        ..
+                    } => {
+                        assert!(agent_id.is_empty(), "fx publishes no stoppable handle");
+                        Some((id, description.as_deref()))
+                    }
+                    P::SubagentCompleted { status, .. } => Some((id, Some(status.as_str()))),
+                    _ => None,
+                }
+            })
+            .collect();
+
+        let call_id = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallStarted { name, call_id, .. } if name == "subagent" => Some(call_id),
+                _ => None,
+            })
+            .expect("a subagent row");
+
+        assert_eq!(
+            lifecycle,
+            [
+                (
+                    call_id.as_str(),
+                    Some("Reply with exactly: hi")
+                ),
+                (call_id.as_str(), Some("completed")),
+            ]
+        );
+    }
+
+    /// The two names that outrank the kind fx sends with them. No capture here
+    /// holds a glob, and the kind it arrives under is what makes the reading
+    /// wrong — so the rule is pinned directly rather than through a fixture.
+    #[test]
+    fn two_names_outrank_the_kind_fx_sends() {
+        assert_eq!(tool_type(ToolKind::Other, "subagent"), ToolType::SubagentSpawn);
+        assert_eq!(tool_type(ToolKind::Read, "glob_files"), ToolType::Search);
+        assert_eq!(tool_type(ToolKind::Read, "read_file"), ToolType::FileRead);
+        assert_eq!(tool_type(ToolKind::Execute, "shell"), ToolType::Shell);
+    }
+
     #[test]
     fn the_replay_blob_is_not_a_result() {
-        assert_eq!(
-            result_text(
-                String::new(),
-                r#"{"session_id":null,"state":"completed","backend":"captured"}"#.into()
-            ),
-            ""
-        );
+        const BLOB: &str = r#"{"session_id":null,"state":"completed","backend":"captured"}"#;
+        assert_eq!(result_text(String::new(), BLOB.into()), "");
         assert_eq!(result_text(String::new(), "wrote x".into()), "wrote x");
-        assert_eq!(result_text("out\n".into(), "{\"session_id\":null".into()), "out\n");
+        // The stream is what a shell says; the blob is what closes it.
+        assert_eq!(result_text("out\n".into(), BLOB.into()), "out\n");
+        // And the other way for a call that streams progress and answers at the
+        // close — the answer wins over what it said while working.
+        assert_eq!(
+            result_text("Fetching x".into(), "the page".into()),
+            "the page"
+        );
+    }
+
+    /// A subagent's report, which is all fx says about the run. Both strings are
+    /// real, out of `~/.dray/sessions`: the second is what fx's 200-character
+    /// cap does to the first kind, and it is the one that has to work — an
+    /// envelope short enough to parse is an envelope with nothing much in it.
+    #[test]
+    fn a_subagent_report_is_unwrapped_whether_or_not_the_envelope_survived() {
+        assert_eq!(
+            unwrap_report(r#"{"ok":true,"result":"/tmp/repo","error_code":null}"#).unwrap(),
+            "/tmp/repo"
+        );
+        assert_eq!(
+            unwrap_report(
+                r#"{"ok":true,"result":"Completed successfully. All commands exited 0.\n\nCommands run:\n- `pwd`\n- `git status --short`\n- Created `report.txt`\n"#
+            )
+            .unwrap(),
+            "Completed successfully. All commands exited 0.\n\nCommands run:\n- `pwd`\n- `git status --short`\n- Created `report.txt`\n"
+        );
+        // Cut inside an escape: the tail nothing can read is dropped, the rest
+        // still arrives.
+        assert_eq!(
+            unwrap_report(r#"{"ok":true,"result":"done\"#).unwrap(),
+            "done"
+        );
+        // A failure keeps its envelope, and anything else is left alone.
+        assert!(unwrap_report(r#"{"ok":false,"result":null,"error_code":"x"}"#).is_none());
+        assert!(unwrap_report("wrote hello.txt").is_none());
     }
 
     /// fx leaks context and skill-discovery diagnostics into the message stream

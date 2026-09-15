@@ -9,6 +9,14 @@ function field(input: JsonValue, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/// The same narrowing for a nested object, so a tool that files its arguments
+/// one level down can still be read by `field`.
+function nested(input: JsonValue, key: string): JsonValue | null {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
+  const value = (input as Record<string, JsonValue>)[key];
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
 /// The interesting argument, shown next to the tool name. Claude Code leaves
 /// `title` null on every call, so the row has to derive its own summary and each
 /// tool keeps whichever field actually identifies the work.
@@ -20,9 +28,27 @@ export function toolSummary(
   // Tool-keyed rather than field-keyed: the harness classifies `Skill` as
   // `other`, and its only identifying field is the skill's own name.
   if (name === "Skill") return field(input, "skill");
+  // fx's own skill tool, whose only field is an opaque location ending in the
+  // skill's name — `skill:68130a4a3e6c5614:0/find-skills`. Tool-keyed for the
+  // same reason: `location` names a skill on this tool and nothing else.
+  if (name === "skill") return field(input, "location")?.split("/").pop() ?? null;
+
+  // Ahead of the path, and that ordering is the rule: a search scopes itself
+  // with a directory and its subject is the pattern, so `grep_files` under `.`
+  // read as "Searched ." — the one field that says nothing. No tool whose
+  // subject *is* a file carries a `pattern`, so this can only fire where the
+  // path is scope.
+  const pattern = field(input, "pattern");
+  if (pattern) return pattern;
 
   const path = field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
   if (path) return shortenPath(path);
+
+  // fx nests a call's real argument under `request` where every other harness
+  // puts it at the top level — a subagent's task, a stored result's query. The
+  // dispatch fields beside it (`action`, `handle`) name no work.
+  const request = nested(input, "request");
+  if (request) return field(request, "task") ?? field(request, "query");
 
   switch (toolType) {
     case "shell":
@@ -112,7 +138,42 @@ const TOOL_VERBS: Record<string, Verbs> = {
   write_file: ["Writing", "Wrote", "file"],
   edit_file: ["Editing", "Edited", "file"],
   glob_files: ["Searching", "Searched", "pattern"],
+  grep_files: ["Searching", "Searched", "pattern"],
+  web_fetch: ["Fetching", "Fetched", "page"],
+  // Claude's `Skill` verbs, for the same reason fx's `shell` takes Bash's: one
+  // act should not be labelled two ways because the reader switched harness.
+  skill: ["Reading Skill", "Read Skill", "skill"],
+  // fx's hand-off to a nested agent. Not "Subagent", which is the wire name and
+  // a noun — the row says what happened, and the task sits beside it.
+  subagent: ["Delegating", "Delegated", "task"],
+  // What the agent can reach: skills and MCP tools matching a query.
+  capability_search: ["Searching", "Searched", "capability"],
+  // fx truncates a long tool result and hands the model a handle to query for
+  // the rest, so this is the agent going back for what it was not shown.
+  read_tool_result: ["Reading output", "Read output", "result"],
 };
+
+/// What a delegated run was asked to do, and what it was asked to do it with.
+///
+/// The row truncates the task to one line, so the brief is drawn whole in the
+/// expanded body — a delegated task is a spec, and the half of it that fits
+/// beside the tool name is not the half that says what the child was for.
+///
+/// `model` and `effort` are optional and usually absent: they are there only
+/// where the agent chose them for the child, which is exactly when the reader
+/// wants to know, since the run is otherwise on the session's own settings.
+export function subagentBrief(
+  input: JsonValue,
+): { task: string; model: string | null; effort: string | null } | null {
+  const request = nested(input, "request");
+  const task = request && field(request, "task")?.trim();
+  if (!task) return null;
+  return {
+    task,
+    model: field(request, "model"),
+    effort: field(request, "effort"),
+  };
+}
 
 /// The brief a `Skill` call was given — the sentence the model wrote for the
 /// skill, not an argument to it. Null where the model named a skill and left it
@@ -144,6 +205,8 @@ const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   // The row's verb carries the noun ("Read Skill pdf"), which a count would
   // then say a second time — "Read Skill 2 skills". The group drops it.
   Skill: ["Reading", "Read"],
+  skill: ["Reading", "Read"],
+  read_tool_result: ["Reading", "Read"],
 };
 
 /// English plurals only where the nouns here need it — a trailing `y` after a

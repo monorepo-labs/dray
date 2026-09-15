@@ -5,6 +5,7 @@ import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { compactTokens } from "@/lib/format";
+import { subagentBrief } from "@/lib/tools";
 import type { SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
@@ -82,7 +83,10 @@ export default function SubagentPanel({
 function hasBrief(spawn: AgentEvent): boolean {
   if (spawn.payload.type !== "tool_call_started") return false;
   const prompt = (spawn.payload.input as Record<string, unknown> | null)?.prompt;
-  return typeof prompt === "string" && prompt.trim().length > 0;
+  if (typeof prompt === "string" && prompt.trim().length > 0) return true;
+  // fx nests its brief a level down, and for an fx run this call is the whole
+  // account there is — without it every delegated run here opens onto nothing.
+  return subagentBrief(spawn.payload.input) !== null;
 }
 
 function RunRow({
