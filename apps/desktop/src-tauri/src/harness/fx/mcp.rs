@@ -18,6 +18,16 @@
 //! that token and re-injecting it as a header would cross the boundary fx drew,
 //! and a snapshot access token would expire with no refresh path anyway.
 //!
+//! **A headerless HTTP server is two cases the config cannot tell apart, so fx
+//! is asked.** An endpoint that wants no auth at all takes `headers: []` and
+//! works; an OAuth-backed one takes the same list and fails the whole
+//! `session/new`. The config line is identical for both — the credential lives
+//! in the keychain, not the file — and `fx mcp list` (no `--connect`, no
+//! network) is fx's own local answer: `auth=none` against `auth=authenticated`
+//! for the very same entry under a home with no credentials stored. Only
+//! `none` earns an empty header list; anything else, or a probe that failed,
+//! is skipped.
+//!
 //! **A server that cannot be authenticated is skipped, never passed.** Every
 //! server on the ACP surface is *required*: one that fails to start fails the
 //! whole `session/new` with `-32602`, and there is no per-server optional flag
@@ -30,21 +40,23 @@
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::process::Stdio;
+use tokio::process::Command;
 
 /// `~/.fx/mcp.json`, the path `fx mcp path` prints.
 fn config_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".fx/mcp.json"))
 }
 
-/// What fx writes under `mcp`. Every field is optional: this file is fx's, free
-/// to gain keys, and one we cannot spell must cost a server rather than the
-/// whole list.
+/// What fx writes under `mcp`. Entries stay `Value` so each is parsed on its
+/// own: this file is fx's, free to change a field's shape, and one entry it
+/// changes under must cost that server rather than every other.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ConfigFile {
-    mcp: BTreeMap<String, ServerConfig>,
+    mcp: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -81,31 +93,154 @@ pub async fn configured_servers() -> Vec<Value> {
     let Ok(config) = serde_json::from_slice::<ConfigFile>(&bytes) else {
         return Vec::new();
     };
-    to_acp(config, |key| std::env::var(key).ok())
+
+    let mut env = BTreeMap::new();
+    for key in referenced_env(&config) {
+        if let Some(value) = resolve_env(&key).await {
+            env.insert(key, value);
+        }
+    }
+
+    let auth = auth_states().await;
+    to_acp(config, &env, &auth)
 }
 
-/// The mapping, with the environment passed in so it is testable.
-fn to_acp(config: ConfigFile, env: impl Fn(&str) -> Option<String>) -> Vec<Value> {
+/// Every environment variable the config names, so each is resolved once.
+fn referenced_env(config: &ConfigFile) -> BTreeSet<String> {
+    config
+        .mcp
+        .values()
+        .filter_map(|v| serde_json::from_value::<ServerConfig>(v.clone()).ok())
+        .flat_map(|s| {
+            s.header_env
+                .into_values()
+                .chain(s.bearer_token_env)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The process environment first, then the login shell's.
+///
+/// A bundled `.app` launched from Finder or the Dock inherits launchd's
+/// environment, which holds nothing a reader exported from `.zprofile` — the
+/// same trap `binpath` walks for `PATH`. Asking the login shell is what makes
+/// a `bearer_token_env` that works in the reader's `fx` shell work here too.
+async fn resolve_env(key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(key) {
+        return Some(value);
+    }
+    login_shell_var(key).await
+}
+
+/// `printenv` inside the user's login shell. The name rides as `$1`, never
+/// interpolated into the command string, and is checked against a variable's
+/// grammar first — it comes out of a config file.
+async fn login_shell_var(key: &str) -> Option<String> {
+    let valid = !key.is_empty()
+        && !key.starts_with(|c: char| c.is_ascii_digit())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return None;
+    }
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let output = Command::new(shell)
+        .args(["-l", "-c", "printenv \"$1\"", "_", key])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    // The last line: a profile that echoes on login puts its chatter first.
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+}
+
+/// Server name → fx's own `auth=` reading, off `fx mcp list`.
+///
+/// No `--connect`, so nothing is opened and nothing leaves the machine; the
+/// state comes from fx's credential store. Run from home rather than the
+/// session's cwd so a project-scoped `.mcp.json` cannot answer for a profile
+/// server of the same name. A failed probe answers empty, which every caller
+/// reads as "skip" — the safe direction.
+async fn auth_states() -> BTreeMap<String, String> {
+    let bin = crate::binpath::fx().await;
+    let mut command = Command::new(&bin);
+    command.args(["mcp", "list"]);
+    if let Some(home) = std::env::home_dir() {
+        command.current_dir(home);
+    }
+    let output = command
+        .env("PATH", crate::harness::agent_path(&bin))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    match output {
+        Ok(output) if output.status.success() => {
+            parse_auth_states(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => BTreeMap::new(),
+    }
+}
+
+/// A server's line opens with its name and carries `key=value` fields; the
+/// indented lines under it are detail and hold no `source=`.
+fn parse_auth_states(listing: &str) -> BTreeMap<String, String> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let mut fields = fields.peekable();
+            fields.peek()?.strip_prefix("source=")?;
+            let auth = fields.find_map(|f| f.strip_prefix("auth="))?;
+            Some((name.to_string(), auth.to_string()))
+        })
+        .collect()
+}
+
+/// The mapping, with the environment and fx's auth reading passed in so it is
+/// testable with nothing spawned.
+fn to_acp(
+    config: ConfigFile,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
+) -> Vec<Value> {
     config
         .mcp
         .into_iter()
+        // A shape this build cannot read costs that entry alone.
+        .filter_map(|(name, value)| {
+            serde_json::from_value::<ServerConfig>(value)
+                .ok()
+                .map(|server| (name, server))
+        })
         // Absent means on, which is how fx reads it; only an explicit `false`
         // is a disabled server.
         .filter(|(_, server)| server.enabled.unwrap_or(true))
-        .filter_map(|(name, server)| server_to_acp(&name, server, &env))
+        .filter_map(|(name, server)| server_to_acp(&name, server, env, auth))
         .collect()
 }
 
 fn server_to_acp(
     name: &str,
     server: ServerConfig,
-    env: &impl Fn(&str) -> Option<String>,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
 ) -> Option<Value> {
     match server.r#type.as_deref() {
         Some(kind @ ("http" | "sse")) => {
-            // No header is not "send none" — fx refuses an HTTP server outright
-            // without one, so an unauthenticated server is one we skip.
-            let headers = headers_for(&server, env)?;
+            let headers = headers_for(name, &server, env, auth)?;
             let url = server.url?;
             Some(json!({"type": kind, "name": name, "url": url, "headers": headers}))
         }
@@ -125,15 +260,19 @@ fn server_to_acp(
     }
 }
 
-/// The headers to hand over, or `None` where the config names no way to
-/// authenticate — which is the signal to skip the server entirely.
+/// The headers to hand over, or `None` where the server cannot be — which is
+/// the signal to skip it entirely.
 ///
 /// Answers as ACP's `[{name, value}]` array, never an object: fx validates the
 /// shape and refuses a map with "MCP server headers must be valid unique
-/// name/value string entries".
+/// name/value string entries". An empty array is a real answer, for a server
+/// fx reports no credentials for; a headerless server fx *does* hold
+/// credentials for is OAuth-backed and cannot be served from here.
 fn headers_for(
+    name: &str,
     server: &ServerConfig,
-    env: &impl Fn(&str) -> Option<String>,
+    env: &BTreeMap<String, String>,
+    auth: &BTreeMap<String, String>,
 ) -> Option<Vec<Value>> {
     let mut headers: BTreeMap<String, String> = server.headers.clone();
 
@@ -141,14 +280,14 @@ fn headers_for(
         // A named variable that is not set is a missing credential, not an
         // empty one — sending a blank header would turn a skip into a session
         // that fails to open.
-        headers.insert(header.clone(), env(key)?);
+        headers.insert(header.clone(), env.get(key)?.clone());
     }
 
     if let Some(key) = &server.bearer_token_env {
-        headers.insert("Authorization".to_string(), format!("Bearer {}", env(key)?));
+        headers.insert("Authorization".to_string(), format!("Bearer {}", env.get(key)?));
     }
 
-    if headers.is_empty() {
+    if headers.is_empty() && auth.get(name).map(String::as_str) != Some("none") {
         return None;
     }
 
@@ -168,8 +307,15 @@ mod tests {
         serde_json::from_str(json).expect("fixture parses")
     }
 
-    fn no_env(_: &str) -> Option<String> {
-        None
+    fn none() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     /// The shape fx accepts for a stdio server, pinned end to end: `env` is a
@@ -181,7 +327,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"probe":{"command":"node","args":["s.mjs"],"env":{"TOKEN":"t"}}}}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         assert_eq!(
@@ -203,7 +350,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"api":{"type":"http","url":"https://e.test/mcp","headers":{"Authorization":"Bearer t"}}}}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         assert_eq!(
@@ -220,18 +368,58 @@ mod tests {
     /// The motivating case: an OAuth-authenticated HTTP server carries no
     /// header Dray may fill, and fx will not lend its own credentials. It has
     /// to be **skipped** — passing it fails the whole `session/new`, since
-    /// every ACP server is required.
+    /// every ACP server is required. fx's own reading is what says so.
     #[test]
-    fn an_unauthenticatable_http_server_is_skipped_not_passed() {
+    fn an_oauth_backed_http_server_is_skipped_not_passed() {
+        // `fx mcp add --transport http` + `fx mcp auth`, verbatim.
+        let config = r#"{"mcp":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp","enabled":true,"startup_timeout_ms":30000,"operation_timeout_ms":60000}}}"#;
+
+        let authenticated = map(&[("linear-server", "authenticated")]);
+        assert!(to_acp(parse(config), &none(), &authenticated).is_empty());
+
+        // A probe that answered nothing reads the same way: skip.
+        assert!(to_acp(parse(config), &none(), &none()).is_empty());
+    }
+
+    /// The other half of the same config line: a headerless server fx holds no
+    /// credentials for is an endpoint that wants none, and goes over with an
+    /// empty header list — which fx requires to be present.
+    #[test]
+    fn a_headerless_server_fx_holds_no_credentials_for_goes_over_with_empty_headers() {
         let servers = to_acp(
-            parse(
-                // `fx mcp add --transport http` + `fx mcp auth`, verbatim.
-                r#"{"mcp":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp","enabled":true,"startup_timeout_ms":30000,"operation_timeout_ms":60000}}}"#,
-            ),
-            no_env,
+            parse(r#"{"mcp":{"local":{"type":"http","url":"http://127.0.0.1:8787/mcp"}}}"#),
+            &none(),
+            &map(&[("local", "none")]),
         );
 
-        assert!(servers.is_empty(), "got {servers:?}");
+        assert_eq!(
+            servers,
+            vec![json!({
+                "type": "http",
+                "name": "local",
+                "url": "http://127.0.0.1:8787/mcp",
+                "headers": [],
+            })]
+        );
+    }
+
+    /// `fx mcp list`'s own output, captured. The name opens the line, the
+    /// detail lines under it carry no `source=` and must not read as servers.
+    #[test]
+    fn auth_states_are_read_off_fx_mcp_list() {
+        let listing = "MCP health (2 servers):\n  \
+            linear-server source=profile scope=profile policy=optional transport=http state=disconnected auth=authenticated\n    \
+            negotiated_name=unavailable negotiated_version=unavailable protocol=unavailable\n    \
+            tools=unknown resources=unknown templates=unknown prompts=unknown cache=unavailable subscription=unavailable\n    \
+            retry_attempt=0 retry_in_ms=none discovery=pending\n  \
+            local source=profile scope=profile policy=optional transport=stdio state=disconnected auth=none\n    \
+            negotiated_name=unavailable negotiated_version=unavailable protocol=unavailable\n";
+
+        assert_eq!(
+            parse_auth_states(listing),
+            map(&[("linear-server", "authenticated"), ("local", "none")])
+        );
+        assert!(parse_auth_states("No MCP servers configured.\n").is_empty());
     }
 
     /// A stdio server beside it still goes over, so one server Dray cannot
@@ -245,7 +433,8 @@ mod tests {
                     "files":{"command":"mcp-fs"}
                 }}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);
@@ -259,19 +448,34 @@ mod tests {
         let bearer = r#"{"mcp":{"api":{"type":"http","url":"https://e.test","bearer_token_env":"TOK"}}}"#;
         let named = r#"{"mcp":{"api":{"type":"http","url":"https://e.test","header_env":{"X-Key":"TOK"}}}}"#;
 
-        let present = |_: &str| Some("secret".to_string());
+        let present = map(&[("TOK", "secret")]);
 
         assert_eq!(
-            to_acp(parse(bearer), present)[0]["headers"],
+            to_acp(parse(bearer), &present, &none())[0]["headers"],
             json!([{"name": "Authorization", "value": "Bearer secret"}])
         );
         assert_eq!(
-            to_acp(parse(named), present)[0]["headers"],
+            to_acp(parse(named), &present, &none())[0]["headers"],
             json!([{"name": "X-Key", "value": "secret"}])
         );
 
-        assert!(to_acp(parse(bearer), no_env).is_empty());
-        assert!(to_acp(parse(named), no_env).is_empty());
+        assert!(to_acp(parse(bearer), &none(), &none()).is_empty());
+        assert!(to_acp(parse(named), &none(), &none()).is_empty());
+    }
+
+    /// Every variable the config names, once, so a login shell is asked at
+    /// most once per name however many servers share it.
+    #[test]
+    fn referenced_env_is_the_union_of_both_spellings() {
+        let config = parse(
+            r#"{"mcp":{
+                "a":{"type":"http","url":"https://a","bearer_token_env":"TOK"},
+                "b":{"type":"http","url":"https://b","header_env":{"X-A":"TOK","X-B":"OTHER"}}
+            }}"#,
+        );
+
+        let keys: Vec<_> = referenced_env(&config).into_iter().collect();
+        assert_eq!(keys, vec!["OTHER", "TOK"]);
     }
 
     /// Only an explicit `false` disables a server; absent means on, which is
@@ -286,28 +490,32 @@ mod tests {
                     "unsaid":{"command":"c"}
                 }}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         let names: Vec<_> = servers.iter().map(|s| s["name"].as_str().unwrap()).collect();
         assert_eq!(names, vec!["on", "unsaid"]);
     }
 
-    /// A transport this build has never heard of, and a server missing the one
-    /// field its transport needs, each cost that server alone. Guessing at
-    /// either would cost the session.
+    /// A transport this build has never heard of, a server missing the one
+    /// field its transport needs, and an entry whose field fx has changed the
+    /// shape of each cost that server alone — never the file.
     #[test]
-    fn an_unknown_transport_or_a_missing_field_costs_one_server() {
+    fn a_bad_entry_costs_itself_and_nothing_else() {
         let servers = to_acp(
             parse(
                 r#"{"mcp":{
                     "future":{"type":"websocket","url":"wss://e.test"},
                     "urlless":{"type":"http","headers":{"a":"b"}},
                     "commandless":{"args":["x"]},
+                    "reshaped":{"command":"x","headers":[{"name":"a","value":"b"}]},
+                    "stringy":{"command":"y","enabled":"yes"},
                     "good":{"command":"ok"}
                 }}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);
@@ -339,7 +547,8 @@ mod tests {
             parse(
                 r#"{"mcp":{"probe":{"command":"node","policy":"optional","restart_limit":3,"trust":"approved"}},"schema_version":9}"#,
             ),
-            no_env,
+            &none(),
+            &none(),
         );
 
         assert_eq!(servers.len(), 1);

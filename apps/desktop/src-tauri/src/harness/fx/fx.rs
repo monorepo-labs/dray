@@ -221,12 +221,9 @@ async fn open_session(
     let mcp_servers = mcp::configured_servers().await;
 
     if is_new_session {
-        let answer = client
-            .request(
-                "session/new",
-                json!({"cwd": session_cwd, "mcpServers": mcp_servers}),
-            )
-            .await?;
+        let answer =
+            open_with_servers(client, "session/new", json!({"cwd": session_cwd}), mcp_servers)
+                .await?;
         let id = answer
             .get("sessionId")
             .and_then(Value::as_str)
@@ -243,13 +240,69 @@ async fn open_session(
         .and_then(|item| item.thread_id)
         .context("this session has no fx session to resume")?;
 
-    client
-        .request(
-            "session/resume",
-            json!({"sessionId": recorded, "cwd": session_cwd, "mcpServers": mcp_servers}),
-        )
-        .await?;
+    open_with_servers(
+        client,
+        "session/resume",
+        json!({"sessionId": recorded, "cwd": session_cwd}),
+        mcp_servers,
+    )
+    .await?;
     Ok(recorded)
+}
+
+/// `session/new` or `session/resume` with the MCP list, shedding servers fx
+/// refuses until it opens.
+///
+/// Every server on the ACP surface is *required* — fx's shell tolerates a
+/// dead one under `policy=optional`, but over ACP the same entry fails the
+/// whole request with `-32602 Required MCP server '<name>' failed to start`.
+/// Left alone, one stale command or unreachable URL in `~/.fx/mcp.json` would
+/// make fx sessions uncreatable in Dray while working fine in a terminal. So
+/// the named culprit is dropped and the request repeated; a refusal naming no
+/// server sheds them all. The child stays usable across a refused open —
+/// measured, for both methods. Each drop is logged, since the reader's only
+/// other signal is a tool the agent cannot find.
+async fn open_with_servers(
+    client: &RpcClient,
+    method: &str,
+    base: Value,
+    mut servers: Vec<Value>,
+) -> Result<Value> {
+    loop {
+        let mut params = base.clone();
+        params["mcpServers"] = Value::Array(servers.clone());
+        match client.request(method, params).await {
+            Ok(answer) => return Ok(answer),
+            Err(error) if !servers.is_empty() => {
+                let message = error.to_string();
+                match refused_server(&servers, &message) {
+                    Some(index) => {
+                        let dropped = servers.remove(index);
+                        eprintln!(
+                            "[fx mcp] dropping server {}: {message}",
+                            dropped["name"].as_str().unwrap_or("?")
+                        );
+                    }
+                    None => {
+                        eprintln!("[fx mcp] dropping every server: {message}");
+                        servers.clear();
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Which of `servers` a refusal names, matched on the quoted name fx puts in
+/// its message. `None` where it names none of them — a message that changed
+/// shape, or a refusal about something other than a server.
+fn refused_server(servers: &[Value], message: &str) -> Option<usize> {
+    servers.iter().position(|server| {
+        server["name"]
+            .as_str()
+            .is_some_and(|name| message.contains(&format!("'{name}'")))
+    })
 }
 
 async fn apply_settings(
@@ -692,6 +745,23 @@ mod tests {
         assert_eq!(mode_for(ApprovalPolicy::Auto), "code");
         assert_eq!(mode_for(ApprovalPolicy::DontAsk), "code");
         assert_eq!(mode_for(ApprovalPolicy::BypassPermissions), "code");
+    }
+
+    /// fx's refusal names the server in quotes, and that is the whole match:
+    /// a server whose name is a prefix of another's must not be blamed for
+    /// it, and a message naming none answers `None` so the caller sheds all
+    /// rather than guessing.
+    #[test]
+    fn a_refusal_names_the_server_it_is_about() {
+        let servers = vec![json!({"name": "files"}), json!({"name": "files-remote"})];
+        let refusal = |name: &str| {
+            format!("Required MCP server '{name}' failed to start: FileNotFound (code -32602)")
+        };
+
+        assert_eq!(refused_server(&servers, &refusal("files-remote")), Some(1));
+        assert_eq!(refused_server(&servers, &refusal("files")), Some(0));
+        assert_eq!(refused_server(&servers, &refusal("other")), None);
+        assert_eq!(refused_server(&servers, "Each HTTP MCP server requires headers"), None);
     }
 
     /// The prompt's answer is read off its id and nothing else — a response
