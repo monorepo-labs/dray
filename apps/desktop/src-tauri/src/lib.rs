@@ -688,6 +688,8 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_pick,
             #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::automation::browser_snapshot,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_status,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_download,

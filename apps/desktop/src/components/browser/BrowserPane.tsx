@@ -33,6 +33,8 @@ import {
   setPendingTab,
   useOpenError,
   setViewport,
+  snapshotPainted,
+  useBrowserSnapshot,
   useBrowserTabs,
   useChromium,
   usePendingTab,
@@ -91,6 +93,7 @@ export default function BrowserPane({
   const pending = usePendingTab(sessionId);
   const current = pending ? null : (tabs.find((t) => t.active) ?? null);
   const viewport = useViewport(sessionId);
+  const snapshot = useBrowserSnapshot(sessionId);
   const [deviceBar, setDeviceBar] = useState(false);
   const key = useId();
   const stageRef = useRef<HTMLDivElement>(null);
@@ -168,15 +171,39 @@ export default function BrowserPane({
           // is a native view, and a DOM scroll container cannot clip it.
           <div
             ref={frameRef}
-            className="shrink-0 rounded-sm shadow-[0_0_0_1px_var(--border)]"
+            className="relative shrink-0 rounded-sm shadow-[0_0_0_1px_var(--border)]"
             style={{
               width: `min(${viewport.width}px, 100%)`,
               height: `min(${viewport.height}px, 100%)`,
             }}
-          />
-        ) : null}
+          >
+            <Snapshot url={snapshot} />
+          </div>
+        ) : (
+          <Snapshot url={snapshot} />
+        )}
       </div>
     </div>
+  );
+}
+
+/// Stands in for the native view while a modal has it hidden. Fills the
+/// same rect the view did, so the capture lands with no scaling.
+function Snapshot({ url }: { url: string | null }) {
+  if (!url) return null;
+  return (
+    <img
+      src={url}
+      alt=""
+      decoding="sync"
+      className="absolute inset-0 h-full w-full"
+      onLoad={(e) => {
+        void e.currentTarget
+          .decode()
+          .catch(() => undefined)
+          .then(() => snapshotPainted(url));
+      }}
+    />
   );
 }
 

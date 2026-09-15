@@ -1004,6 +1004,39 @@ const HELPERS_JS: &str = r#"
   };
 "#;
 
+/// The active tab as the pane sees it, for drawing in its place while the
+/// native view is hidden under a modal. No metrics override: the picture
+/// must match the widget's own size, or it is drawn stretched. The view
+/// hides only once this lands, so the whole cost is a modal opening late
+/// over the page: one CSS pixel per image pixel (a quarter of retina) and
+/// a fast JPEG, since the picture lives as long as a menu is open. Waits
+/// on `CAPTURING` so an agent's sized screenshot cannot hand back a
+/// phone-wide page.
+#[tauri::command]
+pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
+    let tab = active_tab(&session_id)?;
+    let _held = CAPTURING.lock().await;
+    // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
+    // at the scrollbar, and a picture a scrollbar short of the view is
+    // stretched across it. The clip is in page coordinates, hence the
+    // scroll offset from the metrics.
+    let (size, metrics) = tokio::join!(
+        eval(tab, "({ w: innerWidth, h: innerHeight })"),
+        cdp(tab, "Page.getLayoutMetrics", json!({}))
+    );
+    let (size, metrics) = (size?, metrics?);
+    let vp = &metrics["cssVisualViewport"];
+    let clip = json!({
+        "x": vp["pageX"], "y": vp["pageY"],
+        "width": size["w"], "height": size["h"],
+        "scale": 1,
+    });
+    let params = json!({ "format": "jpeg", "quality": 60, "optimizeForSpeed": true, "clip": clip });
+    let reply = cdp(tab, "Page.captureScreenshot", params).await?;
+    let data = reply["data"].as_str().ok_or("no image came back")?;
+    Ok(format!("data:image/jpeg;base64,{data}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
