@@ -2243,6 +2243,11 @@ async fn deliver_prompt(
     // Already resolved against the tracker by the caller. Appended to the text
     // the child is given, so the transcript keeps showing exactly what the
     // model was told — the same rule a non-image attachment's `@path` follows.
+    //
+    // fx is the one exception, and it is deliberate: it has no system-prompt
+    // surface, so [`crate::harness::fx::start_turn`] appends Dray's rules to
+    // the wire text alone and the transcript shows strictly less than the
+    // model was told. Nothing else may take that liberty.
     issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
