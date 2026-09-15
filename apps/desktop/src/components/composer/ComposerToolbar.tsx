@@ -35,6 +35,8 @@ type ComposerToolbarProps = {
   /// have one, so the picker that names the model is where it belongs.
   fast: boolean;
   onFastChange: (fast: boolean) => void;
+  /// What the harness said about fast mode last turn, if it said anything.
+  fastNote: string | null;
   onModelChange: (modelId: ModelId, effort: Effort | null) => void;
   onRefreshModels: () => void;
   onReloadModels: () => void;
@@ -88,6 +90,7 @@ export default function ComposerToolbar({
   modelId,
   effort,
   fast,
+  fastNote,
   onFastChange,
   onModelChange,
   onRefreshModels,
@@ -143,6 +146,7 @@ export default function ComposerToolbar({
         modelId={modelId}
         effort={effort}
         fast={fast}
+        fastNote={fastNote}
         onFastChange={onFastChange}
         isNewSession={isNewSession}
         onChange={onModelChange}

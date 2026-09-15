@@ -432,6 +432,20 @@ impl Mapper {
                     duration_ms: compact_metadata.duration_ms,
                 }))
             }
+            // The notice channel is general and keyed, like `status` above, so
+            // only the keys something reads are mapped and the rest fall
+            // through to `None` — a notice with nowhere to go is not a parse
+            // failure. This arm is the whole seam for the rest of the channel
+            // on purpose: mapping it is cheap, where *drawing* it is a design
+            // question nobody has answered, so the arm exists and the UI does
+            // not. The whole `fast-mode-` prefix rather than the one
+            // captured key, because the payload carries the harness's sentence
+            // untouched: anything it says under that prefix is news about fast
+            // mode, and drawing it beside the switch is honest whichever way
+            // the news goes.
+            SystemEvent::Notification { key, text, .. } if key.starts_with("fast-mode-") => {
+                Ok(Some(AgentEventPayload::FastModeNotice { text }))
+            }
             _ => Ok(None),
         }
     }
@@ -1121,7 +1135,8 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::ThinkingTokens { session_id, .. }
         | SystemEvent::PermissionDenied { session_id, .. }
         | SystemEvent::CompactBoundary { session_id, .. }
-        | SystemEvent::ApiRetry { session_id, .. } => session_id,
+        | SystemEvent::ApiRetry { session_id, .. }
+        | SystemEvent::Notification { session_id, .. } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -1746,6 +1761,50 @@ mod tests {
                 ..
             } if usage.context_window.is_none()
         )));
+    }
+
+    /// The refusal the reader never saw: fast mode lit, the turn running at
+    /// ordinary speed, and the only word about it on a `notification` line that
+    /// used to land in `parse_failures.jsonl` as `unknown_subtype`.
+    ///
+    /// The fixture is two lines because that is what was captured — the CLI
+    /// says it once per turn it refuses, not once per session, which is what
+    /// lets a later turn saying nothing clear the notice.
+    #[test]
+    fn maps_a_fast_mode_refusal_to_the_harnesss_own_sentence() {
+        let events = map_fixture(
+            &mut Mapper::default(),
+            include_str!("fixtures/fast_mode_refused.jsonl"),
+        );
+
+        let notices: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                AgentEventPayload::FastModeNotice { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            notices,
+            [
+                "Fast mode disabled · usage credits exhausted",
+                "Fast mode disabled · usage credits exhausted"
+            ]
+        );
+    }
+
+    /// Every other key on that channel is somebody else's notice, and a notice
+    /// with nowhere to go is a clean drop rather than a failure — the same
+    /// reading `tool_progress` gets.
+    #[test]
+    fn maps_a_notification_on_another_key_to_nothing() {
+        let line = r#"{"type":"system","subtype":"notification","key":"tips","text":"Try /help","priority":"low","color":"text","uuid":"u","session_id":"s"}"#;
+
+        assert!(Mapper::default()
+            .map(parser::parse_line(line).unwrap())
+            .unwrap()
+            .is_none());
     }
 
     /// A compaction is exactly two events, and the CLI's own bookkeeping that

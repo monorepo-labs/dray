@@ -1,4 +1,4 @@
-import type { Harness, Model, ModelId } from "@/types/events";
+import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 
 /// When a fast-mode pick can reach the child, per harness.
 ///
@@ -75,4 +75,32 @@ export function fastFor(
   const support = FAST_MODE_BY_HARNESS[harness] ?? "none";
   if (support === "none") return false;
   return models.find((m) => m.id === modelId)?.supportsFast ?? standsWithNoModel(harness);
+}
+
+/// The harness's own word about fast mode this turn, or `null` where it said
+/// nothing.
+///
+/// Read back out of the log rather than tracked, the same bargain the context
+/// ring makes: the notice is already persisted, so a session reopened days
+/// later reads the same answer it did live.
+///
+/// Scoped to the newest turn, which is what clears it — Claude Code says this
+/// once per **turn** it refuses, not once per session, so a turn that runs fast
+/// says nothing and the walk stops at its `turn_started` having found no
+/// notice. Captured: two lines 8s apart in one session, which is the whole
+/// reason this walk may stop there. Read it as once-per-session and the stop is
+/// a bug to simplify away — and then the newest notice stands for the rest of
+/// the session, which cannot heal: a cooldown ends, credits get topped up, and
+/// the sentence sits there saying otherwise.
+///
+/// Deliberately not read from `turn_started`'s own `settings.fastMode`. That
+/// field is not a weaker source but a lying one: measured, it said `on` through
+/// both turns of the capture the CLI refused.
+export function fastNotice(events: AgentEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const p = events[i].payload;
+    if (p.type === "fast_mode_notice") return p.text;
+    if (p.type === "turn_started") return null;
+  }
+  return null;
 }

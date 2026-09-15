@@ -87,6 +87,7 @@ export default function ModelSelector({
   effort,
   fast,
   onFastChange,
+  fastNote,
   isNewSession,
   onChange,
   onRefreshModels,
@@ -108,6 +109,9 @@ export default function ModelSelector({
   /// screen, and `fastFor` is what settles it at the send.
   fast: boolean;
   onFastChange: (fast: boolean) => void;
+  /// The harness's own sentence about fast mode on the newest turn, drawn under
+  /// the row. Never reconciled into `fast` above — see `fastNotice`.
+  fastNote: string | null;
   /// fx's fast mode is settled when its session is created and unreachable
   /// after, so the row it draws has to go once one exists.
   isNewSession: boolean;
@@ -512,25 +516,39 @@ export default function ModelSelector({
             where the harness *and* the model have one, so it is never a control
             that acks and changes nothing. */}
         {offersFast(harness, selected, isNewSession) && (
-          <DropdownMenuItem
-            className="cursor-pointer text-ui"
-            // The row is the control and the switch is its picture: a `Switch`
-            // that took its own click would fire beside this one and toggle
-            // twice. So the state is stated here — `role`/`aria-checked` over
-            // the item's own `menuitem` — and the track below is inert.
-            role="switch"
-            aria-checked={fast}
-            // Held open, unlike every other row in this menu. A switch that
-            // vanishes on the press never shows the reader which way it went,
-            // and a second thought about it costs reopening the picker.
-            onSelect={(e) => {
-              e.preventDefault();
-              onFastChange(!fast);
-            }}
-          >
-            Fast mode
-            <Switch checked={fast} tabIndex={-1} aria-hidden className="pointer-events-none ml-auto" />
-          </DropdownMenuItem>
+          <>
+            <DropdownMenuItem
+              className="cursor-pointer text-ui"
+              // The row is the control and the switch is its picture: a `Switch`
+              // that took its own click would fire beside this one and toggle
+              // twice. So the state is stated here — `role`/`aria-checked` over
+              // the item's own `menuitem` — and the track below is inert.
+              role="switch"
+              aria-checked={fast}
+              // Held open, unlike every other row in this menu. A switch that
+              // vanishes on the press never shows the reader which way it went,
+              // and a second thought about it costs reopening the picker.
+              onSelect={(e) => {
+                e.preventDefault();
+                onFastChange(!fast);
+              }}
+            >
+              Fast mode
+              <Switch checked={fast} tabIndex={-1} aria-hidden className="pointer-events-none ml-auto" />
+            </DropdownMenuItem>
+
+            {/* The harness's own sentence, verbatim — "Fast mode disabled ·
+                usage credits exhausted" says the whole thing, so nothing here
+                frames it. Under the switch only while the switch is on: it is
+                there to explain a lit control that changed nothing, and beside
+                an off one it would be a stale complaint about a setting the
+                reader has already left. Not a `DropdownMenuItem` — there is
+                nothing to pick, and one would take arrow focus on the way past
+                the row it belongs to. */}
+            {fastNote && fast && (
+              <p className="px-2 pb-1.5 text-ui text-muted-foreground">{fastNote}</p>
+            )}
+          </>
         )}
 
         {/* A submenu rather than a second block under a heading, because the

@@ -133,6 +133,7 @@ function App() {
     effort,
     fast,
     setFast,
+    fastNote,
     permissionMode,
     projects,
     projectPath,
@@ -1789,6 +1790,7 @@ function App() {
               effort={effort}
               fast={fast}
               onFastChange={setFast}
+              fastNote={fastNote}
               onModelChange={handleModelChange}
               onRefreshModels={refreshModels}
               onReloadModels={reloadModels}

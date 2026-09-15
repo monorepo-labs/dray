@@ -398,6 +398,19 @@ pub enum AgentEventPayload {
         message: String,
     },
 
+    /// The harness's own word about fast mode, in its own sentence — "Fast mode
+    /// disabled · usage credits exhausted". Drawn beside the switch, never
+    /// reconciled into the reader's pick: this says what the CLI did, where the
+    /// switch says what was asked for, and moving the switch from here would
+    /// read as the reader having turned it off. Same reading `permissionMode`
+    /// gets.
+    ///
+    /// Claude Code alone says anything at all; Codex and fx report nothing, so
+    /// there is nothing to draw for those two either way.
+    FastModeNotice {
+        text: String,
+    },
+
     Hook {
         name: String,
         event: String,

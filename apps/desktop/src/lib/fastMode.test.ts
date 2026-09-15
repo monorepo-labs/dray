@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { fastFor, offersFast } from "./fastMode";
-import type { Harness, Model, ModelId } from "@/types/events";
+import { fastFor, fastNotice, offersFast } from "./fastMode";
+import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 
 function model(id: string, supportsFast: boolean): Model {
   return {
@@ -78,5 +78,32 @@ describe("an unset model", () => {
 
     expect(offersFast("codex", null, true)).toBe(false);
     expect(fastFor(true, "codex", [], "" as ModelId)).toBe(false);
+  });
+});
+
+/// The notice is what stands between a lit switch and a turn that ran at
+/// ordinary speed, so what matters is both that it is said and that it stops
+/// being said.
+describe("the harness's own word about fast mode", () => {
+  const ev = (payload: object) => ({ payload }) as AgentEvent;
+  const REFUSED = "Fast mode disabled · usage credits exhausted";
+  const notice = ev({ type: "fast_mode_notice", text: REFUSED });
+  const turn = ev({ type: "turn_started" });
+  const text = ev({ type: "assistant_text", text: "hi" });
+
+  it("says nothing where the harness did", () => {
+    expect(fastNotice([])).toBe(null);
+    expect(fastNotice([turn, text])).toBe(null);
+  });
+
+  it("carries the sentence through the rest of the turn", () => {
+    expect(fastNotice([turn, notice, text])).toBe(REFUSED);
+  });
+
+  /// The clearing rule. A turn that refuses says so again, so a turn that says
+  /// nothing is a turn that ran fast — and the notice must not outlive it.
+  it("clears on a turn that says nothing", () => {
+    expect(fastNotice([turn, notice, text, turn, text])).toBe(null);
+    expect(fastNotice([turn, notice, turn, notice])).toBe(REFUSED);
   });
 });
