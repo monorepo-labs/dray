@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Sliders, Zap } from "lucide-react";
+import { Check, Sliders } from "lucide-react";
 import AgentIcon from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
@@ -22,13 +22,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { invoke } from "@tauri-apps/api/core";
-import { FAST_MODE_NOTE, offersFast } from "@/lib/fastMode";
+import { offersFast } from "@/lib/fastMode";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
@@ -318,6 +319,13 @@ export default function ModelSelector({
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
+              {/* The second qualifier on the model, drawn exactly like the
+                  first: its *presence* is what says fast mode is on, so colour
+                  would be a second way to say one thing — and an accent here
+                  competes with the yellow the sidebar spends on sessions
+                  wanting the reader. A glyph was the other try; among two words
+                  it read as a badge stuck on the label. */}
+              {fast && <span className="text-muted-foreground/60">Fast</span>}
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -490,6 +498,41 @@ export default function ModelSelector({
           </p>
         )}
 
+        {/* Straight under the models it qualifies, and above "More models",
+            which is a *fold of the same list* — putting this between the list
+            and its own continuation would read as the fold belonging to it.
+            Inside this menu rather than beside it in the toolbar, since which
+            models have a faster tier is what this menu is already about.
+
+            A real switch and not a check: every other row here is a *pick* out
+            of a set, where this is one thing on or off, and a tick that appears
+            and disappears says that in half the space and none of the clarity.
+            No glyph either — the rows above carry none, and one here would make
+            this look like a model with a mark rather than a control. Drawn only
+            where the harness *and* the model have one, so it is never a control
+            that acks and changes nothing. */}
+        {offersFast(harness, selected, isNewSession) && (
+          <DropdownMenuItem
+            className="cursor-pointer text-ui"
+            // The row is the control and the switch is its picture: a `Switch`
+            // that took its own click would fire beside this one and toggle
+            // twice. So the state is stated here — `role`/`aria-checked` over
+            // the item's own `menuitem` — and the track below is inert.
+            role="switch"
+            aria-checked={fast}
+            // Held open, unlike every other row in this menu. A switch that
+            // vanishes on the press never shows the reader which way it went,
+            // and a second thought about it costs reopening the picker.
+            onSelect={(e) => {
+              e.preventDefault();
+              onFastChange(!fast);
+            }}
+          >
+            Fast mode
+            <Switch checked={fast} tabIndex={-1} aria-hidden className="pointer-events-none ml-auto" />
+          </DropdownMenuItem>
+        )}
+
         {/* A submenu rather than a second block under a heading, because the
             rows below are not a category the reader is choosing *between* —
             they are the ones they will not open this menu for. Folding them
@@ -502,33 +545,6 @@ export default function ModelSelector({
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>{more.map(modelRow)}</DropdownMenuSubContent>
           </DropdownMenuSub>
-        )}
-
-        {/* Under the models and above "Choose models…", because it qualifies
-            the model the way effort does rather than being one — and inside
-            this menu rather than beside it in the toolbar, since which models
-            have a faster tier is exactly what this menu is already about.
-
-            A toggling `DropdownMenuItem` rather than a checkbox item: the menu
-            closes on the pick like every other row here, and the switch is what
-            says on or off. Drawn only where the harness *and* the model have
-            one, so it is never a control that acks and changes nothing. */}
-        {offersFast(harness, selected, isNewSession) && (
-          <DropdownMenuItem
-            className="cursor-pointer gap-2 text-ui"
-            onSelect={() => onFastChange(!fast)}
-          >
-            <Zap className={fast ? "size-3.5" : "size-3.5 text-muted-foreground"} />
-            <span className="flex flex-col">
-              Fast mode
-              {/* The vendor's own cost sentence, not ours. Codex publishes
-                  "2x speed, increased usage" on every row of `model/list`, and
-                  a switch that says only "faster" is one the reader finds out
-                  about from a bill. */}
-              <span className="text-muted-foreground/60">{FAST_MODE_NOTE[harness]}</span>
-            </span>
-            {fast && <Check className="ml-auto size-3.5 self-start" />}
-          </DropdownMenuItem>
         )}
 
         {/* No rule above it. The row is already a different shape to the models

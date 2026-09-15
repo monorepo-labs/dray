@@ -76,17 +76,3 @@ export function fastFor(
   if (support === "none") return false;
   return models.find((m) => m.id === modelId)?.supportsFast ?? standsWithNoModel(harness);
 }
-
-/// What the row says under its label, in the harness's own words.
-///
-/// Codex's is a **cost** statement it publishes itself — `model/list` carries
-/// "2x speed, increased usage" on Astra and "1.5x speed" on the rest — and
-/// saying only "faster" where the vendor says "and dearer" is the one wording
-/// mistake worth avoiding here. fx's hedge is fx's own, from its settings
-/// screen: it decides per model and publishes no list of which.
-export const FAST_MODE_NOTE: Record<Harness, string> = {
-  claude_code: "Faster responses, uses more of your limit",
-  codex: "Around twice the speed, increased usage",
-  fx: "Faster inference where the model supports it",
-  pi: "",
-};
