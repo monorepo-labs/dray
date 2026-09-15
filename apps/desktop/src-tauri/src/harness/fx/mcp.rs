@@ -536,10 +536,12 @@ mod tests {
     }
 
     /// What this machine's own `~/.fx/mcp.json` maps to, printed rather than
-    /// asserted. Everything above reads a fixture, so it proves the mapping and
-    /// nothing about whether the reader's real file still parses through it —
-    /// which is the half a new fx release can break. Ignored by default: the
-    /// answer is whatever this machine happens to be configured with.
+    /// asserted, **header values masked** — a `bearer_token_env` resolves to
+    /// a key, and a test's stdout is the last place one belongs. Everything
+    /// above reads a fixture, so it proves the mapping and nothing about
+    /// whether the reader's real file still parses through it — which is the
+    /// half a new fx release can break. Ignored by default: the answer is
+    /// whatever this machine happens to be configured with.
     ///
     /// Read it beside `fx mcp list`: a server healthy there and absent here is
     /// one Dray is skipping, and for an `auth=authenticated` HTTP server that
@@ -547,7 +549,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn what_the_installed_fx_config_maps_to() {
-        for server in configured_servers().await {
+        for mut server in configured_servers().await {
+            if let Some(headers) = server["headers"].as_array_mut() {
+                for header in headers {
+                    header["value"] = json!("<masked>");
+                }
+            }
             println!("  {server}");
         }
     }
