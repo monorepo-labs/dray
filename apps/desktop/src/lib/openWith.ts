@@ -89,6 +89,54 @@ export function pickFileOpener(
   );
 }
 
+/// Hands one file to one named app, honouring what each kind means for a file:
+/// Finder **reveals**, an editor with a known scheme is asked for the line, and
+/// anything else simply opens it.
+///
+/// Throws on failure rather than swallowing it, since the two callers want
+/// different things — the transcript's link falls through to a reveal, where
+/// the Files view's button has a tooltip to put the sentence in.
+export async function openFileWith(
+  app: ExternalApp,
+  path: string,
+  line?: number,
+): Promise<void> {
+  // `open -a Finder` on a source file hands Finder a document it has no use
+  // for, where selecting it in a window is what picking Finder here means.
+  if (app.kind === "files") return revealItemInDir(path);
+  await invoke("open_in_app", { appPath: app.path, path: lineUrl(app, path, line) ?? path });
+}
+
+/// What a control opening a *directory* offers and remembers, and what one
+/// opening a *file* does — two different lists, two different defaults and two
+/// different meanings for Finder, collected so one button can wear either.
+export type Opener = {
+  /// Where the reader's last pick is stored.
+  key: string;
+  /// Which detected apps this control lists.
+  choices: (apps: ExternalApp[]) => ExternalApp[];
+  /// Which of them it opens with when the stored one is gone or unset.
+  pick: (apps: ExternalApp[], stored: string | null) => ExternalApp | null;
+  open: (app: ExternalApp, path: string, line?: number) => Promise<void>;
+};
+
+export const DIR_OPENER: Opener = {
+  key: OPEN_DIR_KEY,
+  // Everything detected, terminals included: handing a checkout to Ghostty is
+  // a thing the reader asks for.
+  choices: (apps) => apps,
+  // Any app beats none — this button has to open *something*.
+  pick: (apps, stored) => apps.find((app) => app.path === stored) ?? apps[0] ?? null,
+  open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
+};
+
+export const FILE_OPENER: Opener = {
+  key: OPEN_FILE_KEY,
+  choices: fileOpenerChoices,
+  pick: pickFileOpener,
+  open: openFileWith,
+};
+
 /// Opens `path` the way the reader asked for in Settings.
 ///
 /// Finder is the default and it *reveals* rather than opens: `open -a Finder`
@@ -104,9 +152,9 @@ export async function openFile(path: string, line?: number): Promise<void> {
   const stored = readLocalStorage<string | null>(OPEN_FILE_KEY, null);
   const app = pickFileOpener(await load(), stored);
 
-  if (app && app.kind !== "files") {
+  if (app) {
     try {
-      await invoke("open_in_app", { appPath: app.path, path: lineUrl(app, path, line) ?? path });
+      await openFileWith(app, path, line);
       return;
     } catch (err) {
       console.error(`failed to open ${path} in ${app.name}`, err);

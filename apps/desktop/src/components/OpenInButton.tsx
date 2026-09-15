@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOpenApps } from "@/hooks/useOpenApps";
+import { DIR_OPENER, type Opener } from "@/lib/openWith";
 import { cn } from "@/lib/utils";
 import type { ExternalApp } from "@/types/events";
 
@@ -34,8 +35,23 @@ const FAILED_MS = 4000;
 /// cannot do anything, and there is no cure to name — every mac has Finder, so
 /// an empty list means the scan itself found nothing rather than that the
 /// reader is missing an editor.
-export default function OpenInButton({ cwd, className }: { cwd: string; className?: string }) {
-  const { apps, pick, select, open, refresh } = useOpenApps();
+export default function OpenInButton({
+  path,
+  opener = DIR_OPENER,
+  line,
+  className,
+}: {
+  path: string;
+  /// Which control this is: a session's working directory, or one file. The
+  /// two offer different apps, remember different picks and mean different
+  /// things by Finder — see [Opener](../lib/openWith.ts).
+  opener?: Opener;
+  /// The line to ask an editor for, where the file was opened from a
+  /// reference that named one. Ignored by a directory and by a reveal.
+  line?: number;
+  className?: string;
+}) {
+  const { apps, pick, select, open, refresh } = useOpenApps(opener);
 
   // `open`'s own sentence when a launch failed, held briefly on the button.
   // The alternative was the developer console, where it told the reader
@@ -47,7 +63,7 @@ export default function OpenInButton({ cwd, className }: { cwd: string; classNam
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
 
   const handleOpen = async (app: ExternalApp) => {
-    const failure = await open(app, cwd);
+    const failure = await open(app, path, line);
     setError(failure);
     if (timer.current) clearTimeout(timer.current);
     // Retires itself like the update check's own verdicts do. A launch failure

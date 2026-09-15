@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
@@ -10,31 +11,43 @@ import type { OpenFile } from "@/hooks/useOpenFiles";
 /// Overflow scrolls sideways and there is no dropdown: a strip long enough to
 /// need one is a strip the reader should be closing tabs out of, and the tree
 /// beside it reopens any of them in a click.
+///
+/// **One row, not two**, the reading the Docs panel's chip strip takes: a
+/// filename header under a strip of tabs says the same thing twice, and the
+/// full path is on each tab's own `title` where it is only ever wanted when the
+/// name is ambiguous.
 export default function FileTabs({
   files,
   active,
   onSelect,
   onClose,
+  actions,
 }: {
   files: readonly OpenFile[];
   active: string | null;
   onSelect: (path: string) => void;
   onClose: (path: string) => void;
+  /// Drawn at the row's end, past the scrolling strip — what acts on the file
+  /// being read rather than on the row.
+  actions?: ReactNode;
 }) {
   const labels = tabLabels(files.map((file) => file.path));
 
   return (
-    <div className="scrollbar-none flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
-      {files.map((file, i) => (
-        <Tab
-          key={file.path}
-          path={file.path}
-          label={labels[i]}
-          active={file.path === active}
-          onSelect={() => onSelect(file.path)}
-          onClose={() => onClose(file.path)}
-        />
-      ))}
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
+      <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        {files.map((file, i) => (
+          <Tab
+            key={file.path}
+            path={file.path}
+            label={labels[i]}
+            active={file.path === active}
+            onSelect={() => onSelect(file.path)}
+            onClose={() => onClose(file.path)}
+          />
+        ))}
+      </div>
+      {actions}
     </div>
   );
 }

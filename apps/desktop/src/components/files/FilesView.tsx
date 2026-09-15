@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelLeft, PanelRight, Search } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
+import OpenInButton from "@/components/OpenInButton";
 import FileTabs from "@/components/files/FileTabs";
 import FileTree from "@/components/files/FileTree";
 import FileViewer from "@/components/files/FileViewer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
+import { FILE_OPENER } from "@/lib/openWith";
 import { readLocalStorage, useLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import {
   activateFile,
@@ -24,10 +26,12 @@ type Side = "left" | "right";
 const SIDE_KEY = "ade.filesListSide";
 const WIDTH_KEY = "ade.filesListWidth";
 
-/// Left, matching every other list in the app. The switch exists because a
-/// reader whose editor puts its tree on the right reads a left one as backwards
-/// all day, not because either answer is better.
-const DEFAULT_SIDE: Side = "left";
+/// Right, against every other list in the app, and deliberately: the sidebar
+/// already holds the window's left edge, so a tree there puts two lists back to
+/// back with the code squeezed between them. On the right it sits where the
+/// right panel does, and the code keeps the side it is read from. The switch is
+/// there for readers whose editor does the opposite.
+const DEFAULT_SIDE: Side = "right";
 
 /// The Diff view's `w-72`, so the two views open at the same width.
 const DEFAULT_WIDTH = 288;
@@ -72,7 +76,14 @@ export default function FilesView({
 
   // The tree speaks in paths relative to `cwd`; the store speaks in absolute
   // ones, since a chat link can open a file from outside the tree entirely.
-  const openRelative = (path: string) => openInFiles(sessionId, `${cwd}/${path}`);
+  //
+  // Stable, because the tree's rows are memoized against this view re-rendering
+  // on every session event and a fresh function here would defeat all of it one
+  // prop down.
+  const openRelative = useCallback(
+    (path: string) => openInFiles(sessionId, `${cwd}/${path}`),
+    [sessionId, cwd],
+  );
   const selected = activePath?.startsWith(`${cwd}/`)
     ? activePath.slice(cwd.length + 1)
     : null;
@@ -182,9 +193,16 @@ export default function FilesView({
             active={activePath}
             onSelect={(path) => activateFile(sessionId, path)}
             onClose={(path) => closeFile(sessionId, path)}
+            // The same split button the right panel hands a *directory* to,
+            // wearing the file opener. On the tab row rather than over a header
+            // of its own: it acts on the file being read, which the strip
+            // beside it already names.
+            actions={
+              file && <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />
+            }
           />
         )}
-        <FileViewer cwd={cwd} file={file} />
+        <FileViewer file={file} />
       </div>
     </div>
   );

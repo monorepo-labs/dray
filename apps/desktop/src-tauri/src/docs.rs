@@ -129,7 +129,14 @@ static WATCH: LazyLock<Mutex<HashMap<String, RecommendedWatcher>>> =
 ///
 /// Best effort throughout: a path whose directory cannot be watched is skipped,
 /// and the panel is left with the Refresh button it already had.
-#[tauri::command]
+///
+/// **`(async)` on a synchronous body, and it is load-bearing.** A plain
+/// `#[tauri::command]` runs on the **main thread**, and this one both builds an
+/// FSEvents watcher and *drops* the scope's previous one — a drop that stops
+/// that stream and joins its thread. Re-arming happens whenever an open set
+/// changes, which since the Files view arrived is every session switch as well,
+/// so the freeze this buys is one the reader meets while doing nothing unusual.
+#[tauri::command(async)]
 pub fn watch_docs(app: AppHandle, scope: String, paths: Vec<String>) -> Result<(), String> {
     let mut held = WATCH.lock().map_err(|e| e.to_string())?;
     if paths.is_empty() {

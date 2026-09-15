@@ -362,7 +362,7 @@ export default function RightPanel({
           {/* Ahead of Refresh, and outside the tab row's own logic: it acts on
               the session rather than on whatever tab is open, so unlike Refresh
               it does not change meaning from one tab to the next. */}
-          {cwd && <OpenInButton cwd={cwd} />}
+          {cwd && <OpenInButton path={cwd} />}
 
           {/* Gone entirely on Subagents, which has nothing to re-read. It
               reserved its width back when the keycaps sat to its right and

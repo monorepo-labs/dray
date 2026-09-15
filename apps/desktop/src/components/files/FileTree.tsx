@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
-import { expandTo, flattenTree, ROOT, type TreeRow } from "@/lib/fileTree";
+import { expandTo, flattenTree, ROOT } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
 import type { DirEntry } from "@/types/events";
 
@@ -72,19 +72,38 @@ export default function FileTree({
 
   const rows = flattenTree(listings, expanded);
 
-  const toggle = (entry: DirEntry) => {
-    const open = expanded.has(entry.path);
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (open) next.delete(entry.path);
-      else next.add(entry.path);
-      return next;
-    });
-    // Outside the updater, which React is free to run twice. Cached until the
-    // next relist, so collapsing and reopening is instant and only a first
-    // expand costs a read.
-    if (!open && !listings.has(entry.path)) void list(entry.path);
-  };
+  const toggle = useCallback(
+    (entry: DirEntry) => {
+      const open = expanded.has(entry.path);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (open) next.delete(entry.path);
+        else next.add(entry.path);
+        return next;
+      });
+      // Outside the updater, which React is free to run twice. Cached until the
+      // next relist, so collapsing and reopening is instant and only a first
+      // expand costs a read.
+      if (!open && !listings.has(entry.path)) void list(entry.path);
+    },
+    [expanded, listings, list],
+  );
+
+  /// What a click on a row does, as one stable function.
+  ///
+  /// Stable is the whole point: every row is `memo`ized against re-rendering on
+  /// each of the transcript's deltas, and an inline arrow per row defeats that
+  /// by handing every one of them a new prop each time. This changes only when
+  /// the reader expands something or a relist lands, which is exactly when the
+  /// rows have to be reconciled anyway.
+  const activate = useCallback(
+    (entry: DirEntry) => {
+      setCursor(entry.path);
+      if (entry.isDir) toggle(entry);
+      else onOpen(entry.path);
+    },
+    [toggle, onOpen],
+  );
 
   // Opening from a link or the filter box lands on a file the tree may have
   // every directory above it closed for, so the path is walked and each prefix
@@ -187,35 +206,38 @@ export default function FileTree({
       {rows.map((row) => (
         <Row
           key={row.entry.path}
-          row={row}
+          entry={row.entry}
+          depth={row.depth}
           expanded={expanded.has(row.entry.path)}
           selected={row.entry.path === selected}
           cursor={row.entry.path === cursor}
-          onClick={() => {
-            setCursor(row.entry.path);
-            if (row.entry.isDir) toggle(row.entry);
-            else onOpen(row.entry.path);
-          }}
+          onActivate={activate}
         />
       ))}
     </div>
   );
 }
 
-function Row({
-  row,
+/// Memoized for `FileList`'s reason, and harder: this view re-renders on every
+/// session event — a streaming turn is one per delta — while a row's props only
+/// move when the reader expands something or a relist lands. Without it a tree
+/// with a few hundred rows open reconciles all of them at the speed an agent
+/// types, which is how a view that only *reads* manages to freeze the window.
+const Row = memo(function Row({
+  entry,
+  depth,
   expanded,
   selected,
   cursor,
-  onClick,
+  onActivate,
 }: {
-  row: TreeRow;
+  entry: DirEntry;
+  depth: number;
   expanded: boolean;
   selected: boolean;
   cursor: boolean;
-  onClick: () => void;
+  onActivate: (entry: DirEntry) => void;
 }) {
-  const { entry, depth } = row;
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
@@ -224,7 +246,7 @@ function Row({
       role="treeitem"
       aria-expanded={entry.isDir ? expanded : undefined}
       aria-selected={selected}
-      onClick={onClick}
+      onClick={() => onActivate(entry)}
       data-path={entry.path}
       title={entry.path}
       style={{ paddingLeft: 8 + depth * INDENT }}
@@ -248,4 +270,4 @@ function Row({
       <span className="min-w-0 truncate">{entry.name}</span>
     </button>
   );
-}
+});

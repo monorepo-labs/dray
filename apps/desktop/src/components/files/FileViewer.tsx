@@ -1,16 +1,11 @@
 import { useCallback, useMemo, useRef } from "react";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
-import { ExternalLink } from "lucide-react";
 
-import FileIcon from "@/components/FileIcon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
-import { splitPath } from "@/lib/changes";
 import { fileName } from "@/lib/diff";
-import { openFile } from "@/lib/openWith";
 import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
@@ -28,10 +23,8 @@ const TARGET_CSS = `[data-target] { background: color-mix(in oklab, var(--primar
 /// button handing the path to the reader's own editor, and that writes nothing
 /// either.
 export default function FileViewer({
-  cwd,
   file,
 }: {
-  cwd: string;
   /// Null where nothing is open, which is the view's own empty state.
   file: OpenFile | null;
 }) {
@@ -101,51 +94,14 @@ export default function FileViewer({
     );
   }
 
+  // No header row: the tab strip above already names the file and carries the
+  // full path on its own `title`, so a second line here would say it twice —
+  // the reading the Docs panel's chip strip takes. No padding either: the
+  // pane's own border is the frame, and an inset would only make the code
+  // narrower than the window it was given.
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <Header cwd={cwd} path={file.path} line={file.line} />
-
-      {/* No padding: the pane's own border is the frame, and an inset would
-          only make the code narrower than the window it was given. */}
-      <div className="min-h-0 flex-1 overflow-auto text-code">
-        <Body file={file} contents={contents} options={options} ready={ready} />
-      </div>
-    </div>
-  );
-}
-
-function Header({ cwd, path, line }: { cwd: string; path: string; line?: number }) {
-  // Relative to the session's directory where it sits under it, absolute where
-  // it doesn't — a chat link can name a file from anywhere, and half a path is
-  // worse than a long one.
-  const shown = path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path;
-  const { dir, name } = splitPath(shown);
-
-  return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
-      <FileIcon path={path} />
-      {/* Name first and never shrinking, directory after it and truncating —
-          the filename is the part of a path that has to survive a narrow pane. */}
-      <span className="flex min-w-0 flex-1 items-center gap-1.5" title={path}>
-        <span className="shrink-0 text-sidebar-foreground">{name}</span>
-        {dir && (
-          <span className="min-w-0 truncate text-muted-foreground">{dir.replace(/\/$/, "")}</span>
-        )}
-      </span>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label="Open in editor"
-            onClick={() => void openFile(path, line)}
-            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ExternalLink className="size-3.5" strokeWidth={1.5} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="left">Open in editor</TooltipContent>
-      </Tooltip>
+    <div className="min-h-0 flex-1 overflow-auto text-code">
+      <Body file={file} contents={contents} options={options} ready={ready} />
     </div>
   );
 }
