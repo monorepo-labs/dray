@@ -111,10 +111,26 @@ Frontend: `Harness` union (generated), `AGENT_LABELS`, `AgentIcon`,
 - The effort ladder is per provider, not per model. A level fx declines fails the first prompt with fx's own sentence.
 - Every `fx acp` session Dray opens is persisted by fx, prompted or not; a session that failed before its first prompt still leaves a row in `fx sessions`.
 
-## Open observations
+## The file has a writer Dray cannot see
 
-Unexplained, written down rather than guessed at.
+**fx's TUI writes `~/.fx/settings.json` while Dray is running, and it writes fields Dray writes too.** Caught on the reader's own file by a 1s watcher, two writes four seconds apart (2026-09-15, 0.0.10):
 
-- **`models.<provider>` in `~/.fx/settings.json` moves, and nothing here moves it.** The reader's file was seen holding `"models":{"gateway":"spacexai/grok-4.6"}` — a grok model filed under the *gateway* key, which is not a pick anybody would make. **No Dray path writes that map at all**: Dray writes `provider` and `fast_mode` and nothing else. And no fx path this build reaches writes it either — probed 2026-09-15 on 0.0.10 against a throwaway `HOME`, with the file byte- and mtime-identical across `fx acp` spawn, `initialize`, `session/new`, `set_config_option` for model *and* for provider, `set_mode`, `session/prompt`, exit, `fx models --json`, `fx status` and `fx doctor`. A cross-provider `fx acp --model <id>` was checked in all three directions and writes nothing either. The only writer found was `fx provider <name>`, which drops a pre-write snapshot in `~/.fx/backups` and rewrites the mode to `0600`.
+```
+13:01:37  fast_mode=true   models.gateway="anthropic/claude-opus-5"     mode 0600, backup 0x43
+13:01:41  fast_mode=false  models.gateway="anthropic/claude-fable-5.1"  mode 0600, backup 0x44
+```
 
-  So it is fx's own, most likely its TUI recording a per-provider model pick, and it matters only as a reminder that this file has a writer Dray cannot see. Anything reading `models.<provider>` should treat it as somebody else's state.
+That is one model switch in the TUI, and it moved **two** fields in one write: the per-provider model pick, and `fast_mode` — turned off because the model it moved to has no fast tier.
+
+- **`models.<provider>` is the TUI's record of the model picked under that provider.** It had been seen holding `"gateway":"spacexai/grok-4.6"`, a grok model under the gateway key, which read as corruption and is not: it is a pick. **No Dray path writes that map at all** — Dray writes `provider` and `fast_mode` and nothing else.
+- **`fast_mode` therefore has two writers**, fx's TUI and Dray's own per-creation write. See _Known issues_ in the root `CLAUDE.md`.
+- **Every fx write leaves a backup and lands at `0600`**, including this one — which is what makes those two things a usable signature for telling an fx write from a Dray one.
+
+Nothing over ACP does any of this: probed byte- and mtime-identical across `fx acp` spawn, `initialize`, `session/new`, `set_config_option` for model *and* provider, `set_mode`, `session/prompt`, exit, `fx models --json`, `fx status`, `fx doctor`, and a cross-provider `fx acp --model <id>` in all three directions. It is the TUI alone.
+
+## Reading `set_config_option`'s answers
+
+**Two traps, and together they are what stop `-32602` being misread.**
+
+- **An unknown `configId` is accepted silently.** `set_config_option` with `configId: "zzz_not_a_real_option"` and a string value answers **ok** and echoes the same four options back. So a typo'd `configId` can never be found by testing against fx — it will simply stop doing anything. The fx-side twin of every silent-failure rule in the root `CLAUDE.md`.
+- **`-32602 "Missing value"` is a *type* complaint, not an unknown id.** It is what a JSON boolean gets where a string is wanted — reproduced on the known-good `effort` id with `value: true`. Read together with the rule above: a `configId` that answers "Missing value" tells you nothing about whether it exists, and one that answers ok tells you nothing either.

@@ -274,6 +274,10 @@ async fn write_active_provider_at(path: &std::path::Path, provider: &str) -> Res
 
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create_new(true);
+    // A ceiling, not the answer: `open` applies `mode & !umask`, so this can only
+    // land at or below what was found. That is the half that matters for safety —
+    // the temp never exists wider than the target is going to be — and the
+    // `set_permissions` below is what makes it *exact*.
     #[cfg(unix)]
     options.mode(mode);
 
@@ -282,6 +286,17 @@ async fn write_active_provider_at(path: &std::path::Path, provider: &str) -> Res
         let mut file = options.open(&tmp).await?;
         file.write_all(&serde_json::to_vec(&settings)?).await?;
         file.sync_all().await?;
+        // Restored exactly, because the create above was filtered by the umask:
+        // under `0077` a file found at `0644` would otherwise be renamed into
+        // place at `0600`, silently *narrowing* the reader's own config instead
+        // of preserving it. Still before the rename, so the window the ordering
+        // exists to close stays closed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(mode))
+                .await?;
+        }
         anyhow::Ok(())
     }
     .await;
@@ -689,7 +704,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
 
-        for found in [0o600, 0o644] {
+        // `0666` is the case that pins the umask half, and it pins it under the
+        // *ordinary* umask rather than needing one set here — `umask 022` filters
+        // a `0666` create down to `0644`, so a build that only passes
+        // `OpenOptions::mode` and never restores the permissions fails on this
+        // row. The same flaw narrows a real `0644` file to `0600` under `umask
+        // 077`, which is the shape Greptile caught; testing it that way round
+        // would mean moving a process-global umask under parallel tests.
+        for found in [0o600, 0o644, 0o666] {
             std::fs::write(
                 &path,
                 br#"{"provider":"codex","models":{"grok":"grok-4.6"},"yolo_acknowledged":true}"#,
