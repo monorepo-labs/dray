@@ -922,6 +922,10 @@ const handleAnswerQuestions = async (
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
+  // The slot is one value for the whole app, so a failure left in it follows
+  // the reader out of the session it happened in. It reports the reader's own
+  // last action failing, and leaving a session is leaving that action behind.
+  setError(null);
   setHarnessState(prefs.harness);
   // Repaired against the list on screen, not taken as read. The effect below
   // only fires when the harness *changes*, so a stored model left over from the
@@ -937,9 +941,20 @@ const handleNewSession = () => {
   //
   // `prefs.harness` and not the one on screen: this restores a session, which
   // carries its own agent.
+  //
+  // fx repairs per provider, like every other fx site. `usableModel` here fell
+  // to the unset sentinel whenever the remembered pick was not in the list on
+  // screen — and that is the ordinary state after a provider switch, since the
+  // reload repairs the on-screen pick through the raw setter and prefs keep
+  // naming the model of the provider left. Coming back from another fx session
+  // then drew "Select Model" with nothing to repair it: the harness had not
+  // changed, so no fetch followed.
   const ownList = modelsByHarness[prefs.harness] ?? [];
+  const remembered = rememberedModel(prefs.modelByHarness, prefs.harness);
   setModelId(
-    usableModel(ownList, rememberedModel(prefs.modelByHarness, prefs.harness), prefs.harness),
+    prefs.harness === "fx"
+      ? repairFxModel(ownList, remembered)
+      : usableModel(ownList, remembered, prefs.harness),
   );
   setEffortByModel(prefs.effortByModel);
   setPermissionModeState(prefs.permissionMode);
@@ -991,6 +1006,10 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   const previous = selectedSessionIdRef.current;
 
   setSelectedSessionId(sessionId);
+  // Cleared on the way in, never on the way out: the rollback below sets its
+  // own sentence *after* this, so a read that resolves to nothing still says
+  // so. See `handleNewSession` for why the slot has to be cleared at all.
+  setError(null);
 
   // Opening the session is answering the notice about it — an unread completion
   // is read, and a pending request is now on screen. Not the ready-to-merge
@@ -1680,9 +1699,16 @@ useEffect(() => {
             // can land while a background subagent is still running, so the
             // backend's status machine owns the call and reports it on the
             // `session_status` channel instead.
-            if (agentEvent.payload.type === "error") {
-              setError(agentEvent.payload.message);
-            }
+            //
+            // An `error` payload is deliberately **not** mirrored into the
+            // composer's slot. It belongs to the session that raised it, is
+            // persisted, and `EventRow` already draws it as a red row in that
+            // session's transcript — where the slot is one value for the whole
+            // app, so a mirrored copy followed the reader to every other
+            // session and to the new-task composer, outliving the conversation
+            // it was about. One decision for every harness: persisted errors
+            // live in the transcript, the slot reports the reader's own last
+            // action failing.
         } else {
             const payload = agentEvent.payload;
 
