@@ -1011,12 +1011,15 @@ const HELPERS_JS: &str = r#"
 /// over the page: one CSS pixel per image pixel (a quarter of retina) and
 /// a fast JPEG, since the picture lives as long as a menu is open. An
 /// agent's sized screenshot holding `CAPTURING` would hand back a
-/// phone-wide page, so this refuses rather than queues behind it: the pane
-/// has given up on the answer long before that capture ends, and the tab
-/// read here is the one the picture is of.
+/// phone-wide page, so this waits for it — briefly, since the pane gives
+/// up on the answer at 400ms and a full-page capture can run for seconds;
+/// past that the pane hides over nothing, as it did before. The tab is read
+/// after the wait, so the picture is of the tab up when it is taken.
 #[tauri::command]
 pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
-    let _held = CAPTURING.try_lock().map_err(|_| "a screenshot is in progress")?;
+    let _held = tokio::time::timeout(Duration::from_millis(300), CAPTURING.lock())
+        .await
+        .map_err(|_| "a screenshot is in progress")?;
     let tab = active_tab(&session_id)?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
