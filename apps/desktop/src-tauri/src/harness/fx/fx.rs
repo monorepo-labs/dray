@@ -61,6 +61,29 @@ pub struct FxSession {
     prompt_id: Arc<std::sync::Mutex<Option<i64>>>,
 }
 
+/// The `--model` argument a spawn carries, or `None` where the flag must be
+/// withheld — which is **every resume**, and that is the whole of DRA-223's
+/// resume failure.
+///
+/// fx persists a session's provider *and* its model and restores both on
+/// `session/resume`. `--model` on a **resuming** spawn overrides that and drags
+/// the session onto whatever `settings.json` names *now* — so a session created
+/// on codex, resumed after the reader started a grok chat, came back on grok
+/// while still holding a codex model. The model call then answered `-32602
+/// "Model is not available for the active provider"` and the turn came back
+/// `refused`, with nothing on screen saying why. Measured both ways on one
+/// session: without the flag it resumes on codex, the model call succeeds and
+/// the turn runs. The model half was pinned separately, against a settings file
+/// pointed at a *different* model of the same provider — resume still answered
+/// with the session's own.
+///
+/// A creation still needs it, since nothing else names the model there, and fx
+/// saves it nowhere: a spawn with `--model` leaves `settings.json` byte-identical
+/// and a later `set_config_option model` still moves the session.
+fn model_arg(model: Option<&Model>, is_new_session: bool) -> Option<&str> {
+    model.filter(|_| is_new_session).map(|m| m.arg.as_str())
+}
+
 /// Spawns a session's `fx acp`, handshakes it and opens or resumes its session.
 ///
 /// Takes an optional [`Model`] like pi: fx is multi-provider and its own
@@ -119,11 +142,8 @@ pub async fn init(
     }
 
     command.arg("acp");
-    // A process-level override, which fx saves nowhere — verified: a spawn
-    // with `--model` left `~/.fx/settings.json` byte-identical, and a later
-    // `set_config_option model` on the same session still moved it.
-    if let Some(model) = model {
-        command.args(["--model", &model.arg]);
+    if let Some(arg) = model_arg(model, is_new_session) {
+        command.args(["--model", arg]);
     }
 
     let mut child = command
@@ -734,6 +754,41 @@ mod tests {
         assert_eq!(mode_for(ApprovalPolicy::Auto), "code");
         assert_eq!(mode_for(ApprovalPolicy::DontAsk), "code");
         assert_eq!(mode_for(ApprovalPolicy::BypassPermissions), "code");
+    }
+
+    /// Only `arg` is read by what is under test; the rest is what fx's own
+    /// `id_to_model` builds for a codex row.
+    fn model(arg: &str) -> Model {
+        Model {
+            id: crate::models::ModelId::new(arg),
+            label: arg.into(),
+            efforts: Vec::new(),
+            default_effort: None,
+            arg: arg.into(),
+            provider: "codex".into(),
+            accepts_images: false,
+            secondary: false,
+        }
+    }
+
+    /// A creation carries `--model`, because nothing else names the model there.
+    #[test]
+    fn a_new_session_spawns_with_the_model_named() {
+        let m = model("gpt-5.6-sol");
+        assert_eq!(model_arg(Some(&m), true), Some("gpt-5.6-sol"));
+        // No pick is fx's own settings deciding, which is an ordinary state here.
+        assert_eq!(model_arg(None, true), None);
+    }
+
+    /// A resume carries it **never**, whatever the pick — fx restores the
+    /// session's own provider and model, and the flag overrides both onto
+    /// whatever `settings.json` names now. That is what left a resumed codex
+    /// session on grok, its model refused `-32602` and its next turn `refused`.
+    #[test]
+    fn a_resume_spawns_without_it_so_the_session_keeps_its_own_provider() {
+        let m = model("gpt-5.6-sol");
+        assert_eq!(model_arg(Some(&m), false), None);
+        assert_eq!(model_arg(None, false), None);
     }
 
     /// The prompt's answer is read off its id and nothing else — a response
