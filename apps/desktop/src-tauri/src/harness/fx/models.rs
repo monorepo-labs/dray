@@ -546,6 +546,22 @@ const RUNGS: [Effort; 6] = [
     Effort::Ultra,
 ];
 
+/// One reply's answer about a model's ladder, as two lists that bound it.
+///
+/// `takes` is every level the reply *proves* the model has; `may_take` is the
+/// whole option list it came out of, which bounds the ladder above. They differ
+/// by the level the session is sitting on, which fx puts in its list whether
+/// the model has it or not — so that level alone is proof of nothing, and
+/// having both bounds is what lets one reading add a rung and remove another.
+pub struct LadderReading {
+    /// Levels the model certainly takes: `configOptions` minus the level in
+    /// use, plus one fx has just accepted for this model.
+    pub takes: Vec<Effort>,
+    /// Levels it may still take: `configOptions` whole. A rung absent from
+    /// this is one fx no longer offers at all.
+    pub may_take: Vec<Effort>,
+}
+
 /// Records what a live session answered for its active model, and says whether
 /// that changed anything — which is what decides if the composer is told to
 /// re-read, since an unchanged ladder is every send after the first.
@@ -557,24 +573,24 @@ const RUNGS: [Effort; 6] = [
 ///   it saying the model has no reasoning effort. It *replaces* whatever was
 ///   known, and an empty list is a real answer: it is what makes the picker
 ///   stop drawing an effort submenu.
-/// - **`Some(levels)` is partial** — `configOptions` minus the level the
-///   session sits on (see `ConfigOptions::model_effort_levels`). Every level
-///   in it is one the model takes, but the subtraction may have dropped one
-///   the model *also* takes, so it is **unioned** rather than assigned.
-///   Without the union the learned ladder would lose whichever rung was in use
-///   and regain it on the next change, so the menu would shuffle a level in
-///   and out as the reader worked.
-pub fn learn_ladder(model_arg: &str, levels: Option<Vec<Effort>>) -> bool {
+/// - **A reading is bounded, not partial** — a rung is kept where this reading
+///   proves it, or where an earlier one did *and* fx still offers it. So the
+///   level in use comes back from the next reading instead of the menu
+///   shuffling it in and out, and a rung fx stops offering altogether is
+///   dropped rather than cached for the life of the process.
+pub fn learn_ladder(model_arg: &str, reading: Option<LadderReading>) -> bool {
     let mut ladders = LADDERS.lock().expect("fx ladders poisoned");
 
-    let next = match levels {
+    let next = match reading {
         None => Vec::new(),
-        Some(partial) => {
+        Some(reading) => {
             let known = ladders.get(model_arg);
             RUNGS
                 .into_iter()
                 .filter(|rung| {
-                    partial.contains(rung) || known.is_some_and(|k| k.contains(rung))
+                    reading.takes.contains(rung)
+                        || (reading.may_take.contains(rung)
+                            && known.is_some_and(|k| k.contains(rung)))
                 })
                 .collect()
         }
@@ -800,7 +816,10 @@ mod tests {
         assert!(learn_ladder("test/no-reasoning", None));
         assert!(learn_ladder(
             "test/reasons",
-            Some(vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]),
+            reply_on(
+                &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max],
+                None,
+            ),
         ));
 
         // Applied to a list built *earlier*, which is the gateway's cached one:
@@ -823,15 +842,32 @@ mod tests {
         assert!(!learn_ladder("test/no-reasoning", None));
     }
 
-    /// A partial reading is unioned, never assigned. Each one is missing
-    /// whichever level its session happened to be on, so assigning would drop
-    /// that rung from the picker and hand it back on the next change — a menu
-    /// shuffling a level in and out as the reader works.
+    /// A reply as fx writes one: the model's ladder unioned with the level the
+    /// session sits on, and that level subtracted back out of what it proves.
+    fn reply_on(ladder: &[Effort], current: Option<Effort>) -> Option<LadderReading> {
+        let mut may_take = ladder.to_vec();
+        if let Some(level) = current.filter(|l| !may_take.contains(l)) {
+            may_take.push(level);
+        }
+        Some(LadderReading {
+            takes: may_take.iter().copied().filter(|l| Some(*l) != current).collect(),
+            may_take,
+        })
+    }
+
+    /// A reading is bounded, not partial. Each one is missing whichever level
+    /// its session happened to be on, so assigning would drop that rung from
+    /// the picker and hand it back on the next change — a menu shuffling a
+    /// level in and out as the reader works. What it is *not* is a licence to
+    /// keep a rung forever: fx offering the ladder whole beside it is what
+    /// lets one go.
     ///
-    /// `None` is the other kind of statement and still replaces: fx carrying
+    /// `None` is the other kind of statement and replaces outright: fx carrying
     /// no `effort` option at all is it saying the model has none.
     #[test]
-    fn partial_readings_are_unioned_and_a_definitive_one_replaces() {
+    fn a_reading_adds_what_it_proves_and_drops_what_fx_stopped_offering() {
+        let whole =
+            [Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max].to_vec();
         let ladder = |id: &str| {
             with_learned_ladders(ids_to_models(vec![id.to_string()], "gateway"))[0]
                 .efforts
@@ -839,29 +875,60 @@ mod tests {
         };
 
         // Sitting on `max`, so the reply's list came back without it.
-        assert!(learn_ladder(
-            "test/union",
-            Some(vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh]),
-        ));
+        assert!(learn_ladder("test/union", reply_on(&whole, Some(Effort::Max))));
         assert!(!ladder("test/union").contains(&Effort::Max));
 
         // Moved to `low`, so this reading carries `max` and misses `low`.
-        assert!(learn_ladder(
-            "test/union",
-            Some(vec![Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]),
-        ));
+        assert!(learn_ladder("test/union", reply_on(&whole, Some(Effort::Low))));
         assert_eq!(
             ladder("test/union"),
-            vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max],
+            whole,
             "both readings together are the model's whole ladder, in rung order",
         );
 
         // Converged, so nothing to tell the composer about.
-        assert!(!learn_ladder("test/union", Some(vec![Effort::Low, Effort::Medium])));
+        assert!(!learn_ladder("test/union", reply_on(&whole, Some(Effort::High))));
+
+        // fx dropping a rung from the list is a rung gone, where the level in
+        // use going missing is only the subtraction. Without the upper bound
+        // the union could never let one go and the picker would offer `max`
+        // until Dray restarted.
+        let shorter = &whole[..whole.len() - 1];
+        assert!(learn_ladder("test/union", reply_on(shorter, Some(Effort::High))));
+        assert_eq!(ladder("test/union"), shorter, "max is not on offer any more");
 
         // fx saying the model has no effort at all overrides everything learned.
         assert!(learn_ladder("test/union", None));
         assert!(ladder("test/union").is_empty());
+    }
+
+    /// fx *accepting* a level is the only proof the active model takes it — the
+    /// reply's own list cannot say so, since that is exactly the level
+    /// subtracted out of it. Without this, opening a session on a perfectly
+    /// valid level teaches the picker the level is unsupported, and
+    /// `usableEffort` then moves the reader off the effort their conversation
+    /// has been running on.
+    #[test]
+    fn an_accepted_level_is_proof_the_model_takes_it() {
+        let ladder = |id: &str| {
+            with_learned_ladders(ids_to_models(vec![id.to_string()], "gateway"))[0]
+                .efforts
+                .clone()
+        };
+        let whole = [Effort::Low, Effort::Medium, Effort::High].to_vec();
+
+        // `session/resume` on a session sitting at `high`: the reading alone
+        // cannot tell that rung from one carried over off another model.
+        assert!(learn_ladder("test/accepted", reply_on(&whole, Some(Effort::High))));
+        assert!(!ladder("test/accepted").contains(&Effort::High));
+
+        // Then fx takes `high`, which the model could not have done without it.
+        // `set_effort`'s reply reads the same way, with the accepted level put
+        // back — see `note_config`.
+        let mut accepted = reply_on(&whole, Some(Effort::High)).unwrap();
+        accepted.takes.push(Effort::High);
+        assert!(learn_ladder("test/accepted", Some(accepted)));
+        assert_eq!(ladder("test/accepted"), whole);
     }
 
     #[test]

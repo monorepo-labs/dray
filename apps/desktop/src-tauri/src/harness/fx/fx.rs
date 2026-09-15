@@ -233,7 +233,7 @@ pub async fn init(
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
         efforts: Arc::new(std::sync::Mutex::new(None)),
     };
-    note_config(&session, &config, app);
+    note_config(&session, &config, None, app);
 
     // Session settings, applied in place on a session that now exists. The model
     // is among them on a **resume**, where it did not ride the spawn — see
@@ -262,7 +262,12 @@ pub async fn init(
     // fx's own default, and the transcript says so — the same answer the
     // in-place path in [`crate::session`] gives, by design, since the reader
     // cannot tell the two moments apart.
-    let (applied, refusal) = open_effort(&session, effort).await;
+    let (applied, refusal, accepted) = open_effort(&session, effort).await;
+    // fx taking the level is proof this model has it, which no reply can say
+    // on its own — every reading has the level in use subtracted out of it.
+    if let (Some(level), Some(config)) = (applied, accepted) {
+        note_effort(&session, &config, level, app);
+    }
     if let Some(refusal) = refusal {
         crate::session::report_session_error(session_id, Fx, &refusal, &seq, &events, app).await;
     }
@@ -332,18 +337,20 @@ async fn set_fast_mode(fast: bool) {
 /// not be opened *at all* — a conversation the reader cannot get back into,
 /// not a menu that offers the wrong thing. Nothing about an effort is worth a
 /// session for.
+/// The accepted reply rides back with them rather than being recorded here, so
+/// this answers with no `AppHandle` and can be tested without one.
 async fn open_effort(
     session: &FxSession,
     asked: Option<Effort>,
-) -> (Option<Effort>, Option<String>) {
+) -> (Option<Effort>, Option<String>, Option<parser::ConfigOptions>) {
     // Absent means fx's `auto`, which is its own default and not a level
     // Dray's ladder spells — so it is left alone rather than sent.
     let Some(level) = asked else {
-        return (None, None);
+        return (None, None, None);
     };
     match set_effort(session, level).await {
-        Ok(()) => (Some(level), None),
-        Err(err) => (None, Some(format!("{err:#}"))),
+        Ok(config) => (Some(level), None, Some(config)),
+        Err(err) => (None, Some(format!("{err:#}")), None),
     }
 }
 
@@ -382,7 +389,12 @@ fn effort_refusal(session: &FxSession, asked: Effort) -> String {
 /// The picker builds its effort submenu from [`models::list`], which for a
 /// model nobody has run can only guess by provider — so without the nudge it
 /// keeps offering a control fx has just refused for the rest of the run.
-fn note_config(session: &FxSession, config: &parser::ConfigOptions, app: &AppHandle) {
+fn note_config(
+    session: &FxSession,
+    config: &parser::ConfigOptions,
+    accepted: Option<Effort>,
+    app: &AppHandle,
+) {
     // A reply carrying no `configOptions` at all is fx saying nothing, not fx
     // saying "no effort" — a shape this build cannot read must leave the
     // judgement with fx rather than silently disable the control.
@@ -397,11 +409,29 @@ fn note_config(session: &FxSession, config: &parser::ConfigOptions, app: &AppHan
     *session.efforts.lock().expect("fx efforts poisoned") = Some(rungs(config.effort_levels()));
 
     // The model list outlives this session, so it only takes the part of that
-    // list which cannot be this session's own level leaking in.
-    if let Some(model) = config.model() {
-        let learned = config.model_effort_levels().map(|levels| rungs(Some(levels)));
-        announce_ladder(model, learned, app);
-    }
+    // list which cannot be this session's own level leaking in — with the whole
+    // list beside it as the upper bound, or a rung fx has stopped offering
+    // would be cached for the life of the process.
+    let Some(model) = config.model() else {
+        return;
+    };
+    let reading = match config.model_effort_levels() {
+        None => None,
+        Some(levels) => {
+            let mut takes = rungs(Some(levels));
+            // fx *taking* a level is the one proof this model has it, and the
+            // reply cannot say so on its own: the level in use is subtracted
+            // out of every reading, since a carried-over one is refused just
+            // the same. Without it, opening a session on a valid level teaches
+            // the picker that level is unsupported — and `usableEffort` then
+            // moves the reader off it silently.
+            if let Some(effort) = accepted.filter(|e| !takes.contains(e)) {
+                takes.push(effort);
+            }
+            Some(models::LadderReading { takes, may_take: rungs(config.effort_levels()) })
+        }
+    };
+    announce_ladder(model, reading, app);
 }
 
 /// fx's level names as rungs Dray can spell.
@@ -419,8 +449,8 @@ fn rungs(levels: Option<Vec<&str>>) -> Vec<Effort> {
         .collect()
 }
 
-fn announce_ladder(model_arg: &str, levels: Option<Vec<Effort>>, app: &AppHandle) {
-    if models::learn_ladder(model_arg, levels) {
+fn announce_ladder(model_arg: &str, reading: Option<models::LadderReading>, app: &AppHandle) {
+    if models::learn_ladder(model_arg, reading) {
         if let Err(err) = app.emit("models_changed", ()) {
             eprintln!("[fx models_changed emit err] {err}");
         }
@@ -486,7 +516,9 @@ async fn open_session(
 /// captured, and the reason an in-place switch costs no extra round trip.
 pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> Result<()> {
     let answer = set_config(session, "model", &model.arg).await?;
-    note_config(session, &parser::ConfigOptions::of(&answer), app);
+    // No accepted level to record: the reply's current effort is the one
+    // carried over from the model just left, which the new one may refuse.
+    note_config(session, &parser::ConfigOptions::of(&answer), None, app);
     Ok(())
 }
 
@@ -499,14 +531,28 @@ pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> R
 /// reader either way — so asking the session's own list first turns the common
 /// case into a sentence naming the model's real levels instead of fx's
 /// "Reasoning effort is unavailable for the active model".
-pub async fn set_effort(session: &FxSession, effort: Effort) -> Result<()> {
+/// The reply is handed back rather than dropped: it restates the whole list
+/// for the level fx has just taken, and that acceptance is the only proof this
+/// model has that level. [`note_effort`] is what records it, and both callers
+/// do — this one cannot, having no `AppHandle` to nudge the composer with.
+pub async fn set_effort(session: &FxSession, effort: Effort) -> Result<parser::ConfigOptions> {
     if let Some(levels) = session.efforts() {
         if !levels.contains(&effort) {
             anyhow::bail!("{}", effort_refusal(session, effort));
         }
     }
-    set_config(session, "effort", effort.as_arg()).await?;
-    Ok(())
+    let answer = set_config(session, "effort", effort.as_arg()).await?;
+    Ok(parser::ConfigOptions::of(&answer))
+}
+
+/// Records a [`set_effort`] reply against the level it accepted.
+pub fn note_effort(
+    session: &FxSession,
+    config: &parser::ConfigOptions,
+    accepted: Effort,
+    app: &AppHandle,
+) {
+    note_config(session, config, Some(accepted), app);
 }
 
 async fn set_config(session: &FxSession, config_id: &str, value: &str) -> Result<Value> {
@@ -1026,8 +1072,9 @@ mod tests {
     async fn a_refused_effort_does_not_stop_a_session_opening() {
         let (session, mut rx) = session_on(Some(Vec::new()));
 
-        let (applied, refusal) = open_effort(&session, Some(Effort::High)).await;
+        let (applied, refusal, accepted) = open_effort(&session, Some(Effort::High)).await;
         assert_eq!(applied, None, "records what is running, not what was asked");
+        assert!(accepted.is_none(), "nothing fx took, so nothing to learn from");
         assert!(
             refusal.expect("says so").contains("takes no reasoning effort"),
             "the reader is told why the level on their row is not the one in force",
@@ -1035,8 +1082,9 @@ mod tests {
         assert!(rx.try_recv().is_err(), "nothing was written");
 
         // No effort asked for is no refusal and nothing sent — fx's own `auto`.
-        let (applied, refusal) = open_effort(&session, None).await;
+        let (applied, refusal, accepted) = open_effort(&session, None).await;
         assert_eq!((applied, refusal), (None, None));
+        assert!(accepted.is_none());
         assert!(rx.try_recv().is_err());
     }
 

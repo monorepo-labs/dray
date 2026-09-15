@@ -975,7 +975,7 @@ impl SessionManager {
                 // of DRA-221: the refusal used to reach the reader as a raw
                 // `-32602` where it reached them at all, with the index and the
                 // picker both left naming a level the session was not on.
-                if let Err(err) = s.set_effort(effort).await {
+                if let Err(err) = s.set_effort(effort, app).await {
                     report_session_error(
                         session_id,
                         s.harness,
@@ -1891,12 +1891,16 @@ impl Session {
     ///
     /// `None` is fx's own `auto`, which nothing here can spell back onto the
     /// wire, so it is recorded and left to the next respawn.
-    pub async fn set_effort(&mut self, effort: Option<Effort>) -> Result<()> {
+    pub async fn set_effort(&mut self, effort: Option<Effort>, app: &AppHandle) -> Result<()> {
         let Transport::Fx(session) = &self.stdin else {
             bail!("this harness has no in-place effort switch");
         };
         if let Some(effort) = effort {
-            crate::harness::fx::set_effort(session, effort).await?;
+            // `app` is here for the same reason `set_model` has it: fx accepting
+            // the level is what proves the active model takes it, and the
+            // picker is drawn from a list that cannot otherwise learn so.
+            let config = crate::harness::fx::set_effort(session, effort).await?;
+            crate::harness::fx::note_effort(session, &config, effort, app);
         }
         self.effort = effort;
 

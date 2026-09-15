@@ -349,9 +349,11 @@ impl ConfigOptions {
     /// So `options` minus this is sound whatever the current level is: every
     /// level left is one the model takes. It can drop a level the model *does*
     /// support — the one in use — which is the safe direction, a rung missing
-    /// from a menu against a refusal the reader cannot see coming, and the
-    /// union in `models::learn_ladder` puts it back the moment a reading is
-    /// taken from another level. Checked against every reply in every fixture
+    /// from a menu against a refusal the reader cannot see coming, and
+    /// `models::learn_ladder` puts it back from the next reading taken at
+    /// another level, or straight away where fx has just *accepted* that level,
+    /// which is the one proof the model takes it. Checked against every reply
+    /// in every fixture
     /// here: 13 readings, no case where a level survived the subtraction that
     /// the model then refused.
     pub fn current_effort(&self) -> Option<&str> {
