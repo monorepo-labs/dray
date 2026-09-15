@@ -93,6 +93,13 @@ export function fastFor(
 /// the session, which cannot heal: a cooldown ends, credits get topped up, and
 /// the sentence sits there saying otherwise.
 ///
+/// Known ceiling: a compaction opens a fresh `init` mid-turn, so one landing
+/// after a refusal clears the notice until the next refusal re-raises it. Left
+/// alone deliberately — the stop is aligned with what the CLI emits against,
+/// which is the turn it opened and not the prompt the reader typed, and a
+/// boundary of our own would be a second answer to a question the emitter has
+/// already answered.
+///
 /// Deliberately not read from `turn_started`'s own `settings.fastMode`. That
 /// field is not a weaker source but a lying one: measured, it said `on` through
 /// both turns of the capture the CLI refused.

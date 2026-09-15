@@ -473,13 +473,17 @@ pub enum SystemEvent {
     /// `fast-mode-overage-rejected` / "Fast mode disabled · usage credits
     /// exhausted", twice in one session, once per turn it refused.
     ///
-    /// `priority` (`immediate`) and `color` (`error`) ride the line too and are
-    /// deliberately unmodelled: they are presentation for a channel nothing
-    /// draws whole yet, and a field nothing reads is a field free to be wrong.
+    /// `uuid`, `priority` (`immediate`) and `color` (`error`) ride the line too
+    /// and are deliberately unmodelled. Not tidiness: a field nothing reads can
+    /// only fail the line it rides on, and this is the one system subtype whose
+    /// *whole* value is a sentence read at the moment a refusal happens, so a
+    /// notice dropped for want of a field no consumer wants is the refusal
+    /// going unsaid again. The siblings above keep their `uuid` because they
+    /// were modelled whole before anything asked the question, not because
+    /// something reads it.
     Notification {
         key: String,
         text: String,
-        uuid: String,
         session_id: String,
     },
     /// A subtype this build doesn't model. The CLI adds subtypes over time

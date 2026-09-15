@@ -106,4 +106,14 @@ describe("the harness's own word about fast mode", () => {
     expect(fastNotice([turn, notice, text, turn, text])).toBe(null);
     expect(fastNotice([turn, notice, turn, notice])).toBe(REFUSED);
   });
+
+  /// The ceiling, pinned rather than fixed: a compaction opens a fresh `init`
+  /// mid-turn, which is a `turn_started` like any other, so it takes the notice
+  /// with it until the next refusal re-raises one. Aligned with what the CLI
+  /// emits against; a boundary of our own would answer a question the emitter
+  /// has already answered.
+  it("is cleared by the fresh turn a compaction opens", () => {
+    const compacted = ev({ type: "context_compacted", postTokens: 1318 });
+    expect(fastNotice([turn, notice, compacted, turn, text])).toBe(null);
+  });
 });
