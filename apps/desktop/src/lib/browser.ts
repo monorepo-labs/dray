@@ -87,14 +87,15 @@ function start() {
   // reflow the capture needs happens where nobody is looking. Nothing is
   // drawn on top of that still: it is the page pixel for pixel, so the
   // whole shot is invisible, which is the point.
-  void listen<{ sessionId: string; shooting: boolean }>("browser_shooting", (e) => {
+  void listen<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
     shooting = e.payload.shooting ? e.payload.sessionId : null;
+    shot = e.payload.shot;
     const winner = presenter();
     // Nothing of this session's page is on screen, so there is no reflow to
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    if (shooting && (!shown || winner?.sessionId !== shooting)) shutterReady();
+    if (shooting && (!shown || winner?.sessionId !== shooting)) shutterReady(shot);
     present();
     notify();
   });
@@ -387,6 +388,8 @@ let capturing = false;
 /// the override lands, so what is photographed is the page as the reader
 /// last saw it, and the swap is invisible.
 let shooting: string | null = null;
+/// Which shot that is, as `browser_shooting` numbered it.
+let shot = 0;
 
 /// Whether the native view is off screen: a modal landed on it, or a shot
 /// is under way on the session presenting it. One predicate, because the
@@ -475,6 +478,9 @@ function present() {
         }
       });
   } else if (lastSession) {
+    // Read now, not when the hide answers: by then the shot this hide is
+    // for may be over and `shot` may name the next one.
+    const covering = shot;
     // Hold the view up until its picture is in; the capture calls back here.
     if (hidden && winner && !snapshot) {
       if (!capturing) captureSnapshot(winner.sessionId);
@@ -503,17 +509,24 @@ function present() {
       // The shot is held until here, so it photographs a page the reader
       // is no longer looking at. Answered after the hide lands, never
       // before: the whole point is that the reflow happens off screen.
-      .then(shutterReady);
+      .then(() => shutterReady(covering));
   }
 }
 
-/// Tells a waiting shot the page is covered. Also the answer when there is
+/// Tells shot `of` the page is covered. Also the answer when there is
 /// nothing to cover — no pane presenting this session, so no reflow anybody
 /// can see — since otherwise every screenshot taken with the browser tab
 /// shut would sit out the full timeout for a cover it never needed.
-function shutterReady() {
-  if (!shooting) return;
-  void invoke("browser_shutter_ready").catch(() => undefined);
+///
+/// **Which shot is named, and it has to be.** One shot is answered twice
+/// where the pane has nothing to cover: once here, and again when the hide
+/// it asked for lands. Unnumbered, that spare answer released the *next*
+/// shot before its own still was painted — the reflow, back on screen every
+/// other capture. The number is captured where the answer is promised, not
+/// read when it arrives, so a hide finishing after its shot is over names
+/// the shot it belonged to and releases nothing.
+function shutterReady(of: number) {
+  void invoke("browser_shutter_ready", { shot: of }).catch(() => undefined);
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks

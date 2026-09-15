@@ -52,8 +52,23 @@ static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// happens behind a still rather than on screen. Waited on rather than
 /// guessed at: the cover is a page snapshot, an image decode and a layout
 /// call, which is a few hundred milliseconds on a good day and not a number
-/// worth hardcoding. One shot at a time, so one `Notify` is the whole of it.
+/// worth hardcoding.
+///
+/// **An ack names the shot it is for, and a bare `Notify` was not enough.**
+/// One shot can be acked twice — the pane answers at once when it has
+/// nothing to cover, and the hide it asked for answers again when it lands
+/// — so the extra notification sat as a stored permit and released the
+/// *next* shot before its own still was painted, showing exactly the reflow
+/// this hides. `SHUTTER_ACK` carries how far the pane has got, the `Notify`
+/// only wakes the waiter to look, and a shot sleeps until the number
+/// reaches its own. A late ack from a finished shot is then a number too
+/// small to release anything.
 static SHUTTER_READY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// The newest shot's number, minted per capture.
+static SHUTTER_SHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The newest shot the pane has answered for. Monotonic, so a repeated ack
+/// for one shot is the same answer twice rather than a second one.
+static SHUTTER_ACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// True from the shutter opening until the override goes on — the window in
 /// which the page still reads the way the reader sees it, and the one thing
 /// that lets the pane's cover picture past `CAPTURING`.
@@ -668,14 +683,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = active_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
-            // Registered before the event goes out, or the pane can answer
-            // into a gap where nothing is listening yet and the shot then
-            // waits the whole timeout for an ack already given.
-            let mut covered = Box::pin(SHUTTER_READY.notified());
-            covered.as_mut().enable();
+            // Numbered before the event goes out, so an ack cannot name a
+            // shot that does not exist yet; `await_shutter` reads the mark
+            // before it waits, so one arriving early is not missed either.
+            let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
             SHUTTER_OPEN.store(true, AtomicOrdering::Release);
-            emit_shooting(session, true);
-            let _ = tokio::time::timeout(SHUTTER, covered).await;
+            emit_shooting(session, true, shot);
+            await_shutter(shot).await;
             // The hide has run, but a hidden view leaves the window on its
             // next frame — so the page is given one before it is asked to
             // reflow into a widget that may still be composited.
@@ -697,7 +711,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // at the end. The still is holding the pane meanwhile, so this
             // costs nothing anybody can see.
             tokio::time::sleep(SETTLE).await;
-            emit_shooting(session, false);
+            emit_shooting(session, false, shot);
             drop(held);
             let bytes = bytes?;
             let path = match path {
@@ -819,11 +833,36 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
 struct ShootingEvent {
     session_id: String,
     shooting: bool,
+    /// Which shot, so the pane's ack can name it back. See `SHUTTER_READY`.
+    shot: u64,
 }
 
-/// Lets a waiting shot through. See `browser_shutter_ready`.
-pub fn shutter_ready() {
-    SHUTTER_READY.notify_one();
+/// Lets the shot numbered `shot` through. See `browser_shutter_ready`.
+/// `fetch_max`, so an ack that arrives after a later shot has been answered
+/// for cannot walk the mark backwards, and `notify_waiters` rather than
+/// `notify_one`, which would leave a permit behind for a shot nobody has
+/// taken yet — the bug this numbering exists to close.
+pub fn shutter_ready(shot: u64) {
+    SHUTTER_ACK.fetch_max(shot, AtomicOrdering::Release);
+    SHUTTER_READY.notify_waiters();
+}
+
+/// Waits until the pane has answered for `shot`, or `SHUTTER` passes. The
+/// registration is re-made around every check, or an ack landing between
+/// reading the mark and awaiting would be missed and the shot would sit out
+/// the whole timeout.
+async fn await_shutter(shot: u64) {
+    let _ = tokio::time::timeout(SHUTTER, async {
+        loop {
+            let mut waiting = Box::pin(SHUTTER_READY.notified());
+            waiting.as_mut().enable();
+            if SHUTTER_ACK.load(AtomicOrdering::Acquire) >= shot {
+                return;
+            }
+            waiting.await;
+        }
+    })
+    .await;
 }
 
 /// Opens and closes the pane's shutter. The capture lays the page out at
@@ -831,10 +870,10 @@ pub fn shutter_ready() {
 /// doing it — so the pane hides the view and draws a camera card for the
 /// length of the shot, rather than showing a page reflowing to a size
 /// nobody asked to look at.
-fn emit_shooting(session: &str, shooting: bool) {
+fn emit_shooting(session: &str, shooting: bool, shot: u64) {
     if let Some(app) = APP.get() {
-        let _ =
-            app.emit("browser_shooting", ShootingEvent { session_id: session.into(), shooting });
+        let _ = app
+            .emit("browser_shooting", ShootingEvent { session_id: session.into(), shooting, shot });
     }
 }
 
