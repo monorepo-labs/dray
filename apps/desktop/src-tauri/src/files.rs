@@ -399,7 +399,10 @@ pub async fn read_file(path: String) -> Result<FileBody, String> {
         if meta.len() > MAX_IMAGE_BYTES {
             return Err(TOO_LARGE.to_string());
         }
-        let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+        // Capped as well as measured, for `read_doc`'s reason: the two are
+        // separate calls, so a file replaced or appended to between them would
+        // otherwise arrive at whatever length it had reached.
+        let bytes = read_capped(&path, MAX_IMAGE_BYTES).await?;
         return Ok(FileBody::Image {
             data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
         });

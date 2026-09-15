@@ -20,6 +20,7 @@ export default function FileTree({
   active,
   revision,
   selected,
+  reveal,
   onOpen,
   filtering,
 }: {
@@ -33,6 +34,10 @@ export default function FileTree({
   /// The open file, as a path relative to `cwd`, or null where the active tab
   /// is a file from outside the tree.
   selected: string | null;
+  /// The open file's `reveal` counter. Bumped every time that path is opened
+  /// afresh, which is the only thing that can say "asked again" about a file
+  /// that was already open.
+  reveal: number;
   onOpen: (path: string) => void;
   /// True while the filter box is drawing its own list instead. The tree stays
   /// mounted underneath, so its reads are held back rather than its state
@@ -108,7 +113,7 @@ export default function FileTree({
   // Opening from a link or the filter box lands on a file the tree may have
   // every directory above it closed for, so the path is walked and each prefix
   // opened and listed.
-  const reveal = useCallback(
+  const revealTo = useCallback(
     (path: string) => {
       const dirs = expandTo(path);
       setExpanded((prev) => new Set([...prev, ...dirs]));
@@ -119,14 +124,21 @@ export default function FileTree({
   );
 
   // The selected file is the one thing outside this component that moves the
-  // tree, and it moves it exactly once per file: `reveal` is idempotent, so a
-  // re-render with the same selection re-expands nothing.
+  // tree, and it moves once per *opening* rather than once per file.
+  //
+  // Keyed on the path alone it fired once and never again, so a reader who
+  // collapsed a directory above the open file and clicked the same link a
+  // second time got the tab activated under a tree still folded over it. The
+  // store's own counter is what says "asked again" — the path cannot, since it
+  // has not changed.
   const revealed = useRef<string | null>(null);
   useEffect(() => {
-    if (!selected || revealed.current === selected) return;
-    revealed.current = selected;
-    reveal(selected);
-  }, [selected, reveal]);
+    if (!selected) return;
+    const asked = `${selected}\n${reveal}`;
+    if (revealed.current === asked) return;
+    revealed.current = asked;
+    revealTo(selected);
+  }, [selected, reveal, revealTo]);
 
   // The cursor takes real focus with it, and that is what makes Enter honest:
   // every row is a button, so the browser already activates the focused one —
@@ -244,6 +256,11 @@ const Row = memo(function Row({
     <button
       type="button"
       role="treeitem"
+      // The tree is one tab stop, not one per row: the container takes the tab
+      // and the arrows walk from there, where leaving a large tree otherwise
+      // meant tabbing past every file in it. Focus still lands here, since
+      // `focus()` ignores this and the cursor effect above is what moves it.
+      tabIndex={-1}
       aria-expanded={entry.isDir ? expanded : undefined}
       aria-selected={selected}
       onClick={() => onActivate(entry)}

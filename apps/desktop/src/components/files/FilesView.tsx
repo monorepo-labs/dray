@@ -171,6 +171,7 @@ export default function FilesView({
         active={active}
         revision={revision}
         selected={selected}
+        reveal={file?.reveal ?? 0}
         onOpen={openRelative}
         filtering={filtering}
       />
