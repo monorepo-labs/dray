@@ -495,12 +495,30 @@ impl SessionManager {
             .as_ref()
             .and_then(|spec| resolve_effort(spec, effort));
 
-        // Clamped to what this harness has a route to, and clamped *here* so
-        // the index records what the child was told rather than what was asked
-        // for. pi is the one with nothing to ask, and a `true` sitting on its
-        // entry would draw a lit switch over a session running at ordinary
-        // speed for the rest of its life.
-        let fast = fast && harness.caps().fast_mode.offered();
+        // Clamped to what this harness *and this model* have a route to, and
+        // clamped **here** so the index records what the child was told rather
+        // than what was asked for. A `true` sitting on an entry that cannot
+        // honour it is not a cosmetic lie: it draws a lit switch over a session
+        // running at ordinary speed, and `dray new` hands it down to every
+        // same-harness child the session spawns.
+        //
+        // Both halves are needed and the composer is not one of them. It runs
+        // the same narrowing in `fastFor`, but `dray new --fast --model haiku`
+        // never goes near it — the orchestration socket reaches this function
+        // directly, which is the whole reason the rule is restated on this side.
+        //
+        // `None` means no model was named at all, since a model that *is* named
+        // and cannot run here already bailed above. fx is the one harness where
+        // that is ordinary and still fast: it applies fast mode per model itself
+        // and publishes no list of which, so "let fx decide" is as able to run
+        // fast as any named model. `standsWithNoModel` in `fastMode.ts` is the
+        // same reading, stated there because neither side can call the other.
+        let fast = fast
+            && harness.caps().fast_mode.offered()
+            && model_spec.as_ref().map_or(
+                harness.caps().fast_mode == FastMode::AtCreation,
+                |spec| spec.supports_fast,
+            );
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -850,11 +868,16 @@ impl SessionManager {
             touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
 
             // A model call is open, so this prompt is held rather than sent, and
-            // none of the live controls below fire with it. `set_model` and
-            // `set_permission_mode` were verified switching an *idle* child;
-            // what they do to a turn mid-flight is unknown, and a queued prompt
-            // is not worth finding out on. The index above has the user's pick
-            // either way, so the next idle send applies it.
+            // none of the live controls below fire with it — `set_model`,
+            // `set_permission_mode` and `set_fast` alike. The first two were
+            // verified switching an *idle* child; what any of them do to a turn
+            // mid-flight is unknown, and a queued prompt is not worth finding
+            // out on. The index above has the user's pick either way, so the
+            // next idle send applies it.
+            //
+            // The cost is stated under _Known issues_ and is the same for all
+            // three: the pick is on screen and in the index from here, while the
+            // prompt this queue delivers still runs under the old one.
             //
             // Gated on the turn, not on `busy`: a session holding a background
             // task reads busy with its main thread idle, and queueing there left

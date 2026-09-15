@@ -304,8 +304,21 @@ fn row_to_model(row: &Row, at: usize) -> Model {
 /// — `turn/start` takes an unknown `serviceTier` with no error, records it on
 /// the thread and runs the turn at ordinary speed — so a fast mode that does
 /// nothing looks exactly like one that works.
+///
+/// Which is why the question is **"does it offer the tier the spawn sends"**
+/// and not "does it offer any tier". The spawn sends the literal
+/// [`FAST_TIER`](super::FAST_TIER) whatever this answers, so a model serving
+/// some other tier and nothing else would draw a switch that changes nothing at
+/// all. Both spellings are checked because Codex publishes both and either
+/// alone would be a guess about which one it keeps.
 fn supports_fast(row: &Row) -> bool {
-    !row.additional_speed_tiers.is_empty() || !row.service_tiers.is_empty()
+    row.additional_speed_tiers
+        .iter()
+        .any(|speed| speed == super::FAST_SPEED)
+        || row
+            .service_tiers
+            .iter()
+            .any(|tier| tier.get("id").and_then(Value::as_str) == Some(super::FAST_TIER))
 }
 
 fn display_name(row: &Row) -> String {
@@ -511,6 +524,10 @@ mod tests {
             {"id": "plain"},
             {"id": "speed-only", "additionalSpeedTiers": ["fast"]},
             {"id": "tier-only", "serviceTiers": [{"id": "priority"}]},
+            // A tier that is not the one the spawn sends. The switch would run
+            // every turn at ordinary speed and say nothing about it.
+            {"id": "some-other-tier", "additionalSpeedTiers": ["turbo"],
+             "serviceTiers": [{"id": "flex"}]},
         ]});
 
         let models = read_rows(&rows);
@@ -521,7 +538,12 @@ mod tests {
 
         assert_eq!(
             offered,
-            [("plain", false), ("speed-only", true), ("tier-only", true)]
+            [
+                ("plain", false),
+                ("speed-only", true),
+                ("tier-only", true),
+                ("some-other-tier", false),
+            ]
         );
     }
 

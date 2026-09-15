@@ -113,8 +113,14 @@ pub struct TurnSettings {
 /// own id is what goes on the wire. An id neither of them spells is accepted
 /// with **no error at all** and simply runs the turn at ordinary speed, which
 /// is why nothing here builds one from a string.
-const FAST_TIER: &str = "priority";
+pub(super) const FAST_TIER: &str = "priority";
 const STANDARD_TIER: &str = "default";
+
+/// What `additionalSpeedTiers` calls the same thing — the *speed*'s name where
+/// [`FAST_TIER`] is the *tier*'s id. Both are read when deciding whether a model
+/// has one, since either alone would be a guess about which spelling a later
+/// Codex keeps.
+pub(super) const FAST_SPEED: &str = "fast";
 
 impl TurnSettings {
     fn new(

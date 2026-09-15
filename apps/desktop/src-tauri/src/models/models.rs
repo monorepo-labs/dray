@@ -806,4 +806,28 @@ mod wire_tests {
             "\"opus\""
         );
     }
+
+    /// Opus alone, which is the CLI's own gate rather than a taste — it refuses
+    /// fast mode to anything whose resolved model does not name `opus-5` or
+    /// `opus-4-8`. Pinned because `send_msg` clamps the pick against this: a row
+    /// wrongly marked here would persist `fast: true` on a session running at
+    /// ordinary speed, and `dray new` hands that down to every child.
+    #[test]
+    fn claude_offers_fast_mode_on_opus_alone() {
+        let offered: Vec<(String, bool)> = claude_models()
+            .into_iter()
+            .map(|m| (m.id.to_string(), m.supports_fast))
+            .collect();
+
+        assert_eq!(
+            offered,
+            [
+                ("fable".to_string(), false),
+                ("opus".to_string(), true),
+                ("claude-fable-5".to_string(), false),
+                ("sonnet".to_string(), false),
+                ("haiku".to_string(), false),
+            ]
+        );
+    }
 }

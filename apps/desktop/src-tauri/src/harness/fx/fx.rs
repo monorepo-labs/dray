@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -92,9 +92,24 @@ pub async fn init(
     // keeps, where a `session/resume` then honours the stamp whatever the file
     // says since. So this is the only moment it can be set, and a resume asking
     // again would be a write that changes nothing.
-    if is_new_session {
+    //
+    // **The guard has to outlive the write, and that is the whole of it.** What
+    // reads the file is `session/new`, seconds later and a process away — so a
+    // lock around the rewrite alone leaves two creations free to interleave
+    // write, write, read, read, and one session is permanently stamped with the
+    // other's speed while Dray's index records the value that was asked for. A
+    // fan-out of `dray new` is exactly where two land at once.
+    //
+    // Named, not `_`: a plain underscore drops the guard on the spot and puts
+    // the race straight back. It falls at the end of `init`, which is wider than
+    // `open_session` by one handshake and costs nothing worth a narrower scope.
+    let _creating = if is_new_session {
+        let guard = FX_CREATING.lock().await;
         set_fast_mode(fast).await;
-    }
+        Some(guard)
+    } else {
+        None
+    };
 
     let bin = crate::binpath::fx().await;
     let mut command = Command::new(&bin);
@@ -202,6 +217,14 @@ pub async fn init(
         queued,
     })
 }
+
+/// Serializes fx session *creation*, so a global setting written for one cannot
+/// be read by another.
+///
+/// Only creation: a resume reads nothing out of the settings file, since fx
+/// honours the stamp on its own session record instead. Two resumes, or a resume
+/// beside a creation, still run side by side.
+static FX_CREATING: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Puts fx's fast mode where the next `session/new` will read it.
 ///
