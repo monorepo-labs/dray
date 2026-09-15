@@ -212,9 +212,12 @@ pub async fn init(
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
     };
 
-    // Effort and stance are session settings, applied in place on a session
-    // that now exists. The model rode the spawn above.
-    if let Err(error) = apply_settings(&session, effort, permission_mode).await {
+    // Session settings, applied in place on a session that now exists. The model
+    // is among them on a **resume**, where it did not ride the spawn; on a
+    // creation it did, and is left alone here.
+    if let Err(error) =
+        apply_settings(&session, model, effort, permission_mode, is_new_session).await
+    {
         let _ = child.kill().await;
         return Err(error);
     }
@@ -316,9 +319,26 @@ async fn open_session(
 
 async fn apply_settings(
     session: &FxSession,
+    model: Option<&Model>,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    is_new_session: bool,
 ) -> Result<()> {
+    // **On a resume the model did not ride the spawn** — see [`model_arg`] — so
+    // it is applied here instead, and it has to be: `send_msg`'s in-place
+    // controls only run for a session that still has a child, and a spawn is
+    // exactly the case where it does not. Without this a reader who picks a new
+    // model on a settled session gets the one fx restores, while the index and
+    // the composer both show the pick they asked for.
+    //
+    // Before effort, since a ladder is per model and a level the new one does
+    // not have would be refused. Re-sending the model fx already restored is a
+    // no-op that answers ok, so this does not need to know whether it changed.
+    if !is_new_session {
+        if let Some(model) = model {
+            set_model(session, model).await?;
+        }
+    }
     // Absent means fx's `auto`, which is its own default and not a level
     // Dray's ladder spells — so it is left alone rather than sent.
     if let Some(effort) = effort {
@@ -768,6 +788,7 @@ mod tests {
             provider: "codex".into(),
             accepts_images: false,
             secondary: false,
+            supports_fast: true,
         }
     }
 
