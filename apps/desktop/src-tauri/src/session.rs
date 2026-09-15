@@ -962,13 +962,43 @@ impl SessionManager {
                 // decide" has nothing to switch to, and the session stays on
                 // whatever it is running, which is what the unset pick means.
                 match model_spec.as_ref() {
-                    Some(spec) => s.set_model(spec).await?,
+                    Some(spec) => s.set_model(spec, app).await?,
                     None if model.is_unset() => {}
                     None => bail!("no model to switch the session to"),
                 }
             }
             if caps.applies_effort_in_place && s.effort != effort {
-                s.set_effort(effort).await?;
+                // A declined effort must not take the prompt down with it. fx
+                // refuses one on a model that does no reasoning, and losing the
+                // message over a level is a far worse answer than running the
+                // turn on fx's own default and saying so — which is the whole
+                // of DRA-221: the refusal used to reach the reader as a raw
+                // `-32602` where it reached them at all, with the index and the
+                // picker both left naming a level the session was not on.
+                if let Err(err) = s.set_effort(effort).await {
+                    report_session_error(
+                        session_id,
+                        s.harness,
+                        &format!("{err:#}"),
+                        &s.seq,
+                        &s.events,
+                        app,
+                    )
+                    .await;
+                    // Written back over the optimistic touch above, so the row
+                    // and `dray ls` name the effort that is running rather than
+                    // the one that was asked for. Every other field is still
+                    // the pick: fast mode is applied below this block, so
+                    // recording the child's current value here would drop it.
+                    touch_session_index_item(
+                        session_id,
+                        model.clone(),
+                        s.effort,
+                        permission_mode,
+                        fast,
+                    )
+                    .await?;
+                }
             }
             if caps.applies_permission_in_place && s.permission_mode != permission_mode {
                 s.set_permission_mode(permission_mode).await?;
@@ -1814,9 +1844,12 @@ impl Session {
     /// reply after this arrives from the new model, so no respawn is needed.
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
-    pub async fn set_model(&mut self, model: &Model) -> Result<()> {
+    pub async fn set_model(&mut self, model: &Model, app: &AppHandle) -> Result<()> {
         if let Transport::Fx(session) = &self.stdin {
-            crate::harness::fx::set_model(session, model).await?;
+            // `app` reaches fx alone, and for one reason: its reply restates
+            // the new model's effort ladder, which the composer's picker has to
+            // be told about or it keeps offering the old model's levels.
+            crate::harness::fx::set_model(session, model, app).await?;
             self.model = model.id.clone();
             return Ok(());
         }
@@ -2753,6 +2786,25 @@ async fn report_send_failure(
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
+    let message = format!("This message could not be sent: {message}");
+    report_session_error(session_id, harness, &message, seq, events, app).await;
+}
+
+/// Files a sentence about the session itself — not about a turn — as a
+/// non-fatal error row, emitted and persisted like any other event.
+///
+/// For what went wrong *around* the conversation rather than in it: a prompt
+/// that never reached the child, a setting the harness declined. Non-fatal
+/// because the session is intact either way, and the reader needs the sentence
+/// far more than the turn needs to be marked failed.
+pub(crate) async fn report_session_error(
+    session_id: &str,
+    harness: Harness,
+    message: &str,
+    seq: &Arc<AtomicU64>,
+    events: &Arc<Mutex<Vec<AgentEvent>>>,
+    app: &AppHandle,
+) {
     let agent_event = AgentEvent {
         id: Uuid::now_v7().to_string(),
         session_id: session_id.to_string(),
@@ -2763,18 +2815,18 @@ async fn report_send_failure(
         subagent: None,
         payload: AgentEventPayload::Error {
             source: ErrorSource::Process,
-            message: format!("This message could not be sent: {message}"),
+            message: message.to_string(),
             fatal: false,
         },
         raw: None,
     };
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
-        eprintln!("[queued flush emit err] {err}");
+        eprintln!("[session error emit err] {err}");
     }
     events.lock().await.push(agent_event.clone());
     if let Err(err) = append_session_event(session_id, agent_event).await {
-        eprintln!("[queued flush log err] {err}");
+        eprintln!("[session error log err] {err}");
     }
 }
 

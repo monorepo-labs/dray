@@ -9,10 +9,21 @@
 //! time, which `fx sessions` then lists. Nine of those from one afternoon of
 //! probing settled it.
 //!
-//! The ladder is therefore a table by provider, read off `session/new`'s
-//! `configOptions` on capture: codex offers `auto low medium high xhigh max
-//! ultra`, gateway stops at `xhigh`. `auto` is fx's own default and is what an
-//! unset effort leaves it on.
+//! The ladder is **per model**, and no list this module can ask for names it:
+//! the gateway serves 247 models and `effort` is absent from the
+//! `configOptions` of every one that does no reasoning, arbitrarily by model
+//! rather than by vendor — `anthropic/claude-opus-5` takes one and
+//! `anthropic/claude-sonnet-4` does not. So a session is the only thing that
+//! can answer, and [`learn_ladder`] is where one hands its answer back — a
+//! level at a time, since fx's list is the model's ladder unioned with the
+//! level the session is on and only the subtraction of that level is sound
+//! ([`crate::harness::fx::parser::ConfigOptions::model_effort_levels`]). A
+//! model no session has reported on keeps [`ladder_for`]'s guess by provider,
+//! which is why [`crate::harness::fx::set_effort`] asks the live session
+//! rather than this list before sending a level. `auto` is fx's own default
+//! and is what an unset effort leaves it on; it and `none` are levels Dray's
+//! ladder cannot spell, so they are dropped rather than given a rung
+//! (DRA-140's rule — a rung is a persisted enum).
 //!
 //! Fast mode, by contrast, **is** in this list: the gateway names a fast tier
 //! as a model of its own with `-fast` on the end, so [`supports_fast`] is a
@@ -23,8 +34,8 @@ use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -64,7 +75,7 @@ async fn all() -> Vec<Model> {
     // below — that is how [`refresh`] lets a changed subscription catalog reach
     // the picker despite the tables. Fresh only; a stale entry falls through.
     if let Some(fresh) = CACHE.peek(&key) {
-        return fresh;
+        return with_learned_ladders(fresh);
     }
 
     // The subscription providers serve a handful of models each, fixed and
@@ -74,13 +85,13 @@ async fn all() -> Vec<Model> {
     // [`refresh`], which probes fx even for a table-backed provider and caches
     // the answer above.
     if let Some(models) = known_models(&key) {
-        return models;
+        return with_learned_ladders(models);
     }
 
     match probe_stable().await {
         Some((provider, models)) => {
             CACHE.insert(&provider, models.clone());
-            models
+            with_learned_ladders(models)
         }
         None => Vec::new(),
     }
@@ -487,9 +498,11 @@ fn supports_fast(id: &str, provider: &str, siblings: &HashSet<&str>) -> bool {
 fn id_to_model(id: String, provider: &str, siblings: &HashSet<&str>) -> Model {
     Model {
         supports_fast: supports_fast(&id, provider, siblings),
+        // The guess. [`with_learned_ladders`] replaces it on the way out with
+        // what a session running this model actually reported.
+        efforts: ladder_for(provider),
         id: ModelId::new(&id),
         label: id.clone(),
-        efforts: ladder_for(provider),
         // fx has its own, in its settings. Naming one here would override a
         // choice this app never made.
         default_effort: None,
@@ -512,9 +525,94 @@ fn provider_key(source: &str) -> String {
     }
 }
 
-// ponytail: per-provider ladder, read off two captures. Per-model would need
-// the ACP probe this module refuses to run; a level fx declines fails the
-// first prompt with fx's own sentence.
+/// What a live session said its model takes, keyed by the id fx spells.
+///
+/// Not persisted, and deliberately: an entry is re-learned by the very next
+/// `session/new` or `session/resume` on that model, so a file would buy one
+/// cold picker draw at the price of a schema to migrate. A model never run
+/// under this process keeps [`ladder_for`]'s guess.
+static LADDERS: LazyLock<Mutex<HashMap<String, Vec<Effort>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Rung order, low to high. The union below is rebuilt in it, since the picker
+/// draws the list as handed and two readings merged by set would arrive in
+/// whatever order the merge pleased.
+const RUNGS: [Effort; 6] = [
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+    Effort::Ultra,
+];
+
+/// Records what a live session answered for its active model, and says whether
+/// that changed anything — which is what decides if the composer is told to
+/// re-read, since an unchanged ladder is every send after the first.
+///
+/// The two arms are two kinds of statement, and conflating them is a bug
+/// either way round:
+///
+/// - **`None` is definitive** — fx carried no `effort` option at all, which is
+///   it saying the model has no reasoning effort. It *replaces* whatever was
+///   known, and an empty list is a real answer: it is what makes the picker
+///   stop drawing an effort submenu.
+/// - **`Some(levels)` is partial** — `configOptions` minus the level the
+///   session sits on (see `ConfigOptions::model_effort_levels`). Every level
+///   in it is one the model takes, but the subtraction may have dropped one
+///   the model *also* takes, so it is **unioned** rather than assigned.
+///   Without the union the learned ladder would lose whichever rung was in use
+///   and regain it on the next change, so the menu would shuffle a level in
+///   and out as the reader worked.
+pub fn learn_ladder(model_arg: &str, levels: Option<Vec<Effort>>) -> bool {
+    let mut ladders = LADDERS.lock().expect("fx ladders poisoned");
+
+    let next = match levels {
+        None => Vec::new(),
+        Some(partial) => {
+            let known = ladders.get(model_arg);
+            RUNGS
+                .into_iter()
+                .filter(|rung| {
+                    partial.contains(rung) || known.is_some_and(|k| k.contains(rung))
+                })
+                .collect()
+        }
+    };
+
+    if ladders.get(model_arg) == Some(&next) {
+        return false;
+    }
+    ladders.insert(model_arg.to_string(), next);
+    true
+}
+
+/// Puts what has been learned over what was guessed, applied **at read rather
+/// than at build** — the gateway's list is cached as whole [`Model`]s, so a
+/// ladder learned after that read would never reach the picker if it were
+/// stamped on in [`id_to_model`]. One place, and every route into [`list`]
+/// passes through it.
+fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {
+    let ladders = LADDERS.lock().expect("fx ladders poisoned");
+    if ladders.is_empty() {
+        return models;
+    }
+    models
+        .into_iter()
+        .map(|mut model| {
+            if let Some(learned) = ladders.get(&model.arg) {
+                model.efforts = learned.clone();
+            }
+            model
+        })
+        .collect()
+}
+
+// ponytail: per-provider guess, read off two captures, for a model no session
+// has reported on yet. It is wrong in both directions on the gateway — it
+// offers effort where a model has none and stops at `xhigh` where
+// claude-opus-5 goes to `max` — which is why it is only ever a first draw:
+// [`learn_ladder`] replaces it with the model's own the moment one runs.
 fn ladder_for(provider: &str) -> Vec<Effort> {
     use Effort::*;
     match provider {
@@ -682,6 +780,88 @@ mod tests {
 
         // A row off the gateway is never filtered, whatever it is called.
         assert!(visible(&ids_to_models(vec!["gpt-fast".to_string()], "codex")[0]));
+    }
+
+    /// A model a session has actually run reports its own ladder, and that
+    /// beats the provider guess in both directions — the guess offers effort
+    /// where the gateway's grok has none, and stops at `xhigh` where its
+    /// claude-opus-5 goes to `max`.
+    ///
+    /// The ids are this test's own, since [`LADDERS`] is process-wide and a
+    /// name a sibling test also used would make the two order-dependent.
+    #[test]
+    fn a_learned_ladder_beats_the_provider_guess() {
+        let built = |id: &str| ids_to_models(vec![id.to_string()], "gateway").remove(0);
+
+        // The list as built, before anything has run: the provider's guess.
+        let guessed = with_learned_ladders(vec![built("test/never-run")]);
+        assert_eq!(guessed[0].efforts, ladder_for("gateway"));
+
+        assert!(learn_ladder("test/no-reasoning", None));
+        assert!(learn_ladder(
+            "test/reasons",
+            Some(vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]),
+        ));
+
+        // Applied to a list built *earlier*, which is the gateway's cached one:
+        // stamping the ladder on at build time would leave that list stale for
+        // as long as it stays fresh.
+        let stale = vec![built("test/no-reasoning"), built("test/reasons"), built("test/never-run")];
+        let read = with_learned_ladders(stale);
+        assert!(
+            read[0].efforts.is_empty(),
+            "an empty ladder is an answer — it is what stops the picker drawing the submenu"
+        );
+        assert!(
+            read[1].efforts.contains(&Effort::Max),
+            "the guess stops at xhigh; the model's own list is what carries max"
+        );
+        assert_eq!(read[2].efforts, ladder_for("gateway"), "unlearned, so untouched");
+
+        // Only news is news: the composer is told to re-read off this bool, and
+        // every send after the first would otherwise bump it.
+        assert!(!learn_ladder("test/no-reasoning", None));
+    }
+
+    /// A partial reading is unioned, never assigned. Each one is missing
+    /// whichever level its session happened to be on, so assigning would drop
+    /// that rung from the picker and hand it back on the next change — a menu
+    /// shuffling a level in and out as the reader works.
+    ///
+    /// `None` is the other kind of statement and still replaces: fx carrying
+    /// no `effort` option at all is it saying the model has none.
+    #[test]
+    fn partial_readings_are_unioned_and_a_definitive_one_replaces() {
+        let ladder = |id: &str| {
+            with_learned_ladders(ids_to_models(vec![id.to_string()], "gateway"))[0]
+                .efforts
+                .clone()
+        };
+
+        // Sitting on `max`, so the reply's list came back without it.
+        assert!(learn_ladder(
+            "test/union",
+            Some(vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh]),
+        ));
+        assert!(!ladder("test/union").contains(&Effort::Max));
+
+        // Moved to `low`, so this reading carries `max` and misses `low`.
+        assert!(learn_ladder(
+            "test/union",
+            Some(vec![Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]),
+        ));
+        assert_eq!(
+            ladder("test/union"),
+            vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max],
+            "both readings together are the model's whole ladder, in rung order",
+        );
+
+        // Converged, so nothing to tell the composer about.
+        assert!(!learn_ladder("test/union", Some(vec![Effort::Low, Effort::Medium])));
+
+        // fx saying the model has no effort at all overrides everything learned.
+        assert!(learn_ladder("test/union", None));
+        assert!(ladder("test/union").is_empty());
     }
 
     #[test]

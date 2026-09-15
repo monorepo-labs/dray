@@ -1,4 +1,4 @@
-import type { Harness, Model, ModelId } from "@/types/events";
+import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 /// The one spelling of "nothing here can name the model".
 ///
@@ -108,6 +108,37 @@ export function usableFxModel(
   const remembered = picks[list[0]?.provider ?? ""];
   if (remembered && list.some((m) => m.id === remembered)) return remembered;
   return UNSET_MODEL;
+}
+
+/// The effort a model will actually run at, given what the reader last picked
+/// for it.
+///
+/// A remembered pick outlives the answer that made it offerable, and fx is
+/// where that bites: its ladder is per model and only a live session can state
+/// it, so a level picked off the provider's guess can stop being on the list
+/// the moment a session reports the truth (DRA-221). Left unchecked the trigger
+/// names a level the menu beside it no longer offers, and the next send asks
+/// for it again — which is the state the reader complained about in the first
+/// place.
+///
+/// A model that takes no effort answers `null`, which is what hides the control
+/// entirely. Otherwise the first offered level of: the pick, the model's own
+/// default, the app's — [`usableModel`]'s own rule, that a pick which cannot be
+/// honoured falls to a *default* rather than to whatever happens to sit nearest
+/// it in the list. Only where none of the three is offered does the shape of
+/// the ladder decide, and then it is the **top** rung: the app default is
+/// already near the top, so a ladder missing it is a short one, and the top of
+/// a short ladder is closer to what was asked than its floor.
+export function usableEffort(
+  model: Model,
+  remembered: Effort | null,
+  fallback: Effort,
+): Effort | null {
+  if (model.efforts.length === 0) return null;
+  for (const wanted of [remembered, model.defaultEffort, fallback]) {
+    if (wanted && model.efforts.includes(wanted)) return wanted;
+  }
+  return model.efforts[model.efforts.length - 1];
 }
 
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A

@@ -14,7 +14,7 @@ import {
 } from "@/hooks/useNotices";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableFxModel, usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { playNotification } from "@/lib/sound";
@@ -309,10 +309,12 @@ const models = modelsByHarness[harness] ?? [];
 // What actually gets sent for the current model: its remembered pick, else its
 // own default, and null for a model that takes no effort flag at all.
 const model = models.find((m) => m.id === modelId) ?? null;
+// Resolved against the model's *own* ladder rather than taken as remembered.
+// fx learns that ladder from a live session, so a level picked off the
+// provider's guess can stop being offered mid-session — and a trigger naming
+// a rung the menu beside it no longer has is the state DRA-221 is about.
 const effort: Effort | null = model
-  ? model.efforts.length
-    ? effortByModel[modelId] ?? model.defaultEffort ?? DEFAULT_EFFORT
-    : null
+  ? usableEffort(model, effortByModel[modelId] ?? null, DEFAULT_EFFORT)
   : effortByModel[modelId] ?? null;
 
 // What the composer draws and what the send carries — the pick narrowed to what
@@ -2126,6 +2128,22 @@ useEffect(() => {
     );
   });
 
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// A model list that has just learned something the composer is drawing wrong.
+//
+// fx is the one harness that emits it, and the one that has to: the effort
+// ladder is per *model*, and until a session runs on one nothing can say which
+// levels it takes — so the picker draws a guess by provider, offers effort on a
+// model that does no reasoning, and fx refuses it. The session's own
+// `configOptions` settle it, and this is how that answer reaches the menu
+// instead of waiting on a harness switch or a restart. Only fired when the
+// answer is news, so an ordinary send costs nothing.
+useEffect(() => {
+  const listenerPromise = listen("models_changed", () => reloadModels());
   return () => {
     listenerPromise.then((unlisten) => unlisten());
   };

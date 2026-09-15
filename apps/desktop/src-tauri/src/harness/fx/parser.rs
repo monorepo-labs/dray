@@ -279,6 +279,116 @@ pub struct PromptUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
+/// The settings a session carries, answered by `session/new`,
+/// `session/resume` and every `session/set_config_option` alike.
+///
+/// The one place fx states what the **active model** actually takes. `effort`
+/// is absent entirely from a model that does no reasoning — grok-4.6 and
+/// claude-sonnet-4 on the Vercel gateway both answer `provider model mode` and
+/// nothing else — and where it is present its `options` are that model's own:
+/// claude-opus-5 stops at `max`, gpt-5.4-nano at `xhigh`, gpt-5.6-sol offers
+/// `none` beside them. So the ladder is per **model**, and no per-provider
+/// table can name it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigOptions {
+    #[serde(default)]
+    pub config_options: Vec<ConfigOption>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigOption {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub current_value: Option<String>,
+    #[serde(default)]
+    pub options: Vec<ConfigChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfigChoice {
+    #[serde(default)]
+    pub value: String,
+}
+
+impl ConfigOptions {
+    /// Reads the list off a JSON-RPC `result`. Absent or misshapen answers an
+    /// empty list, which [`effort_levels`](Self::effort_levels) then reads as
+    /// "fx said nothing about effort" rather than as "this model takes none" —
+    /// the safe direction, since the second refuses a level fx might accept.
+    pub fn of(result: &Value) -> Self {
+        serde_json::from_value(result.clone()).unwrap_or_default()
+    }
+
+    /// The `effort` option's values, or `None` where the reply carries no
+    /// `effort` option — the active model does no reasoning and
+    /// `set_config_option effort` on it answers `-32602`.
+    ///
+    /// **Not always the model's own list.** See
+    /// [`model_effort_levels`](Self::model_effort_levels): fx unions the
+    /// session's current level into it, so this can name a rung the model
+    /// refuses. Safe for "may this session try that level" — fx is still the
+    /// judge — and not safe for anything that outlives the session.
+    pub fn effort_levels(&self) -> Option<Vec<&str>> {
+        let option = self.effort()?;
+        Some(option.options.iter().map(|c| c.value.as_str()).collect())
+    }
+
+    /// The level the session is sitting on, which is the one entry of
+    /// [`effort_levels`](Self::effort_levels) that may not be the model's.
+    ///
+    /// fx's option list is the model's ladder **unioned with the session's
+    /// current level**, and switching model does not clamp that level.
+    /// Captured on the codex provider: a session moved from `gpt-5.6-sol` at
+    /// `ultra` onto `gpt-5.6-luna` reports luna's options as `… max, ultra` —
+    /// and `ultra` set there is still refused `-32602`, so the list is simply
+    /// wrong. `session/resume` restates the same wrong list.
+    ///
+    /// So `options` minus this is sound whatever the current level is: every
+    /// level left is one the model takes. It can drop a level the model *does*
+    /// support — the one in use — which is the safe direction, a rung missing
+    /// from a menu against a refusal the reader cannot see coming, and the
+    /// union in `models::learn_ladder` puts it back the moment a reading is
+    /// taken from another level. Checked against every reply in every fixture
+    /// here: 13 readings, no case where a level survived the subtraction that
+    /// the model then refused.
+    pub fn current_effort(&self) -> Option<&str> {
+        self.effort()?.current_value.as_deref()
+    }
+
+    /// The levels that can only be the model's own — [`effort_levels`] minus
+    /// [`current_effort`](Self::current_effort). `None` where fx carries no
+    /// `effort` option at all, which is it saying outright that the model has
+    /// none, and is the one reading that needs no subtracting: the grok row of
+    /// `effort_ladder.jsonl` reports it while the session stands at `max`.
+    ///
+    /// [`effort_levels`]: Self::effort_levels
+    pub fn model_effort_levels(&self) -> Option<Vec<&str>> {
+        let current = self.current_effort();
+        Some(
+            self.effort_levels()?
+                .into_iter()
+                .filter(|level| Some(*level) != current)
+                .collect(),
+        )
+    }
+
+    /// The model those levels belong to, as fx spells it.
+    pub fn model(&self) -> Option<&str> {
+        self.config_options
+            .iter()
+            .find(|o| o.id == "model")?
+            .current_value
+            .as_deref()
+    }
+
+    fn effort(&self) -> Option<&ConfigOption> {
+        self.config_options.iter().find(|o| o.id == "effort")
+    }
+}
+
 /// Types one notification off the connection.
 pub fn parse_notification(method: &str, params: Value) -> Result<FxEvent, serde_json::Error> {
     Ok(match method {
@@ -320,6 +430,185 @@ mod tests {
     const PERMISSION: &str = include_str!("fixtures/permission_request.jsonl");
     const CANCEL: &str = include_str!("fixtures/cancel.jsonl");
     const EDIT: &str = include_str!("fixtures/edit_file.jsonl");
+    const LADDER: &str = include_str!("fixtures/effort_ladder.jsonl");
+    const CARRYOVER: &str = include_str!("fixtures/effort_carryover.jsonl");
+
+    /// Every reply in a capture that states the session's settings, in order —
+    /// `session/new`, `session/resume` and `session/set_config_option` alike,
+    /// which is what lets one reader serve all three.
+    fn configs(fixture: &str) -> Vec<ConfigOptions> {
+        inbound(fixture)
+            .into_iter()
+            .filter(|v| v.pointer("/result/configOptions").is_some())
+            .map(|v| ConfigOptions::of(&v["result"]))
+            .collect()
+    }
+
+    /// The whole of DRA-221's first half, read off one capture: the ladder is a
+    /// fact about the **model**, and `effort` is simply absent from a model
+    /// that does no reasoning. A per-provider table cannot say either — every
+    /// row here is the same provider.
+    #[test]
+    fn the_effort_ladder_is_per_model_and_absent_where_a_model_has_none() {
+        let configs = configs(LADDER);
+
+        // `session/new` on claude-opus-5.
+        let opened = &configs[0];
+        assert_eq!(opened.model(), Some("anthropic/claude-opus-5"));
+        assert_eq!(
+            opened.effort_levels(),
+            Some(vec!["auto", "low", "medium", "high", "xhigh", "max"]),
+        );
+
+        // Switched onto grok-4.6, which carries no `effort` option at all —
+        // and that is `None`, not an empty list, so a caller can tell "fx says
+        // this model has none" from "fx said nothing".
+        let grok = configs
+            .iter()
+            .find(|c| c.model() == Some("spacexai/grok-4.6"))
+            .expect("the capture switches onto grok-4.6");
+        assert_eq!(grok.effort_levels(), None);
+
+        // And onto gpt-5.4-nano, which offers a level Dray cannot spell. Its
+        // list also carries the `max` this session was left on — the carryover
+        // `effort_carryover.jsonl` pins — so only the first reply above is
+        // trusted past the session.
+        let nano = configs
+            .iter()
+            .find(|c| c.model() == Some("openai/gpt-5.4-nano"))
+            .expect("the capture switches onto gpt-5.4-nano");
+        assert!(nano
+            .effort_levels()
+            .expect("nano reasons")
+            .contains(&"none"));
+        assert_eq!(nano.current_effort(), Some("max"), "carried in from opus-5");
+        assert!(
+            !nano
+                .model_effort_levels()
+                .expect("nano reasons")
+                .contains(&"max"),
+            "the carried level is what the subtraction is for",
+        );
+    }
+
+    /// fx's option list is the model's ladder **unioned with whatever level the
+    /// session is on**, and switching model does not clamp that level — so the
+    /// list can name a rung the model refuses, and `session/resume` restates
+    /// it. Remembering one of these against the *model* is what would put a
+    /// dead rung in the picker for the rest of the run.
+    #[test]
+    fn a_carried_level_leaks_into_the_list_and_is_still_refused() {
+        let configs = configs(CARRYOVER);
+
+        // luna's own ladder, read before anything was set on the session.
+        let fresh = &configs[0];
+        assert_eq!(fresh.model(), Some("gpt-5.6-luna"));
+        assert_eq!(
+            fresh.effort_levels(),
+            Some(vec!["auto", "low", "medium", "high", "xhigh", "max"]),
+        );
+
+        // The same model after a session carrying `ultra` switched onto it:
+        // `ultra` is in the list, and the capture's next line is fx refusing
+        // it. Both readings of luna are in one file, which is the point.
+        let carried = configs
+            .iter()
+            .filter(|c| c.model() == Some("gpt-5.6-luna"))
+            .find(|c| c.current_effort() == Some("ultra"))
+            .expect("the capture switches onto luna carrying ultra");
+        assert!(carried.effort_levels().expect("luna reasons").contains(&"ultra"));
+
+        // Subtracting the carried level reads luna's own ladder back off the
+        // polluted reply, exactly — which is what makes the rule worth having
+        // rather than merely safe.
+        assert_eq!(
+            carried.model_effort_levels(),
+            Some(vec!["auto", "low", "medium", "high", "xhigh", "max"]),
+        );
+
+        // Refused twice: once on the fresh session, once after the switch that
+        // put `ultra` in luna's own list.
+        let refusals = inbound(CARRYOVER).into_iter().filter(|v| v.get("error").is_some()).count();
+        assert_eq!(refusals, 2);
+    }
+
+    /// The rule the learned ladder rests on, checked against every reply in
+    /// every capture rather than argued: `options` is the model's ladder
+    /// unioned with the session's current level, so `options` minus that level
+    /// holds nothing the model refuses.
+    ///
+    /// Truth here is a reading taken on a fresh `session/new` sitting on
+    /// `auto`, which has nothing carried in. A future fx that widened the
+    /// list some other way should fail here first.
+    #[test]
+    fn subtracting_the_current_level_never_keeps_one_the_model_refuses() {
+        let mut truth: Vec<(String, Vec<String>)> = Vec::new();
+        let mut checked = 0;
+
+        for fixture in [LIVE_TURN, PERMISSION, CANCEL, EDIT, LADDER, CARRYOVER] {
+            for config in configs(fixture) {
+                let (Some(model), Some(levels)) = (config.model(), config.effort_levels()) else {
+                    continue;
+                };
+                if config.current_effort() == Some("auto") {
+                    let owned = levels.iter().map(|l| l.to_string()).collect();
+                    truth.push((model.to_string(), owned));
+                }
+            }
+        }
+
+        for fixture in [LIVE_TURN, PERMISSION, CANCEL, EDIT, LADDER, CARRYOVER] {
+            for config in configs(fixture) {
+                let Some(model) = config.model() else { continue };
+                let Some(known) = truth.iter().find(|(m, _)| m == model).map(|(_, l)| l) else {
+                    continue;
+                };
+                for level in config.model_effort_levels().unwrap_or_default() {
+                    assert!(
+                        known.iter().any(|k| k == level),
+                        "{model}: {level} survived the subtraction but is not in its own ladder",
+                    );
+                    checked += 1;
+                }
+            }
+        }
+
+        assert!(checked > 40, "the captures stopped covering this: {checked}");
+    }
+
+    /// Both refusals are `-32602` and their sentences differ by one word, so
+    /// neither the code nor the text can be matched on to tell "this model has
+    /// no effort" from "not that rung". Dray writes its own sentence off the
+    /// ladder instead, and this is what says why.
+    #[test]
+    fn fx_refuses_two_different_things_with_one_code() {
+        let errors: Vec<String> = inbound(LADDER)
+            .into_iter()
+            .filter_map(|v| v.get("error").cloned())
+            .map(|e| {
+                assert_eq!(e["code"], -32602);
+                e["message"].as_str().unwrap_or_default().to_string()
+            })
+            .collect();
+
+        assert_eq!(
+            errors,
+            vec![
+                "Reasoning effort is unavailable for the active model",
+                "Reasoning effort is not available for the active model",
+            ],
+        );
+    }
+
+    /// `session/new`, `session/resume` and `set_config_option` all answer the
+    /// same shape, so one reader serves every place a ladder can be learned.
+    /// A reply with no `configOptions` reads as an empty list, never an error.
+    #[test]
+    fn a_reply_without_config_options_is_empty_not_a_failure() {
+        assert!(ConfigOptions::of(&serde_json::json!({})).config_options.is_empty());
+        assert_eq!(ConfigOptions::of(&Value::Null).effort_levels(), None);
+        assert_eq!(ConfigOptions::of(&Value::Null).model(), None);
+    }
 
     /// Every update in every capture parses, and none lands on the catch-all.
     /// A new `sessionUpdate` kind should fail here before it is filed as

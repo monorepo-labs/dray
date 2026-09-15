@@ -6,10 +6,11 @@ import {
   nextHarness,
   rememberedModel,
   UNSET_MODEL,
+  usableEffort,
   usableFxModel,
   usableModel,
 } from "./model";
-import type { Model } from "@/types/events";
+import type { Effort, Model } from "@/types/events";
 
 const model = (id: string, provider?: string): Model =>
   ({ id, label: id, efforts: [], defaultEffort: null, provider }) as unknown as Model;
@@ -152,5 +153,41 @@ describe("nextHarness", () => {
 
   it("parks an unknown harness on the first", () => {
     expect(nextHarness("other" as never)).toBe("claude_code");
+  });
+});
+
+describe("usableEffort", () => {
+  const withEfforts = (efforts: Effort[], defaultEffort: Effort | null = null): Model =>
+    ({ id: "m", label: "m", efforts, defaultEffort }) as unknown as Model;
+
+  const LUNA: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
+  it("keeps a remembered level the model offers", () => {
+    expect(usableEffort(withEfforts(LUNA), "high", "high")).toBe("high");
+  });
+
+  /// DRA-221: fx's ladder is per model and learned from a live session, so a
+  /// level picked off the provider's guess can stop being offered mid-session.
+  /// Left standing, the trigger names a rung the menu no longer has and the
+  /// next send asks fx for it again.
+  it("drops a remembered level the model has stopped offering", () => {
+    expect(usableEffort(withEfforts(LUNA), "ultra", "high")).toBe("high");
+  });
+
+  /// The fall-back is the top of the ladder, not the app default: a pick that
+  /// has fallen off the list is one above the model's top rung, so landing on
+  /// medium would be a downgrade nobody asked for.
+  it("falls to the highest rung when nothing else is offered", () => {
+    expect(usableEffort(withEfforts(["low", "medium"]), "ultra", "high")).toBe("medium");
+  });
+
+  it("prefers the model's own default over the app's", () => {
+    expect(usableEffort(withEfforts(LUNA, "low"), "ultra", "high")).toBe("low");
+  });
+
+  /// An empty ladder is a real answer — fx reports no `effort` option at all
+  /// for a model that does no reasoning — and `null` is what hides the control.
+  it("answers null for a model that takes no effort", () => {
+    expect(usableEffort(withEfforts([]), "high", "high")).toBeNull();
   });
 });
