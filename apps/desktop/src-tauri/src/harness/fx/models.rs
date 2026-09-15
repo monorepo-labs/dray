@@ -219,12 +219,16 @@ pub(super) async fn write_setting(key: &str, value: serde_json::Value) -> Result
     let path = std::env::home_dir()
         .context("no home dir")?
         .join(".fx/settings.json");
-    write_active_provider_at(&path, provider).await
+    write_setting_at(&path, key, value).await
 }
 
 /// Takes the path so a test can round-trip against a tempdir and read the mode
 /// back, rather than writing into the reader's real `~/.fx`.
-async fn write_active_provider_at(path: &std::path::Path, provider: &str) -> Result<()> {
+async fn write_setting_at(
+    path: &std::path::Path,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<()> {
     let bytes = tokio::fs::read(path).await.context("reading fx settings")?;
     let mut settings: serde_json::Value =
         serde_json::from_slice(&bytes).context("parsing fx settings")?;
@@ -246,10 +250,11 @@ async fn write_active_provider_at(path: &std::path::Path, provider: &str) -> Res
     // somebody else's config, so the rule is preserve what was found rather than
     // mint a mode of our own — and fx keeps it at `0600`, as it does every file
     // beside it. `fs::write` creates at the process umask, so the rename was
-    // handing the reader back a `0644` copy of their own config on every switch,
-    // readable by any other account on the machine. Measured, not feared: fx
-    // rewrites the mode to `0600` on each of its own writes, so the widening was
-    // Dray's alone and came back every time.
+    // handing the reader back a `0644` copy of their own config on every write
+    // through here — a provider switch, and every session creation that moves
+    // fast mode — readable by any other account on the machine. Measured, not
+    // feared: fx rewrites the mode to `0600` on each of its own writes, so the
+    // widening was Dray's alone and came back every time.
     //
     // On the temp at **create**, never on the final file after the rename: the
     // same ordering [`crate::issues`]'s credential write documents, and for the
@@ -686,14 +691,15 @@ mod tests {
         assert_eq!(provider_key("Something New"), "something new");
     }
 
-    /// The file is fx's, kept at `0600` like everything beside it, and a switch
-    /// must hand it back at the mode it was found at. `fs::write` creates at the
-    /// process umask, so without this the reader's own config came back `0644`
-    /// on every provider switch — and fx rewrites `0600` on its next write, so
-    /// the widening returned each time rather than settling.
+    /// The file is fx's, kept at `0600` like everything beside it, and **every**
+    /// write through here must hand it back at the mode it was found at — the
+    /// provider switch and the fast-mode write each session creation makes.
+    /// `fs::write` creates at the process umask, so without this the reader's own
+    /// config came back `0644` — and fx rewrites `0600` on its next write, so the
+    /// widening returned each time rather than settling.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_provider_switch_hands_the_file_back_at_the_mode_it_found() {
+    async fn a_settings_write_hands_the_file_back_at_the_mode_it_found() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir().join(format!(
@@ -723,7 +729,7 @@ mod tests {
             .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(found)).unwrap();
 
-            write_active_provider_at(&path, "grok").await.unwrap();
+            write_setting_at(&path, "provider", "grok".into()).await.unwrap();
 
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, found, "a switch must not move the file's mode");
