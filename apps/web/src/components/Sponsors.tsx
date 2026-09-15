@@ -1,4 +1,5 @@
 import { GreptileGlyph } from "@/components/GreptileGlyph";
+import { SponsorLink } from "@/components/SponsorLink";
 
 /// Who pays for this. A grant is money and an OSS programme handing over
 /// credits is not, so each name carries its own line saying which — "OSS
@@ -50,13 +51,22 @@ export function Sponsors({ className }: { className?: string }) {
           note={
             <>
               Vercel CEO ·{" "}
-              <NoteLink href="https://rauchg-oss-grants.vercel.app/">
+              <NoteLink
+                href="https://rauchg-oss-grants.vercel.app/"
+                sponsor="guillermo_rauch"
+                destination="oss_grants"
+              >
                 OSS Grants
               </NoteLink>
             </>
           }
         >
-          <Credit href="https://x.com/rauchg" name="Guillermo Rauch">
+          <Credit
+            href="https://x.com/rauchg"
+            name="Guillermo Rauch"
+            sponsor="guillermo_rauch"
+            destination="profile"
+          >
             {/* Plain `img` for the same reason the testimonial avatars are: at
                 this size the optimizer's round trip buys nothing. */}
             <img
@@ -74,7 +84,12 @@ export function Sponsors({ className }: { className?: string }) {
             Greptile for nothing in particular — the heading calls both of
             these sponsors, and only this line says what this one does. */}
         <Group note="AI code reviews, free for open source">
-          <Credit href="https://www.greptile.com/" name="Greptile">
+          <Credit
+            href="https://www.greptile.com/"
+            name="Greptile"
+            sponsor="greptile"
+            destination="website"
+          >
             <GreptileGlyph className="h-6 w-auto shrink-0" />
           </Credit>
         </Group>
@@ -118,17 +133,21 @@ function Group({
 function Credit({
   href,
   name,
+  sponsor,
+  destination,
   children,
 }: {
   href: string;
   name: string;
+  sponsor: string;
+  destination: string;
   children: React.ReactNode;
 }) {
   return (
-    <a
+    <SponsorLink
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
+      sponsor={sponsor}
+      destination={destination}
       // Full-strength text, and the largest thing in the section: these two
       // names are what it is for, and in muted grey at 14px they read as
       // small print somebody added at the bottom of a page.
@@ -140,7 +159,7 @@ function Credit({
     >
       {children}
       {name}
-    </a>
+    </SponsorLink>
   );
 }
 
@@ -148,19 +167,23 @@ function Credit({
 /// change is the only other signal and the note is already the quiet line.
 function NoteLink({
   href,
+  sponsor,
+  destination,
   children,
 }: {
   href: string;
+  sponsor: string;
+  destination: string;
   children: React.ReactNode;
 }) {
   return (
-    <a
+    <SponsorLink
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
+      sponsor={sponsor}
+      destination={destination}
       className="underline underline-offset-2 transition-colors hover:text-foreground"
     >
       {children}
-    </a>
+    </SponsorLink>
   );
 }
