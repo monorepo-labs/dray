@@ -150,21 +150,6 @@ export function openBeside(
   return [...rest, { id, columns, space }];
 }
 
-/// The sidebar's order with each group's run folded into one step, for a chord
-/// that walks groups rather than rows. Only *consecutive* members fold — a
-/// group's run is drawn together, so that is every member — and a row in no
-/// group is a step of its own.
-export function stepUnits<T>(rows: T[], groups: SplitGroup[], id: (row: T) => string): T[][] {
-  const units: T[][] = [];
-  const unitOf = (row: T) => groupOf(groups, id(row))?.id ?? id(row);
-  for (const row of rows) {
-    const last = units[units.length - 1];
-    if (last && unitOf(last[0]) === unitOf(row)) last.push(row);
-    else units.push([row]);
-  }
-  return units;
-}
-
 /// Takes one session out of its group. A group left with one member is no
 /// group, so it goes too.
 export function closePane(groups: SplitGroup[], sessionId: string): SplitGroup[] {

@@ -8,7 +8,6 @@ import {
   paneOrder,
   place,
   pruneGroups,
-  stepUnits,
   type SplitGroup,
 } from "@/lib/groups";
 
@@ -114,14 +113,6 @@ describe("pruneGroups", () => {
     expect(pruneGroups(groups, new Set(["a", "c", "d"]))).toEqual([
       { id: 1, columns: [["a"], ["c"]], space: null },
     ]);
-  });
-});
-
-describe("stepUnits", () => {
-  it("folds a group's run into one step and leaves other rows single", () => {
-    const groups = [group(1, ["a"], ["b"]), group(2, ["c", "d"])];
-    const rows = ["a", "b", "c", "d", "e", "f"];
-    expect(stepUnits(rows, groups, (r) => r)).toEqual([["a", "b"], ["c", "d"], ["e"], ["f"]]);
   });
 });
 

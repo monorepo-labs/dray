@@ -530,6 +530,41 @@ export function sortSessions(
   );
 }
 
+/// That same order with each *heading's* run folded into one step, for the
+/// chord that walks headings rather than rows.
+///
+/// The unit is what the reader sees a heading over: a split group, the Pinned
+/// run, or a project. A project's state runs fold back together because they
+/// draw under one heading — stepping into "Completed" inside the project the
+/// reader is already in is not the jump the chord promises.
+///
+/// Keyed rather than counted, since the runs of one project are consecutive by
+/// construction and nothing else should ever fold.
+export function sessionUnits(
+  items: SessionIndexItem[],
+  projects: Project[] = [],
+  live?: LiveSessions,
+  settled = false,
+  splits: SplitGroup[] = [],
+): SessionIndexItem[][] {
+  const key = (group: SessionGroup) =>
+    group.kind === "project"
+      ? `p${group.projectPath}`
+      : group.kind === "group"
+        ? `g${group.id}`
+        : "pinned";
+
+  const units: SessionIndexItem[][] = [];
+  let last: string | null = null;
+  for (const group of sessionGroups(items, projects, live, settled, splits)) {
+    const rows = group.rows.map((row) => row.item);
+    if (key(group) === last) units[units.length - 1].push(...rows);
+    else units.push(rows);
+    last = key(group);
+  }
+  return units;
+}
+
 /// The rows a query leaves on screen, matched on `title` alone.
 ///
 /// Applied *before* grouping, so a heading only draws where a group still holds
@@ -1276,8 +1311,10 @@ function ShortcutHint({
           className={HINT_KEYS}
         />
       </HintRow>
-      {/* Only while a group exists: the chord steps groups as one row each,
-          and with none it is ⌘⇧ under another name. */}
+      {/* The chord steps every heading — projects included — but it is only
+          taught where a grid exists. Two chords a keystroke apart in the same
+          corner is one too many to read past, and the project jump is the half
+          a reader finds by trying the pair they already know. */}
       {grouped && (
         <HintRow label="Switch groups">
           <ShortcutKeys ids={["group.prev", "group.next"]} className={HINT_KEYS} />

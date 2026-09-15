@@ -5,6 +5,7 @@ import {
   isNested,
   sessionGroups,
   sessionRows,
+  sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
 import type { LiveSessions } from "@/components/Sidebar";
@@ -870,6 +871,57 @@ describe("filterSessions", () => {
     const found = filterSessions(items, "parser");
 
     expect(ids(sortSessions(found))).toEqual(["first", "second"]);
+  });
+});
+
+describe("sessionUnits", () => {
+  const live = (
+    statusBySession: Record<string, string>,
+    asking: string[] = [],
+  ) =>
+    ({ statusBySession, asking: new Set(asking) }) as unknown as LiveSessions;
+
+  const unitIds = (units: SessionIndexItem[][]) => units.map(ids);
+
+  it("steps projects with no split group in sight", () => {
+    const items = [
+      item("a", "2026-01-04T00:00:00Z", null, "/repo"),
+      item("b", "2026-01-03T00:00:00Z", null, "/repo"),
+      item("c", "2026-01-02T00:00:00Z", null, "/other"),
+    ];
+    expect(unitIds(sessionUnits(items, [project("/repo"), project("/other")]))).toEqual([
+      ["a", "b"],
+      ["c"],
+    ]);
+  });
+
+  it("folds a project's state runs back into one step", () => {
+    // Three rows, so the project splits — but it draws one heading, so the
+    // chord must not stop twice inside it.
+    const items = [
+      item("idle", "2026-01-03T00:00:00Z"),
+      item("done", "2026-01-02T00:00:00Z"),
+      item("ask", "2026-01-01T00:00:00Z"),
+      item("elsewhere", "2026-01-04T00:00:00Z", null, "/other"),
+    ];
+    const reading = live({ done: "completed", ask: "in_progress" }, ["ask"]);
+    expect(unitIds(sessionUnits(items, [project("/repo"), project("/other")], reading))).toEqual([
+      ["ask", "done", "idle"],
+      ["elsewhere"],
+    ]);
+  });
+
+  it("keeps a split group and the pins as steps of their own", () => {
+    const items = [
+      pin("kept", "2026-01-04T00:00:00Z"),
+      item("a", "2026-01-03T00:00:00Z"),
+      item("b", "2026-01-02T00:00:00Z"),
+    ];
+    const splits = [{ id: 1, columns: [["a"], ["b"]], space: null }];
+    expect(unitIds(sessionUnits(items, [], undefined, false, splits))).toEqual([
+      ["a", "b"],
+      ["kept"],
+    ]);
   });
 });
 

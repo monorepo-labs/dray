@@ -43,6 +43,7 @@ import Sidebar, {
   SEARCH_INPUT_ID,
   SidebarToggle,
   filterSessions,
+  sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
 import SplitView, { DragGhost, DropZone } from "@/components/SplitView";
@@ -58,7 +59,6 @@ import {
   openBeside,
   paneOrder,
   pruneGroups,
-  stepUnits,
   type SplitGroup,
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
@@ -988,8 +988,21 @@ function App() {
   };
   const stepSession = (delta: number) =>
     stepThrough(ordered.map((i) => [i]), delta);
-  const stepGroup = (delta: number) =>
-    stepThrough(stepUnits(ordered, spaceGroups, (i) => i.sessionId), delta);
+  // Headings, not split groups: with no grid on screen the chord used to be
+  // ⌘⇧ under another name, stepping one row at a time and never reaching the
+  // next project the way its own label promised.
+  const units = useMemo(
+    () =>
+      sessionUnits(
+        searchedSessions,
+        projects,
+        showArchived ? undefined : { statusBySession, asking: askingSessions },
+        showArchived,
+        showArchived ? [] : spaceGroups,
+      ),
+    [searchedSessions, projects, showArchived, statusBySession, askingSessions, spaceGroups],
+  );
+  const stepGroup = (delta: number) => stepThrough(units, delta);
 
   // A click on a markdown path in the transcript, which is the one route in.
   // Off the counter rather than off `docs.length`, since reopening a file that
