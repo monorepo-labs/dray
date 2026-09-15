@@ -9,14 +9,27 @@
 //!
 //! **Dray forwards only what the user already wrote into their own fx config.**
 //! A literal `headers` entry, or a `header_env`/`bearer_token_env` naming an
-//! environment variable. fx's OAuth credential store is never read: a server
-//! authenticated by `fx mcp auth` keeps its token in the keychain, and fx
-//! deliberately refuses to lend those credentials to an ACP-supplied server —
-//! one handed over with no usable header fails with "Authentication required;
-//! supply an Authorization header in the ACP MCP server configuration", even
-//! for a name fx itself holds a live authenticated connection for. Extracting
-//! that token and re-injecting it as a header would cross the boundary fx drew,
-//! and a snapshot access token would expire with no refresh path anyway.
+//! environment variable. **A bearer token has exactly one spelling,
+//! `bearer_token_env`**: fx refuses a literal `Authorization` under `headers`
+//! or `header_env` with `McpConfigInvalidHeaders` — "so credentials do not
+//! become ordinary profile data", its docs say — so the value has to live in
+//! the environment, and the login-shell fallback below is what makes that work
+//! from a Dock launch. Verified live: `bearer_token_env: "LINEAR_API_KEY"`
+//! exported from `.zprofile` gave an ACP session Linear's 66 tools with the
+//! variable scrubbed from this process's own environment.
+//!
+//! fx's OAuth credential store is never read: a server authenticated by
+//! `fx mcp auth` keeps its token in the keychain, and fx deliberately refuses
+//! to lend those credentials to an ACP-supplied server — one handed over with
+//! no usable header fails with "Authentication required; supply an
+//! Authorization header in the ACP MCP server configuration", even for a name
+//! fx itself holds a live authenticated connection for. Nor to an *approved
+//! workspace* server, the one route its docs leave open: the same entry in
+//! `<cwd>/.mcp.json`, trusted and `fx mcp auth`ed there, logs
+//! `McpAuthenticationRequired` in an ACP session and reads `auth=required`
+//! even in native fx (0.0.10). Extracting the token and re-injecting it would
+//! cross the boundary fx drew, and a snapshot access token would expire with
+//! no refresh path anyway.
 //!
 //! **A headerless HTTP server is two cases the config cannot tell apart, so fx
 //! is asked.** An endpoint that wants no auth at all takes `headers: []` and
