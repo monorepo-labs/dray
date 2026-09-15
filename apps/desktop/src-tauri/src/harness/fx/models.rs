@@ -704,14 +704,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
 
-        // `0666` is the case that pins the umask half, and it pins it under the
-        // *ordinary* umask rather than needing one set here — `umask 022` filters
-        // a `0666` create down to `0644`, so a build that only passes
-        // `OpenOptions::mode` and never restores the permissions fails on this
-        // row. The same flaw narrows a real `0644` file to `0600` under `umask
-        // 077`, which is the shape Greptile caught; testing it that way round
-        // would mean moving a process-global umask under parallel tests.
-        for found in [0o600, 0o644, 0o666] {
+        // `0o777` is what pins the umask half, and it pins it **without setting
+        // a umask here** — which must not happen, since a umask is process-wide
+        // and these tests run in parallel.
+        //
+        // It works because `0o777 & umask != 0` for every umask except `0000`:
+        // a build that only passes `OpenOptions::mode` and never restores the
+        // permissions creates the temp at `0o777 & !umask` and renames that into
+        // place, so this row fails under any umask that filters anything. And
+        // under `0000` nothing is filtered, so that build is *correct* and there
+        // is no regression to catch. The row's coverage is therefore exactly as
+        // wide as the defect's reach, rather than depending on the ambient value.
+        for found in [0o600, 0o644, 0o777] {
             std::fs::write(
                 &path,
                 br#"{"provider":"codex","models":{"grok":"grok-4.6"},"yolo_acknowledged":true}"#,
