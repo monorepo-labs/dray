@@ -599,4 +599,70 @@ describe("a call whose background task the child still holds", () => {
 
     expect(resultByCallId.get("c1")?.text).toMatch(ABANDONED);
   });
+
+  /// fx reports nothing at all about a child: no events, no progress, and no
+  /// handle a stop could name. Both readings that follow from that are made
+  /// here rather than in the renderer, so both are pinned here.
+  describe("a run from a harness that streams nothing", () => {
+    const fx = (seq: number, payload: AgentEventPayload): AgentEvent => ({
+      ...event(seq, payload),
+      harness: "fx",
+    });
+
+    const fxCall = (seq: number, callId: string): AgentEvent =>
+      fx(seq, {
+        type: "tool_call_started",
+        callId,
+        name: "subagent",
+        toolType: "subagent_spawn",
+        input: { request: { action: "run", task: "Reply with exactly: hi" } },
+        rawInput: null,
+        title: null,
+      } as AgentEventPayload);
+
+    /// `agentId` is empty on the wire because fx publishes no handle, and the
+    /// spawning call's id is what the envelope correlates on.
+    const fxSpawn = (seq: number, callId: string): AgentEvent => ({
+      ...fx(seq, {
+        type: "subagent_started",
+        agentId: "",
+        label: "Subagent",
+        description: "Reply with exactly: hi",
+        prompt: null,
+      } as AgentEventPayload),
+      subagent: { id: callId, label: "Subagent" },
+    });
+
+    it("files the run against the call that spawned it", () => {
+      const { subagentById, turns } = buildTranscript(
+        [prompt(0, "go", false), fxCall(1, "c1"), fxSpawn(2, "c1"), completed(3)],
+        false,
+      );
+
+      const run = subagentById.get("c1");
+      expect(run?.description).toBe("Reply with exactly: hi");
+      expect(run?.spawn?.payload.type).toBe("tool_call_started");
+      // The lifecycle event belongs to the run, not to the conversation, so it
+      // draws no row — the spawning call is the only thing in the turn.
+      expect(turns[0].work).toHaveLength(1);
+    });
+
+    /// `inline` is what keeps the chat drawing the tool row. A row that only
+    /// navigated would open a panel holding what the reader was already reading.
+    it("is drawn inline, where a harness that streams the child's work is not", () => {
+      const { subagentById } = buildTranscript([fxCall(0, "c1"), fxSpawn(1, "c1")], true);
+      expect(subagentById.get("c1")?.inline).toBe(true);
+
+      const claude = buildTranscript([callStarted(0, "c2"), spawn(1, "c2", "t1")], true);
+      expect(claude.subagentById.get("c2")?.inline).toBe(false);
+    });
+
+    /// An empty `agentId` is *no handle*, not a handle that has yet to arrive —
+    /// filled with the call id it would read as stoppable and the panel would
+    /// offer a button whose request fx could not take.
+    it("names no task, so nothing offers to stop it", () => {
+      const { subagentById } = buildTranscript([fxCall(0, "c1"), fxSpawn(1, "c1")], true);
+      expect(subagentById.get("c1")?.taskId).toBeNull();
+    });
+  });
 });
