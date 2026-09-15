@@ -300,6 +300,22 @@ export function useSessions() {
     // one could never be answered.
     const [asksBySession, setAsksBySession] = useState<Record<string, string[]>>({});
     const [error, setError] = useState<string | null>(null);
+    // Bumped by every navigation, so an action started before it and rejecting
+    // after it can be told from one the reader is still standing next to.
+    // Clearing the slot on the way in is only half of keeping it to its
+    // session: a send, an interrupt or a permission reply can reject seconds
+    // after the reader has moved on, and an unguarded catch would write the
+    // previous session's failure into the composer they moved to.
+    const navGen = useRef(0);
+    /// A catch handler for an action starting now. Reports into the slot only
+    /// while the reader has not navigated since — taken at the *start* of the
+    /// action, since the rejection lands after any move.
+    const failUnlessLeft = () => {
+      const gen = navGen.current;
+      return (e: unknown) => {
+        if (gen === navGen.current) setError(String(e));
+      };
+    };
 
 // Empty is the agreed "not read yet" answer — `usableModel` leaves the pick
 // standing on it and the picker draws its own waiting row — so an absent entry
@@ -394,6 +410,7 @@ const setUseWorktree = (next: boolean | ((prev: boolean) => boolean)) => {
 // Attaching a known project just selects it, so this doubles as "switch to one
 // I already have" without the picker growing duplicates.
 const handleAttachProject = async () => {
+  const fail = failUnlessLeft();
   const picked = await open({ directory: true, multiple: false });
   if (typeof picked !== "string") return;
 
@@ -402,7 +419,7 @@ const handleAttachProject = async () => {
     setProjects(await invoke<Project[]>("add_project", { path: picked }));
     setProjectPath(picked);
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -410,12 +427,13 @@ const handleAttachProject = async () => {
 // stay in the sidebar — this is the picker's list, not the work. The composer
 // moves to whatever is left, since a pick nothing lists can still be sent in.
 const handleRemoveProject = async (path: string) => {
+  const fail = failUnlessLeft();
   try {
     const left = await invoke<Project[]>("remove_project", { path });
     setProjects(left);
     if (projectPath === path) setProjectPath(left[0]?.path ?? null);
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -423,10 +441,11 @@ const handleRemoveProject = async (path: string) => {
 // caller: the sidebar's switcher moves the reader between spaces, never a
 // project between them.
 const setProjectSpace = async (path: string, space: string | null) => {
+  const fail = failUnlessLeft();
   try {
     setProjects(await invoke<Project[]>("set_project_space", { path, space }));
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -435,11 +454,12 @@ const setProjectSpace = async (path: string, space: string | null) => {
 // nothing was written, which is what lets the caller keep its own record of
 // which spaces exist in step with the tags.
 const retagSpace = async (from: string, to: string | null) => {
+  const fail = failUnlessLeft();
   try {
     setProjects(await invoke<Project[]>("retag_space", { from, to }));
     return true;
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return false;
   }
 };
@@ -457,6 +477,7 @@ const handleSelectProject = (path: string | null) => {
 // Checks the branch out for real, so the picker is the only thing that moves the
 // working tree — by send time the repo is already where the session expects it.
 const runCheckout = async (target: string, stash: boolean) => {
+  const fail = failUnlessLeft();
   if (!projectPath) return;
 
   try {
@@ -470,7 +491,7 @@ const runCheckout = async (target: string, stash: boolean) => {
   } catch (e) {
     // Git refuses rather than clobbering, so the tree is untouched and the
     // message names the files in the way.
-    setError(String(e));
+    fail(e);
   } finally {
     setPendingBranch(null);
   }
@@ -483,6 +504,7 @@ const runCheckout = async (target: string, stash: boolean) => {
 // fetched when the project was selected, and the user has been editing files
 // since. A stale zero silently skips the dialog and moves their work.
 const handleSelectBranch = async (target: string) => {
+  const fail = failUnlessLeft();
   if (!projectPath || target === branches?.current) return;
 
   let list: BranchList;
@@ -490,7 +512,7 @@ const handleSelectBranch = async (target: string) => {
     list = await invoke<BranchList>("list_branches", { cwd: projectPath });
     setBranches(list);
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return;
   }
 
@@ -625,6 +647,7 @@ const handleSendMsg = async (
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
 ) => {
+  const fail = failUnlessLeft();
   const attachmentPaths = attachments.map((a) => a.path);
 
   let sessionId = selectedSessionId;
@@ -807,7 +830,7 @@ const handleSendMsg = async (
         setSelectedSessionId(null);
       }
     }
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -818,6 +841,7 @@ const handleSendMsg = async (
 // past that the CLI owns the prompt and no channel exists to retract it, so the
 // composer is left alone and the message lands as an ordinary one.
 const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
+  const fail = failUnlessLeft();
   if (!selectedSessionId) return null;
   const sessionId = selectedSessionId;
   try {
@@ -845,7 +869,7 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
     }));
     return cancelled;
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return null;
   }
 };
@@ -854,11 +878,12 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
 // is not touched here — the abort produces a result event, and the backend's
 // machine reports the transition on `session_status` like any other ending.
 const handleInterrupt = async () => {
+  const fail = failUnlessLeft();
   if (!selectedSessionId) return;
   try {
     await invoke("interrupt_session", { sessionId: selectedSessionId });
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -870,11 +895,12 @@ const handleInterrupt = async () => {
 // running task alone — a task is backgrounded to outlive its turn, so killing
 // one is its own ask.
 const handleStopTask = async (taskId: string) => {
+  const fail = failUnlessLeft();
   if (!selectedSessionId) return;
   try {
     await invoke("stop_task", { sessionId: selectedSessionId, taskId });
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -892,10 +918,11 @@ const handleRespondPermission = async (
   requestId: string,
   optionId: string,
 ) => {
+  const fail = failUnlessLeft();
   try {
     await invoke("respond_permission", { sessionId, requestId, optionId });
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -904,10 +931,11 @@ const handleAnswerQuestions = async (
   requestId: string,
   answers: Record<string, string>,
 ) => {
+  const fail = failUnlessLeft();
   try {
     await invoke("answer_questions", { sessionId, requestId, answers });
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -924,7 +952,9 @@ const handleNewSession = () => {
   setSelectedSessionId(null);
   // The slot is one value for the whole app, so a failure left in it follows
   // the reader out of the session it happened in. It reports the reader's own
-  // last action failing, and leaving a session is leaving that action behind.
+  // last action failing, and leaving a session is leaving that action behind —
+  // the bump is what keeps one still in flight from arriving after this.
+  navGen.current++;
   setError(null);
   setHarnessState(prefs.harness);
   // Repaired against the list on screen, not taken as read. The effect below
@@ -1009,7 +1039,11 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   // Cleared on the way in, never on the way out: the rollback below sets its
   // own sentence *after* this, so a read that resolves to nothing still says
   // so. See `handleNewSession` for why the slot has to be cleared at all.
+  navGen.current++;
   setError(null);
+  // Taken *after* the bump, so this read's own failure still reports — and a
+  // later move retires it like any other action's.
+  const fail = failUnlessLeft();
 
   // Opening the session is answering the notice about it — an unread completion
   // is read, and a pending request is now on screen. Not the ready-to-merge
@@ -1076,7 +1110,7 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     // deletion is the likely cause rather than the observed one.
     setError("Session not found.");
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 }
 
@@ -1094,6 +1128,7 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
 /// failed write must not leave the sidebar drawing a state the disk doesn't
 /// have. Nothing re-parents — detaching is one-way.
 const detachSession = async (sessionId: string) => {
+  const fail = failUnlessLeft();
   try {
     const updated = await invoke<SessionIndexItem | null>("detach_session", {
       sessionId,
@@ -1103,7 +1138,7 @@ const detachSession = async (sessionId: string) => {
       prev.map((i) => (i.sessionId === sessionId ? updated : i)),
     );
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -1116,6 +1151,7 @@ const setSessionFlags = async (
   sessionId: string,
   flags: { archived?: boolean; pinned?: boolean },
 ): Promise<boolean> => {
+  const fail = failUnlessLeft();
   try {
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
@@ -1163,7 +1199,7 @@ const setSessionFlags = async (
     if (updated.archived) evictSessions({ sessionId });
     return true;
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return false;
   }
 };
@@ -1186,10 +1222,11 @@ const applyIssues = (sessionId: string, issues: IssueRef[]) => {
 // Removes one. `key` is the tracker's own id from the row that was clicked; the
 // backend also accepts the human identifier, which is what the CLI passes.
 const unlinkIssue = async (sessionId: string, key: string) => {
+  const fail = failUnlessLeft();
   try {
     applyIssues(sessionId, await invoke<IssueRef[]>("unlink_issue", { sessionId, key }));
   } catch (e) {
-    setError(String(e));
+    fail(e);
   }
 };
 
@@ -1340,6 +1377,7 @@ const removeWorktree = (sessionId: string, origin: "asked" | "tidy" = "asked") =
 // snapshot it returns is the parent's copied log, so the new session opens
 // reading exactly like the one it came from.
 const forkSession = async (sessionId: string, worktree: boolean) => {
+  const fail = failUnlessLeft();
   const forkId = crypto.randomUUID();
 
   let snapshot: SessionSnapshot;
@@ -1350,7 +1388,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
       worktree,
     });
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return;
   }
 
@@ -1377,10 +1415,11 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // neighbour — the next session is not a guess worth making, and `handleNewSession`
 // is the one path that also restores the user's own defaults.
 const deleteSession = async (sessionId: string) => {
+  const fail = failUnlessLeft();
   try {
     await invoke<boolean>("delete_session", { sessionId });
   } catch (e) {
-    setError(String(e));
+    fail(e);
     return;
   }
 
@@ -1412,7 +1451,7 @@ useEffect(() => {
       setSessionIndexItems(items);
       setIndexSide(showArchived);
     })
-    .catch((e) => setError(String(e)));
+    .catch(failUnlessLeft());
 }, [showArchived])
 
 useEffect(() => {
@@ -1491,7 +1530,7 @@ useEffect(() => {
     })
     // Without this a failed read leaves the picker silently empty, and the
     // reason only reaches the console.
-    .catch((e) => setError(String(e)));
+    .catch(failUnlessLeft());
 }, [])
 
 // Refetched per project rather than cached: branches change outside the app.
@@ -1505,6 +1544,7 @@ useEffect(() => {
   }
 
   let cancelled = false;
+  const fail = failUnlessLeft();
 
   invoke<BranchList>("list_branches", { cwd: projectPath })
     .then((list) => {
@@ -1518,7 +1558,7 @@ useEffect(() => {
       // previous project's branches for this one.
       setBranches(null);
       setBranch(null);
-      setError(String(e));
+      fail(e);
     });
 
   return () => {
