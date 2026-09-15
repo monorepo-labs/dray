@@ -140,6 +140,10 @@ export default function FileTree({
     revealTo(selected);
   }, [selected, reveal, revealTo]);
 
+  const focusRow = useCallback((path: string) => {
+    box.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)?.focus();
+  }, []);
+
   // The cursor takes real focus with it, and that is what makes Enter honest:
   // every row is a button, so the browser already activates the focused one —
   // a cursor drawn beside a focus that stayed behind would open whichever row
@@ -148,8 +152,20 @@ export default function FileTree({
   useEffect(() => {
     const root = box.current;
     if (!root || !cursor || !root.contains(document.activeElement)) return;
-    root.querySelector<HTMLElement>(`[data-path="${CSS.escape(cursor)}"]`)?.focus();
-  }, [cursor]);
+    focusRow(cursor);
+  }, [cursor, focusRow]);
+
+  // Tabbing in lands on the container, since the rows are no longer tab stops —
+  // and Enter there would do nothing until an arrow key had been pressed, which
+  // is a control that looks broken on first use. So arriving hands focus
+  // straight to the row the cursor is on, or to the first one.
+  const onFocus = (e: React.FocusEvent) => {
+    if (e.target !== e.currentTarget) return;
+    const path = cursor ?? rows[0]?.entry.path;
+    if (!path) return;
+    setCursor(path);
+    focusRow(path);
+  };
 
   const at = rows.findIndex((row) => row.entry.path === cursor);
 
@@ -207,6 +223,7 @@ export default function FileTree({
       ref={box}
       role="tree"
       tabIndex={0}
+      onFocus={onFocus}
       onKeyDown={onKeyDown}
       // Hidden rather than unmounted while the filter list is up: the expanded
       // set is what the reader built, and clearing the box has to give it back.
