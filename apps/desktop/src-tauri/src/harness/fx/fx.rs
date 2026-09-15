@@ -14,6 +14,7 @@
 
 pub mod commands;
 pub mod mapper;
+pub mod mcp;
 pub mod models;
 pub mod parser;
 pub mod permissions;
@@ -213,9 +214,18 @@ async fn open_session(
         )
         .await?;
 
+    // Read once and sent on both paths. `fx acp` reads no MCP config of its
+    // own, so this list is the only thing standing between a session and the
+    // servers the reader's `fx` shell already has — and a resumed session is
+    // handed them again, since fx keeps none of it across the connection.
+    let mcp_servers = mcp::configured_servers().await;
+
     if is_new_session {
         let answer = client
-            .request("session/new", json!({"cwd": session_cwd, "mcpServers": []}))
+            .request(
+                "session/new",
+                json!({"cwd": session_cwd, "mcpServers": mcp_servers}),
+            )
             .await?;
         let id = answer
             .get("sessionId")
@@ -236,7 +246,7 @@ async fn open_session(
     client
         .request(
             "session/resume",
-            json!({"sessionId": recorded, "cwd": session_cwd, "mcpServers": []}),
+            json!({"sessionId": recorded, "cwd": session_cwd, "mcpServers": mcp_servers}),
         )
         .await?;
     Ok(recorded)
