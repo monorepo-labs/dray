@@ -262,6 +262,11 @@ async fn open_session(
 /// server sheds them all. The child stays usable across a refused open —
 /// measured, for both methods. Each drop is logged, since the reader's only
 /// other signal is a tool the agent cannot find.
+///
+/// **Only an MCP refusal is retried.** A timeout or a closed pipe is not one:
+/// a `session/new` that timed out may have opened a session fx persisted,
+/// and repeating it would mint a second one nothing tracks, with the first
+/// failure hidden behind it. Those propagate untouched.
 async fn open_with_servers(
     client: &RpcClient,
     method: &str,
@@ -273,7 +278,7 @@ async fn open_with_servers(
         params["mcpServers"] = Value::Array(servers.clone());
         match client.request(method, params).await {
             Ok(answer) => return Ok(answer),
-            Err(error) if !servers.is_empty() => {
+            Err(error) if !servers.is_empty() && is_mcp_refusal(&error.to_string()) => {
                 let message = error.to_string();
                 match refused_server(&servers, &message) {
                     Some(index) => {
@@ -292,6 +297,18 @@ async fn open_with_servers(
             Err(error) => return Err(error),
         }
     }
+}
+
+/// Whether a failed open is fx refusing the MCP list, as against the request
+/// never being answered at all.
+///
+/// The RPC layer flattens a JSON-RPC error to text, so the answer is read off
+/// the two things that text carries and no other failure does: `RpcError`'s
+/// own `(code -32602)` suffix — invalid params, the code every MCP refusal
+/// came back under — and fx's "MCP server" wording. A timeout says "never
+/// answered", a dead child says "pipe is closed"; neither carries a code.
+fn is_mcp_refusal(message: &str) -> bool {
+    message.contains("(code -32602)") && message.contains("MCP server")
 }
 
 /// Which of `servers` a refusal names, matched on the quoted name fx puts in
@@ -762,6 +779,33 @@ mod tests {
         assert_eq!(refused_server(&servers, &refusal("files")), Some(0));
         assert_eq!(refused_server(&servers, &refusal("other")), None);
         assert_eq!(refused_server(&servers, "Each HTTP MCP server requires headers"), None);
+    }
+
+    /// Only fx refusing the list is retried. The three captured refusals all
+    /// qualify; the RPC layer's own failures — a request that timed out or a
+    /// child that left — carry no code and must propagate, since repeating a
+    /// `session/new` that may already have landed mints a session nothing
+    /// tracks.
+    #[test]
+    fn only_an_mcp_refusal_is_retried() {
+        let refused = [
+            "session/new failed: Required MCP server 'dead' failed to start: FileNotFound (code -32602)",
+            "session/new failed: Each HTTP MCP server requires headers (code -32602)",
+            "session/resume failed: Required MCP server 'x' failed to start: ConnectionRefused (code -32602)",
+        ];
+        for message in refused {
+            assert!(is_mcp_refusal(message), "{message}");
+        }
+
+        let propagated = [
+            "session/new was never answered — the agent exited",
+            "session/new timed out after 30s",
+            "the agent's input pipe is closed",
+            "session/new failed: Run fx login grok. (code -32600)",
+        ];
+        for message in propagated {
+            assert!(!is_mcp_refusal(message), "{message}");
+        }
     }
 
     /// The prompt's answer is read off its id and nothing else — a response
