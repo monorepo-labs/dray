@@ -1009,13 +1009,15 @@ const HELPERS_JS: &str = r#"
 /// must match the widget's own size, or it is drawn stretched. The view
 /// hides only once this lands, so the whole cost is a modal opening late
 /// over the page: one CSS pixel per image pixel (a quarter of retina) and
-/// a fast JPEG, since the picture lives as long as a menu is open. Waits
-/// on `CAPTURING` so an agent's sized screenshot cannot hand back a
-/// phone-wide page.
+/// a fast JPEG, since the picture lives as long as a menu is open. An
+/// agent's sized screenshot holding `CAPTURING` would hand back a
+/// phone-wide page, so this refuses rather than queues behind it: the pane
+/// has given up on the answer long before that capture ends, and the tab
+/// read here is the one the picture is of.
 #[tauri::command]
 pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
+    let _held = CAPTURING.try_lock().map_err(|_| "a screenshot is in progress")?;
     let tab = active_tab(&session_id)?;
-    let _held = CAPTURING.lock().await;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the

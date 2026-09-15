@@ -41,6 +41,7 @@ import {
   usePicking,
   useViewport,
   VIEWPORT_PRESETS,
+  type Snapshot as BrowserSnapshot,
   type BrowserTab,
   type LocalServer,
   type Viewport,
@@ -177,10 +178,10 @@ export default function BrowserPane({
               height: `min(${viewport.height}px, 100%)`,
             }}
           >
-            <Snapshot url={snapshot} />
+            <Snapshot of={snapshot} />
           </div>
         ) : (
-          <Snapshot url={snapshot} />
+          <Snapshot of={snapshot} />
         )}
       </div>
     </div>
@@ -189,18 +190,18 @@ export default function BrowserPane({
 
 /// Stands in for the native view while a modal has it hidden. Fills the
 /// same rect the view did, so the capture lands with no scaling.
-function Snapshot({ url }: { url: string | null }) {
-  if (!url) return null;
+function Snapshot({ of }: { of: BrowserSnapshot | null }) {
+  if (!of?.url) return null;
   return (
     <img
-      src={url}
+      src={of.url}
       alt=""
       className="absolute inset-0 h-full w-full"
       onLoad={(e) => {
         void e.currentTarget
           .decode()
           .catch(() => undefined)
-          .then(() => snapshotPainted(url));
+          .then(() => snapshotPainted(of));
       }}
     />
   );

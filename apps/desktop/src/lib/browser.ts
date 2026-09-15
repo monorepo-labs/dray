@@ -113,11 +113,18 @@ function start() {
     const blocked = document.body.style.pointerEvents === "none";
     if (blocked !== modalOpen) {
       modalOpen = blocked;
-      occluded = false;
+      occluded = null;
       present();
     }
-    if (modalOpen && !occluded) requestAnimationFrame(() => requestAnimationFrame(judgeOcclusion));
+    judgeSoon();
   }).observe(document.body, { attributes: true, attributeFilter: ["style"], childList: true });
+}
+
+/// Two frames on, so a popper just portalled in has been placed. Called
+/// from every change that could put the view under something: the body
+/// mutation, and a claim landing or moving while a modal is already up.
+function judgeSoon() {
+  if (modalOpen && !occluded) requestAnimationFrame(() => requestAnimationFrame(judgeOcclusion));
 }
 
 /// What a modal puts on screen: menus in their popper wrapper, dialogs by
@@ -139,7 +146,7 @@ function judgeOcclusion() {
       const r = el.getBoundingClientRect();
       return r.left < view.right && r.right > view.left && r.top < view.bottom && r.bottom > view.top;
     });
-  if (occluded) present();
+  present();
 }
 
 function fetchTabs(sessionId: string) {
@@ -344,19 +351,26 @@ export function setViewport(sessionId: string, viewport: Viewport | null) {
 type Claim = { priority: number; sessionId: string; rect: DOMRectReadOnly };
 const claims = new Map<string, Claim>();
 let modalOpen = false;
-/// Something open lands on the view, judged once per modal and cleared with
-/// it, so this alone says whether the view hides.
-let occluded = false;
+/// Something open lands on the view: `null` until judged for this modal,
+/// cleared with it, so this alone says whether the view hides. A view not
+/// yet on screen waits for the judgement; one already up stays up, since
+/// hiding it and bringing it back is the flash this exists to remove.
+let occluded: boolean | null = null;
+let shown = false;
 let lastSession: string | null = null;
 
 /// A picture of the page drawn in the native view's place while a modal has
 /// it hidden, or the pane is a hole for as long as a menu is open. `url` is
 /// `null` where the capture failed: the view still hides, over nothing.
-let snapshot: { sessionId: string; url: string | null } | null = null;
+/// One object per capture, and callbacks compare against it: two menus in
+/// a row over an unchanged page capture the same URL, so a URL cannot tell
+/// the first capture's late fallback from the second's image.
+export type Snapshot = { sessionId: string; url: string | null };
+let snapshot: Snapshot | null = null;
 let capturing = false;
 
-export function useBrowserSnapshot(sessionId: string): string | null {
-  return useSyncExternalStore(subscribe, () => (snapshot?.sessionId === sessionId ? snapshot.url : null));
+export function useBrowserSnapshot(sessionId: string): Snapshot | null {
+  return useSyncExternalStore(subscribe, () => (snapshot?.sessionId === sessionId ? snapshot : null));
 }
 
 /// Captured *before* the view hides, so the pane never blanks; a menu over
@@ -372,16 +386,17 @@ function captureSnapshot(sessionId: string) {
     .then((url) => {
       capturing = false;
       if (!occluded) return;
-      snapshot = { sessionId, url };
+      const taken: Snapshot = { sessionId, url };
+      snapshot = taken;
       notify();
-      if (url) setTimeout(() => snapshotPainted(url), 500);
+      if (url) setTimeout(() => snapshotPainted(taken), 500);
       else present();
     });
 }
 
 /// The pane's image is decoded: two frames on so it has painted, then hide.
-export function snapshotPainted(url: string) {
-  if (snapshot?.url !== url || !occluded) return;
+export function snapshotPainted(of: Snapshot) {
+  if (snapshot !== of || !occluded) return;
   requestAnimationFrame(() => requestAnimationFrame(present));
 }
 
@@ -390,6 +405,7 @@ export function claimPresenter(key: string, claim: Claim | null) {
   if (claim) claims.set(key, claim);
   else claims.delete(key);
   present();
+  judgeSoon();
 }
 
 function presenter(): Claim | null {
@@ -402,12 +418,14 @@ function presenter(): Claim | null {
 
 function present() {
   const winner = presenter();
+  if (winner && modalOpen && occluded === null && !shown) return;
   if (winner && !occluded) {
+    shown = true;
     lastSession = winner.sessionId;
     const r = winner.rect;
     // The picture stays until the view is back over it, or the pane is a
     // hole for the round trip.
-    const shown = snapshot;
+    const held = snapshot;
     void invoke("browser_layout", {
       sessionId: winner.sessionId,
       x: r.left,
@@ -418,7 +436,7 @@ function present() {
     })
       .catch(() => undefined)
       .then(() => {
-        if (shown && snapshot === shown && !occluded) {
+        if (held && snapshot === held && !occluded) {
           snapshot = null;
           notify();
         }
@@ -429,6 +447,7 @@ function present() {
       if (!capturing) captureSnapshot(winner.sessionId);
       return;
     }
+    shown = false;
     void invoke("browser_layout", {
       sessionId: lastSession,
       x: 0,
