@@ -10,7 +10,7 @@ import {
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { paneBounds, snapWidth } from "@/lib/resize";
+import { paneBounds, snapWidth, takenBy } from "@/lib/resize";
 import { cn } from "@/lib/utils";
 
 /// Which edge of the pane the strip sits on. Dragging *away* from the pane
@@ -39,6 +39,15 @@ function useViewportWidth(): number {
 /// other pane can have.
 type Pane = "sidebar" | "panel";
 
+/// Who yields to whom — see `takenBy`, which is where that matters.
+///
+/// The sidebar leads because it is a list at a width the reader sets once,
+/// where the panel is the one dragged about. The chat's floor is still
+/// guaranteed either way: the sidebar may take everything but that floor, and
+/// the panel everything the sidebar left over it, so what remains is exactly
+/// the floor.
+const ORDER: readonly Pane[] = ["sidebar", "panel"];
+
 /// The narrowest the chat column may be squeezed to, whatever the share works
 /// out at. The share alone is a proportion, so on a small window it still hands
 /// the conversation something unreadable; this is the absolute floor under it.
@@ -56,15 +65,8 @@ const widths: Partial<Record<Pane, number>> = {};
 let chatFloor = CHAT_MIN;
 const layoutChanged = channel<void>();
 
-/// Width held by the side panes other than this one — what the caller cannot
-/// have, whatever its share of the window works out at.
-function useOtherPanes(self: Pane | undefined): number {
-  return useSyncExternalStore(layoutChanged.subscribe, () =>
-    (Object.keys(widths) as Pane[]).reduce(
-      (total, key) => (key === self ? total : total + (widths[key] ?? 0)),
-      0,
-    ),
-  );
+function useSeniorPanes(self: Pane | undefined): number {
+  return useSyncExternalStore(layoutChanged.subscribe, () => takenBy(widths, ORDER, self));
 }
 
 function useChatFloor(): number {
@@ -105,12 +107,18 @@ export function useResizable({
   edge,
   label,
   pane,
+  floor,
 }: {
   storageKey: string;
   initial: number;
   min: number;
   edge: Edge;
   label: string;
+  /// What the pane's sibling keeps, where that sibling is not the chat column.
+  /// The chat floor is lifted for a split — its panes are deliberately small —
+  /// and a pane on another row must not inherit that lifting, since nothing
+  /// about a split makes *its* neighbour safe to squeeze to nothing.
+  floor?: number;
   /// Set on the two panes flanking the chat column, so each publishes what it
   /// is holding and every other one can take it off the width it is bidding
   /// for. Absent for a pane on some other row — the files list, whose siblings
@@ -125,7 +133,8 @@ export function useResizable({
   // beside this was the alternative and it is the very split it would recreate:
   // CSS drew the pane at its share while the clamp here still answered its own
   // minimum.
-  const bounds = paneBounds(min, useViewportWidth(), useOtherPanes(pane), useChatFloor());
+  const columnFloor = useChatFloor();
+  const bounds = paneBounds(min, useViewportWidth(), useSeniorPanes(pane), floor ?? columnFloor);
   const clamp = useCallback(
     (raw: number) => snapWidth(raw, bounds.min, bounds.max, initial),
     [bounds.min, bounds.max, initial],

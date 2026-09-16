@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paneBounds, snapWidth } from "@/lib/resize";
+import { paneBounds, snapWidth, takenBy } from "@/lib/resize";
 
 /// The chat column's floor, as `ResizeHandle` publishes it.
 const CHAT_MIN = 360;
@@ -84,5 +84,47 @@ describe("paneBounds", () => {
         expect(min).toBeLessThanOrEqual(max);
       }
     }
+  });
+});
+
+describe("takenBy", () => {
+  const ORDER = ["sidebar", "panel"] as const;
+
+  it("takes only the panes ahead of this one", () => {
+    const widths = { sidebar: 240, panel: 512 };
+    expect(takenBy(widths, ORDER, "sidebar")).toBe(0);
+    expect(takenBy(widths, ORDER, "panel")).toBe(240);
+  });
+
+  it("takes every pane where the caller is on another row", () => {
+    expect(takenBy({ sidebar: 240, panel: 512 }, ORDER)).toBe(752);
+  });
+
+  it("counts an absent pane as nothing, which is what a collapsed one is", () => {
+    expect(takenBy({ panel: 512 }, ORDER, "panel")).toBe(0);
+  });
+
+  // The whole reason for the precedence. Read symmetrically, a pair too wide
+  // for the window alternates forever: each clamps against the other's old
+  // width, republishes, and frees the other to grow back. Replaying the render
+  // loop has to reach a fixed point on stored widths that do not fit.
+  it("settles rather than oscillating on widths too wide for the window", () => {
+    const stored = { sidebar: 480, panel: 600 };
+    const viewport = 1200;
+    const min = { sidebar: 240, panel: 320 };
+
+    const pass = (widths: Record<string, number>) =>
+      Object.fromEntries(
+        ORDER.map((pane) => {
+          const { max } = paneBounds(min[pane], viewport, takenBy(widths, ORDER, pane), CHAT_MIN);
+          return [pane, Math.min(stored[pane], max)];
+        }),
+      );
+
+    let widths: Record<string, number> = { ...stored };
+    const settled = pass(widths);
+    for (let i = 0; i < 10; i++) widths = pass(widths);
+    expect(widths).toEqual(settled);
+    expect(viewport - widths.sidebar - widths.panel).toBe(CHAT_MIN);
   });
 });

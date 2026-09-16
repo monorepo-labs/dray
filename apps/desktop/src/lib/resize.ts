@@ -41,3 +41,21 @@ export function snapWidth(raw: number, min: number, max: number, snapTo: number)
   const target = Math.max(min, Math.min(max, snapTo));
   return Math.abs(clamped - target) < SNAP_PX ? target : clamped;
 }
+
+/// Width the panes ahead of `self` are holding — what it cannot have.
+///
+/// `order` is a precedence, and that is the whole reason the bounds settle.
+/// Read symmetrically — each pane taking every other's width off its own
+/// ceiling — a pair too wide for the window never converges: each clamps
+/// against the other's old width, republishes, and frees the other to grow
+/// back. A pane yields to those ahead of it and to none behind, which makes the
+/// dependency an order rather than a loop. A pane not in `order` at all yields
+/// to every one of them, since it sits inside the column they have bounded.
+export function takenBy<P extends string>(
+  widths: Partial<Record<P, number>>,
+  order: readonly P[],
+  self?: P,
+): number {
+  const ahead = self ? order.slice(0, order.indexOf(self)) : order;
+  return ahead.reduce((total, key) => total + (widths[key] ?? 0), 0);
+}

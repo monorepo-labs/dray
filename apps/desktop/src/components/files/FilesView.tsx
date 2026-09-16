@@ -47,6 +47,12 @@ const DEFAULT_SIDE: Side = "right";
 const DEFAULT_WIDTH = 288;
 const MIN_WIDTH = 180;
 
+/// The narrowest the code pane beside the list may be squeezed to. Its own
+/// number rather than the chat column's: a split lifts that floor, since split
+/// panes are deliberately small, and this view renders under a split like any
+/// other — so borrowing it let the list be dragged over the file it opens.
+const VIEWER_MIN = 360;
+
 /// The session's directory as a tree, with the files it opens beside it.
 ///
 /// Read-only, for the reason the repo view states: the conversation next door
@@ -80,6 +86,7 @@ export default function FilesView({
     min: MIN_WIDTH,
     edge: side === "left" ? "right" : "left",
     label: "Resize the file list",
+    floor: VIEWER_MIN,
   });
 
   const [query, setQuery] = useState("");
