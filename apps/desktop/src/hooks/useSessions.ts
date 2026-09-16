@@ -601,6 +601,13 @@ const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot
 // spawned and the harness has taken the prompt — 1–2s on pi and Codex in a
 // worktree — and the real `user_message` is minted at the far end of that wait.
 // The id prefix is what retires it, on either path the real one can arrive by.
+//
+// A *resume* has the same wait and is worse to sit through: the session is on
+// screen with its whole history, so the sentence just typed is the one thing
+// missing from it. fx is where it is felt — its resume respawns the child, hands
+// it the MCP list and blocks on `session/resume` — but the wait is every
+// harness's, since a child that has gone away has to be spawned before anything
+// can take the prompt.
 const PROVISIONAL_PREFIX = "provisional:";
 const isProvisional = (e: AgentEvent) => e.id.startsWith(PROVISIONAL_PREFIX);
 
@@ -609,11 +616,15 @@ const provisionalPrompt = (
   harness: Harness,
   text: string,
   attachments: Attachment[],
+  // Past the last event the session holds, so a merge that sorts — a snapshot
+  // arriving while this is up — cannot lift the provisional above the history
+  // it was typed under. A new session has none and starts at 0.
+  seq = 0,
 ): AgentEvent => ({
   id: `${PROVISIONAL_PREFIX}${sessionId}`,
   sessionId,
   harness,
-  seq: 0,
+  seq,
   ts: new Date().toISOString(),
   turnId: null,
   subagent: null,
@@ -629,6 +640,18 @@ const provisionalPrompt = (
   },
   raw: null,
 });
+
+// Taken back where the send answered with something else to draw — a prompt the
+// backend queued, which has its own pending row, or a send that failed outright.
+// The ordinary retirement is the real `user_message` landing in the listener.
+const dropProvisional = (sessionId: string) =>
+  setSessions((prev) =>
+    prev.map((s) =>
+      s.sessionId === sessionId && s.events.some(isProvisional)
+        ? { ...s, events: s.events.filter((e) => !isProvisional(e)) }
+        : s,
+    ),
+  );
 
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
@@ -729,6 +752,28 @@ const handleSendMsg = async (
       pinned: false,
     };
     upsertSession(shell);
+  } else {
+    // The same row for a session already on screen, whose child may have to be
+    // spawned and resumed before anything can mint the real one.
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.sessionId === sessionId
+          ? {
+              ...s,
+              events: [
+                ...s.events,
+                provisionalPrompt(
+                  sessionId,
+                  harness,
+                  message,
+                  attachments,
+                  (s.events[s.events.length - 1]?.seq ?? -1) + 1,
+                ),
+              ],
+            }
+          : s,
+      ),
+    );
   }
 
   try {
@@ -780,6 +825,9 @@ const handleSendMsg = async (
 
     if (outcome.queued) {
       const queued = outcome.queued;
+      // The prompt is held, and the queue draws its own pending row — so the
+      // provisional would be that sentence on screen twice.
+      dropProvisional(sessionId);
       setQueuedBySession((prev) => ({
         ...prev,
         [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
@@ -832,6 +880,10 @@ const handleSendMsg = async (
       if (selectionRequestRef.current === sessionId) {
         setSelectedSessionId(null);
       }
+    } else {
+      // Nothing took the prompt, so the row drawn for it goes with the failure —
+      // the composer still holds the text and the error says why.
+      dropProvisional(sessionId);
     }
     fail(e);
   }
