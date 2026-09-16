@@ -17,6 +17,7 @@ import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, isUnsetModel, rememberedModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
+import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
@@ -596,32 +597,16 @@ const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot
   return { ...into, events: [...into.events, ...missing].sort((a, b) => a.seq - b.seq) };
 };
 
-// The user's own prompt, drawn before the backend has answered for the session.
-// A new session's `send_msg` resolves only once the worktree is made, the child
-// spawned and the harness has taken the prompt — 1–2s on pi and Codex in a
-// worktree — and the real `user_message` is minted at the far end of that wait.
-// The id prefix is what retires it, on either path the real one can arrive by.
-//
-// A *resume* has the same wait and is worse to sit through: the session is on
-// screen with its whole history, so the sentence just typed is the one thing
-// missing from it. fx is where it is felt — its resume respawns the child, hands
-// it the MCP list and blocks on `session/resume` — but the wait is every
-// harness's, since a child that has gone away has to be spawned before anything
-// can take the prompt.
-const PROVISIONAL_PREFIX = "provisional:";
-const isProvisional = (e: AgentEvent) => e.id.startsWith(PROVISIONAL_PREFIX);
-
 const provisionalPrompt = (
+  id: string,
   sessionId: string,
   harness: Harness,
   text: string,
   attachments: Attachment[],
-  // Past the last event the session holds, so a merge that sorts — a snapshot
-  // arriving while this is up — cannot lift the provisional above the history
-  // it was typed under. A new session has none and starts at 0.
+  // A new session holds no events and starts at 0.
   seq = 0,
 ): AgentEvent => ({
-  id: `${PROVISIONAL_PREFIX}${sessionId}`,
+  id,
   sessionId,
   harness,
   seq,
@@ -644,14 +629,18 @@ const provisionalPrompt = (
 // Taken back where the send answered with something else to draw — a prompt the
 // backend queued, which has its own pending row, or a send that failed outright.
 // The ordinary retirement is the real `user_message` landing in the listener.
-const dropProvisional = (sessionId: string) =>
+//
+// By id, so a send only ever takes back its own row: another prompt typed
+// during the wait is still out and still has to be drawn.
+const dropProvisional = (sessionId: string, id: string) =>
   setSessions((prev) =>
     prev.map((s) =>
-      s.sessionId === sessionId && s.events.some(isProvisional)
-        ? { ...s, events: s.events.filter((e) => !isProvisional(e)) }
+      s.sessionId === sessionId && s.events.some((e) => e.id === id)
+        ? { ...s, events: s.events.filter((e) => e.id !== id) }
         : s,
     ),
   );
+
 
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
@@ -723,9 +712,11 @@ const handleSendMsg = async (
   // Every field is one this call is already passing, so nothing here is a guess.
   // The three the backend alone resolves — the worktree name, the truncated
   // title, the recorded branch — arrive with the snapshot and replace these.
+  const provisional = provisionalId();
+
   if (isNewSession) {
     const shell: SessionSnapshot = {
-      events: [provisionalPrompt(sessionId, harness, message, attachments)],
+      events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
       sessionId,
       harness,
       cwd,
@@ -763,11 +754,12 @@ const handleSendMsg = async (
               events: [
                 ...s.events,
                 provisionalPrompt(
+                  provisional,
                   sessionId,
                   harness,
                   message,
                   attachments,
-                  (s.events[s.events.length - 1]?.seq ?? -1) + 1,
+                  nextMainSeq(s.events),
                 ),
               ],
             }
@@ -827,7 +819,7 @@ const handleSendMsg = async (
       const queued = outcome.queued;
       // The prompt is held, and the queue draws its own pending row — so the
       // provisional would be that sentence on screen twice.
-      dropProvisional(sessionId);
+      dropProvisional(sessionId, provisional);
       setQueuedBySession((prev) => ({
         ...prev,
         [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
@@ -883,7 +875,7 @@ const handleSendMsg = async (
     } else {
       // Nothing took the prompt, so the row drawn for it goes with the failure —
       // the composer still holds the text and the error says why.
-      dropProvisional(sessionId);
+      dropProvisional(sessionId, provisional);
     }
     fail(e);
   }
@@ -1643,7 +1635,7 @@ useEffect(() => {
             const settled = agentEvent.payload.type === "user_message";
             return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
-                ? { ...s, events: [...(settled ? s.events.filter((e) => !isProvisional(e)) : s.events), agentEvent] }
+                ? { ...s, events: [...(settled ? retireOldestProvisional(s.events) : s.events), agentEvent] }
                 : s,
             );
             });
