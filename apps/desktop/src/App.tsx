@@ -1745,7 +1745,12 @@ function App() {
             cwd={selectedSession.cwd}
           >
             <TabBody active={activeTab === "changes"}>
-              <ChangesPanel cwd={selectedSession.cwd} baseline={baseline} {...changesData} />
+              <ChangesPanel
+                cwd={selectedSession.cwd}
+                baseline={baseline}
+                onOpenRepo={() => setViewTab("changes")}
+                {...changesData}
+              />
             </TabBody>
             <TabBody active={activeTab === "browser"}>
               <BrowserPane
