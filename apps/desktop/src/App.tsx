@@ -23,7 +23,16 @@ import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
 import PrPanel from "@/components/PrPanel";
 import BrowserPane from "@/components/browser/BrowserPane";
-import { clearOpenError, describePick, openInBrowser, setPickHandler, useBrowserTabs } from "@/lib/browser";
+import {
+  clearOpenError,
+  closeTab,
+  describePick,
+  openInBrowser,
+  setPendingTab,
+  setPickHandler,
+  useBrowserTabs,
+  usePendingTab,
+} from "@/lib/browser";
 import { setLinkOpener } from "@/lib/openLink";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
@@ -75,7 +84,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
-import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -766,13 +775,15 @@ function App() {
   // Read here rather than in the panel, for the PR tab's reason: the row has to
   // know whether the tab exists before that tab has ever been drawn.
   const { docs, activePath: activeDocPath, opened: docsOpened } = useDocs(selectedSessionId);
-  // Only the counter: which files are open is the view's own business, where a
-  // doc's tab row has to exist in the panel before the panel is drawn.
-  const { opened: filesOpened } = useOpenFiles(selectedSessionId);
+  // The counter brings the view forward; the active path is what ⌘W closes.
+  // Which files are open past that is the view's own business, where a doc's
+  // tab row has to exist in the panel before the panel is drawn.
+  const { opened: filesOpened, active: activeFile } = useOpenFiles(selectedSessionId);
   const hasDocsTab = docs.length > 0;
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
   const browserTabs = useBrowserTabs(selectedSessionId);
+  const pendingBrowserTab = usePendingTab(selectedSessionId ?? "");
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, every time and whatever tab the pane was on: the
@@ -1358,7 +1369,7 @@ function App() {
   // a grid; the view tabs take ⌘⌥ below. Not ⌘⇧, which macOS spends on
   // screenshots for exactly these digits. Bound only while a grid is *on
   // screen*: with none ⌘1 has nothing to point at and must not eat the key,
-  // and under the Diff tab or the issues page ⌘⌥W would close a pane the
+  // and under the Diff tab or the issues page ⌘W would close a pane the
   // reader cannot see.
   const gridShown = !!activeGroup && !issuesOpen && viewTab === "chat";
   const paneIds = activeGroup ? paneOrder(activeGroup) : [];
@@ -1376,9 +1387,42 @@ function App() {
   // Nine digits, so a tenth pane has no chord — it still takes a click. A
   // fixed list, so the hook count never moves between renders.
   for (const n of PANE_DIGITS) useHotkey(`pane.${n}`, () => focusPane(n), { enabled: gridShown });
-  useHotkey("pane.close", () => selectedSessionId && closeSessionPane(selectedSessionId), {
-    enabled: gridShown,
-  });
+  // ⌘W closes the innermost thing the main column has open, which is what it
+  // means in every editor and browser this app is read beside. The views are
+  // mutually exclusive, so the chain is an ordering rather than an
+  // arbitration — bar the last arm, which is the reader on Chat with the
+  // browser beside it in the panel and no grid to close a pane out of.
+  const closeBrowserTab = () => {
+    if (!selectedSessionId) return;
+    // The pending tab has no browser behind it, so it is dropped rather than
+    // closed — and it is what the reader is looking at while it is up.
+    if (pendingBrowserTab) return setPendingTab(selectedSessionId, false);
+    const open = browserTabs?.find((tab) => tab.active);
+    if (open) void closeTab(selectedSessionId, open.id);
+  };
+  // `viewTab` is per session and the issues page does not clear it, so a
+  // reader who opened Issues from the Files view still has `activeFile`
+  // naming a tab in a view nobody can see — and ⌘W there closed it silently.
+  // Every other arm already carries the guard: `fullBrowserOpen` and
+  // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
+  // page hides.
+  const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
+  const closeTabOrPane = () => {
+    if (!selectedSessionId) return;
+    if (fileShown && activeFile) return closeFile(selectedSessionId, activeFile);
+    if (fullBrowserOpen) return closeBrowserTab();
+    if (gridShown) return closeSessionPane(selectedSessionId);
+    if (panelShown && activeTab === "browser") closeBrowserTab();
+  };
+  // Bound only where it has something to close: `useHotkey` claims every chord
+  // it matches, and a ⌘W that eats the key and does nothing is worse than one
+  // the app never had.
+  const hasCloseTarget =
+    fileShown ||
+    ((fullBrowserOpen || (panelShown && activeTab === "browser")) &&
+      (pendingBrowserTab || !!hasBrowserTabs)) ||
+    gridShown;
+  useHotkey("tab.close", closeTabOrPane, { enabled: hasCloseTarget });
   // ⌘E for the right pane against ⌘B for the left.
   //
   // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:

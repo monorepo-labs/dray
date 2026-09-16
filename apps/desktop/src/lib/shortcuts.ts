@@ -42,7 +42,7 @@ export const SHORTCUTS = [
   { id: "pane.7", label: "Focus pane 7", group: "Sessions", chord: k("7") },
   { id: "pane.8", label: "Focus pane 8", group: "Sessions", chord: k("8") },
   { id: "pane.9", label: "Focus pane 9", group: "Sessions", chord: k("9") },
-  { id: "pane.close", label: "Close pane", group: "Sessions", chord: k("w", { alt: true }) },
+  { id: "tab.close", label: "Close tab or pane", group: "Sessions", chord: k("w") },
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
   { id: "panel.toggle", label: "Toggle right panel", group: "Panels and views", chord: k("e") },
@@ -99,15 +99,17 @@ export function shortcutLabel(id: ShortcutId): string {
 
 /// Chords the platform already means something by, which the recorder refuses.
 ///
-/// ⌘Q reaches the menu bar before the webview and ⌘W is close-window in every
-/// Mac app, so a shortcut bound to either would either never fire or fire once
-/// and take the window with it. The editing set — select all, cut, copy,
-/// paste, undo, redo — is what every text field expects, and `useHotkey`
-/// claims a chord it matches, so binding one takes it out of the composer.
-/// Plain ⌘ only, apart from redo — ⌘⌥W closes a pane and is fine.
+/// ⌘Q reaches the menu bar before the webview, so a shortcut bound to it would
+/// never fire. The editing set — select all, cut, copy, paste, undo, redo — is
+/// what every text field expects, and `useHotkey` claims a chord it matches, so
+/// binding one takes it out of the composer. Plain ⌘ only, apart from redo.
+///
+/// **⌘W is not reserved**, though it is close-window in every other Mac app:
+/// this one has a single window and quitting is confirmed, so the Close Window
+/// item is left out of the menu (see `quit.rs`) and the key is the app's to
+/// spend on closing a tab or a pane.
 const RESERVED: Chord[] = [
   k("q"),
-  k("w"),
   k("a"),
   k("x"),
   k("c"),

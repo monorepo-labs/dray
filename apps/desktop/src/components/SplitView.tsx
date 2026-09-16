@@ -280,7 +280,7 @@ function PaneHeader({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <ShortcutKeys ids={["pane.close"]} />
+            <ShortcutKeys ids={["tab.close"]} />
           </TooltipContent>
         </Tooltip>
       )}

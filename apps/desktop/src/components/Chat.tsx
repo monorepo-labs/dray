@@ -269,6 +269,16 @@ export default function Chat({
   //
   // Gated on what is drawn, not on what is pending, so the indicator can't slip
   // into a lingering card's window and undo the quiet it buys.
+  // On fx the orb rides *beside* the preview instead of standing in for it.
+  // Nothing closes an fx block until the next update arrives, so a message that
+  // finished streaming sits there looking finished while the model works on in
+  // silence — the reader watches a complete sentence and a dead screen, then
+  // two tool calls land at once. Every other harness earns the suppression: its
+  // preview is still growing, or a tool block has opened with arguments
+  // streaming into it, so something on screen is moving. fx's is not, and there
+  // is no way to tell its stalled preview from its slow one.
+  const orbRidesPreview = session?.harness === "fx";
+
   const waitingTurn =
     busy &&
     working &&
@@ -277,7 +287,7 @@ export default function Chat({
     cards.length === 0 &&
     lastTurn &&
     !lastTurn.completed &&
-    !streamingAny
+    (!streamingAny || orbRidesPreview)
       ? lastTurn
       : null;
 
@@ -561,29 +571,35 @@ export default function Chat({
                   editsByCallId={editsByCallId}
                   onOpenSubagent={onOpenSubagent}
                   onOpenSession={onOpenSession}
-                  // Both cover the wait for output, and never at once —
-                  // `waitingTurn` requires no streaming text. Inside the block so
-                  // they sit at the gap the committed event will occupy, rather
-                  // than the wider one between turns: the preview belongs to this
-                  // turn, not after it.
+                  // Both cover the wait for output, and on every harness but fx
+                  // never at once — `waitingTurn` requires no streaming text
+                  // there. Inside the block so they sit at the gap the committed
+                  // event will occupy, rather than the wider one between turns:
+                  // the preview belongs to this turn, not after it. Where both
+                  // draw, the orb goes under the preview, which is where the
+                  // reader is already looking and where it sits on its own.
                   footer={
-                    turn === waitingTurn ? (
-                      <WorkingIndicator tokens={working?.tokens ?? 0} />
-                    ) : turn !== streamingTurn ? (
-                      undefined
-                    ) : streamingThinking ? (
-                      // The same component the committed `reasoning` event renders
-                      // with, in its `streaming` presentation — the multi-line
-                      // preview keeps growing live; it collapses to one line once
-                      // committed.
-                      <Reasoning text={streamingThinking} encrypted={false} streaming />
-                    ) : streamingTool ? (
-                      // Must come before the text arm: a tool block leaves
-                      // `streamingText` empty, so falling through would render an
-                      // empty message where the row belongs.
-                      <StreamingToolCall {...streamingTool} />
-                    ) : (
-                      <AssistantMessage text={streamingText} streaming />
+                    turn !== streamingTurn && turn !== waitingTurn ? undefined : (
+                      <>
+                        {turn === streamingTurn &&
+                          (streamingThinking ? (
+                            // The same component the committed `reasoning` event
+                            // renders with, in its `streaming` presentation — the
+                            // multi-line preview keeps growing live; it collapses
+                            // to one line once committed.
+                            <Reasoning text={streamingThinking} encrypted={false} streaming />
+                          ) : streamingTool ? (
+                            // Must come before the text arm: a tool block leaves
+                            // `streamingText` empty, so falling through would
+                            // render an empty message where the row belongs.
+                            <StreamingToolCall {...streamingTool} />
+                          ) : (
+                            <AssistantMessage text={streamingText} streaming />
+                          ))}
+                        {turn === waitingTurn && (
+                          <WorkingIndicator tokens={working?.tokens ?? 0} />
+                        )}
+                      </>
                     )
                   }
                 />

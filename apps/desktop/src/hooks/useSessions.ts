@@ -1822,11 +1822,26 @@ useEffect(() => {
                 // wait continues under a name it can finally be given. The
                 // counter restarts here — `usage_update` reports the block's own
                 // size, not a running session total.
-                setWorkingBySession((prev) =>
-                  payload.blockType.type === "thinking"
-                    ? { ...prev, [sessionId]: { tokens: 0 } }
-                    : { ...prev, [sessionId]: null },
-                );
+                //
+                // Except on fx, where the wait runs for the whole turn. Every
+                // other harness announces a model request within 30ms of each
+                // tool result *and* streams a tool call's arguments as a block
+                // of its own, so a cleared indicator is always replaced by
+                // something drawing. fx does neither: a tool call arrives whole
+                // with no `block_start`, so the turn's first text block cleared
+                // the indicator and nothing put it back until that tool
+                // finished — leaving the first tool call of every turn bare and
+                // every later one lit, which is one turn drawn two ways. So the
+                // turn itself is the wait here: opened with `TurnStarted`, and
+                // closed by `turn_completed` or by status leaving
+                // `in_progress`, which is what a stop comes back as.
+                if (agentEvent.harness !== "fx") {
+                  setWorkingBySession((prev) =>
+                    payload.blockType.type === "thinking"
+                      ? { ...prev, [sessionId]: { tokens: 0 } }
+                      : { ...prev, [sessionId]: null },
+                  );
+                }
 
                 // The block announces its kind up front — this is the only
                 // frame that knows thinking from text, since thinking deltas
