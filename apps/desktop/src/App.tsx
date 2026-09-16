@@ -1395,9 +1395,16 @@ function App() {
     const open = browserTabs?.find((tab) => tab.active);
     if (open) void closeTab(selectedSessionId, open.id);
   };
+  // `viewTab` is per session and the issues page does not clear it, so a
+  // reader who opened Issues from the Files view still has `activeFile`
+  // naming a tab in a view nobody can see — and ⌘W there closed it silently.
+  // Every other arm already carries the guard: `fullBrowserOpen` and
+  // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
+  // page hides.
+  const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
-    if (viewTab === "files" && activeFile) return closeFile(selectedSessionId, activeFile);
+    if (fileShown && activeFile) return closeFile(selectedSessionId, activeFile);
     if (fullBrowserOpen) return closeBrowserTab();
     if (gridShown) return closeSessionPane(selectedSessionId);
     if (panelShown && activeTab === "browser") closeBrowserTab();
@@ -1406,7 +1413,7 @@ function App() {
   // it matches, and a ⌘W that eats the key and does nothing is worse than one
   // the app never had.
   const hasCloseTarget =
-    (viewTab === "files" && !!activeFile) ||
+    fileShown ||
     ((fullBrowserOpen || (panelShown && activeTab === "browser")) &&
       (pendingBrowserTab || !!hasBrowserTabs)) ||
     gridShown;
