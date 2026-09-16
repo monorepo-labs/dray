@@ -656,6 +656,7 @@ mod tests {
     const CANCEL: &str = include_str!("fixtures/cancel.jsonl");
     const EDIT: &str = include_str!("fixtures/edit_file.jsonl");
     const TOOLS: &str = include_str!("fixtures/tools.jsonl");
+    const REASONING: &str = include_str!("fixtures/reasoning.jsonl");
 
     /// Replays one capture's first prompt through the mapper: every
     /// `session/update`, then the prompt's own response.
@@ -731,6 +732,66 @@ mod tests {
         assert_eq!(*status, TurnStatus::Success);
         let window = usage.as_ref().unwrap().context_window.unwrap();
         assert_eq!((window.used_tokens, window.max_tokens), (7567, 272000));
+    }
+
+    /// **Nothing fx sends ever closes a block; only the next thing arriving
+    /// does.** So a message the model has finished writing stays open, and its
+    /// commit lands in the same breath as the tool calls that follow it — which
+    /// is why the transcript cannot read a still preview as "done" and must
+    /// keep the working indicator up beside it on fx (DRA-239).
+    ///
+    /// The other captures cannot say this: between them they carry two thought
+    /// chunks, both one line, where a model that reasons puts 124 on the wire in
+    /// six runs. This is grok-4.6 at `effort high`, which is the shape a reader
+    /// actually sits in front of.
+    #[test]
+    fn a_text_block_stays_open_until_the_tool_calls_land() {
+        let events = replay(REASONING);
+
+        // Deltas are the preview; the committed events are the transcript, and
+        // the adjacency being pinned is theirs.
+        let committed: Vec<&P> = events
+            .iter()
+            .map(|e| &e.payload)
+            .filter(|p| !matches!(p, P::Delta(_)))
+            .collect();
+
+        let reasoning = committed
+            .iter()
+            .filter(|p| matches!(p, P::Reasoning { .. }))
+            .count();
+        assert_eq!(reasoning, 6, "six runs of thought, one committed block each");
+
+        // Every message but the last is closed *by* a tool call, with nothing
+        // between the two. Were fx to start terminating its own blocks, this is
+        // what would break first.
+        let texts: Vec<usize> = committed
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(p, P::AssistantText { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(texts.len(), 6);
+        for &i in &texts[..texts.len() - 1] {
+            assert!(
+                matches!(committed[i + 1], P::ToolCallStarted { .. }),
+                "a text block is closed by the tool call that follows it, not by fx",
+            );
+        }
+
+        // The last one has no tool call behind it, so the turn's own answer is
+        // what closes it — `prompt_done` is the only other caller of
+        // `close_open`, and without it the final message would never commit.
+        let last = *texts.last().unwrap();
+        assert!(matches!(committed[last + 1], P::TurnCompleted { .. }));
+
+        // fx reports tokens, but only here: `usage_update` carries an occupancy
+        // and no breakdown, so nothing on this wire can feed a live counter.
+        let P::TurnCompleted { usage, .. } = committed[last + 1] else {
+            unreachable!()
+        };
+        let window = usage.as_ref().unwrap().context_window.unwrap();
+        assert_eq!(window.max_tokens, 500_000);
     }
 
     /// Stop: the shell's update comes back `failed` and the prompt answers
