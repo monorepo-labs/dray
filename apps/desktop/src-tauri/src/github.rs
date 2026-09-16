@@ -165,16 +165,25 @@ impl MergeMethod {
 ///
 /// `mergeStateStatus` needs no preview header here, checked against the live
 /// API rather than assumed.
+///
+/// **Page sizes are the point cost, and 5/20/20 is measured.** GraphQL charges
+/// on the shape asked for, not on what comes back: nested `first`s multiply,
+/// so `20 × 50 × 50` reserved a thousand thread comments and cost 11 points
+/// per read *of a branch with no PR at all* — 2640 an hour at the settling
+/// poll, which is how two Dray instances alone drained the 5000/hour budget
+/// and every agent's own `gh` call started failing (DRA-247). The same query
+/// at `5 × 20 × 20` costs 1. Five is plenty: the query is per *branch*, so
+/// only a stack or one fix against two bases puts more than one here.
 const QUERY: &str = r#"
 query($owner:String!,$repo:String!,$branch:String!){
  repository(owner:$owner,name:$repo){
-  pullRequests(headRefName:$branch,first:20,orderBy:{field:CREATED_AT,direction:DESC}){nodes{
+  pullRequests(headRefName:$branch,first:5,orderBy:{field:CREATED_AT,direction:DESC}){nodes{
    number title url state isDraft baseRefName headRefName headRef{name} isCrossRepository mergeable mergeStateStatus reviewDecision updatedAt
    additions deletions changedFiles
    author{login avatarUrl}
    comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
    reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
-   reviewThreads(first:50){nodes{isResolved path line comments(first:50){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
+   reviewThreads(first:20){nodes{isResolved path line comments(first:20){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
    commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
      __typename
      ... on StatusContext{context state targetUrl avatarUrl}
