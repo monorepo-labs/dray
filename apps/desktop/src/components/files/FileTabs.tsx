@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { tabLabels } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
 import type { OpenFile } from "@/hooks/useOpenFiles";
@@ -13,9 +15,14 @@ import type { OpenFile } from "@/hooks/useOpenFiles";
 /// beside it reopens any of them in a click.
 ///
 /// **One row, not two**, the reading the Docs panel's chip strip takes: a
-/// filename header under a strip of tabs says the same thing twice, and the
-/// full path is on each tab's own `title` where it is only ever wanted when the
-/// name is ambiguous.
+/// filename header under a strip of tabs says the same thing twice.
+///
+/// **No `title` on a tab.** It carried the full path, and the native tooltip
+/// that draws it is the app's own rule broken — chrome here is a real tooltip
+/// or nothing — and it read as a directory hanging off the cursor a second
+/// after landing on a tab the reader was only passing over. `tabLabels` already
+/// appends the parent where a basename stops being unambiguous, which is the
+/// only moment the rest of the path was worth saying.
 export default function FileTabs({
   files,
   active,
@@ -87,7 +94,6 @@ function Tab({
         e.preventDefault();
         onClose();
       }}
-      title={path}
       className={cn(
         "group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md py-1 pl-2 pr-1 text-ui transition-colors",
         active
@@ -97,24 +103,35 @@ function Tab({
     >
       <FileIcon path={path} className="size-3.5" />
       <span className="max-w-40 truncate">{label}</span>
-      <button
-        type="button"
-        aria-label={`Close ${label}`}
-        onClick={(e) => {
-          // Or closing a background tab would select it on the way out.
-          e.stopPropagation();
-          onClose();
-        }}
-        className={cn(
-          "rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground",
-          // Always on the active tab, on hover elsewhere: a row of crosses is
-          // a row of things to press by accident, and the tab being read is
-          // the one whose close is worth reaching for without hunting.
-          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-        )}
-      >
-        <X className="size-3" strokeWidth={2} />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Close ${label}`}
+            onClick={(e) => {
+              // Or closing a background tab would select it on the way out.
+              e.stopPropagation();
+              onClose();
+            }}
+            className={cn(
+              "cursor-pointer rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground",
+              // Always on the active tab, on hover elsewhere: a row of crosses
+              // is a row of things to press by accident, and the tab being read
+              // is the one whose close is worth reaching for without hunting.
+              active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            )}
+          >
+            <X className="size-3" strokeWidth={2} />
+          </button>
+        </TooltipTrigger>
+        {/* The chord closes whichever tab is *active*, so a background tab's
+            cross names no key — it would promise one that closes a different
+            file. */}
+        <TooltipContent>
+          Close
+          {active && <ShortcutKeys ids={["tab.close"]} />}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }

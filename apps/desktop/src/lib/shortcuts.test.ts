@@ -23,15 +23,24 @@ describe("SHORTCUTS", () => {
         if (a.id !== b.id && sameChord(a.chord, b.chord))
           throw new Error(`${a.id} and ${b.id} share a chord`);
   });
+
+  // A reserved default fires but cannot be rebound, since the settings tab
+  // refuses to record one — so the two lists disagreeing is a shortcut the
+  // reader can use and cannot change, with nothing on screen saying why.
+  it("ships no default the settings tab would refuse", () => {
+    for (const shortcut of SHORTCUTS)
+      if (isReserved(shortcut.chord)) throw new Error(`${shortcut.id} is reserved`);
+  });
 });
 
 describe("isReserved", () => {
-  it("keeps quit, close-window and the editing set, and nothing wider", () => {
+  it("keeps quit and the editing set, and nothing wider", () => {
     expect(isReserved({ key: "q", meta: true, shift: false, alt: false })).toBe(true);
-    expect(isReserved({ key: "W", meta: true, shift: false, alt: false })).toBe(true);
     expect(isReserved({ key: "c", meta: true, shift: false, alt: false })).toBe(true);
     expect(isReserved({ key: "z", meta: true, shift: true, alt: false })).toBe(true);
     expect(isReserved({ key: "w", meta: true, shift: false, alt: true })).toBe(false);
+    // ⌘W is the app's — the menu ships no Close Window item to claim it.
+    expect(isReserved({ key: "w", meta: true, shift: false, alt: false })).toBe(false);
     expect(isReserved({ key: "c", meta: true, shift: true, alt: false })).toBe(false);
   });
 });

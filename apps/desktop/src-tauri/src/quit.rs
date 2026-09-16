@@ -96,6 +96,12 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         &[&PredefinedMenuItem::fullscreen(app, None)?],
     )?;
 
+    // No Close Window item, and its absence is what frees ⌘W. The predefined
+    // one carries that accelerator built in, and a menu key equivalent is
+    // matched before the responder chain — so with it here ⌘W closed the only
+    // window there is, which arrives as `CloseRequested` and raises the quit
+    // dialog. The app binds ⌘W to closing a tab or a pane instead, and the
+    // window's own close button still asks the question.
     let window_menu = Submenu::with_items(
         app,
         "Window",
@@ -103,8 +109,6 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         &[
             &PredefinedMenuItem::minimize(app, None)?,
             &PredefinedMenuItem::maximize(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;
 
