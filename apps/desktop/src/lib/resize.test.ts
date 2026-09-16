@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paneCap, snapWidth } from "@/lib/resize";
+import { paneBounds, paneCap, snapWidth } from "@/lib/resize";
 
 describe("snapWidth", () => {
   it("clamps to the pane's range", () => {
@@ -51,5 +51,25 @@ describe("paneCap", () => {
     const narrowest = 720;
     const left = narrowest - paneCap(480, narrowest) - paneCap(900, narrowest);
     expect(left).toBe(144);
+  });
+});
+
+describe("paneBounds", () => {
+  it("keeps the pane's own floor where the window has room", () => {
+    expect(paneBounds(320, 900, 2560)).toEqual({ min: 320, max: 900 });
+  });
+
+  // Below ~800px the right panel's share falls under its own minimum. The
+  // floor has to give way, or the range describes a panel wider than the one
+  // being drawn.
+  it("drops the floor to the cap on a window too narrow for it", () => {
+    expect(paneBounds(320, 900, 720)).toEqual({ min: 288, max: 288 });
+  });
+
+  it("never reports a floor above its ceiling", () => {
+    for (const viewport of [400, 720, 800, 1200, 2560]) {
+      const { min, max } = paneBounds(320, 900, viewport);
+      expect(min).toBeLessThanOrEqual(max);
+    }
   });
 });

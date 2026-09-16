@@ -1,7 +1,7 @@
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
-import { MAX_SHARE, paneCap, snapWidth } from "@/lib/resize";
+import { paneBounds, snapWidth } from "@/lib/resize";
 import { cn } from "@/lib/utils";
 
 /// Which edge of the pane the strip sits on. Dragging *away* from the pane
@@ -12,6 +12,19 @@ type Edge = "left" | "right";
 /// a few presses, since the keyboard cannot aim the way a pointer does; Home is
 /// there for the default.
 const STEP_PX = 16;
+
+const subscribeToResize = (fn: () => void) => {
+  window.addEventListener("resize", fn);
+  return () => window.removeEventListener("resize", fn);
+};
+
+/// The window's width, as state. A pane's bounds are a share of it, so the
+/// clamp, the keys and the ARIA values all go stale the moment the window is
+/// resized — and the reader resizing the window is exactly when a pane has to
+/// give ground.
+function useViewportWidth(): number {
+  return useSyncExternalStore(subscribeToResize, () => window.innerWidth);
+}
 
 /// A pane the reader can drag wider, with its width remembered.
 ///
@@ -39,16 +52,26 @@ export function useResizable({
   edge: Edge;
   label: string;
 }): { style: CSSProperties; handle: ReactNode } {
-  const [width, setWidth] = useState(() => readLocalStorage(storageKey, initial));
+  const [stored, setStored] = useState(() => readLocalStorage(storageKey, initial));
   const from = useRef<{ x: number; width: number } | null>(null);
 
-  // The cap is read at the press rather than held: the window is resizable and
-  // nothing here re-renders on that, so one captured at mount would answer for
-  // the window the app launched in.
-  const capped = (raw: number) => snapWidth(raw, min, paneCap(max, window.innerWidth), initial);
+  // One range for everything here, so what is drawn, what the keys move and
+  // what assistive technology is told can never disagree. A CSS `max-width`
+  // beside this was the alternative and it is the very split it would recreate:
+  // CSS drew the pane at its share while the clamp here still answered its own
+  // minimum.
+  const bounds = paneBounds(min, max, useViewportWidth());
+  const clamp = useCallback(
+    (raw: number) => snapWidth(raw, bounds.min, bounds.max, initial),
+    [bounds.min, bounds.max, initial],
+  );
+
+  // Narrowing the window narrows the pane; widening it back restores what the
+  // reader asked for, which is why the stored width is left alone.
+  const width = clamp(stored);
 
   const commit = (next: number) => {
-    setWidth(next);
+    setStored(next);
     writeLocalStorage(storageKey, next);
   };
 
@@ -66,9 +89,9 @@ export function useResizable({
   // separator nothing can focus leaves every pane here unresizable without a
   // mouse.
   const byKey = (key: string): number | null => {
-    if (key === "Home") return initial;
+    if (key === "Home") return clamp(initial);
     const step = key === "ArrowRight" ? STEP_PX : key === "ArrowLeft" ? -STEP_PX : null;
-    return step === null ? null : capped(width + (edge === "right" ? step : -step));
+    return step === null ? null : clamp(width + (edge === "right" ? step : -step));
   };
 
   const handle = (
@@ -77,8 +100,8 @@ export function useResizable({
       aria-orientation="vertical"
       aria-label={label}
       aria-valuenow={width}
-      aria-valuemin={min}
-      aria-valuemax={max}
+      aria-valuemin={bounds.min}
+      aria-valuemax={bounds.max}
       tabIndex={0}
       onPointerDown={(e) => {
         // Without this the drag starts a text selection at the handle and
@@ -93,7 +116,7 @@ export function useResizable({
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        setWidth(capped(start.width + moved));
+        setStored(clamp(start.width + moved));
       }}
       onPointerUp={end}
       onPointerCancel={end}
@@ -104,7 +127,7 @@ export function useResizable({
         e.preventDefault();
         commit(next);
       }}
-      onDoubleClick={() => commit(initial)}
+      onDoubleClick={() => commit(clamp(initial))}
       className={cn(
         // No hover fill: the pane already draws a border here, and lighting a
         // second one beside it reads as the edge thickening. The cursor is the
@@ -115,9 +138,5 @@ export function useResizable({
     />
   );
 
-  // `maxWidth` is the drag's own cap stated to CSS, and it is not a second
-  // statement of it: a window resized narrower moves that bound with no drag to
-  // re-run the clamp, and both panes are `shrink-0`, so without it their widths
-  // come off the transcript between them until it is clipped to nothing.
-  return { style: { width, maxWidth: `${MAX_SHARE * 100}vw` }, handle };
+  return { style: { width }, handle };
 }
