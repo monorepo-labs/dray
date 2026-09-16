@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
@@ -65,11 +65,22 @@ function Tab({
   onSelect: () => void;
   onClose: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // The strip scrolls, so a tab opened or stepped onto can be off the end of
+  // it. `nearest` on both axes, or an already-visible tab would be dragged to
+  // the middle and the column under it scrolled too.
+  useEffect(() => {
+    if (!active) return;
+    ref.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
+
   return (
     // A div rather than a button, because the close control sits inside it and
     // a button inside a button is invalid markup with a click that lands on the
     // wrong one — the same reading `FileLink` takes about the tool row.
     <div
+      ref={ref}
       role="tab"
       aria-selected={active}
       tabIndex={0}
