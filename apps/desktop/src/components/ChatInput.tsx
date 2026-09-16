@@ -118,7 +118,7 @@ type ChatInputProps = {
   /// the box they apply to — and the send button gives way to a keyboard hint.
   isNewTask?: boolean;
   /// The title of the session this box sends into, named in the placeholder.
-  /// Only while a split view is up: one composer under four transcripts is
+  /// Only while a split view is up: one composer under several transcripts is
   /// one box that can send into the wrong session, so the box says where
   /// before anything is typed — and in the placeholder rather than a row of
   /// its own, which grew the card. Single view leaves it unset; the header

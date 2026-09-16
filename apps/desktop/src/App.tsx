@@ -113,6 +113,8 @@ import { worktreeNoticeDetail } from "@/lib/worktree";
 import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
+const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+
 function App() {
   const {
     selectedSessionId,
@@ -1367,10 +1369,9 @@ function App() {
     void handleSelectSessionIndexItem(id);
     focusComposer();
   };
-  useHotkey("pane.1", () => focusPane(1), { enabled: gridShown });
-  useHotkey("pane.2", () => focusPane(2), { enabled: gridShown });
-  useHotkey("pane.3", () => focusPane(3), { enabled: gridShown });
-  useHotkey("pane.4", () => focusPane(4), { enabled: gridShown });
+  // Nine digits, so a tenth pane has no chord — it still takes a click. A
+  // fixed list, so the hook count never moves between renders.
+  for (const n of PANE_DIGITS) useHotkey(`pane.${n}`, () => focusPane(n), { enabled: gridShown });
   useHotkey("pane.close", () => selectedSessionId && closeSessionPane(selectedSessionId), {
     enabled: gridShown,
   });

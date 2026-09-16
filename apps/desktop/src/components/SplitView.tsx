@@ -11,7 +11,7 @@ import { useHasDraft } from "@/hooks/useDraft";
 import type { PaneState } from "@/hooks/useSessions";
 import { DROP_ATTR, useSessionDrag } from "@/lib/dragSession";
 import { basename } from "@/lib/format";
-import { dropLabel, type Region, type SplitGroup } from "@/lib/groups";
+import { dropLabel, paneOrder, type Region, type SplitGroup } from "@/lib/groups";
 import { IS_MAC } from "@/lib/platform";
 import { sessionBranch } from "@/lib/pr";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,7 @@ type SplitViewProps = {
   >;
 };
 
-/// Up to four transcripts in columns. One composer serves the focused pane —
+/// Any number of transcripts in columns. One composer serves the focused pane —
 /// the selected session — so a click anywhere in a pane focuses it, and the
 /// pane header is what says which one that is.
 export default function SplitView({
@@ -62,10 +62,13 @@ export default function SplitView({
   // composer — it is module-level and keyed by session, which is the whole
   // reason it exists. The *emptiness* alone, never the text: this component
   // holds every mounted transcript, so subscribing to the string would rerender
-  // all four on every keystroke.
+  // every pane on every keystroke.
   const composing = useHasDraft(focusedId);
-  // Grid order, which is what ⌘1–4 count in.
-  const numbers = new Map(columns.flat().map((item, i) => [item.sessionId, i + 1]));
+  // The order ⌘1–9 count in, so the keycap a header draws is the key that
+  // reaches it.
+  const numbers = new Map(
+    paneOrder({ columns: columns.map((c) => c.map((i) => i.sessionId)) }).map((id, i) => [id, i + 1]),
+  );
   return (
     // A top border, since the main header draws none of its own and the pane
     // headers under it would otherwise read as a second line of the same row.
@@ -180,8 +183,9 @@ const REGION_BOX: Record<Region, string> = {
 };
 
 /// Drawn over a pane while a row is held above it: the space the drop would
-/// take, and what letting go does. No label means no room, and nothing is
-/// drawn — a zone that lights up and then does nothing is worse than none.
+/// take, and what letting go does. No label means the drop would do nothing,
+/// and nothing is drawn — a zone that lights up and then does nothing is worse
+/// than none.
 export function DropZone({ region, label }: { region: Region; label: string | null }) {
   if (!label) return null;
   return (
@@ -211,7 +215,7 @@ function PaneHeader({
 }: {
   item: SessionIndexItem;
   focused: boolean;
-  /// This pane's place in ⌘1–4.
+  /// This pane's place in ⌘1–9.
   number: number;
   /// The accelerator is held, so the close button gives its slot to the
   /// keycap that reaches this pane — the one moment the number is useful.

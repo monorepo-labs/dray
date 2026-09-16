@@ -37,6 +37,11 @@ export const SHORTCUTS = [
   { id: "pane.2", label: "Focus pane 2", group: "Sessions", chord: k("2") },
   { id: "pane.3", label: "Focus pane 3", group: "Sessions", chord: k("3") },
   { id: "pane.4", label: "Focus pane 4", group: "Sessions", chord: k("4") },
+  { id: "pane.5", label: "Focus pane 5", group: "Sessions", chord: k("5") },
+  { id: "pane.6", label: "Focus pane 6", group: "Sessions", chord: k("6") },
+  { id: "pane.7", label: "Focus pane 7", group: "Sessions", chord: k("7") },
+  { id: "pane.8", label: "Focus pane 8", group: "Sessions", chord: k("8") },
+  { id: "pane.9", label: "Focus pane 9", group: "Sessions", chord: k("9") },
   { id: "pane.close", label: "Close pane", group: "Sessions", chord: k("w", { alt: true }) },
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
