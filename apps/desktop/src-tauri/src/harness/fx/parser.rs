@@ -377,6 +377,18 @@ impl ConfigOptions {
         )
     }
 
+    /// Which provider the session is on, as fx spells it.
+    ///
+    /// fx refuses a model belonging to any other one outright, so this is what
+    /// [`super::set_model`] compares against before it sends a model across.
+    pub fn provider(&self) -> Option<&str> {
+        self.config_options
+            .iter()
+            .find(|o| o.id == "provider")?
+            .current_value
+            .as_deref()
+    }
+
     /// The model those levels belong to, as fx spells it.
     pub fn model(&self) -> Option<&str> {
         self.config_options
@@ -434,6 +446,7 @@ mod tests {
     const EDIT: &str = include_str!("fixtures/edit_file.jsonl");
     const LADDER: &str = include_str!("fixtures/effort_ladder.jsonl");
     const CARRYOVER: &str = include_str!("fixtures/effort_carryover.jsonl");
+    const PROVIDER_SWITCH: &str = include_str!("fixtures/provider_switch.jsonl");
 
     /// Every reply in a capture that states the session's settings, in order —
     /// `session/new`, `session/resume` and `session/set_config_option` alike,
@@ -444,6 +457,34 @@ mod tests {
             .filter(|v| v.pointer("/result/configOptions").is_some())
             .map(|v| ConfigOptions::of(&v["result"]))
             .collect()
+    }
+
+    /// The whole of DRA-241, read off one capture: `set_config_option provider`
+    /// is a real in-place switch.
+    ///
+    /// It moves the model with it — fx restores that provider's own remembered
+    /// pick, so a switch strands nothing — and it **persists onto fx's own
+    /// session record**, so a `session/resume` in a fresh process comes back on
+    /// it rather than on whatever `~/.fx/settings.json` names. FX-PLAN said it
+    /// died with the process; that was only ever true of the settings file,
+    /// which this capture leaves on `grok` throughout.
+    #[test]
+    fn a_provider_switch_moves_the_model_and_survives_a_resume() {
+        let readings = configs(PROVIDER_SWITCH);
+
+        let [opened, switched, resumed] = &readings[..] else {
+            panic!("the capture is new, switch, resume: {} readings", readings.len());
+        };
+        assert_eq!((opened.provider(), opened.model()), (Some("grok"), Some("grok-4.6")));
+        assert_eq!(
+            (switched.provider(), switched.model()),
+            (Some("codex"), Some("gpt-5.6-sol")),
+        );
+        assert_eq!(
+            (resumed.provider(), resumed.model()),
+            (Some("codex"), Some("gpt-5.6-sol")),
+            "a fresh process resumes on the switched provider, not the global one",
+        );
     }
 
     /// The whole of DRA-221's first half, read off one capture: the ladder is a

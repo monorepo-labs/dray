@@ -91,6 +91,10 @@ pub struct FxSession {
     /// [`parser::ConfigOptions::model_effort_levels`] for why this is the
     /// place that may, and the model list is not.
     efforts: Arc<std::sync::Mutex<Option<Vec<Effort>>>>,
+    /// Which provider the session is on, off the same `configOptions` the
+    /// efforts come from. `None` for a reply this build could not read, which
+    /// [`set_model`] takes as "leave it alone" rather than as a mismatch.
+    provider: Arc<std::sync::Mutex<Option<String>>>,
     /// Whether [`SYSTEM_PROMPT`] still has to ride a prompt.
     ///
     /// **Not `is_new_session`, and the gap is a real one.** `open_session`
@@ -111,6 +115,11 @@ impl FxSession {
     /// The active model's ladder, or `None` where fx has not said.
     fn efforts(&self) -> Option<Vec<Effort>> {
         self.efforts.lock().expect("fx efforts poisoned").clone()
+    }
+
+    /// The provider fx last reported for this session.
+    fn provider(&self) -> Option<String> {
+        self.provider.lock().expect("fx provider poisoned").clone()
     }
 }
 
@@ -265,6 +274,7 @@ pub async fn init(
         id: fx_id,
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
         efforts: Arc::new(std::sync::Mutex::new(None)),
+        provider: Arc::new(std::sync::Mutex::new(None)),
         preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
     };
     note_config(&session, &config, None, app);
@@ -441,6 +451,14 @@ fn note_config(
     // that is now reported, where withholding a level costs one fx would have
     // taken.
     *session.efforts.lock().expect("fx efforts poisoned") = Some(rungs(config.effort_levels()));
+
+    // Every reply that states a session's settings states its provider, so the
+    // one reader serves `session/new`, `session/resume` and every
+    // `set_config_option` alike — which is what keeps [`set_model`]'s
+    // comparison current without a read of its own.
+    if let Some(provider) = config.provider() {
+        *session.provider.lock().expect("fx provider poisoned") = Some(provider.to_string());
+    }
 
     // The model list outlives this session, so it only takes the part of that
     // list which cannot be this session's own level leaking in — with the whole
@@ -622,12 +640,44 @@ fn refused_server(servers: &[Value], message: &str) -> Option<usize> {
     })
 }
 
-/// Moves a live session onto another model.
+/// The provider a session has to be moved to before [`set_model`] may send
+/// this model, or `None` where it is already there and nothing need go out.
+///
+/// Two states answer `None` besides agreement, and both are silence rather than
+/// evidence: a session whose `configOptions` this build could not read, and a
+/// model listed with no provider on it — `fx models` falls back to an empty one
+/// where `~/.fx/settings.json` cannot be read, which says nothing about where
+/// the model lives.
+fn provider_move<'a>(current: Option<&str>, model: &'a Model) -> Option<&'a str> {
+    if model.provider.is_empty() || current? == model.provider {
+        return None;
+    }
+    Some(&model.provider)
+}
+
+/// Moves a live session onto another model, taking its provider with it.
 ///
 /// The reply restates the whole `configOptions` list for the model just
 /// switched to, so this is also where the new model's effort ladder is read —
 /// captured, and the reason an in-place switch costs no extra round trip.
+///
+/// **The provider moves first, and that is what makes a cross-provider pick
+/// land at all.** fx refuses a model belonging to another provider outright
+/// (`-32602 "Model is not available for the active provider"`), and this `?`
+/// used to take the whole send with it — on a resume, [`init`] kills the child
+/// over it, so a session whose provider had moved underneath it could not be
+/// opened. A model names its provider, so there is nothing to ask the reader:
+/// switching the session across is what picking that model *meant*.
+/// `set_config_option provider` is a real in-place switch — it persists onto
+/// fx's own session record and a later `session/resume` comes back on it,
+/// captured in `provider_switch.jsonl` — and it moves the session onto that
+/// provider's own remembered model, which the call below then overrides.
 pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> Result<()> {
+    if let Some(provider) = provider_move(session.provider().as_deref(), model) {
+        let answer = set_config(session, "provider", provider).await?;
+        note_config(session, &parser::ConfigOptions::of(&answer), None, app);
+    }
+
     let answer = set_config(session, "model", &model.arg).await?;
     // No accepted level to record: the reply's current effort is the one
     // carried over from the model just left, which the new one may refuse.
@@ -1252,6 +1302,7 @@ mod tests {
                 id: "s".into(),
                 prompt_id: Arc::new(std::sync::Mutex::new(None)),
                 efforts: Arc::new(std::sync::Mutex::new(efforts)),
+                provider: Arc::new(std::sync::Mutex::new(None)),
                 preamble: Arc::new(AtomicBool::new(false)),
             },
             rx,
@@ -1320,6 +1371,26 @@ mod tests {
         assert_eq!((applied, refusal), (None, None));
         assert!(accepted.is_none());
         assert!(rx.try_recv().is_err());
+    }
+
+    /// A model belonging to another provider takes the session across first,
+    /// since fx refuses it outright otherwise — and that refusal is not a
+    /// sentence the reader ever sees: it fails the send, and on a resume kills
+    /// the child, so the conversation cannot be opened at all.
+    ///
+    /// Nothing goes out where the two already agree, or every ordinary model
+    /// switch would cost a round trip. And nothing goes out on either kind of
+    /// silence: sending a provider nobody established would be a switch made
+    /// out of a failure to read one.
+    #[test]
+    fn a_model_from_another_provider_moves_the_provider_first() {
+        let sol = model("gpt-5.6-sol");
+        assert_eq!(provider_move(Some("grok"), &sol), Some("codex"));
+        assert_eq!(provider_move(Some("codex"), &sol), None, "already there");
+        assert_eq!(provider_move(None, &sol), None, "fx has not said where it is");
+
+        let nowhere = Model { provider: String::new(), ..model("gpt-5.6-sol") };
+        assert_eq!(provider_move(Some("grok"), &nowhere), None, "a list read with no provider");
     }
 
     /// The ladder rides `configOptions`, and `auto`/`none` are fx's own levels

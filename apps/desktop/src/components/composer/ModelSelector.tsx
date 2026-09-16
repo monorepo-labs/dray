@@ -70,6 +70,106 @@ export function nextEffort(model: Model | undefined, current: Effort | null): Ef
   return cycle[(i + 1) % cycle.length];
 }
 
+/// fx's provider, as a segmented control at the top of the model menu.
+///
+/// fx's list is its *active provider's*, and the provider is a global fx
+/// setting (`fx provider …`, written to `~/.fx/settings.json`). Beside the
+/// agent control and built the same way: a segmented control says "one of
+/// these" where stacked rows read as more models. Text, not icons — the
+/// providers have no brand mark here. The active one is read off the rows fx
+/// answered with.
+///
+/// Unlike the agent beside it, this is *not* creation-time. fx takes a provider
+/// switch in place and a switched session keeps it: the change persists onto
+/// fx's own session record, so a later `session/resume` comes back on it rather
+/// than on whatever the settings file names by then (`provider_switch.jsonl`).
+/// The session itself moves at the next send, where `fx::set_model` carries the
+/// provider across with the model — a model names its provider, and fx refuses
+/// one belonging to another.
+///
+/// **`aria-disabled`, never `disabled`, and the tooltip is the whole reason.**
+/// A `disabled` button fires no pointer events, so it can open no tooltip and
+/// swallows the hover on its way to any ancestor holding one — which leaves a
+/// dead control with nowhere to say why, the same trap the blocked update
+/// button documents. So the buttons stay live to the pointer and the click is
+/// guarded instead.
+function ProviderRow({
+  providers,
+  active,
+  current,
+  busy,
+  onPick,
+}: {
+  providers: readonly { id: string; short: string; label: string }[];
+  /// Index into `providers` of the one in force, or -1 before fx has said.
+  active: number;
+  current: string | undefined;
+  busy: boolean;
+  onPick: (id: string) => void;
+}) {
+  const row = (
+    <div
+      role="radiogroup"
+      aria-label="Provider"
+      // Dimmed on the track rather than per button, so the moving thumb goes
+      // with it — a lit thumb over dead buttons reads as one of them still
+      // being pressable.
+      className={`mb-1 flex items-center rounded-md bg-surface-well p-1 ${busy ? "opacity-45" : ""}`}
+    >
+      <div className="relative flex flex-1 items-center">
+        {/* The moving thumb, one segment wide, placed by index — the switch
+            slides across rather than blinking between pills. Hidden until a
+            provider is known, so first run reads as "none picked" rather than
+            the first segment being silently selected. */}
+        {active >= 0 && (
+          <span
+            aria-hidden
+            className="absolute top-0 left-0 h-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+            style={{
+              width: `${100 / providers.length}%`,
+              transform: `translateX(${active * 100}%)`,
+            }}
+          />
+        )}
+        {providers.map((provider) => (
+          <button
+            key={provider.id}
+            type="button"
+            role="radio"
+            aria-checked={provider.id === current}
+            aria-label={provider.label}
+            // A switch mid-turn would move the list and the pick under a prompt
+            // already running, and a queued prompt carries no live control
+            // change with it either. The turn is seconds to minutes, so waiting
+            // is the whole cure.
+            aria-disabled={busy}
+            onClick={() => !busy && onPick(provider.id)}
+            className="relative z-10 flex h-6 flex-1 items-center justify-center rounded-sm text-ui opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+          >
+            {provider.short}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  if (!busy) return row;
+
+  // Only while the turn is running: a tooltip on a control that works would be
+  // one more thing to read on the way past it.
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{row}</TooltipTrigger>
+      {/* `max-w-none whitespace-nowrap` for the trigger tooltip's reason — the
+          menu is 202px and the default `max-w-xs` wraps a sentence this long
+          onto two rows. */}
+      <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+        Provider can't be changed mid-stream
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /// Which agent runs the session, which model it runs on, and at what effort —
 /// one control, because the three are one decision.
 ///
@@ -89,6 +189,7 @@ export default function ModelSelector({
   onFastChange,
   fastNote,
   isNewSession,
+  busy,
   onChange,
   onRefreshModels,
   onReloadModels,
@@ -115,6 +216,10 @@ export default function ModelSelector({
   /// fx's fast mode is settled when its session is created and unreachable
   /// after, so the row it draws has to go once one exists.
   isNewSession: boolean;
+  /// Whether this session's turn is in flight. The provider switch is the one
+  /// control here that waits on it — everything else is a pick the send
+  /// applies, where this one moves the child the moment it is clicked.
+  busy: boolean;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
   /// Asks the harness for its list again, dropping the backend cache first.
   /// Only pi has one that can change under the reader — the other two are
@@ -428,46 +533,27 @@ export default function ModelSelector({
 
         {/* fx's list is its *active provider's*, and the provider is a global
             fx setting (`fx provider …`, written to `~/.fx/settings.json`).
-            Creation-time only, beside the agent control and built the same way:
-            a segmented control says "one of these" where stacked rows read as
-            more models. Text, not icons — the providers have no brand mark here.
-            The active one is read off the rows fx answered with. */}
-        {harness === "fx" && canSwitchHarness && (
-          <div
-            role="radiogroup"
-            aria-label="Provider"
-            className="mb-1 flex items-center rounded-md bg-surface-well p-1"
-          >
-            <div className="relative flex flex-1 items-center">
-              {/* The moving thumb, one segment wide, placed by index — the
-                  switch slides across rather than blinking between pills. Hidden
-                  until a provider is known, so first run reads as "none picked"
-                  rather than the first segment being silently selected. */}
-              {activeProvider >= 0 && (
-                <span
-                  aria-hidden
-                  className="absolute top-0 left-0 h-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
-                  style={{
-                    width: `${100 / FX_PROVIDERS.length}%`,
-                    transform: `translateX(${activeProvider * 100}%)`,
-                  }}
-                />
-              )}
-              {FX_PROVIDERS.map((provider) => (
-                <button
-                  key={provider.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={provider.id === currentProvider}
-                  aria-label={provider.label}
-                  onClick={() => switchProvider(provider.id)}
-                  className="relative z-10 flex h-6 flex-1 items-center justify-center rounded-sm text-ui opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
-                >
-                  {provider.short}
-                </button>
-              ))}
-            </div>
-          </div>
+            Beside the agent control and built the same way: a segmented control
+            says "one of these" where stacked rows read as more models. Text,
+            not icons — the providers have no brand mark here. The active one is
+            read off the rows fx answered with.
+
+            Unlike the agent beside it, this is *not* creation-time. fx takes a
+            provider switch in place, and a switched session keeps it: the
+            change persists onto fx's own session record, so a later
+            `session/resume` comes back on it rather than on whatever the
+            settings file names by then (`provider_switch.jsonl`). The session
+            itself moves at the next send, where `fx::set_model` carries the
+            provider across with the model — a model names its provider, and fx
+            refuses one belonging to another. */}
+        {harness === "fx" && (
+          <ProviderRow
+            providers={FX_PROVIDERS}
+            active={activeProvider}
+            current={currentProvider}
+            busy={busy}
+            onPick={switchProvider}
+          />
         )}
 
         {/* Grouped only where a heading says something: pi answers with a

@@ -1847,6 +1847,7 @@ function App() {
               onAttach={() => void pickAttachments(selectedSessionId)}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
+              busy={busy}
             />
           }
         />

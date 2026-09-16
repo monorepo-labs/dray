@@ -76,6 +76,11 @@ type ComposerToolbarProps = {
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
   isNewSession: boolean;
+
+  /// Whether this session's turn is in flight. Only the fx provider switch
+  /// reads it — it is the one control here that moves the child on the click
+  /// rather than at the next send.
+  busy: boolean;
 };
 
 /// The composer's control row. Model and permission change a running session in
@@ -114,6 +119,7 @@ export default function ComposerToolbar({
   onAttach,
   contextUsage,
   isNewSession,
+  busy,
 }: ComposerToolbarProps) {
   return (
     <div className="flex min-w-0 items-center gap-0.5 px-1">
@@ -149,6 +155,7 @@ export default function ComposerToolbar({
         fastNote={fastNote}
         onFastChange={onFastChange}
         isNewSession={isNewSession}
+        busy={busy}
         onChange={onModelChange}
         onRefreshModels={onRefreshModels}
         onReloadModels={onReloadModels}
