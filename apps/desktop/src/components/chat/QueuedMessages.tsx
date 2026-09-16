@@ -1,7 +1,10 @@
+import { CornerDownLeft } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
+import { useHotkey } from "@/hooks/useHotkey";
+import { useChord } from "@/hooks/useShortcuts";
 import { imagesOf, type QueuedPrompt } from "@/hooks/useSessions";
 import {
   SEGMENT_COLOR,
@@ -10,6 +13,7 @@ import {
   withLineBreaks,
 } from "@/lib/highlight";
 import { commandBrand } from "@/lib/pluginBrand";
+import { keyLabel, modifierLabels } from "@/lib/shortcuts";
 import { stripSenderPrefix } from "@/lib/relay";
 
 /// Prompts typed into the running turn that the app is still holding.
@@ -23,7 +27,32 @@ import { stripSenderPrefix } from "@/lib/relay";
 /// Deliberately the same bubble and the same image row `UserMessage` uses,
 /// dimmed rather than restyled — it is the same message a moment early, and
 /// giving it its own shape would read as a different kind of thing.
-export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] }) {
+export default function QueuedMessages({
+  messages,
+  /// Stops the running turn so the flush that follows it happens now. Drawn
+  /// only where waiting costs a whole turn, which is fx — see `Chat`.
+  onSendNow,
+}: {
+  messages: QueuedPrompt[];
+  onSendNow?: () => void;
+}) {
+  // Above the early return, since a hook cannot be conditional — and bound to
+  // the prop rather than to fx by name, so the chord exists exactly where the
+  // button does: on a harness that has one, with something held to send.
+  useHotkey("queue.send", () => onSendNow?.(), { enabled: !!onSendNow && messages.length > 0 });
+  // Read off the store the binding reads, so the hint cannot name a chord the
+  // key no longer fires. Plain text rather than `ShortcutKeys`: a keycap is
+  // chrome, and this line is one muted sentence under a dimmed bubble — two
+  // filled chips in it are the loudest thing on screen after the message.
+  //
+  // Return is drawn as the composer's own glyph rather than as `⏎`, which is
+  // what `keyLabel` answers: the hint under the empty composer says "Press ⏎ to
+  // send" with this icon, so a character here would be a second spelling of one
+  // key a few pixels away. The registry keeps the character for the Settings
+  // tab, where a `Kbd` is a text chip.
+  const chord = useChord("queue.send");
+  const mods = modifierLabels(chord).join("");
+
   if (!messages.length) return null;
 
   return (
@@ -83,9 +112,44 @@ export default function QueuedMessages({ messages }: { messages: QueuedPrompt[] 
             </div>
 
             {/* Only under the newest, because Esc takes that one back and a hint
-                on every row would promise each of them a key that reaches one. */}
+                on every row would promise each of them a key that reaches one.
+                Send now reaches the whole queue rather than this row, and sits
+                here for the same reason: one line under the last of them. */}
             {i === messages.length - 1 && (
-              <span className="pr-1 text-ui text-muted-foreground/60">Esc to cancel</span>
+              <span className="flex items-center gap-1.5 pr-1 text-ui text-muted-foreground/60">
+                {onSendNow && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={onSendNow}
+                      className="flex items-center gap-0.5 rounded-sm hover:text-foreground"
+                    >
+                      {/* One word and no glyph beside it. A send arrow was
+                          tried and dropped: the line is one quiet sentence under
+                          a dimmed bubble, and the arrow made it the loudest
+                          thing on screen after the message itself. "Now" rather
+                          than "Send" because it reads as the pair `Esc to
+                          cancel` already is, and standing under a held prompt
+                          there is nothing else it could send. Judged against a
+                          four-character prompt, where the line is wider than the
+                          bubble whatever it says — the accepted cost, since the
+                          line answers for the whole queue rather than for the
+                          one message above it. */}
+                      Now
+                      <span className="ml-0.5 flex items-center opacity-70">
+                        {mods}
+                        {chord.key === "Enter" ? (
+                          <CornerDownLeft className="size-3" strokeWidth={2} />
+                        ) : (
+                          keyLabel(chord)
+                        )}
+                      </span>
+                    </button>
+                    <span aria-hidden>·</span>
+                  </>
+                )}
+                <span>Esc to cancel</span>
+              </span>
             )}
           </div>
         );

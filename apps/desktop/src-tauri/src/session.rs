@@ -1687,6 +1687,7 @@ impl Session {
             baseline,
             false,
             crate::harness::pi::Delivery::WhenIdle,
+            true,
             from,
             &self.seq,
             &self.events,
@@ -1804,6 +1805,7 @@ impl Session {
             None,
             false,
             crate::harness::pi::Delivery::Steer,
+            true,
             from,
             &self.seq,
             &self.events,
@@ -1811,6 +1813,7 @@ impl Session {
             app,
         )
         .await
+        .map(|_| ())
     }
 
     /// Holds a prompt and immediately hands it over, for the case where a tool
@@ -2254,12 +2257,17 @@ async fn deliver_prompt(
     // Where this lands on a harness that can take a prompt into a turn already
     // running. Ignored by every other transport, which has one way in.
     delivery: crate::harness::pi::Delivery,
+    // `false` logs the prompt and hands its prepared text back without sending
+    // it — [`flush_fx`] alone, which logs every held message as its own bubble
+    // and then opens **one** turn with the lot, fx taking one prompt per turn.
+    // No other transport is written to answer it, and none passes it.
+    send: bool,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     app: &AppHandle,
-) -> Result<()> {
+) -> Result<String> {
     let seq = seq.fetch_add(1, Relaxed);
 
     // Ahead of the event, because it is what decides the event's own text:
@@ -2275,7 +2283,7 @@ async fn deliver_prompt(
     // that only grows. Failing after it leaves a bubble with no turn behind it,
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
-        Transport::Rpc(thread) => {
+        Transport::Rpc(thread) if send => {
             Some((thread, crate::harness::codex::turn_input(thread, &text).await?))
         }
         _ => None,
@@ -2321,24 +2329,32 @@ async fn deliver_prompt(
 
     append_session_event(session_id, agent_event).await?;
 
+    // Logged, not sent: the caller holds the text and opens the turn itself.
+    if !send {
+        return Ok(text);
+    }
+
     // Codex takes a prompt as a request that opens a turn, so the write is the
     // send rather than a line the child picks up on its own schedule. Images
     // ride a different shape there and are not wired yet; the text still goes.
     // Its input was built above, where a failure could still be a no-op.
     if let Some((thread, input)) = codex {
-        return crate::harness::codex::start_turn(thread, input).await;
+        crate::harness::codex::start_turn(thread, input).await?;
+        return Ok(text);
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        return crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await;
+        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await?;
+        return Ok(text);
     }
     // fx takes a prompt as a request that blocks for the turn, so the write
     // is the send and the reader settles the answer. Images not wired: the
     // Codex provider answered `refused` to one on capture.
     if let Transport::Fx(session) = transport {
-        return crate::harness::fx::start_turn(session, &text).await;
+        crate::harness::fx::start_turn(session, &text).await?;
+        return Ok(text);
     }
     let stdin = transport.lines()?;
 
@@ -2366,7 +2382,8 @@ async fn deliver_prompt(
     };
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
-    write_line(stdin, &line).await
+    write_line(stdin, &line).await?;
+    Ok(text)
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.
@@ -2656,24 +2673,31 @@ pub async fn flush_queued(
     }
 }
 
-/// The fx flush: one prompt per turn, and the release symmetric to the
-/// reservation `ingest` makes.
+/// The fx flush: the **whole** queue as one turn, and the release symmetric to
+/// the reservation `ingest` makes.
+///
+/// fx takes one prompt per turn — `session/prompt` blocks for the turn and a
+/// second one written meanwhile takes over the id the read loop settles on — so
+/// draining one message per boundary made a reader's second sentence wait out a
+/// whole turn answering their first. Every held message is still its own bubble
+/// and its own line in the log; what they share is the turn they open.
 ///
 /// The empty-check and the release of the reservation are done **while holding
 /// both status and queued** — the crux, symmetric to `fx_queue_if_in_flight`
 /// on the send side. Release the queue lock before marking the turn Completed
 /// and a send can enqueue in the gap, leaving a prompt with no turn to flush
-/// it. Holding both, a send either lands its message before the empty-check
-/// (drained here, or reserved for the next turn) or reads the released
-/// Completed after and delivers directly.
+/// it. Holding both, a send either lands its message before the take (drained
+/// here, or reserved for the next turn) or reads the released Completed after
+/// and delivers directly.
 ///
-/// A message that fails to send starts no turn and so no flush to reach the
-/// next, hence the loop: keep taking until one is delivered or the queue is
-/// empty. Locks are dropped across each delivery, so a cancel or a send can
-/// move the queue between attempts — which the next iteration re-reads.
+/// A batch that fails to reach the child starts no turn and so no flush to
+/// reach the next, hence the loop: keep taking until something is delivered or
+/// the queue is empty under both locks. Locks are dropped across each attempt,
+/// so a cancel or a send can move the queue between them — which the next round
+/// re-reads.
 ///
-/// Order is status→queued, as everywhere; nothing holds queued while awaiting
-/// status, so no deadlock.
+/// Order is status -> queued, as everywhere; nothing holds queued while
+/// awaiting status, so no deadlock.
 async fn flush_fx(
     session_id: &str,
     harness: Harness,
@@ -2685,48 +2709,80 @@ async fn flush_fx(
     app: &AppHandle,
 ) {
     loop {
-        let message = {
+        let batch: Vec<QueuedMessage> = {
             let mut tracker = status.lock().await;
             let mut held = queued.lock().await;
-            match held.is_empty() {
-                // Nothing to hand over: the whole queue failed to send, or a
-                // cancel emptied it. Give the reserved turn back under both
-                // locks, or the session hangs `InProgress` on a prompt no child
-                // holds — and a send racing this either queued before the check
-                // (so it is not empty) or reads Completed after and delivers.
-                true => {
-                    let released = tracker.release_reserved_turn();
-                    drop(held);
-                    drop(tracker);
-                    if let Some(next) = released {
-                        publish_status(session_id, next, app).await;
-                    }
-                    return;
+            let batch = std::mem::take(&mut *held);
+            // Nothing to hand over: the whole queue failed to send, or a cancel
+            // emptied it. Give the reserved turn back under both locks, or the
+            // session hangs `InProgress` on a prompt no child holds — and a send
+            // racing this either queued before the take (so it is in the batch)
+            // or reads Completed after and delivers.
+            if batch.is_empty() {
+                let released = tracker.release_reserved_turn();
+                drop(held);
+                drop(tracker);
+                if let Some(next) = released {
+                    publish_status(session_id, next, app).await;
                 }
-                false => held.remove(0),
+                return;
             }
+            batch
         };
 
-        // Delivered outside the locks — attachment prep, the log write and
-        // `start_turn` all await. On success the reservation stands as
-        // `InProgress` and the turn is the delivered prompt's; on failure
-        // `deliver_batch` reports it and the loop takes the next.
-        let mut delivered = 0;
-        deliver_batch(
-            vec![message],
-            session_id,
-            harness,
-            seq,
-            events,
-            transport,
-            app,
-            &mut delivered,
-        )
-        .await;
-
-        if delivered > 0 {
-            return;
+        // Logged outside the locks — attachment prep and the log write both
+        // await. Each message mints its own `user_message`, so the transcript
+        // draws what the reader typed, separately, in the order they typed it.
+        // The text comes back prepared — a non-image attachment is an `@path` on
+        // it by now — which is what may be joined.
+        let mut texts = Vec::new();
+        for message in batch {
+            match deliver_prompt(
+                session_id,
+                harness,
+                &message.text,
+                &message.attachment_paths,
+                &message.issues,
+                // No baseline, for `deliver_batch`'s reason.
+                None,
+                true,
+                crate::harness::pi::Delivery::WhenIdle,
+                false,
+                message.from,
+                seq,
+                events,
+                transport,
+                app,
+            )
+            .await
+            {
+                Ok(text) => texts.push(text),
+                Err(err) => {
+                    eprintln!("[queued flush err] {err}");
+                    report_send_failure(session_id, harness, &err.to_string(), seq, events, app)
+                        .await;
+                }
+            }
         }
+
+        // One prompt, blank-line separated, because one is all fx takes. On
+        // success the reservation stands as `InProgress` and the turn is this
+        // batch's; on failure every message is already on screen and in the log,
+        // so the sentence saying why is the only thing still owing.
+        if let (false, Transport::Fx(session)) = (texts.is_empty(), transport) {
+            match crate::harness::fx::start_turn(session, &texts.join("\n\n")).await {
+                Ok(()) => return,
+                Err(err) => {
+                    eprintln!("[queued flush err] {err}");
+                    report_send_failure(session_id, harness, &err.to_string(), seq, events, app)
+                        .await;
+                }
+            }
+        }
+
+        // Nothing reached the child, so nothing will flush whatever queued
+        // behind this. Round again: the reservation is only given back where the
+        // queue is empty under both locks.
     }
 }
 
@@ -2757,6 +2813,7 @@ async fn deliver_batch(
             true,
             // A flush runs at a boundary, so there is no turn to steer into.
             crate::harness::pi::Delivery::WhenIdle,
+            true,
             message.from,
             seq,
             events,
@@ -2765,7 +2822,7 @@ async fn deliver_batch(
         )
         .await
         {
-            Ok(()) => *delivered += 1,
+            Ok(_) => *delivered += 1,
             Err(err) => {
                 eprintln!("[queued flush err] {err}");
                 // Drawn, not only logged. The prompt is already on screen and in

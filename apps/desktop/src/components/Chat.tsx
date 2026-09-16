@@ -72,6 +72,7 @@ type ChatProps = {
   /// yet. Rendered here rather than built from the log, because a held prompt is
   /// deliberately unpersisted until it is delivered.
   queuedMessages?: QueuedPrompt[];
+  onSendNow?: () => void;
   /// Both side panes are open, so the pane is at its narrowest and the rail sits
   /// close to the text. Passed in rather than measured here: the shell owns those
   /// two toggles, and the rail overlays the transcript at every width anyway — so
@@ -160,6 +161,7 @@ export default function Chat({
   compacting = false,
   apiRetry = null,
   queuedMessages = [],
+  onSendNow,
   crowded = false,
   rail = true,
   active = true,
@@ -617,7 +619,14 @@ export default function Chat({
               ),
             )}
 
-            <QueuedMessages messages={queuedMessages} />
+            {/* fx alone: it takes one prompt per turn, so a held message waits
+                out the whole turn on screen. Every other harness hands its queue
+                over at the next tool boundary, seconds away, where stopping the
+                turn to save that wait costs more than the wait. */}
+            <QueuedMessages
+              messages={queuedMessages}
+              onSendNow={session.harness === "fx" ? onSendNow : undefined}
+            />
 
             {backgroundTaskCount > 0 && (
               <BackgroundTasksIndicator

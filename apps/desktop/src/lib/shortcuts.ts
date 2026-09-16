@@ -61,6 +61,7 @@ export const SHORTCUTS = [
   { id: "harness.next", label: "Next agent", group: "Composer", chord: k("a", { shift: true }) },
   { id: "worktree.toggle", label: "Toggle worktree", group: "Composer", chord: k("t", { shift: true }) },
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },
+  { id: "queue.send", label: "Send queued prompts now", group: "Composer", chord: k("Enter") },
 
   { id: "notice.take", label: "Open the notification", group: "Notifications", chord: k("g") },
   { id: "notice.delete", label: "Delete worktree from notification", group: "Notifications", chord: k("d", { shift: true }) },
@@ -171,6 +172,7 @@ const KEY_LABELS: Record<string, string> = {
   ArrowDown: "↓",
   ArrowLeft: "←",
   ArrowRight: "→",
+  Enter: "⏎",
   Escape: "Esc",
   " ": "Space",
   Backspace: "⌫",

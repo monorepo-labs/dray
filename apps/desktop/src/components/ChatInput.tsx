@@ -915,8 +915,14 @@ export default function ChatInput({
                     // works with the composer unfocused too.
 
                     // Shift+Enter is the only way to get a newline; plain Enter sends.
+                    //
+                    // ⌘⏎ is not a second way to send, and used to be one only
+                    // because nothing here read the modifier. It belongs to
+                    // `queue.send` — a document binding, which fires *after*
+                    // this one — so submitting here as well would send the draft
+                    // and flush the queue on one press.
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                      if (!e.shiftKey) {
+                      if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
                         e.preventDefault();
                         submit();
                         return;
