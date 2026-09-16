@@ -1702,13 +1702,18 @@ useEffect(() => {
               }));
             }
 
-            // A prompt reaching the child is the other start of a blank
-            // stretch, and the only one on fx: it mints `model_request_started`
-            // with the *first update it gets back*, so a queue flushed by Send
-            // now leaves the turn open and the screen dead until the model
-            // speaks. The optimistic write in `handleSendMsg` covers a prompt
-            // the reader sent from the composer and nothing covers one the
-            // backend hands over — a flushed queue, a relayed `dray send`.
+            // A prompt going out is the other start of a blank stretch, and
+            // the only one on fx: it mints `model_request_started` with the
+            // *first update it gets back*, so a queue flushed by Send now
+            // leaves the turn open and the screen dead until the model speaks.
+            // `handleSendMsg` writes the wait optimistically for a prompt the
+            // reader sent from the composer; this covers one the backend hands
+            // over — a flushed queue, a relayed `dray send`.
+            //
+            // The event is logged *before* the transport write, so it says the
+            // prompt is on its way rather than that a child took it. That is
+            // the right side to err on: a send that fails releases the turn,
+            // and a status off `in_progress` clears the wait below.
             if (agentEvent.payload.type === "user_message") {
               setWorkingBySession((prev) => ({
                 ...prev,
