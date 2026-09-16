@@ -1870,6 +1870,7 @@ function App() {
             onOpenSubagentPanel: openSubagentPanel,
             onRespondPermission: handleRespondPermission,
             onAnswerQuestions: handleAnswerQuestions,
+            onSendNow: handleInterrupt,
           }}
         />
       ) : (

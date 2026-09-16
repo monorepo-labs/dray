@@ -885,6 +885,15 @@ export default function ChatInput({
                   // follows the caret however it moved rather than only on typing.
                   onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
                   onKeyDown={(e) => {
+                    // Enter is the composer's on its own and with Shift, and
+                    // nobody else's: a modified one belongs to whatever document
+                    // binding claims it — `queue.send` is ⌘⏎ by default and the
+                    // reader may rebind it onto any modifier. Those listeners run
+                    // *after* this one, so anything done here happens as well as
+                    // the chord: picking a row, sending the draft, or growing a
+                    // list marker behind a flush.
+                    const plainEnter = !e.metaKey && !e.ctrlKey && !e.altKey;
+
                     // Whichever picker is open owns these keys, and only while it
                     // is — Enter completes the highlighted row instead of sending,
                     // which is the one place the composer's usual rule gives way.
@@ -904,7 +913,7 @@ export default function ChatInput({
                         setActiveIndex((active - 1 + rowCount) % rowCount);
                         return;
                       }
-                      if (e.key === "Enter" || e.key === "Tab") {
+                      if ((e.key === "Enter" && plainEnter) || e.key === "Tab") {
                         e.preventDefault();
                         pickRow(active);
                         return;
@@ -915,14 +924,8 @@ export default function ChatInput({
                     // works with the composer unfocused too.
 
                     // Shift+Enter is the only way to get a newline; plain Enter sends.
-                    //
-                    // ⌘⏎ is not a second way to send, and used to be one only
-                    // because nothing here read the modifier. It belongs to
-                    // `queue.send` — a document binding, which fires *after*
-                    // this one — so submitting here as well would send the draft
-                    // and flush the queue on one press.
-                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                      if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                    if (e.key === "Enter" && plainEnter && !e.nativeEvent.isComposing) {
+                      if (!e.shiftKey) {
                         e.preventDefault();
                         submit();
                         return;

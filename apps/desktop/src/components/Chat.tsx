@@ -622,10 +622,16 @@ export default function Chat({
             {/* fx alone: it takes one prompt per turn, so a held message waits
                 out the whole turn on screen. Every other harness hands its queue
                 over at the next tool boundary, seconds away, where stopping the
-                turn to save that wait costs more than the wait. */}
+                turn to save that wait costs more than the wait.
+
+                Gated on `active` as well, which in a split is the focused pane
+                and on screen. `onSendNow` interrupts the *selected* session, so
+                an unfocused pane's button would stop somebody else's turn — and
+                the chord rides the same prop, so four mounted transcripts would
+                otherwise bind it four times. */}
             <QueuedMessages
               messages={queuedMessages}
-              onSendNow={session.harness === "fx" ? onSendNow : undefined}
+              onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
             />
 
             {backgroundTaskCount > 0 && (
