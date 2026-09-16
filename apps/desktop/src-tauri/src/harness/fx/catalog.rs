@@ -79,10 +79,18 @@ type Ladders = Arc<HashMap<String, Vec<Effort>>>;
 
 struct Cached {
     ladders: Ladders,
-    /// When it was last *asked for*, which is not when it was last answered:
-    /// a failed fetch stamps this too, or a machine with no network spends a
-    /// whole [`TIMEOUT`] on every read.
-    at: Instant,
+    /// When these ladders came back, which is what [`MAX_AGE`] is about — how
+    /// old the *answer* is.
+    answered_at: Instant,
+    /// When the gateway was last asked, answer or not. A failed fetch moves
+    /// this and leaves `answered_at` alone, or a machine with no network spends
+    /// a whole [`TIMEOUT`] on every read.
+    ///
+    /// **Two stamps, because one of them lied.** Held as a single field, a
+    /// failed refresh at the six-hour mark reset the age as well as the
+    /// attempt, so the next try was six hours out rather than [`REFETCH_FLOOR`]
+    /// — a transient failure buying a whole extra age's worth of stale ladders.
+    tried_at: Instant,
 }
 
 /// In memory and never on disk — the bargain [`super::models::LADDERS`] makes
@@ -105,31 +113,38 @@ pub async fn ladders(wanted: &[&str]) -> Ladders {
 
     let ask = match cached.as_ref() {
         None => true,
-        Some(held) => {
-            held.at.elapsed() >= MAX_AGE
-                || (held.at.elapsed() >= REFETCH_FLOOR
-                    && wanted.iter().any(|id| !held.ladders.contains_key(*id)))
-        }
+        Some(held) => should_ask(
+            held.answered_at.elapsed(),
+            held.tried_at.elapsed(),
+            wanted.iter().any(|id| !held.ladders.contains_key(*id)),
+        ),
     };
 
     if ask {
+        let tried_at = Instant::now();
         match fetch().await {
             Ok(fresh) => {
                 *cached = Some(Cached {
                     ladders: Arc::new(fresh),
-                    at: Instant::now(),
+                    answered_at: Instant::now(),
+                    tried_at,
                 })
             }
             Err(err) => {
                 eprintln!("[fx catalog] {err:#}");
                 // The previous answer stands — a failed refetch must not throw
-                // away ladders that were read fine an hour ago.
+                // away ladders that were read fine an hour ago — and keeps its
+                // own age, so the next try is the floor away and not an age.
                 match cached.as_mut() {
-                    Some(held) => held.at = Instant::now(),
+                    Some(held) => held.tried_at = tried_at,
                     None => {
                         *cached = Some(Cached {
                             ladders: Ladders::default(),
-                            at: Instant::now(),
+                            // Nothing was answered, so this is as stale as it
+                            // gets: the floor is the only thing holding the
+                            // next attempt off.
+                            answered_at: tried_at,
+                            tried_at,
                         })
                     }
                 }
@@ -141,6 +156,19 @@ pub async fn ladders(wanted: &[&str]) -> Ladders {
         .as_ref()
         .map(|held| held.ladders.clone())
         .unwrap_or_default()
+}
+
+/// Whether a held answer is worth asking about again — split out from the
+/// clock so the rule can be read and tested on its own, which it has earned:
+/// the age arm was added in review and took the retry cadence with it.
+///
+/// **Two reasons to ask, and the floor governs both.** Gating the miss alone
+/// left a failed age-driven refresh waiting a whole [`MAX_AGE`] for its next
+/// try rather than [`REFETCH_FLOOR`], since the failure moved the stamp the age
+/// was read from. It costs a legitimate refresh nothing: an answer old enough
+/// to be stale clears a ten-minute floor by definition.
+fn should_ask(answered_ago: Duration, tried_ago: Duration, any_missing: bool) -> bool {
+    (answered_ago >= MAX_AGE || any_missing) && tried_ago >= REFETCH_FLOOR
 }
 
 /// Drops the cached catalog, so the next read fetches. For the reader's manual
@@ -347,6 +375,30 @@ mod tests {
             ladder_of(&serde_json::json!([{"type": "effort", "values": {"min": "low"}}])),
             None
         );
+    }
+
+    /// The retry cadence, and the case that made it worth a test of its own: a
+    /// failed refresh must not push the next attempt out by a whole age.
+    #[test]
+    fn a_failed_refresh_retries_on_the_floor_not_the_age() {
+        let stale = MAX_AGE + Duration::from_secs(1);
+        let just_tried = Duration::from_secs(1);
+        let past_floor = REFETCH_FLOOR + Duration::from_secs(1);
+
+        // The moment the answer goes stale, with nothing tried recently.
+        assert!(should_ask(stale, stale, false));
+        // That attempt failed a second ago: hold off, but on the floor —
+        // the answer is still stale, and ten minutes later it is asked again.
+        assert!(!should_ask(stale, just_tried, false));
+        assert!(should_ask(stale, past_floor, false));
+
+        // A miss is the other reason, and takes the same floor.
+        assert!(!should_ask(Duration::ZERO, just_tried, true));
+        assert!(should_ask(Duration::ZERO, past_floor, true));
+
+        // A fresh answer that names everything asked for is left alone however
+        // long ago it was read.
+        assert!(!should_ask(Duration::ZERO, past_floor, false));
     }
 
     /// An unreadable entry is dropped from the map rather than filed empty, so
