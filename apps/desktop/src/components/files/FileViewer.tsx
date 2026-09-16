@@ -48,6 +48,11 @@ export default function FileViewer({
   const scrolled = useRef<string | null>(null);
   const line = file?.line;
   const revealKey = file ? `${file.path}\n${file.reveal}` : null;
+  // What is on screen now, for a wait started under an earlier reveal. The
+  // pane is reused across tab switches, so a frame armed for one file would
+  // otherwise scroll the next one to the first file's line.
+  const current = useRef(revealKey);
+  current.current = revealKey;
 
   const text = file?.state.status === "ready" && file.state.body.kind === "text"
     ? file.state.body.text
@@ -94,6 +99,7 @@ export default function FileViewer({
       scrolled.current = revealKey;
       let frames = 0;
       const scrollWhenSized = () => {
+        if (current.current !== revealKey) return;
         if (pane.scrollHeight < at.top + at.height) {
           if (++frames < 60) requestAnimationFrame(scrollWhenSized);
           return;
