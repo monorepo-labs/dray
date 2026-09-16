@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 import { getFiletypeFromFileName } from "@pierre/diffs";
-import { File } from "@pierre/diffs/react";
+import { File, Virtualizer } from "@pierre/diffs/react";
 
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
@@ -16,6 +16,14 @@ import { cn } from "@/lib/utils";
 /// than a `--diffs-*` token, since the library has none for "the line somebody
 /// was sent to".
 const TARGET_CSS = `[data-target] { background: color-mix(in oklab, var(--primary) 18%, transparent); }`;
+
+/// What `onPostRender` hands back once `File` runs under a `Virtualizer`: a
+/// `VirtualizedFile`, which can say where a line sits without drawing it. Both
+/// optional, since the callback is typed against the plain `File`.
+type VirtualizedInstance = {
+  getLinePosition?: (line: number) => { top: number; height: number } | undefined;
+  getEditorViewport?: () => HTMLElement | Document | undefined;
+};
 
 /// The active file, read and highlighted.
 ///
@@ -41,11 +49,17 @@ export default function FileViewer({
   const line = file?.line;
   const revealKey = file ? `${file.path}\n${file.reveal}` : null;
 
+  const text = file?.state.status === "ready" && file.state.body.kind === "text"
+    ? file.state.body.text
+    : null;
+  const lineCount = useMemo(() => (text === null ? 0 : text.split("\n").length), [text]);
+
   // `onPostRender` hands back the *host* element, whose rows live in its shadow
   // root, so the query has to cross that boundary explicitly — the same reading
-  // `CodeView`'s gutter rewrite takes.
+  // `CodeView`'s gutter rewrite takes. Under the virtualizer it fires on every
+  // window the viewer draws, which is what re-marks the row as it scrolls in.
   const mark = useCallback(
-    (host: HTMLElement) => {
+    (host: HTMLElement, instance: unknown) => {
       const root: ParentNode = host.shadowRoot ?? host;
       for (const stale of root.querySelectorAll("[data-target]")) {
         stale.removeAttribute("data-target");
@@ -58,11 +72,37 @@ export default function FileViewer({
       const rows = root.querySelectorAll(`[data-line-index="${line - 1}"]`);
       for (const row of rows) row.setAttribute("data-target", "");
 
-      if (scrolled.current === revealKey) return;
+      if (scrolled.current === revealKey || line > lineCount) return;
+      if (rows[0]) {
+        scrolled.current = revealKey;
+        rows[0].scrollIntoView({ block: "center" });
+        return;
+      }
+
+      // Virtualized, so a row outside the first window is not in the DOM to
+      // scroll to. The instance knows where it would sit; scrolling the pane
+      // there draws the window that holds it, and the next post-render marks it.
+      // Not this frame: this runs inside the virtualizer's own render pass,
+      // before it has given the pane its virtual height, and a scroll issued
+      // against a pane still 818px tall is clamped to nothing — measured. So
+      // wait for the pane to be tall enough to hold the line, a frame or two,
+      // and give up quietly if it never is.
+      const virtualized = instance as VirtualizedInstance;
+      const at = virtualized.getLinePosition?.(line);
+      const pane = virtualized.getEditorViewport?.();
+      if (!at || !(pane instanceof HTMLElement)) return;
       scrolled.current = revealKey;
-      rows[0]?.scrollIntoView({ block: "center" });
+      let frames = 0;
+      const scrollWhenSized = () => {
+        if (pane.scrollHeight < at.top + at.height) {
+          if (++frames < 60) requestAnimationFrame(scrollWhenSized);
+          return;
+        }
+        pane.scrollTo({ top: at.top - (pane.clientHeight - at.height) / 2 });
+      };
+      requestAnimationFrame(scrollWhenSized);
     },
-    [line, revealKey],
+    [line, revealKey, lineCount],
   );
 
   const options = useMemo(
@@ -79,10 +119,6 @@ export default function FileViewer({
     }),
     [pair, resolvedMode, mark],
   );
-
-  const text = file?.state.status === "ready" && file.state.body.kind === "text"
-    ? file.state.body.text
-    : null;
 
   // Keyed on content like a diff side, so the pool caches the result and a
   // tab the reader comes back to does not tokenize again.
@@ -101,10 +137,18 @@ export default function FileViewer({
   // the reading the Docs panel's chip strip takes. No padding either: the
   // pane's own border is the frame, and an inset would only make the code
   // narrower than the window it was given.
+  //
+  // The `Virtualizer` is the scroll container, and its presence is what turns
+  // `File` into a `VirtualizedFile` (`useFileInstance` reads the context): only
+  // the rows in and around the viewport exist in the DOM. Without it an
+  // 8000-line lockfile is 8000 rows laid out for a pane showing forty, on open
+  // and again on every tab switch. `overflow: "scroll"` above is the library's
+  // uniform-row path, so nothing is measured per line and the default 20px
+  // metric is exactly the `--diffs-line-height` its rows are drawn at.
   return (
-    <div className="min-h-0 flex-1 overflow-auto text-code">
+    <Virtualizer className="min-h-0 flex-1 overflow-auto text-code">
       <Body file={file} contents={contents} options={options} ready={ready} />
-    </div>
+    </Virtualizer>
   );
 }
 
@@ -161,5 +205,10 @@ function Body({
     return <pre className="px-2.5 py-2 font-mono whitespace-pre">{contents?.contents ?? ""}</pre>;
   }
 
-  return <File file={contents} options={options} />;
+  // Never zero-height. The virtualizer anchors scroll on each file's edge and
+  // reads a host whose bottom sits at or above the viewport top as scrolled
+  // past — which a host not yet rendered, at 0px, is. It then keeps that bottom
+  // edge in place as the host grows to its virtual height, so an 8000-line file
+  // opened at the top landed at the end. Measured; one pixel is the whole cure.
+  return <File file={contents} options={options} style={{ minHeight: 1 }} />;
 }
