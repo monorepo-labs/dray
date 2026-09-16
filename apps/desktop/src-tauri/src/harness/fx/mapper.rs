@@ -102,11 +102,6 @@ impl Mapper {
         }
     }
 
-    /// Whether a prompt is running.
-    pub fn turn_open(&self) -> bool {
-        self.turn_open
-    }
-
     pub fn map(&mut self, event: FxEvent) -> Vec<AgentEvent> {
         match event {
             FxEvent::Update(update) => self.update(update),

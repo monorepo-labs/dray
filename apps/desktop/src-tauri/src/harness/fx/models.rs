@@ -424,6 +424,44 @@ async fn active_provider() -> Option<String> {
     settings.get("provider")?.as_str().map(str::to_string)
 }
 
+/// The cheapest model that writes a usable session title on the provider fx is
+/// on, for [`crate::title`] to name through `FX_MODEL`.
+///
+/// **Per provider because a title must not need a login the reader hasn't got.**
+/// `FX_MODEL` does cross providers — `openai/gpt-5.4-nano` ran a request with
+/// `provider=grok` — but only where the gateway is signed in, so naming one
+/// model for everybody would leave a grok-only or codex-only reader with no
+/// titles at all.
+///
+/// The picks are measured, not assumed: `fx ask --json` reports the model it
+/// actually used, and titling one real prompt, `openai/gpt-5.4-nano` answered in
+/// 2.8s where `anthropic/claude-haiku-4.5` took 3.6s for more tokens and
+/// `spacexai/grok-4.1-fast-non-reasoning` answered with nothing at all after
+/// 141s. Nothing waits on a title, so what is being bought here is cost rather
+/// than latency.
+///
+/// An unreadable settings file or a provider this build has never heard of
+/// answers `None`, which leaves the session on its prompt-derived title — the
+/// same thing every other failure here costs.
+pub(crate) async fn title_model() -> Option<&'static str> {
+    title_model_for(&active_provider().await?)
+}
+
+/// The mapping above, split from the settings read so it can be tested without
+/// one.
+fn title_model_for(provider: &str) -> Option<&'static str> {
+    match provider {
+        "gateway" => Some("openai/gpt-5.4-nano"),
+        // The cheap rung of the generation, which is what `title.rs` already
+        // titles a Codex session with.
+        "codex" => Some("gpt-5.6-luna"),
+        // Grok serves one generation and no small sibling, so this is the floor
+        // rather than a pick.
+        "grok" => Some("grok-4.6"),
+        _ => None,
+    }
+}
+
 /// A provider's whole id list as models.
 ///
 /// Mapped over the set rather than one id at a time because [`supports_fast`]
@@ -997,5 +1035,22 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every provider fx has gets a title model, and a provider this build has
+    /// never heard of gets none rather than somebody else's — `FX_MODEL` naming
+    /// a model the active provider does not serve is a spawn that fails, and
+    /// with it a session left on its prompt-derived title for a reason nothing
+    /// says out loud.
+    #[test]
+    fn a_title_model_per_provider_and_none_invented() {
+        for provider in ["gateway", "codex", "grok"] {
+            assert!(
+                title_model_for(provider).is_some(),
+                "{provider} has no title model"
+            );
+        }
+        assert_eq!(title_model_for("anthropic"), None);
+        assert_eq!(title_model_for(""), None);
     }
 }

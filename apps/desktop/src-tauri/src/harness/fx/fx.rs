@@ -54,11 +54,15 @@ const PROTOCOL_VERSION: u64 = 1;
 /// Its own file rather than pi's: pi's names `~/.agents/skills`, and fx reads
 /// `~/.claude/skills` among its global roots, so each has to name the path its
 /// own agent will actually find the skill at.
-const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
+pub(crate) const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 
 /// The tag the rules are wrapped in, so anything reading the prompt back can
 /// find where they stop.
-const PREAMBLE_TAG: &str = "dray_system_prompt";
+///
+/// Shared with [`crate::title`], which cuts the block back out before titling
+/// rather than trusting the call chain to have kept it away — two spellings of
+/// this would leave that cut silently matching nothing.
+pub(crate) const PREAMBLE_TAG: &str = "dray_system_prompt";
 
 /// How long a child is given to leave after `session/close` and EOF before it
 /// is killed. fx holds a `session.lock` per session under `~/.fx/sessions`,
@@ -210,6 +214,7 @@ pub async fn init(
     let _creating = if is_new_session {
         let guard = FX_CREATING.lock().await;
         set_fast_mode(fast).await;
+        disable_fx_titles().await;
         Some(guard)
     } else {
         None
@@ -389,6 +394,36 @@ static FX_CREATING: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 async fn set_fast_mode(fast: bool) {
     if let Err(error) = models::write_setting("fast_mode", fast.into()).await {
         eprintln!("[fx] couldn't set fast mode: {error:#}");
+    }
+}
+
+/// Turns fx's own session titling off, so the first turn ends when the answer
+/// does.
+///
+/// **fx's ACP server holds the `session/prompt` reply until it has written a
+/// title, and that is a second model call.** Measured against 0.0.10 through
+/// `fx acp --log-file`: `prompt_finish` for the turn, then 5.9s of
+/// `title_generation`, and only then the reply — so the working indicator sat
+/// there for six seconds over a finished answer. Nothing on the wire says the
+/// answer is done; `prompt_finish` is log-only. Nor can the wait be worked
+/// around from this side: a prompt sent into that window is refused outright
+/// with `-32600 Prompt already in progress`, so fx holds the whole session and
+/// not merely the reply. Off, the same gap measures 0.16s.
+///
+/// Only the first turn pays it — fx restates the stored title afterwards rather
+/// than deriving it again — which is why the stall looks like the first message
+/// being special.
+///
+/// [`crate::title`] writes the title instead, detached, the way every other
+/// harness here is titled.
+///
+/// Best effort and for fast mode's reason, and it sits beside it for another:
+/// this is fx's **global** setting, so it moves the reader's own TUI default
+/// too, and the two writers can undo each other. A lost write costs the stall
+/// back, never the session.
+async fn disable_fx_titles() {
+    if let Err(error) = models::write_setting("session_titles", false.into()).await {
+        eprintln!("[fx] couldn't turn fx's own session titling off: {error:#}");
     }
 }
 
@@ -1002,19 +1037,11 @@ async fn read_stdout(
             continue;
         };
 
-        // A title is a fact about the index row, not a transcript event, so it
-        // takes the side channel `title.rs` emits on. Only inside a turn:
-        // `session/resume` restates the last title before any prompt — and for
-        // a session never titled, restates "Untitled session" — where Dray
-        // already holds one written from the prompt.
-        if let parser::FxEvent::Update(parser::SessionUpdate::SessionInfoUpdate {
-            title: Some(title),
-        }) = &event
-        {
-            if mapper.turn_open() && !title.trim().is_empty() {
-                set_title(&handles, title).await;
-            }
-        }
+        // fx's own title is deliberately dropped — see [`disable_fx_titles`].
+        // With its generation off, what `session_info_update` carries is the
+        // raw first prompt, which is already what Dray's index holds; and fx
+        // **restates** that on every later turn, so honouring it would write the
+        // prompt back over the title [`crate::title`] generated, mid-session.
 
         let ingest = crate::session::Ingest {
             session_id: &handles.session_id,
@@ -1114,23 +1141,6 @@ fn prompt_answer(session: &FxSession, line: &str) -> Option<parser::FxEvent> {
         .and_then(|r| serde_json::from_value(r).ok())
         .unwrap_or_default();
     Some(parser::FxEvent::PromptDone(response))
-}
-
-/// fx's own title for the session, written over the prompt-derived one.
-async fn set_title(handles: &ReaderHandles, title: &str) {
-    match store::set_session_title(&handles.session_id, title).await {
-        Ok(Some(_)) => {
-            let event = crate::title::SessionTitleEvent {
-                session_id: handles.session_id.clone(),
-                title: title.to_string(),
-            };
-            if let Err(e) = handles.app.emit("session_title", &event) {
-                eprintln!("[fx title emit err] {e}");
-            }
-        }
-        Ok(None) => {}
-        Err(e) => eprintln!("[fx title write err] {e}"),
-    }
 }
 
 /// Turns one permission request into the card that answers it.

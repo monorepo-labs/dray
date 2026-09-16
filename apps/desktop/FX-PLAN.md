@@ -38,7 +38,7 @@ only the method vocabulary differs.
 | `edit_file` | ACP has a `diff` content block | **Not sent.** `rawInput` carries `{path, old_string, new_string}` — the pair `diff.ts` already reads for Claude's `Edit`. The completion is text: `edited greet.py (64 bytes)` |
 | `shell` result | — | Streams stdout as `in_progress` updates, one per line. The `completed` update carries a JSON blob as text **and** `command_result {exit_code, signal, duration_ms, stdout_bytes, output_file…}` beside the content. `exit_code` and `duration_ms` map straight onto `ToolResult` |
 | turn end | — | The `session/prompt` **response**: `{stopReason, usage{inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,reasoningTokens}}`. `end_turn`, `cancelled`, `refused` seen. No `turn/started` notification — the turn opens when the request is written |
-| title | — | `session_info_update.title` after the first turn, model-written (`Create hello.txt and report its size`). Free, so `title.rs` need spawn nothing for fx |
+| title | — | `session_info_update.title` after the first turn, model-written (`Create hello.txt and report its size`). Read as free, and it is not — see the note below |
 | context ring | — | `usage_update.used` / `.size` (7567 / 272000). An occupancy, not a cumulative — the trap Codex's `total` and Claude's `result.usage` both set is absent |
 | stop | `session/cancel` | A **notification**, not a request. The running shell died on signal 15, its `tool_call_update` came back `failed`, the prompt answered `stopReason: cancelled` |
 | resume | `session/resume`, `session/load` | Both work. `resume` replays nothing and the next prompt remembers the first; `load` replays history as `user_message_chunk`/`tool_call`/… updates (unneeded — Dray's own log is the replay). One process can hold several sessions; `session/close` works |
@@ -61,7 +61,7 @@ only the method vocabulary differs.
 - **Diffs off `rawInput`.** `edit_file` maps to `ToolType::FileEdit` with input `{file_path, old_string, new_string}` (`path` renamed so `toolSummary` and `diff.ts` read it unchanged). `write_file` maps to `{file_path, content}`. No `FileEdits` event — nothing on the wire carries a unified diff, and the existing row already draws the pair.
 - **Not forkable.** fx has no fork and its resume handle is a server-minted id, not a file. `session recover <id>` copies a session but is a CLI command against `~/.fx/sessions`; later, maybe.
 - **Worktrees are Dray's** (`creates_own_worktree: false`), the Codex/pi route.
-- **Title from the wire.** `session_info_update` → `store::set_session_title` + `session_title` event, through the same path `title.rs` emits on. `title.rs`'s fx arm bails, as pi's does; the wire answers first anyway.
+- ~~**Title from the wire.**~~ **Retired in DRA-250 — the wire's title is not free.** fx writes it with a second model call and holds the `session/prompt` reply until that lands, which is seconds of working orb over a finished answer on every first turn. `session_titles: false` now goes into `~/.fx/settings.json` at creation, `session_info_update` is dropped, and `title.rs` has a real fx arm. CLAUDE.md carries the measurement.
 - **Stop = `session/cancel`**, a notification, and the reader reports the end through the prompt's own response.
 
 ## Mapping
