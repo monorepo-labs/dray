@@ -172,9 +172,11 @@ impl MergeMethod {
 /// comments and cost 11 points per read *of a branch with no PR at all* —
 /// 2640 an hour at the settling poll, which is how two Dray instances alone
 /// drained the 5000/hour budget and every agent's own `gh` call started
-/// failing (DRA-247). Thirty threads and ten replies each is where a reviewer
-/// bot's inline comments still fit; past either the rest is silently absent,
-/// as it was past fifty before, and paging would cost the points this saves.
+/// failing (DRA-247). Only a connection's *parents* multiply, so the fifty
+/// replies under each thread are a leaf and cost nothing; thirty threads is
+/// where a reviewer bot's inline comments still fit, and past it the rest is
+/// silently absent, as it was past fifty before — paging would cost the points
+/// this saves.
 ///
 /// **Open and settled are two aliased connections**, the bargain [`QUERY_MARKS`]
 /// makes for the sidebar: a single `first:5` newest-first would drop an older
@@ -193,7 +195,7 @@ fragment pr on PullRequest{
  author{login avatarUrl}
  comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
  reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
- reviewThreads(first:30){nodes{isResolved path line comments(first:10){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
+ reviewThreads(first:30){nodes{isResolved path line comments(first:50){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
    __typename
    ... on StatusContext{context state targetUrl avatarUrl}
