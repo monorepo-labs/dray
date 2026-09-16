@@ -20,6 +20,10 @@ export type Region = "center" | "top" | "bottom" | "left" | "right";
 
 export const groupName = (group: { id: number }) => `Group ${group.id}`;
 
+/// The drop anchor of the empty main column — no session open. A drop there
+/// opens the session whole; there is nothing to sit beside.
+export const EMPTY_VIEW = "";
+
 /// Grid order: left to right, top to bottom. The sidebar's run reads the same.
 export const members = (group: SplitGroup): string[] => group.columns.flat();
 
@@ -105,6 +109,7 @@ export function dropLabel(
   dropped: string,
   region: Region,
 ): string | null {
+  if (anchor === EMPTY_VIEW) return "Open";
   const target = groupOf(groups, anchor);
   // Replacing a single view is opening the session, which a click already
   // does — so it is no drop at all.

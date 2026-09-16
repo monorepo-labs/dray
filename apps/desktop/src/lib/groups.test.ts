@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   closePane,
   dropLabel,
+  EMPTY_VIEW,
   members,
   openBeside,
   paneOrder,
@@ -52,6 +53,11 @@ describe("dropLabel", () => {
     expect(dropLabel(groups, "a", "y", "bottom")).toBe("Open below");
     expect(dropLabel(groups, "a", "y", "left")).toBe("Open on the left");
     expect(dropLabel(groups, "x", "x", "right")).toBeNull();
+  });
+
+  it("opens whole on the empty view, whatever the region", () => {
+    expect(dropLabel([], EMPTY_VIEW, "y", "center")).toBe("Open");
+    expect(dropLabel([], EMPTY_VIEW, "y", "left")).toBe("Open");
   });
 });
 

@@ -53,6 +53,7 @@ import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
   dropLabel,
+  EMPTY_VIEW,
   GROUPS_KEY,
   groupName,
   members,
@@ -620,7 +621,8 @@ function App() {
   // the grid for that session's single view.
   const dropSession = ({ sessionId: anchor, region }: DropTarget, dropped: string) => {
     if (!dropLabel(spaceGroups, anchor, dropped, region)) return;
-    setGroups((prev) => openBeside(prev, anchor, dropped, region, space));
+    // Nothing open, so the drop is the click: the session opens whole.
+    if (anchor !== EMPTY_VIEW) setGroups((prev) => openBeside(prev, anchor, dropped, region, space));
     void handleSelectSessionIndexItem(dropped);
   };
 
@@ -631,12 +633,14 @@ function App() {
     if (next) void handleSelectSessionIndexItem(next);
   };
 
-  // The single view's own drop zone; a grid's panes draw theirs.
+  // The single view's own drop zone; a grid's panes draw theirs. The empty
+  // column is one too, drawn whole: the drop opens the session, so there is
+  // no side to the zone.
   const drag = useSessionDrag();
   const singleDrop =
-    drag?.over && !activeGroup && drag.over.sessionId === selectedSessionId
+    drag?.over && !activeGroup && drag.over.sessionId === (selectedSessionId ?? EMPTY_VIEW)
       ? {
-          region: drag.over.region,
+          region: selectedSessionId ? drag.over.region : ("center" as const),
           label: dropLabel(spaceGroups, drag.over.sessionId, drag.sessionId, drag.over.region),
         }
       : null;
@@ -1503,6 +1507,7 @@ function App() {
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!selectedSession && !issuesOpen}
+      overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       sidebar={
         <Sidebar
           items={searchedSessions}

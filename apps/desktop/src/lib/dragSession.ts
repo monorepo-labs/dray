@@ -51,7 +51,9 @@ export function regionAt(x: number, y: number, width: number, height: number): R
 function targetAt(x: number, y: number): DropTarget | null {
   const el = document.elementFromPoint(x, y)?.closest(`[${DROP_ATTR}]`);
   const sessionId = el?.getAttribute(DROP_ATTR);
-  if (!el || !sessionId) return null;
+  // `""` is `EMPTY_VIEW`, the column with no session open — a target, not
+  // the absence of one.
+  if (!el || sessionId == null) return null;
   const rect = el.getBoundingClientRect();
   return { sessionId, region: regionAt(x - rect.left, y - rect.top, rect.width, rect.height) };
 }
