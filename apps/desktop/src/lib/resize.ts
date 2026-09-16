@@ -5,34 +5,27 @@
 /// drag's own origin never moves.
 const SNAP_PX = 12;
 
-/// The most of the window a single pane may take.
+/// The range a pane can actually occupy right now — the one bounds the clamp,
+/// the keys and the ARIA values all read.
 ///
-/// Both panes are `shrink-0`, so their widths come off the conversation between
-/// them rather than off each other: at their px maxima alone they sum to more
-/// than the default window and nearly twice the minimum one, which squeezes the
-/// transcript to nothing and clips it. A share of the window is what the px cap
-/// cannot say, since the window is resizable and the cap is not.
-const MAX_SHARE = 0.4;
-
-/// The widest a pane may actually be drawn: its own maximum, or its share of
-/// this window, whichever is less.
-export function paneCap(max: number, viewport: number): number {
-  return Math.min(max, Math.round(viewport * MAX_SHARE));
-}
-
-/// The range a pane can actually occupy in *this* window — the one bounds the
-/// clamp, the keys and the ARIA values all read.
+/// One rule: a pane may take everything except what the chat column keeps and
+/// what the other side panes are already holding. A share of the window sat
+/// beside this for a while and every number it held was wrong somewhere — a
+/// proportion cannot see the sidebar, so the same percentage left the
+/// conversation a comfortable width in one state and a sliver in the other.
+/// `floor` says what "good enough" is in the only units that mean it.
 ///
-/// The floor gives way to the cap rather than outranking it: below ~800px the
-/// right panel's share falls under its own minimum, and a floor that won wrote
-/// a width wider than the pane was drawn, so the value handed to assistive
-/// technology described a panel nobody could see.
+/// The pane's own floor gives way to that ceiling rather than outranking it: on
+/// a window with no room for both, a minimum that won wrote a width wider than
+/// the pane was drawn, so the value handed to assistive technology described a
+/// panel nobody could see.
 export function paneBounds(
   min: number,
-  max: number,
   viewport: number,
+  taken = 0,
+  floor = 0,
 ): { min: number; max: number } {
-  const cap = paneCap(max, viewport);
+  const cap = Math.max(0, viewport - taken - floor);
   return { min: Math.min(min, cap), max: cap };
 }
 

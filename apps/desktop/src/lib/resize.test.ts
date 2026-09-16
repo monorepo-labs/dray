@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { paneBounds, paneCap, snapWidth } from "@/lib/resize";
+import { paneBounds, snapWidth } from "@/lib/resize";
+
+/// The chat column's floor, as `ResizeHandle` publishes it.
+const CHAT_MIN = 360;
 
 describe("snapWidth", () => {
   it("clamps to the pane's range", () => {
@@ -32,44 +35,54 @@ describe("snapWidth", () => {
   });
 });
 
-describe("paneCap", () => {
-  it("takes the px maximum on a wide window", () => {
-    expect(paneCap(480, 2560)).toBe(480);
-  });
-
-  // The two panes' px maxima sum past the default window and nearly twice the
-  // minimum one, which is the whole reason the share exists.
-  it("takes the window's share on a narrow one", () => {
-    expect(paneCap(900, 1200)).toBe(480);
-    expect(paneCap(480, 720)).toBe(288);
-  });
-
-  // The bound that matters: both panes at their widest must still leave the
-  // transcript between them something to draw in, at the narrowest window the
-  // app allows.
-  it("leaves the transcript room with both panes at their cap", () => {
-    const narrowest = 720;
-    const left = narrowest - paneCap(480, narrowest) - paneCap(900, narrowest);
-    expect(left).toBe(144);
-  });
-});
-
 describe("paneBounds", () => {
-  it("keeps the pane's own floor where the window has room", () => {
-    expect(paneBounds(320, 900, 2560)).toEqual({ min: 320, max: 900 });
+  // The whole rule, and the only one: whatever the window and whatever else is
+  // on the row, the chat column comes away with its floor exactly.
+  it("leaves the chat column exactly its floor", () => {
+    for (const [viewport, taken] of [
+      [1440, 0],
+      [1440, 240],
+      [1440, 400],
+      [2560, 0],
+      [2560, 240],
+      [3840, 480],
+    ]) {
+      const { max } = paneBounds(320, viewport, taken, CHAT_MIN);
+      expect(viewport - taken - max).toBe(CHAT_MIN);
+    }
   });
 
-  // Below ~800px the right panel's share falls under its own minimum. The
-  // floor has to give way, or the range describes a panel wider than the one
-  // being drawn.
-  it("drops the floor to the cap on a window too narrow for it", () => {
-    expect(paneBounds(320, 900, 720)).toEqual({ min: 288, max: 288 });
+  // What another pane holds is width this one cannot have, and it comes off
+  // exactly rather than as a fraction: a sidebar 160px wider costs this pane
+  // 160px, not a proportion of it.
+  it("takes the other panes off exactly", () => {
+    expect(paneBounds(320, 1440, 0, CHAT_MIN).max).toBe(1080);
+    expect(paneBounds(320, 1440, 240, CHAT_MIN).max).toBe(840);
+    expect(paneBounds(320, 1440, 400, CHAT_MIN).max).toBe(680);
   });
 
-  it("never reports a floor above its ceiling", () => {
-    for (const viewport of [400, 720, 800, 1200, 2560]) {
-      const { min, max } = paneBounds(320, 900, viewport);
-      expect(min).toBeLessThanOrEqual(max);
+  // Split view holds several deliberately small panes, so the floor is lifted
+  // and only the other panes bound it.
+  it("lifts the floor for a split", () => {
+    expect(paneBounds(320, 1440, 240, 0).max).toBe(1200);
+  });
+
+  // The floor is absolute, so it outranks the pane's own minimum: on a window
+  // with no room for both, a minimum that won wrote a width wider than the pane
+  // was drawn.
+  it("drops the pane's minimum rather than the chat column's floor", () => {
+    const { min, max } = paneBounds(320, 720, 240, CHAT_MIN);
+    expect(max).toBe(120);
+    expect(min).toBe(120);
+  });
+
+  it("never reports a floor above its ceiling, or a negative one", () => {
+    for (const viewport of [375, 720, 800, 1440, 2560]) {
+      for (const taken of [0, 240, 480, 900]) {
+        const { min, max } = paneBounds(320, viewport, taken, CHAT_MIN);
+        expect(max).toBeGreaterThanOrEqual(0);
+        expect(min).toBeLessThanOrEqual(max);
+      }
     }
   });
 });

@@ -80,7 +80,12 @@ export default function SessionHeader({
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>
-      <span className="flex min-w-0 items-center gap-1.5">
+      {/* `overflow-hidden` as well as `min-w-0`: the two spans below are
+          `shrink-0`, so this box can be given less width than its own content
+          and the project name spills out of it — over the branch next door,
+          which is what the overlap was. `min-w-0` frees the box to shrink;
+          only this makes what is inside it clip when it does. */}
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
         <span className="shrink-0 text-muted-foreground">{project}</span>
         <span aria-hidden className="shrink-0 text-muted-foreground/50">
           /
@@ -96,14 +101,17 @@ export default function SessionHeader({
               type="button"
               onClick={() => void copy()}
               aria-label={`Copy the working directory, ${cwd}`}
-              className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+              // Shrinkable, not `shrink-0`: a worktree branch name is long and
+              // unbounded, so a fixed one overflowed the row and drew itself
+              // over the view tabs rather than giving up width.
+              className="flex min-w-0 cursor-pointer items-center gap-1 rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
             >
               {copied ? (
                 <Check className="size-3.5 shrink-0" />
               ) : (
                 <GitBranchIcon className="size-3.5 shrink-0" />
               )}
-              {branch}
+              <span className="truncate">{branch}</span>
             </button>
           </TooltipTrigger>
           {/* What the click does, not the path itself: a branch name says

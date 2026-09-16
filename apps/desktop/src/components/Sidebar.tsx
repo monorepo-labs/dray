@@ -879,9 +879,13 @@ export default function Sidebar({
     storageKey: "ade.sidebarWidth",
     initial: 240,
     min: 240,
-    max: 480,
     edge: "right",
     label: "Resize the sidebar",
+    // Dropped while collapsed, which is not an unmount: this component returns
+    // `null` below with its hooks already run, so publishing on mount alone
+    // left the panel taking a sidebar's width off its own cap with no sidebar
+    // on screen.
+    pane: collapsed ? undefined : "sidebar",
   });
 
   const closeSearch = () => {

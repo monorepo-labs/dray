@@ -49,6 +49,7 @@ import RightPanel, {
   tabOrder,
   type PanelTab,
 } from "@/components/RightPanel";
+import { useChatColumnFloor } from "@/components/ResizeHandle";
 import Sidebar, {
   SEARCH_INPUT_ID,
   SidebarToggle,
@@ -523,6 +524,10 @@ function App() {
   // Selecting a member is what activates a group; the selected session is the
   // focused pane, so every control that serves one session keeps doing so.
   const activeGroup = groupOf(spaceGroups, selectedSessionId);
+  // One conversation keeps a readable floor whatever the panes beside it are
+  // dragged to; a split holds several deliberately small ones, so the same
+  // floor there would refuse the layout the reader asked for.
+  useChatColumnFloor(!activeGroup);
 
   // The pane's open flag and tab pick are held per session, like `viewTabs`
   // above and for the same reason: app-wide, a pane opened on one session's
@@ -1608,7 +1613,11 @@ function App() {
       }
       header={
         <header
-          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 px-3"
+          // `overflow-hidden` is the containment: whatever runs out of room in
+          // here must clip at the column's edge, never spill over the pane
+          // beside it. Every child below decides how it gives up width; this
+          // decides that it has to.
+          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3"
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
           // Buttons still block on their own — Tauri stops walking up at any

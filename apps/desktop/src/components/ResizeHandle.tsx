@@ -1,6 +1,15 @@
-import { useCallback, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { channel } from "@/lib/channel";
 import { paneBounds, snapWidth } from "@/lib/resize";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +35,58 @@ function useViewportWidth(): number {
   return useSyncExternalStore(subscribeToResize, () => window.innerWidth);
 }
 
+/// The panes that sit either side of the chat column, each holding width no
+/// other pane can have.
+type Pane = "sidebar" | "panel";
+
+/// The narrowest the chat column may be squeezed to, whatever the share works
+/// out at. The share alone is a proportion, so on a small window it still hands
+/// the conversation something unreadable; this is the absolute floor under it.
+const CHAT_MIN = 360;
+
+/// What each side pane is holding, and how much the chat column must keep.
+///
+/// Published by the panes themselves rather than measured off the DOM: each is
+/// the one place that already knows its number, and a pane *unmounting* — which
+/// is what a collapsed sidebar is — is the state a query selector cannot tell
+/// from one that has not mounted yet. Module-level because the readers are
+/// siblings with nothing above them to hang it on but `App`, which would then
+/// thread it through components that have no other use for it.
+const widths: Partial<Record<Pane, number>> = {};
+let chatFloor = CHAT_MIN;
+const layoutChanged = channel<void>();
+
+/// Width held by the side panes other than this one — what the caller cannot
+/// have, whatever its share of the window works out at.
+function useOtherPanes(self: Pane | undefined): number {
+  return useSyncExternalStore(layoutChanged.subscribe, () =>
+    (Object.keys(widths) as Pane[]).reduce(
+      (total, key) => (key === self ? total : total + (widths[key] ?? 0)),
+      0,
+    ),
+  );
+}
+
+function useChatFloor(): number {
+  return useSyncExternalStore(layoutChanged.subscribe, () => chatFloor);
+}
+
+/// Called by `App` with whether the chat column is showing one conversation.
+///
+/// Split view is the exception: its panes are deliberately small, so a floor
+/// written for a single transcript would refuse a layout the reader asked for
+/// outright.
+export function useChatColumnFloor(single: boolean) {
+  useEffect(() => {
+    chatFloor = single ? CHAT_MIN : 0;
+    layoutChanged.emit();
+    return () => {
+      chatFloor = CHAT_MIN;
+      layoutChanged.emit();
+    };
+  }, [single]);
+}
+
 /// A pane the reader can drag wider, with its width remembered.
 ///
 /// Returns the pane's own style and the strip to render; the pane needs
@@ -41,16 +102,20 @@ export function useResizable({
   storageKey,
   initial,
   min,
-  max,
   edge,
   label,
+  pane,
 }: {
   storageKey: string;
   initial: number;
   min: number;
-  max: number;
   edge: Edge;
   label: string;
+  /// Set on the two panes flanking the chat column, so each publishes what it
+  /// is holding and every other one can take it off the width it is bidding
+  /// for. Absent for a pane on some other row — the files list, whose siblings
+  /// are inside the chat column rather than beside it.
+  pane?: Pane;
 }): { style: CSSProperties; handle: ReactNode } {
   const [stored, setStored] = useState(() => readLocalStorage(storageKey, initial));
   const from = useRef<{ x: number; width: number } | null>(null);
@@ -60,7 +125,7 @@ export function useResizable({
   // beside this was the alternative and it is the very split it would recreate:
   // CSS drew the pane at its share while the clamp here still answered its own
   // minimum.
-  const bounds = paneBounds(min, max, useViewportWidth());
+  const bounds = paneBounds(min, useViewportWidth(), useOtherPanes(pane), useChatFloor());
   const clamp = useCallback(
     (raw: number) => snapWidth(raw, bounds.min, bounds.max, initial),
     [bounds.min, bounds.max, initial],
@@ -69,6 +134,18 @@ export function useResizable({
   // Narrowing the window narrows the pane; widening it back restores what the
   // reader asked for, which is why the stored width is left alone.
   const width = clamp(stored);
+
+  // Published on every change and cleared on unmount, which is what a collapsed
+  // sidebar is — it returns null rather than rendering a rail.
+  useEffect(() => {
+    if (!pane) return;
+    widths[pane] = width;
+    layoutChanged.emit();
+    return () => {
+      delete widths[pane];
+      layoutChanged.emit();
+    };
+  }, [pane, width]);
 
   const commit = (next: number) => {
     setStored(next);
