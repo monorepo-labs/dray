@@ -42,6 +42,9 @@ type SplitViewProps = {
   >;
 };
 
+/// How many panes ⌘-digit reaches: `pane.1` through `pane.9` in the registry.
+const PANE_CHORDS = 9;
+
 /// Any number of transcripts in columns. One composer serves the focused pane —
 /// the selected session — so a click anywhere in a pane focuses it, and the
 /// pane header is what says which one that is.
@@ -100,6 +103,7 @@ export default function SplitView({
           {column.map((item, ri) => {
             const focused = item.sessionId === focusedId;
             const hint = hintFor(item);
+            const number = numbers.get(item.sessionId) ?? 0;
             return (
               <div
                 key={item.sessionId}
@@ -121,8 +125,10 @@ export default function SplitView({
                 <PaneHeader
                   item={item}
                   focused={focused}
-                  number={numbers.get(item.sessionId) ?? 0}
-                  showNumber={metaHeld && !focused}
+                  number={number}
+                  // Nine digits, so a tenth pane draws no keycap — one it
+                  // did draw would name a chord nothing binds.
+                  showNumber={metaHeld && !focused && number <= PANE_CHORDS}
                   onClose={() => onClose(item.sessionId)}
                 />
                 {/* Dimmed rather than veiled: a scrim is one more element to
