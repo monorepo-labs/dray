@@ -39,18 +39,38 @@ const URL: &str = "https://ai-gateway.vercel.sh/coding-agent/v1/models";
 
 /// How long a miss waits before it is worth asking again.
 ///
-/// A miss is the only refetch trigger — a model new enough that the cached
-/// catalog has never heard of it *is* an id fx lists and this map does not
-/// hold, so nothing has to diff the two lists. The floor is what keeps that
-/// from being a fetch per picker draw forever: a team-private model is a
-/// permanent miss, since the anonymous catalog will never name one.
+/// A model new enough that the cached catalog has never heard of it *is* an id
+/// fx lists and this map does not hold, so a miss carries the "something new
+/// shipped" signal on its own and nothing has to diff the two lists. The floor
+/// is what keeps that from being a fetch per picker draw forever: a team-private
+/// model is a permanent miss, the anonymous catalog never naming one, and so is
+/// an entry [`ladder_of`] could not read.
 const REFETCH_FLOOR: Duration = Duration::from_secs(600);
+
+/// How long an answer stands before it is asked again whether anything missed
+/// or not.
+///
+/// A miss cannot see a model the gateway *changed* — a rung added to a ladder
+/// already held, or effort withdrawn from a model that had it — and Dray is an
+/// app people leave open for days, so miss-driven refetching alone would hold
+/// one reading for the life of the process. Long, because this is a catalog of
+/// published models rather than anything moving: the cost of being a few hours
+/// behind is a rung, where the cost of a short ceiling is a fetch nobody asked
+/// for on a picker that was already right.
+const MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Past this the picker is waiting on a list it can do without, and so is a
 /// send — [`super::models::find`] reads this path too. Every failure here
 /// degrades to the guess, so a slow answer is worth less than a quick admission
-/// of none; the fetch is a few hundred KB and wants well under a second.
-const TIMEOUT: Duration = Duration::from_secs(5);
+/// of none: a few hundred KB wants well under a second, and what this bounds is
+/// the unreachable case, which is then held off by [`REFETCH_FLOOR`] rather
+/// than paid again on the next read.
+///
+/// Awaited rather than backgrounded, deliberately. The alternative draws the
+/// guess on the first open and corrects it on the second, which is the picker
+/// offering rungs the model refuses — the exact thing this module exists to
+/// stop — so the wait is bounded instead of dodged.
+const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Every model the catalog names, against the rungs it takes. An empty list is
 /// a real answer — *this model has no effort control* — where an absent key is
@@ -86,8 +106,9 @@ pub async fn ladders(wanted: &[&str]) -> Ladders {
     let ask = match cached.as_ref() {
         None => true,
         Some(held) => {
-            held.at.elapsed() >= REFETCH_FLOOR
-                && wanted.iter().any(|id| !held.ladders.contains_key(*id))
+            held.at.elapsed() >= MAX_AGE
+                || (held.at.elapsed() >= REFETCH_FLOOR
+                    && wanted.iter().any(|id| !held.ladders.contains_key(*id)))
         }
     };
 
@@ -142,10 +163,15 @@ async fn fetch() -> Result<HashMap<String, Vec<Effort>>> {
         .await
         .context("reading the AI Gateway's model catalog")?;
 
+    // An entry `ladder_of` could not read is left *out* of the map rather than
+    // filed as empty, which is what makes an unreadable one indistinguishable
+    // from a model the catalog never named — the state that already means "keep
+    // the guess" everywhere downstream. It costs a permanent miss, bounded by
+    // [`REFETCH_FLOOR`] like a private model's.
     Ok(listing
         .data
         .into_iter()
-        .map(|entry| (entry.id, ladder_of(&entry.reasoning_options)))
+        .filter_map(|entry| Some((entry.id, ladder_of(&entry.reasoning_options)?)))
         .collect())
 }
 
@@ -167,32 +193,53 @@ struct Entry {
     reasoning_options: Value,
 }
 
-/// The rungs one entry offers, out of the first `effort` option it carries.
+/// The rungs one entry offers, out of the first `effort` option it carries —
+/// or `None` where the entry is a shape this build cannot read.
 ///
-/// **First, not merged**, which is fx's own reading — a second `effort` member
+/// **An empty answer and an unreadable one must not collapse into each other,
+/// and they did.** An empty ladder is a *confident negative* that overrides the
+/// guess and takes the effort control off the picker, which is the whole point
+/// of reading this list. So it may only ever be said about an entry that was
+/// understood: `reasoning_options` absent, null, or an array naming no `effort`
+/// option is a model with no effort control, where a wire shape that moved
+/// under us is `None` and leaves the guess exactly where it was. Reported as
+/// absence, that drift would hide a working control and look like the gateway's
+/// own answer.
+///
+/// **First `effort` member, not merged**, which is fx's own reading — a second
 /// would be the gateway contradicting itself, and taking the earlier one is at
 /// least the same answer fx acts on.
 ///
 /// A level Dray's ladder cannot spell is dropped rather than given a rung:
 /// `none` is real here (`openai/gpt-5.4-nano` offers it) and a rung is a
 /// persisted enum, so minting one for it would be DRA-140's bug again. Dropping
-/// it costs the reader fx's own floor, reachable by leaving effort unset.
-fn ladder_of(options: &Value) -> Vec<Effort> {
-    options
-        .as_array()
-        .into_iter()
-        .flatten()
+/// it costs the reader fx's own floor, reachable by leaving effort unset — and
+/// an entry whose rungs are *all* unspellable stays a confident empty rather
+/// than unknown, since a control offering none of them is the honest draw
+/// either way.
+fn ladder_of(options: &Value) -> Option<Vec<Effort>> {
+    if options.is_null() {
+        return Some(Vec::new());
+    }
+
+    let Some(offered) = options.as_array() else {
+        return None;
+    };
+    let Some(effort) = offered
+        .iter()
         .find(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
-        .and_then(|option| option.get("values"))
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .filter_map(Effort::from_arg)
-                .collect()
-        })
-        .unwrap_or_default()
+    else {
+        return Some(Vec::new());
+    };
+
+    let values = effort.get("values")?.as_array()?;
+    Some(
+        values
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(Effort::from_arg)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -209,7 +256,7 @@ mod tests {
         listing
             .data
             .into_iter()
-            .map(|entry| (entry.id, ladder_of(&entry.reasoning_options)))
+            .filter_map(|entry| Some((entry.id, ladder_of(&entry.reasoning_options)?)))
             .collect()
     }
 
@@ -262,19 +309,66 @@ mod tests {
             {"type": "effort", "values": ["low", 7, "invented", "max"]},
             {"type": "effort", "values": ["high"]},
         ]);
-        assert_eq!(ladder_of(&strange), vec![Low, Max]);
-
-        // `reasoning_options` absent, null, or an object where the wire
-        // promises an array.
-        assert!(ladder_of(&Value::Null).is_empty());
-        assert!(ladder_of(&serde_json::json!({"type": "effort", "values": ["high"]})).is_empty());
-        assert!(ladder_of(&serde_json::json!([{"type": "effort"}])).is_empty());
+        assert_eq!(ladder_of(&strange), Some(vec![Low, Max]));
     }
 
+    /// The three ways an entry says *this model has no effort control*, which
+    /// is a real answer and overrides the guess.
     #[test]
-    fn an_entry_with_no_reasoning_options_field_still_parses() {
-        let listing: Listing =
-            serde_json::from_str(r#"{"data":[{"id":"provider/plain","type":"language"}]}"#).unwrap();
-        assert!(ladder_of(&listing.data[0].reasoning_options).is_empty());
+    fn a_readable_entry_with_no_effort_option_is_a_confident_empty() {
+        assert_eq!(ladder_of(&Value::Null), Some(Vec::new()));
+        assert_eq!(
+            ladder_of(&serde_json::json!([{"type": "budget_tokens", "min": 1}])),
+            Some(Vec::new())
+        );
+        // Every rung named is one Dray cannot spell, so there is no control to
+        // draw whichever way this is read.
+        assert_eq!(
+            ladder_of(&serde_json::json!([{"type": "effort", "values": ["none"]}])),
+            Some(Vec::new())
+        );
+    }
+
+    /// The other half of that, and the one worth having a test for: a wire
+    /// shape this build cannot read must not be reported as *no effort*, or
+    /// drift in the gateway's format takes a working control off the picker and
+    /// reads as the gateway's own answer.
+    #[test]
+    fn an_unreadable_shape_is_unknown_and_never_an_empty_ladder() {
+        // An object where the wire promises an array.
+        assert_eq!(
+            ladder_of(&serde_json::json!({"type": "effort", "values": ["high"]})),
+            None
+        );
+        // An effort option carrying no values, or values of a shape that
+        // stopped being a list of names.
+        assert_eq!(ladder_of(&serde_json::json!([{"type": "effort"}])), None);
+        assert_eq!(
+            ladder_of(&serde_json::json!([{"type": "effort", "values": {"min": "low"}}])),
+            None
+        );
+    }
+
+    /// An unreadable entry is dropped from the map rather than filed empty, so
+    /// downstream cannot tell it from a model the catalog never named — which
+    /// is what leaves the guess standing.
+    #[test]
+    fn an_unreadable_entry_is_absent_rather_than_empty() {
+        let listing: Listing = serde_json::from_str(
+            r#"{"data":[
+                {"id":"provider/plain","type":"language"},
+                {"id":"provider/drifted","type":"language","reasoning_options":{"effort":["high"]}}
+            ]}"#,
+        )
+        .unwrap();
+        let map: HashMap<String, Vec<Effort>> = listing
+            .data
+            .into_iter()
+            .filter_map(|entry| Some((entry.id, ladder_of(&entry.reasoning_options)?)))
+            .collect();
+
+        // No `reasoning_options` field at all still parses, and answers.
+        assert_eq!(map["provider/plain"], Vec::<Effort>::new());
+        assert!(!map.contains_key("provider/drifted"));
     }
 }
