@@ -99,7 +99,11 @@ export default function FileViewer({
       scrolled.current = revealKey;
       let frames = 0;
       const scrollWhenSized = () => {
-        if (current.current !== revealKey) return;
+        if (current.current !== revealKey) {
+          // Cancelled, not done: switching back must scroll after all.
+          if (scrolled.current === revealKey) scrolled.current = null;
+          return;
+        }
         if (pane.scrollHeight < at.top + at.height) {
           if (++frames < 60) requestAnimationFrame(scrollWhenSized);
           return;
