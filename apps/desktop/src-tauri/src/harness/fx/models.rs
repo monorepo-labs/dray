@@ -9,27 +9,35 @@
 //! time, which `fx sessions` then lists. Nine of those from one afternoon of
 //! probing settled it.
 //!
-//! The ladder is **per model**, and no list this module can ask for names it:
-//! the gateway serves 247 models and `effort` is absent from the
-//! `configOptions` of every one that does no reasoning, arbitrarily by model
-//! rather than by vendor — `anthropic/claude-opus-5` takes one and
-//! `anthropic/claude-sonnet-4` does not. So a session is the only thing that
-//! can answer, and [`learn_ladder`] is where one hands its answer back — a
-//! level at a time, since fx's list is the model's ladder unioned with the
-//! level the session is on and only the subtraction of that level is sound
-//! ([`crate::harness::fx::parser::ConfigOptions::model_effort_levels`]). A
-//! model no session has reported on keeps [`ladder_for`]'s guess by provider,
-//! which is why [`crate::harness::fx::set_effort`] asks the live session
-//! rather than this list before sending a level. `auto` is fx's own default
-//! and is what an unset effort leaves it on; it and `none` are levels Dray's
-//! ladder cannot spell, so they are dropped rather than given a rung
-//! (DRA-140's rule — a rung is a persisted enum).
+//! The ladder is **per model** — the gateway serves 247 and `effort` is absent
+//! from the `configOptions` of every one that does no reasoning, arbitrarily by
+//! model rather than by vendor, `anthropic/claude-opus-5` taking one where
+//! `anthropic/claude-sonnet-4` does not. Three things answer it, and the later
+//! one always wins:
+//!
+//! 1. [`ladder_for`]'s guess by provider, which is wrong in both directions and
+//!    only ever a first draw.
+//! 2. The gateway's own catalog ([`super::catalog`]), which names every public
+//!    model's ladder outright and is fetched once. Gateway models only, and
+//!    only those it names — codex and grok are not in it.
+//! 3. What a live session reported, through [`learn_ladder`] — a level at a
+//!    time, since fx's list is the model's ladder unioned with the level the
+//!    session is on and only the subtraction of that level is sound
+//!    ([`crate::harness::fx::parser::ConfigOptions::model_effort_levels`]).
+//!    Strongest because it is the only one that has watched *this* model accept
+//!    a level, which is why [`crate::harness::fx::set_effort`] asks the live
+//!    session rather than any list before sending one.
+//!
+//! `auto` is fx's own default and is what an unset effort leaves it on; it and
+//! `none` are levels Dray's ladder cannot spell, so they are dropped rather
+//! than given a rung (DRA-140's rule — a rung is a persisted enum).
 //!
 //! Fast mode, by contrast, **is** in this list: the gateway names a fast tier
 //! as a model of its own with `-fast` on the end, so [`supports_fast`] is a
 //! lookup in the ids already in hand and [`visible`] keeps the twins out of the
 //! picker.
 
+use super::catalog;
 use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
@@ -75,7 +83,7 @@ async fn all() -> Vec<Model> {
     // below — that is how [`refresh`] lets a changed subscription catalog reach
     // the picker despite the tables. Fresh only; a stale entry falls through.
     if let Some(fresh) = CACHE.peek(&key) {
-        return with_learned_ladders(fresh);
+        return with_ladders(fresh).await;
     }
 
     // The subscription providers serve a handful of models each, fixed and
@@ -85,13 +93,13 @@ async fn all() -> Vec<Model> {
     // [`refresh`], which probes fx even for a table-backed provider and caches
     // the answer above.
     if let Some(models) = known_models(&key) {
-        return with_learned_ladders(models);
+        return with_ladders(models).await;
     }
 
     match probe_stable().await {
         Some((provider, models)) => {
             CACHE.insert(&provider, models.clone());
-            with_learned_ladders(models)
+            with_ladders(models).await
         }
         None => Vec::new(),
     }
@@ -103,6 +111,10 @@ async fn all() -> Vec<Model> {
 /// even for codex or grok.
 pub async fn refresh() {
     forget();
+    // The catalog goes with it. Refresh is the reader saying a list on screen
+    // is behind the world, and a model too new for [`catalog`]'s floor is one
+    // of the two things they could mean by that.
+    catalog::forget().await;
     if let Some((provider, models)) = probe_stable().await {
         CACHE.insert(&provider, models);
     }
@@ -641,11 +653,50 @@ pub fn learn_ladder(model_arg: &str, reading: Option<LadderReading>) -> bool {
     true
 }
 
-/// Puts what has been learned over what was guessed, applied **at read rather
-/// than at build** — the gateway's list is cached as whole [`Model`]s, so a
-/// ladder learned after that read would never reach the picker if it were
-/// stamped on in [`id_to_model`]. One place, and every route into [`list`]
-/// passes through it.
+/// The whole ladder story in the order it is believed: the guess
+/// [`id_to_model`] stamped on, then the catalog over it, then what a session
+/// actually watched the model do.
+///
+/// Applied **at read rather than at build** — the gateway's list is cached as
+/// whole [`Model`]s, so a ladder learned or fetched after that read would never
+/// reach the picker if it were stamped on in [`id_to_model`]. One place, and
+/// every route into [`list`] passes through it.
+async fn with_ladders(models: Vec<Model>) -> Vec<Model> {
+    with_learned_ladders(with_catalog_ladders(models).await)
+}
+
+/// Puts the gateway's own answer over the guess, for the gateway's own models.
+///
+/// Only where the catalog names the model: an id it does not hold is one it
+/// cannot answer for rather than one with no ladder, since the fetch is
+/// anonymous and a reader's private models are invisible to it. Keyed on the
+/// provider and not on the id's shape, [`visible`]'s reason — another provider
+/// shipping an id spelled like a gateway one must not start reading answers
+/// out of a catalog that knows nothing about it.
+async fn with_catalog_ladders(mut models: Vec<Model>) -> Vec<Model> {
+    let wanted: Vec<&str> = models
+        .iter()
+        .filter(|model| model.provider == "gateway")
+        .map(|model| model.arg.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return models;
+    }
+
+    let ladders = catalog::ladders(&wanted).await;
+    for model in models.iter_mut() {
+        if model.provider != "gateway" {
+            continue;
+        }
+        if let Some(named) = ladders.get(&model.arg) {
+            model.efforts = named.clone();
+        }
+    }
+    models
+}
+
+/// Puts what has been learned over everything else — the only source that has
+/// seen this model take a level rather than been told it would.
 fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {
     let ladders = LADDERS.lock().expect("fx ladders poisoned");
     if ladders.is_empty() {
@@ -662,11 +713,14 @@ fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {
         .collect()
 }
 
-// ponytail: per-provider guess, read off two captures, for a model no session
-// has reported on yet. It is wrong in both directions on the gateway — it
-// offers effort where a model has none and stops at `xhigh` where
+// ponytail: per-provider guess, read off two captures, for a model nothing
+// better has answered for yet. It is wrong in both directions on the gateway —
+// it offers effort where a model has none and stops at `xhigh` where
 // claude-opus-5 goes to `max` — which is why it is only ever a first draw:
-// [`learn_ladder`] replaces it with the model's own the moment one runs.
+// [`with_catalog_ladders`] replaces it for any public gateway model and
+// [`learn_ladder`] for any model a session runs. What is left for it is a
+// gateway model the catalog does not name, and the two subscription providers,
+// whose lists are short and fixed enough that a capture each is the answer.
 fn ladder_for(provider: &str) -> Vec<Effort> {
     use Effort::*;
     match provider {
