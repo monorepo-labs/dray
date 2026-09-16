@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { snapWidth } from "@/lib/resize";
+import { paneCap, snapWidth } from "@/lib/resize";
 
 describe("snapWidth", () => {
   it("clamps to the pane's range", () => {
@@ -22,5 +22,34 @@ describe("snapWidth", () => {
   // rather than being held one pixel off it.
   it("snaps a default sitting on the range's edge", () => {
     expect(snapWidth(174, 180, 480, 180)).toBe(180);
+  });
+
+  // A window too narrow to hold the default drops the cap below it. Snapping
+  // there would put the pane past the bound the cap exists to state.
+  it("never holds past a cap below the default", () => {
+    expect(snapWidth(400, 180, 288, 512)).toBe(288);
+    expect(snapWidth(200, 180, 288, 512)).toBe(200);
+  });
+});
+
+describe("paneCap", () => {
+  it("takes the px maximum on a wide window", () => {
+    expect(paneCap(480, 2560)).toBe(480);
+  });
+
+  // The two panes' px maxima sum past the default window and nearly twice the
+  // minimum one, which is the whole reason the share exists.
+  it("takes the window's share on a narrow one", () => {
+    expect(paneCap(900, 1200)).toBe(480);
+    expect(paneCap(480, 720)).toBe(288);
+  });
+
+  // The bound that matters: both panes at their widest must still leave the
+  // transcript between them something to draw in, at the narrowest window the
+  // app allows.
+  it("leaves the transcript room with both panes at their cap", () => {
+    const narrowest = 720;
+    const left = narrowest - paneCap(480, narrowest) - paneCap(900, narrowest);
+    expect(left).toBe(144);
   });
 });

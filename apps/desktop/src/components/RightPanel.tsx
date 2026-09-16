@@ -273,7 +273,7 @@ export default function RightPanel({
 }: RightPanelProps) {
   const tabs = tabOrder({ pr, docs, issue, subagents });
   // 32rem, the width this pane opened at before it could be dragged.
-  const { width, handle } = useResizable({
+  const { style, handle } = useResizable({
     storageKey: "ade.rightPanelWidth",
     initial: 512,
     min: 320,
@@ -284,7 +284,7 @@ export default function RightPanel({
 
   return (
     <aside
-      style={{ width }}
+      style={style}
       className={cn(
         "relative shrink-0 flex-col border-l border-border bg-sidebar",
         // Conditional `flex` rather than `flex` plus `hidden`: both set

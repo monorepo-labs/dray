@@ -875,7 +875,7 @@ export default function Sidebar({
   // 240 is `w-60`, the width this opened at before it could be dragged — and
   // its floor as well as its default: narrower, the rows' timestamps and marks
   // start eating the title they sit beside, so this only ever widens.
-  const { width, handle } = useResizable({
+  const { style, handle } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: 240,
     min: 240,
@@ -964,7 +964,7 @@ export default function Sidebar({
   return (
     <aside
       className="relative flex shrink-0 flex-col border-r border-sidebar-border"
-      style={{ width }}
+      style={style}
     >
       {handle}
       {/* The toggle shares this strip with the traffic lights, so it sits at the
