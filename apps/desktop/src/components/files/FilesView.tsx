@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PanelLeft, PanelRight, Search } from "lucide-react";
+import {
+  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
+  Search,
+} from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
 import OpenInButton from "@/components/OpenInButton";
@@ -25,6 +33,7 @@ type Side = "left" | "right";
 
 const SIDE_KEY = "ade.filesListSide";
 const WIDTH_KEY = "ade.filesListWidth";
+const SHOWN_KEY = "ade.filesListShown";
 
 /// Right, against every other list in the app, and deliberately: the sidebar
 /// already holds the window's left edge, so a tree there puts two lists back to
@@ -62,6 +71,7 @@ export default function FilesView({
   useOpenFilesWatcher(sessionId);
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
+  const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);
   // Read once and written on pointerup rather than held in `useLocalStorage`:
   // the drag moves this on every frame, and a stored value would put a JSON
   // stringify on each of them for a number only the last frame decides.
@@ -107,7 +117,21 @@ export default function FilesView({
   useHotkey("subtab.prev", () => step(-1), chord);
   useHotkey("subtab.next", () => step(1), chord);
 
-  const list = (
+  // Hidden, the list keeps its own edge and its own filter row — one button
+  // wide. The toggle has to stay on screen or there is no way back, and the tab
+  // strip beside it is drawn only while a file is open.
+  const list = !shown ? (
+    <div
+      className={cn(
+        "flex shrink-0 flex-col",
+        side === "left" ? "border-r border-border" : "border-l border-border",
+      )}
+    >
+      <div className="flex h-9 shrink-0 items-center border-b border-border px-2">
+        <ShowHide side={side} shown={false} onShown={setShown} />
+      </div>
+    </div>
+  ) : (
     <div
       data-files-list
       className={cn(
@@ -131,6 +155,7 @@ export default function FilesView({
         onHit={setHit}
         side={side}
         onSide={setSide}
+        onShown={setShown}
       />
 
       {filtering && (
@@ -223,6 +248,7 @@ function Filter({
   onHit,
   side,
   onSide,
+  onShown,
 }: {
   query: string;
   onQuery: (next: string) => void;
@@ -232,6 +258,7 @@ function Filter({
   onHit: (next: number) => void;
   side: Side;
   onSide: (next: Side) => void;
+  onShown: (next: boolean) => void;
 }) {
   const other: Side = side === "left" ? "right" : "left";
   const Icon = side === "left" ? PanelRight : PanelLeft;
@@ -292,7 +319,46 @@ function Filter({
         </TooltipTrigger>
         <TooltipContent side="bottom">Move list to the {other}</TooltipContent>
       </Tooltip>
+
+      <ShowHide side={side} shown onShown={onShown} />
     </div>
+  );
+}
+
+/// The one button that hides the file list and brings it back.
+function ShowHide({
+  side,
+  shown,
+  onShown,
+}: {
+  side: Side;
+  shown: boolean;
+  onShown: (next: boolean) => void;
+}) {
+  const label = shown ? "Hide file list" : "Show file list";
+  const Icon = shown
+    ? side === "left"
+      ? PanelLeftClose
+      : PanelRightClose
+    : side === "left"
+      ? PanelLeftOpen
+      : PanelRightOpen;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-expanded={shown}
+          onClick={() => onShown(!shown)}
+          className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Icon className="size-3.5" strokeWidth={1.5} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
