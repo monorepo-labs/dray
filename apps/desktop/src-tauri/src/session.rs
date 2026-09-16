@@ -974,12 +974,22 @@ impl SessionManager {
                             // index still naming the asked-for one sends every
                             // later prompt back into the same refusal.
                             // `set_model` has already adopted what fx answered.
+                            //
+                            // **Every field is the session's own here, which is
+                            // what makes this different from the effort arm
+                            // below.** That one records `s.effort` beside the
+                            // *requested* mode and fast, because the blocks
+                            // applying those still run after it. This returns,
+                            // so none of them do — the child is on none of what
+                            // was asked for, and an index naming any of it
+                            // would be describing a session that does not
+                            // exist.
                             touch_session_index_item(
                                 session_id,
                                 s.model.clone(),
-                                effort,
-                                permission_mode,
-                                fast,
+                                s.effort,
+                                s.permission_mode,
+                                s.fast,
                             )
                             .await?;
                             return Err(err);
