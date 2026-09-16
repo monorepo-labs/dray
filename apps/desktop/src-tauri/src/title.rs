@@ -419,17 +419,82 @@ pub async fn generate_title(harness: Harness, prompt: &str, cwd: &str) -> Result
 /// opens stderr with a banner and skill-loading notices, and the sentence about
 /// what actually went wrong is the last thing written. Capped, since this ends
 /// up in a log line and a model's own refusal can run long.
+///
+/// **Sanitized across the whole line, not merely trimmed at its end.** This is
+/// a terminal's stream: `--no-color` governs stdout and these CLIs still write
+/// escapes and carriage returns here for spinners and highlighting. Carried
+/// through, they reach a log line through `eprintln!` and *act* there — colour
+/// the rest of the output, or overwrite the line that was being read. A
+/// diagnostic that mangles the log it lands in is worse than the silence this
+/// replaced. Emptiness is judged **after** that, or a line of nothing but
+/// escapes reads as the reason and hides the real one above it.
 fn said(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
-    let tail = text.trim_end();
-    let tail = tail.trim_end_matches(|c: char| c.is_control() && c != '\n');
-    let Some(last) = tail.lines().rev().find(|l| !l.trim().is_empty()) else {
+    let Some(last) = text.lines().rev().map(readable).find(|l| !l.is_empty()) else {
         return String::new();
     };
 
-    let last = last.trim();
     let cut: String = last.chars().take(STDERR_TAIL).collect();
     format!(": {cut}")
+}
+
+/// One stderr line with its terminal machinery taken out, trimmed.
+///
+/// An escape sequence is dropped **whole** rather than having its `ESC` filtered
+/// out and `[31m` left standing as text — the point is a line somebody can
+/// read, and the residue is noise in the one place noise costs most.
+///
+/// **The two shapes end differently and reading one as the other mangles it.**
+/// CSI (`ESC [`) ends at its final byte, `@` to `~`. OSC (`ESC ]`) runs until
+/// `BEL` or `ST`, and its payload is a *string* — so ending it at the first
+/// letter cuts a hyperlink mid-URL and spills the rest into the line, which is
+/// how `ESC ]8;;https://…` left `ttps://…` behind. Anything else runs
+/// intermediates (`0x20`–`0x2F`) up to one final byte, which is a charset
+/// designation like `ESC ( B` — read as two bytes it leaves its `B` in the
+/// text.
+fn readable(line: &str) -> String {
+    let mut out = String::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            if !c.is_control() {
+                out.push(c);
+            }
+            continue;
+        }
+
+        match chars.next() {
+            Some('[') => {
+                while let Some(next) = chars.next() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                    if next == '\u{1b}' {
+                        chars.next_if_eq(&'\\');
+                        break;
+                    }
+                }
+            }
+            Some(first) if ('\u{20}'..='\u{2f}').contains(&first) => {
+                while chars
+                    .next_if(|n| ('\u{20}'..='\u{2f}').contains(n))
+                    .is_some()
+                {}
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+
+    out.trim().to_string()
 }
 
 /// How much of a title child's last stderr line is worth carrying into the
@@ -631,6 +696,30 @@ mod tests {
         assert_eq!(said(b"only line\n\n\x07"), ": only line");
         assert_eq!(said(b""), "");
         assert_eq!(said(b"   \n  \n"), "");
+    }
+
+    /// **This lands in a log line through `eprintln!`, where an escape does not
+    /// sit there as text — it acts.** These CLIs write colour and spinners to
+    /// stderr whatever `--no-color` does to stdout, so a diagnostic carrying
+    /// them recolours everything printed after it or overwrites the line being
+    /// read. A sequence goes whole, rather than losing its `ESC` and leaving
+    /// `[31m` as words.
+    #[test]
+    fn terminal_machinery_never_reaches_the_log() {
+        assert_eq!(
+            said(b"\x1b[31merror: model is unavailable\x1b[0m\n"),
+            ": error: model is unavailable"
+        );
+        // A spinner's carriage returns, and an OSC hyperlink closed by BEL.
+        assert_eq!(said(b"working... \rdone: it failed\n"), ": working... done: it failed");
+        assert_eq!(said(b"\x1b]8;;https://example.test\x07see here\n"), ": see here");
+
+        // A line of pure machinery is not the reason — the one above it is.
+        assert_eq!(said(b"error: the real reason\n\x1b[2K\x1b[0m\n"), ": error: the real reason");
+
+        // An OSC ended by ST rather than BEL, and a two-byte escape.
+        assert_eq!(said(b"\x1b]0;a title\x1b\\kept\n"), ": kept");
+        assert_eq!(said(b"\x1b(Bkept too\n"), ": kept too");
     }
 
     /// Capped, since this lands in a log line and a model's own refusal runs
