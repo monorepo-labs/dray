@@ -5,7 +5,7 @@ import { File } from "@pierre/diffs/react";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
-import { fileName } from "@/lib/diff";
+import { diffSide, fileName } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
@@ -84,7 +84,9 @@ export default function FileViewer({
     ? file.state.body.text
     : null;
 
-  const contents = useMemo(() => (text === null ? null : { name, contents: text }), [name, text]);
+  // Keyed on content like a diff side, so the pool caches the result and a
+  // tab the reader comes back to does not tokenize again.
+  const contents = useMemo(() => (text === null ? null : diffSide(path, text)), [path, text]);
 
   if (!file) {
     return (

@@ -4,7 +4,7 @@ import { File } from "@pierre/diffs/react";
 
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
-import { fileName, type ReadRange } from "@/lib/diff";
+import { diffSide, fileName, type ReadRange } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 
 /// The slice a ranged `Read` returned, highlighted. Not a diff — nothing
@@ -22,10 +22,9 @@ export default function CodeView({
   const name = fileName(range.path);
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
-  const file = useMemo(
-    () => ({ name, contents: range.text }),
-    [name, range.text],
-  );
+  // Keyed on content like a diff side, or the pool caches nothing for it and a
+  // remount — collapse and expand, a view tab flipped — tokenizes it again.
+  const file = useMemo(() => diffSide(range.path, range.text), [range.path, range.text]);
 
   // The renderer numbers a file from 1 and exposes no starting-line option, so
   // the gutter is rewritten after each render. Padding the content with blank

@@ -1,6 +1,7 @@
 import { getHighlighterIfLoaded, preloadHighlighter } from "@pierre/diffs";
 import type { CodeHighlighterPlugin, HighlightOptions, HighlightResult } from "@streamdown/code";
 
+import { HIGHLIGHT_ENGINE } from "@/hooks/useHighlighter";
 import type { CodeThemePair } from "@/lib/codeTheme";
 
 /// A Streamdown code-highlighter backed by the same highlighter `@pierre/diffs`
@@ -90,7 +91,7 @@ export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlug
           pending = new Set();
           waiting.set(key, pending);
 
-          preloadHighlighter({ themes, langs: [lang] })
+          preloadHighlighter({ themes, langs: [lang], preferredHighlighter: HIGHLIGHT_ENGINE })
             .then(() => {
               const result = tokenize();
               const callbacks = waiting.get(key);

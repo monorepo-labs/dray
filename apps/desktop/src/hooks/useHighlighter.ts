@@ -21,11 +21,25 @@ function canTokenize(lang: string, pair: CodeThemePair): boolean {
   );
 }
 
+/// The regex engine every Shiki instance here runs on — the shared main-thread
+/// highlighter and each pool worker alike. `getSharedHighlighter` reads it on
+/// first creation only, so every creation site has to name it or the first one
+/// to run decides for the rest.
+///
+/// WASM Oniguruma, not the library's default JavaScript engine, and the reason
+/// is the webview: under JavaScriptCore the JS engine tokenizes at ~1ms/line
+/// (2237 lines of TS = 2.2s, a full-file diff twice that) and translates each
+/// grammar's regexes lazily on first use, ~1.9s for TypeScript, paid separately
+/// by the main thread and by every worker. Measured in Safari 26.5 through this
+/// app's own components. The same code on WASM: 230ms for those lines, 150ms
+/// cold. V8 hides the gap (3x, not 10x), which is why a Chromium head never
+/// showed it. The binary is base64-inlined in `shiki/wasm`, so nothing is fetched.
+export const HIGHLIGHT_ENGINE = "shiki-wasm" as const;
+
 /// Grammars loaded at startup — the languages this app is used on. Measured in
-/// the app, all of these together attach in ~54ms because the loaders run in
-/// parallel, which is cheaper than the single worst grammar in Shiki's bundle
-/// (Ruby is ~390ms on its own, since it drags in HTML, CSS, JS and SQL for its
-/// embedded syntaxes).
+/// the app, all of these together attach in ~25ms because the loaders run in
+/// parallel. Attach is the cheap half: it registers the grammar and nothing
+/// more, where the first *tokenize* in a language is what compiles it.
 ///
 /// So this is not a "preload everything" list and must not become one. It is
 /// the set common enough that paying for it once at startup beats making the
@@ -67,6 +81,7 @@ export function warmHighlighter(pair: CodeThemePair): void {
   void preloadHighlighter({
     themes: [pair.light, pair.dark],
     langs: COMMON_LANGS,
+    preferredHighlighter: HIGHLIGHT_ENGINE,
   }).catch(() => {
     // Best-effort: every view still loads what it needs on mount.
   });
@@ -96,7 +111,11 @@ export function useHighlighter(lang: string, pair: CodeThemePair): boolean {
     setReady(false);
 
     let cancelled = false;
-    preloadHighlighter({ themes: [pair.light, pair.dark], langs: [lang] })
+    preloadHighlighter({
+      themes: [pair.light, pair.dark],
+      langs: [lang],
+      preferredHighlighter: HIGHLIGHT_ENGINE,
+    })
       .then(() => {
         if (!cancelled) setReady(true);
       })

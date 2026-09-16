@@ -6,7 +6,7 @@ import { WorkerPoolContextProvider, useWorkerPool } from "@pierre/diffs/react";
 // know the host's bundler.
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 
-import { COMMON_LANGS } from "@/hooks/useHighlighter";
+import { COMMON_LANGS, HIGHLIGHT_ENGINE } from "@/hooks/useHighlighter";
 import type { CodeThemePair } from "@/lib/codeTheme";
 
 /// Moves diff highlighting off the main thread.
@@ -21,6 +21,10 @@ import type { CodeThemePair } from "@/lib/codeTheme";
 /// Two workers, not the library's default eight: each one boots its own Shiki
 /// with its own grammars, and this app opens one diff at a time — the second
 /// worker only covers a burst of rows opened together.
+///
+/// The engine is named here as well as at the main-thread sites, since each
+/// worker builds its own Shiki from this option and the default is the slow
+/// JS engine `HIGHLIGHT_ENGINE` exists to avoid.
 export default function DiffWorkerPool({
   pair,
   children,
@@ -31,7 +35,11 @@ export default function DiffWorkerPool({
   return (
     <WorkerPoolContextProvider
       poolOptions={{ workerFactory: () => new DiffWorker(), poolSize: 2 }}
-      highlighterOptions={{ langs: COMMON_LANGS, theme: pair }}
+      highlighterOptions={{
+        langs: COMMON_LANGS,
+        theme: pair,
+        preferredHighlighter: HIGHLIGHT_ENGINE,
+      }}
     >
       <PoolThemeSync pair={pair} />
       {children}

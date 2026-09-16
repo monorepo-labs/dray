@@ -76,10 +76,11 @@ export default defineConfig(async () => ({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
 
-  // The diff-highlighting worker has a conditional `import("shiki/wasm")` on a
-  // path this app never takes (it uses the JS regex engine). The default iife
-  // worker build can't code-split, so it would inline that ~600KB chunk into
-  // the worker; `es` keeps it a separate file that is never fetched.
+  // The diff-highlighting worker reaches its engine through a conditional
+  // `import("shiki/wasm")` — ~600KB of base64, and the path this app takes
+  // (`HIGHLIGHT_ENGINE`). The default iife worker build can't code-split, so it
+  // would inline that chunk into the worker's own script; `es` keeps it a
+  // separate file the worker fetches once it has booted.
   worker: { format: "es" as const },
 
   test: {
