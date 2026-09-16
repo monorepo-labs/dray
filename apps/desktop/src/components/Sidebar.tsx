@@ -51,6 +51,7 @@ import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
+import { useResizable } from "@/components/ResizeHandle";
 import { cn } from "@/lib/utils";
 import type {
   PrMark,
@@ -871,6 +872,17 @@ export default function Sidebar({
   onOpenSettings,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
+  // 240 is `w-60`, the width this opened at before it could be dragged — and
+  // its floor as well as its default: narrower, the rows' timestamps and marks
+  // start eating the title they sit beside, so this only ever widens.
+  const { width, handle } = useResizable({
+    storageKey: "ade.sidebarWidth",
+    initial: 240,
+    min: 240,
+    max: 480,
+    edge: "right",
+    label: "Resize the sidebar",
+  });
 
   const closeSearch = () => {
     onSearchOpenChange(false);
@@ -950,7 +962,11 @@ export default function Sidebar({
   if (collapsed) return null;
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-sidebar-border">
+    <aside
+      className="relative flex shrink-0 flex-col border-r border-sidebar-border"
+      style={{ width }}
+    >
+      {handle}
       {/* The toggle shares this strip with the traffic lights, so it sits at the
           right to clear them — except in fullscreen, where they're gone and the
           left edge is free. */}

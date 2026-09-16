@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   PanelLeft,
   PanelLeftClose,
@@ -18,7 +18,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
 import { FILE_OPENER } from "@/lib/openWith";
-import { readLocalStorage, useLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useResizable } from "@/components/ResizeHandle";
 import {
   activateFile,
   closeFile,
@@ -72,10 +73,16 @@ export default function FilesView({
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);
-  // Read once and written on pointerup rather than held in `useLocalStorage`:
-  // the drag moves this on every frame, and a stored value would put a JSON
-  // stringify on each of them for a number only the last frame decides.
-  const [width, setWidth] = useState(() => readLocalStorage(WIDTH_KEY, DEFAULT_WIDTH));
+  // The handle sits on the list's *inner* edge, which is the opposite side to
+  // the one the list is on.
+  const { style, handle } = useResizable({
+    storageKey: WIDTH_KEY,
+    initial: DEFAULT_WIDTH,
+    min: MIN_WIDTH,
+    max: MAX_WIDTH,
+    edge: side === "left" ? "right" : "left",
+    label: "Resize the file list",
+  });
 
   const [query, setQuery] = useState("");
   const filtering = query.trim().length > 0;
@@ -138,7 +145,7 @@ export default function FilesView({
         "relative flex shrink-0 flex-col",
         side === "left" ? "border-r border-border" : "border-l border-border",
       )}
-      style={{ width }}
+      style={style}
     >
       <Filter
         query={query}
@@ -201,7 +208,7 @@ export default function FilesView({
         filtering={filtering}
       />
 
-      <Handle side={side} width={width} onWidth={setWidth} />
+      {handle}
     </div>
   );
 
@@ -300,7 +307,7 @@ function Filter({
               if (picked) onPick(picked.path);
             }
           }}
-          placeholder="Filter files"
+          placeholder="Search files"
           spellCheck={false}
           className="min-w-0 flex-1 bg-transparent text-ui outline-none placeholder:text-muted-foreground"
         />
@@ -359,58 +366,5 @@ function ShowHide({
       </TooltipTrigger>
       <TooltipContent side="bottom">{label}</TooltipContent>
     </Tooltip>
-  );
-}
-
-/// The strip between the list and the pane, dragged to resize.
-///
-/// The first drag handle in the app, and it stays inside this component until a
-/// second surface wants one. `setPointerCapture` is what makes it work over the
-/// code pane: without it the pointer leaves this element on the first frame and
-/// every move after that is delivered somewhere else.
-function Handle({
-  side,
-  width,
-  onWidth,
-}: {
-  side: Side;
-  width: number;
-  onWidth: (next: number) => void;
-}) {
-  const from = useRef<{ x: number; width: number } | null>(null);
-
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the file list"
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        from.current = { x: e.clientX, width };
-      }}
-      onPointerMove={(e) => {
-        const start = from.current;
-        if (!start) return;
-        // The handle is on the list's *inner* edge, so dragging away from the
-        // list widens it — which is the opposite direction on each side.
-        const moved = side === "left" ? e.clientX - start.x : start.x - e.clientX;
-        onWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, start.width + moved)));
-      }}
-      onPointerUp={() => {
-        if (!from.current) return;
-        from.current = null;
-        // Written once, at the end: the value moved on every frame of the drag
-        // and only the last one is a preference.
-        writeLocalStorage(WIDTH_KEY, width);
-      }}
-      onDoubleClick={() => {
-        onWidth(DEFAULT_WIDTH);
-        writeLocalStorage(WIDTH_KEY, DEFAULT_WIDTH);
-      }}
-      className={cn(
-        "absolute inset-y-0 z-10 w-1 cursor-col-resize hover:bg-border",
-        side === "left" ? "-right-0.5" : "-left-0.5",
-      )}
-    />
   );
 }

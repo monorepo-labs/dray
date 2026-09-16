@@ -6,6 +6,7 @@ import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useResizable } from "@/components/ResizeHandle";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -271,16 +272,27 @@ export default function RightPanel({
   children,
 }: RightPanelProps) {
   const tabs = tabOrder({ pr, docs, issue, subagents });
+  // 32rem, the width this pane opened at before it could be dragged.
+  const { width, handle } = useResizable({
+    storageKey: "ade.rightPanelWidth",
+    initial: 512,
+    min: 320,
+    max: 900,
+    edge: "left",
+    label: "Resize the panel",
+  });
 
   return (
     <aside
+      style={{ width }}
       className={cn(
-        "w-[32rem] shrink-0 flex-col border-l border-border bg-sidebar",
+        "relative shrink-0 flex-col border-l border-border bg-sidebar",
         // Conditional `flex` rather than `flex` plus `hidden`: both set
         // `display`, so stacking them leaves the winner to stylesheet order.
         open ? "flex" : "hidden",
       )}
     >
+      {handle}
       <div
         className={cn(
           "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 px-2",
