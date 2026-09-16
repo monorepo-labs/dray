@@ -95,6 +95,15 @@ pub struct FxSession {
     /// efforts come from. `None` for a reply this build could not read, which
     /// [`set_model`] takes as "leave it alone" rather than as a mismatch.
     provider: Arc<std::sync::Mutex<Option<String>>>,
+    /// The model fx says it is running, off those same replies.
+    ///
+    /// Not the model that was *asked* for — [`landed_model`] hands this back so
+    /// a caller whose request was refused can record what the child is really
+    /// on. A cross-provider [`set_model`] moves the provider first, and fx
+    /// answers that with the new provider's own remembered model, so a refusal
+    /// on the model call after it leaves the session somewhere neither side
+    /// picked.
+    model: Arc<std::sync::Mutex<Option<String>>>,
     /// Whether [`SYSTEM_PROMPT`] still has to ride a prompt.
     ///
     /// **Not `is_new_session`, and the gap is a real one.** `open_session`
@@ -121,6 +130,16 @@ impl FxSession {
     fn provider(&self) -> Option<String> {
         self.provider.lock().expect("fx provider poisoned").clone()
     }
+}
+
+/// The model fx last reported for a session, as an id — which for fx is the
+/// same string as the argument, every row being minted from the one fx names.
+///
+/// For a caller reconciling after a refusal. `None` before any reply this build
+/// could read, which is "nothing better than what you already have".
+pub fn landed_model(session: &FxSession) -> Option<crate::models::ModelId> {
+    let model = session.model.lock().expect("fx model poisoned").clone();
+    model.map(crate::models::ModelId::new)
 }
 
 /// The `--model` argument a spawn carries, or `None` where the flag must be
@@ -275,6 +294,7 @@ pub async fn init(
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
         efforts: Arc::new(std::sync::Mutex::new(None)),
         provider: Arc::new(std::sync::Mutex::new(None)),
+        model: Arc::new(std::sync::Mutex::new(None)),
         preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
     };
     note_config(&session, &config, None, app);
@@ -458,6 +478,9 @@ fn note_config(
     // comparison current without a read of its own.
     if let Some(provider) = config.provider() {
         *session.provider.lock().expect("fx provider poisoned") = Some(provider.to_string());
+    }
+    if let Some(model) = config.model() {
+        *session.model.lock().expect("fx model poisoned") = Some(model.to_string());
     }
 
     // The model list outlives this session, so it only takes the part of that
@@ -1303,6 +1326,7 @@ mod tests {
                 prompt_id: Arc::new(std::sync::Mutex::new(None)),
                 efforts: Arc::new(std::sync::Mutex::new(efforts)),
                 provider: Arc::new(std::sync::Mutex::new(None)),
+                model: Arc::new(std::sync::Mutex::new(None)),
                 preamble: Arc::new(AtomicBool::new(false)),
             },
             rx,

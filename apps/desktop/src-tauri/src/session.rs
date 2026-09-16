@@ -962,7 +962,29 @@ impl SessionManager {
                 // decide" has nothing to switch to, and the session stays on
                 // whatever it is running, which is what the unset pick means.
                 match model_spec.as_ref() {
-                    Some(spec) => s.set_model(spec, app).await?,
+                    Some(spec) => {
+                        if let Err(err) = s.set_model(spec, app).await {
+                            // The send still fails — the reader asked for a
+                            // model they are not getting, and their prompt is
+                            // better kept in the composer than run on another
+                            // one. What must not survive it is the optimistic
+                            // touch above: fx moves the provider ahead of a
+                            // cross-provider model, so a refusal here can leave
+                            // the child on a model neither side picked, and an
+                            // index still naming the asked-for one sends every
+                            // later prompt back into the same refusal.
+                            // `set_model` has already adopted what fx answered.
+                            touch_session_index_item(
+                                session_id,
+                                s.model.clone(),
+                                effort,
+                                permission_mode,
+                                fast,
+                            )
+                            .await?;
+                            return Err(err);
+                        }
+                    }
                     None if model.is_unset() => {}
                     None => bail!("no model to switch the session to"),
                 }
@@ -1852,7 +1874,19 @@ impl Session {
             // `app` reaches fx alone, and for one reason: its reply restates
             // the new model's effort ladder, which the composer's picker has to
             // be told about or it keeps offering the old model's levels.
-            crate::harness::fx::set_model(session, model, app).await?;
+            let outcome = crate::harness::fx::set_model(session, model, app).await;
+            // **What the child is on, not what was asked for, and the refusal
+            // path is the whole reason.** A cross-provider switch moves the
+            // provider first, and fx answers that by putting the session on the
+            // *new provider's* own remembered model — so a model call refused
+            // after it leaves the child somewhere neither side chose. Adopting
+            // fx's own answer is what stops this struct, the index and the
+            // child naming three different models, which is a session whose
+            // every later send retries the same refusal.
+            if let Some(landed) = crate::harness::fx::landed_model(session) {
+                self.model = landed;
+            }
+            outcome?;
             self.model = model.id.clone();
             return Ok(());
         }
