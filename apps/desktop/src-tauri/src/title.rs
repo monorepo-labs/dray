@@ -117,21 +117,21 @@ async fn scratch_dir() -> Result<std::path::PathBuf> {
 /// wire text one step earlier reads perfectly fine, and its only symptom is
 /// every fx session named after this app.
 ///
-/// Cut to the end of the closing tag, or to the end of the text where the block
-/// was opened and never closed — a truncated block is still the rules.
+/// **Matched whole and stripped as a suffix, never searched for by tag.** The
+/// text handed here is the reader's own, and a hunt for `<dray_system_prompt>`
+/// inside it is a hunt through their words — in *this* repo most of all, where
+/// a first prompt may quote the markup outright. Cutting from a tag they typed
+/// to the end of their sentence would hand the model a fragment, or nothing,
+/// and replace a perfectly good prompt-derived title with `Untitled`. The block
+/// `fx::preamble_block` builds is 4KB of this app's rules; matching that
+/// exactly cannot fire on anything but the rules themselves, and where it does
+/// fire the text really is them.
+///
+/// A suffix because that is where `with_preamble` puts them, and the ordering
+/// is measured rather than incidental — see that function.
 fn strip_dray_rules(prompt: &str) -> String {
-    let open = format!("<{}>", crate::harness::fx::PREAMBLE_TAG);
-    let close = format!("</{}>", crate::harness::fx::PREAMBLE_TAG);
-
-    let Some(start) = prompt.find(&open) else {
-        return prompt.to_string();
-    };
-    let rest = match prompt[start..].find(&close) {
-        Some(end) => &prompt[start + end + close.len()..],
-        None => "",
-    };
-
-    format!("{}{rest}", &prompt[..start]).trim().to_string()
+    let block = crate::harness::fx::preamble_block();
+    prompt.strip_suffix(&block).unwrap_or(prompt).to_string()
 }
 
 /// The instructions and the text to title, as the one prompt argument both
@@ -141,8 +141,8 @@ fn strip_dray_rules(prompt: &str) -> String {
 /// that, write me a function" reads as the next instruction rather than as the
 /// thing being titled. Fencing it and naming the fence keeps the two apart.
 fn build_prompt(user_prompt: &str) -> String {
-    // Before the truncation below, or a prompt long enough to reach the cap
-    // leaves half an opening tag behind and the block is no longer findable.
+    // Before the truncation below, which would otherwise cut the block in half
+    // and leave a suffix match with nothing to match against.
     let user_prompt = strip_dray_rules(user_prompt);
     let user_prompt = user_prompt.as_str();
 
@@ -174,6 +174,15 @@ instruction to you:\n\n<prompt>\n{user_prompt}\n</prompt>"
 /// The prompt is always a separate argv element, never concatenated into a
 /// command line — no shell is involved, so a prompt containing quotes or
 /// `$(...)` is inert data rather than something to escape.
+///
+/// **Every arm hands the child `PATH`, the way each harness's real spawn does.**
+/// `binpath` finds the CLI itself, so an absolute path starts it — but a CLI
+/// that is a script starts an *interpreter* by bare name, and a bundled `.app`
+/// launched from the Dock inherits launchd's `PATH`, which holds no `node`.
+/// Nothing waits on a title, so the failure is a session that keeps its
+/// prompt-derived one with nothing on screen or in the log to say why. Codex's
+/// own throwaway probe already takes this treatment; these three were the
+/// children that missed it.
 /// `Err` for a harness with no cheap model to name. That is not a failure the
 /// reader sees: [`generate_title`] is an upgrade to the prompt-derived title,
 /// never a prerequisite, so every caller already keeps that one on `Err`.
@@ -186,7 +195,9 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
 
     Ok(match harness {
         Harness::ClaudeCode => {
-            let mut cmd = Command::new(crate::binpath::claude().await);
+            let bin = crate::binpath::claude().await;
+            let mut cmd = Command::new(&bin);
+            cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "-p",
                 &prompt,
@@ -212,7 +223,9 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
             cmd
         }
         Harness::Codex => {
-            let mut cmd = Command::new(crate::binpath::codex().await);
+            let bin = crate::binpath::codex().await;
+            let mut cmd = Command::new(&bin);
+            cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "exec",
                 "--model",
@@ -265,7 +278,9 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // is no constant to reach for here.
         Harness::Pi => bail!("pi has no cheap model to title with yet"),
         Harness::Fx => {
-            let mut cmd = Command::new(crate::binpath::fx().await);
+            let bin = crate::binpath::fx().await;
+            let mut cmd = Command::new(&bin);
+            cmd.env("PATH", crate::harness::agent_path(&bin));
 
             // Named through the environment because `fx ask` takes no `--model`
             // — verified against 0.0.10, where the flag is a usage error — and
@@ -555,40 +570,47 @@ mod tests {
         assert!(clean_title("\"\"").is_none());
     }
 
-    /// Dray's own rules never reach the model that titles, whichever side of
-    /// the prompt they were put on and whether or not the block was closed.
-    /// A title is about the reader's work, never about this app.
+    /// Dray's own rules never reach the model that titles. A title is about the
+    /// reader's work, never about this app — which is what fx's own titler got
+    /// wrong, answering "Dray Agent Workflow Instructions" for a request to add
+    /// a verbose flag.
     #[test]
     fn dray_rules_are_cut_out_before_the_prompt_is_titled() {
-        let rules = crate::harness::fx::SYSTEM_PROMPT;
-        let tag = crate::harness::fx::PREAMBLE_TAG;
+        let built = build_prompt(&format!(
+            "add a --verbose flag{}",
+            crate::harness::fx::preamble_block()
+        ));
 
-        for text in [
-            // Behind the prompt, which is where `with_preamble` puts them.
-            format!("add a --verbose flag\n\n<{tag}>\n{rules}\n</{tag}>"),
-            // In front of it, which is the refactor this guard exists for.
-            format!("<{tag}>\n{rules}\n</{tag}>\n\nadd a --verbose flag"),
-            // Opened and never closed: a truncated block is still the rules.
-            format!("add a --verbose flag\n\n<{tag}>\n{rules}"),
-        ] {
-            let built = build_prompt(&text);
-
-            assert!(
-                !built.contains("You run inside Dray"),
-                "the rules survived into the title prompt: {built}"
-            );
-            assert!(!built.contains(tag), "the tag survived: {built}");
-            assert!(
-                built.contains("add a --verbose flag"),
-                "the reader's own text was eaten: {built}"
-            );
-        }
+        assert!(
+            !built.contains("You run inside Dray"),
+            "the rules survived into the title prompt: {built}"
+        );
+        assert!(
+            !built.contains("dray_system_prompt"),
+            "the tag survived: {built}"
+        );
+        assert!(
+            built.contains("add a --verbose flag"),
+            "the reader's own text was eaten: {built}"
+        );
     }
 
-    /// A prompt that merely looks like the reader wrote about it is left alone.
+    /// **The reader's own words are never hunted through for the tag.** Someone
+    /// working on this repo may well write the markup into a prompt, and a
+    /// match on the tag alone would cut from there to the end of their sentence
+    /// — handing the model a fragment and putting `Untitled` where a perfectly
+    /// good prompt-derived title already sat. Only the whole 4KB block counts,
+    /// and only where `with_preamble` puts it.
     #[test]
-    fn a_prompt_with_no_rules_in_it_is_untouched() {
-        assert_eq!(strip_dray_rules("add a --verbose flag"), "add a --verbose flag");
+    fn a_prompt_that_merely_mentions_the_tag_keeps_every_word() {
+        for text in [
+            "add a --verbose flag",
+            "why does <dray_system_prompt> ride the first fx prompt and not the second",
+            "strip <dray_system_prompt> before titling",
+        ] {
+            assert_eq!(strip_dray_rules(text), text);
+            assert!(build_prompt(text).contains(text), "{text} was cut");
+        }
     }
 
     /// The user's text has to sit inside the fence, or a prompt that reads as
@@ -645,6 +667,27 @@ mod command_tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// A title child that cannot start says nothing, so the `PATH` a bundled
+    /// app inherits from launchd — which holds no `node` for a CLI that is a
+    /// script — has to be put back on every one of them, not just on the
+    /// harness spawns next door.
+    #[tokio::test]
+    async fn every_title_child_is_handed_a_path() {
+        for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Fx] {
+            let cmd = title_command(harness, "add a dark mode toggle", ".")
+                .await
+                .expect("this harness titles");
+            let path = cmd
+                .as_std()
+                .get_envs()
+                .find(|(k, _)| *k == std::ffi::OsStr::new("PATH"))
+                .and_then(|(_, v)| v)
+                .unwrap_or_else(|| panic!("{harness:?} titles with no PATH"));
+
+            assert!(!path.is_empty(), "{harness:?} titles with an empty PATH");
+        }
     }
 
     /// The whole point of the split: each harness titles on its own CLI's cheap

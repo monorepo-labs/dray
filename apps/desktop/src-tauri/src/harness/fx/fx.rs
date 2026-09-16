@@ -54,15 +54,11 @@ const PROTOCOL_VERSION: u64 = 1;
 /// Its own file rather than pi's: pi's names `~/.agents/skills`, and fx reads
 /// `~/.claude/skills` among its global roots, so each has to name the path its
 /// own agent will actually find the skill at.
-pub(crate) const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
+const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 
 /// The tag the rules are wrapped in, so anything reading the prompt back can
 /// find where they stop.
-///
-/// Shared with [`crate::title`], which cuts the block back out before titling
-/// rather than trusting the call chain to have kept it away — two spellings of
-/// this would leave that cut silently matching nothing.
-pub(crate) const PREAMBLE_TAG: &str = "dray_system_prompt";
+const PREAMBLE_TAG: &str = "dray_system_prompt";
 
 /// How long a child is given to leave after `session/close` and EOF before it
 /// is killed. fx holds a `session.lock` per session under `~/.fx/sessions`,
@@ -836,7 +832,19 @@ fn owes_preamble(is_new_session: bool, seq_start: u64) -> bool {
 /// the same way. The rules are still honoured from down there — pinned live
 /// with a codeword rule the model obeyed on the turn it arrived.
 fn with_preamble(text: &str) -> String {
-    format!("{text}\n\n<{PREAMBLE_TAG}>\n{SYSTEM_PROMPT}\n</{PREAMBLE_TAG}>")
+    format!("{text}{}", preamble_block())
+}
+
+/// Exactly what [`with_preamble`] appends, as one string.
+///
+/// **Split out so [`crate::title`] can cut back off what this puts on, by
+/// equality rather than by pattern.** A search for the tag alone is a search
+/// through the reader's own words — and in this repo, of all places, a prompt
+/// may well quote the markup — where the whole block is 4KB nobody writes by
+/// accident. Two spellings of it would leave that cut silently matching
+/// nothing, which is why this is one function and not a rule stated twice.
+pub(crate) fn preamble_block() -> String {
+    format!("\n\n<{PREAMBLE_TAG}>\n{SYSTEM_PROMPT}\n</{PREAMBLE_TAG}>")
 }
 
 /// Writes one prompt as a turn.
