@@ -166,31 +166,40 @@ impl MergeMethod {
 /// `mergeStateStatus` needs no preview header here, checked against the live
 /// API rather than assumed.
 ///
-/// **Page sizes are the point cost, and 5/20/20 is measured.** GraphQL charges
-/// on the shape asked for, not on what comes back: nested `first`s multiply,
-/// so `20 × 50 × 50` reserved a thousand thread comments and cost 11 points
-/// per read *of a branch with no PR at all* — 2640 an hour at the settling
-/// poll, which is how two Dray instances alone drained the 5000/hour budget
-/// and every agent's own `gh` call started failing (DRA-247). The same query
-/// at `5 × 20 × 20` costs 1. Five is plenty: the query is per *branch*, so
-/// only a stack or one fix against two bases puts more than one here.
+/// **Page sizes are the point cost, and this shape is measured at 2.** GraphQL
+/// charges on the shape asked for, not on what comes back: nested `first`s
+/// multiply, so one connection at `20 × 50 × 50` reserved a thousand thread
+/// comments and cost 11 points per read *of a branch with no PR at all* —
+/// 2640 an hour at the settling poll, which is how two Dray instances alone
+/// drained the 5000/hour budget and every agent's own `gh` call started
+/// failing (DRA-247). Thirty threads and ten replies each is where a reviewer
+/// bot's inline comments still fit; past either the rest is silently absent,
+/// as it was past fifty before, and paging would cost the points this saves.
+///
+/// **Open and settled are two aliased connections**, the bargain [`QUERY_MARKS`]
+/// makes for the sidebar: a single `first:5` newest-first would drop an older
+/// open PR behind five settled ones on a reused branch, and the open-first
+/// sort in `read_prs` runs after the cut. Five open covers a stack; two
+/// settled is what the panel has to say about a branch whose work landed.
 const QUERY: &str = r#"
 query($owner:String!,$repo:String!,$branch:String!){
  repository(owner:$owner,name:$repo){
-  pullRequests(headRefName:$branch,first:5,orderBy:{field:CREATED_AT,direction:DESC}){nodes{
-   number title url state isDraft baseRefName headRefName headRef{name} isCrossRepository mergeable mergeStateStatus reviewDecision updatedAt
-   additions deletions changedFiles
-   author{login avatarUrl}
-   comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
-   reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
-   reviewThreads(first:20){nodes{isResolved path line comments(first:20){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
-   commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
-     __typename
-     ... on StatusContext{context state targetUrl avatarUrl}
-     ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{name logoUrl}}}
-   }}}}}}
-  }}
+  open: pullRequests(headRefName:$branch,states:OPEN,first:5,orderBy:{field:CREATED_AT,direction:DESC}){nodes{...pr}}
+  settled: pullRequests(headRefName:$branch,states:[MERGED,CLOSED],first:2,orderBy:{field:CREATED_AT,direction:DESC}){nodes{...pr}}
  }}
+fragment pr on PullRequest{
+ number title url state isDraft baseRefName headRefName headRef{name} isCrossRepository mergeable mergeStateStatus reviewDecision updatedAt
+ additions deletions changedFiles
+ author{login avatarUrl}
+ comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
+ reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
+ reviewThreads(first:30){nodes{isResolved path line comments(first:10){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
+ commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
+   __typename
+   ... on StatusContext{context state targetUrl avatarUrl}
+   ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{name logoUrl}}}
+ }}}}}}
+}
 "#;
 
 /// Every pull request the sidebar can mark a row with, by head branch.
@@ -250,7 +259,7 @@ impl<T> Nodes<T> {
 
 /// Generic over the repository shape, because both queries here answer with
 /// the same two envelopes around `repository` and only what is asked of it
-/// differs: one `pullRequests` connection, or two under aliases.
+/// differs: which states each aliased `pullRequests` connection asks for.
 #[derive(Deserialize)]
 struct Response<R> {
     data: Option<ResponseData<R>>,
@@ -288,7 +297,8 @@ struct ResponseData<R> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrsRepository {
-    pull_requests: Option<Nodes<RawPr>>,
+    open: Option<Nodes<RawPr>>,
+    settled: Option<Nodes<RawPr>>,
 }
 
 #[derive(Deserialize)]
@@ -907,9 +917,9 @@ fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
 
     let mut prs: Vec<PullRequest> = response
         .repository()?
-        .map(|r| Nodes::take(r.pull_requests))
-        .unwrap_or_default()
+        .map(|r| Nodes::take(r.open).into_iter().chain(Nodes::take(r.settled)))
         .into_iter()
+        .flatten()
         .map(RawPr::map)
         .collect();
 
@@ -1347,7 +1357,7 @@ mod tests {
     /// No capture holds one yet, so this pins the shape.
     #[test]
     fn a_threads_later_comments_are_replies() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,
             "reviews":{"nodes":[{"id":"R1","author":{"login":"bot"},"body":"",
               "state":"COMMENTED","submittedAt":"2026-01-01T00:00:00Z"}]},
             "reviewThreads":{"nodes":[
@@ -1372,7 +1382,7 @@ mod tests {
     /// it reads as its own note, which is what it is with nothing to hang off.
     #[test]
     fn a_thread_with_no_review_of_its_own_stands_alone() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
             {"path":"src/main.rs","line":3,"comments":{"nodes":[
               {"author":{"login":"bot"},"body":"look here","createdAt":"2026-01-01T00:00:00Z"}]}}]}}]}}}}"#;
         let prs = read_prs(out).expect("orphan thread parses");
@@ -1385,7 +1395,7 @@ mod tests {
     /// path rather than anything to draw.
     #[test]
     fn an_empty_thread_draws_no_row() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,"reviewThreads":{"nodes":[
             {"path":"src/main.rs","comments":{"nodes":[]}}]}}]}}}}"#;
         assert!(read_prs(out).expect("empty thread parses")[0].comments.is_empty());
     }
@@ -1413,7 +1423,7 @@ mod tests {
     /// threads arrives in, and they must not fail the response.
     #[test]
     fn null_connections_read_as_empty() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[
             {"number":7,"comments":{"nodes":null},"reviews":null,"reviewThreads":{"nodes":null},
              "commits":{"nodes":[]}}]}}}}"#;
         let prs = read_prs(out).expect("nulls parse");
@@ -1423,7 +1433,7 @@ mod tests {
     /// An unmodelled rollup entry costs its own row and nothing else.
     #[test]
     fn an_unknown_check_shape_is_dropped() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,
             "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[
               {"__typename":"SomethingNew","name":"x"},
               {"__typename":"StatusContext","context":"CI","state":"PENDING"}]}}}}]}}]}}}}"#;
@@ -1436,7 +1446,7 @@ mod tests {
     /// would draw it as finished.
     #[test]
     fn a_running_check_is_pending() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,
             "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[
               {"__typename":"CheckRun","name":"build","status":"IN_PROGRESS",
                "conclusion":null}]}}}}]}}]}}}}"#;
@@ -1447,7 +1457,7 @@ mod tests {
     /// The envelope GitHub wraps inline file comments in carries no body.
     #[test]
     fn a_bodyless_review_is_dropped_unless_it_approves() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviews":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,"reviews":{"nodes":[
             {"author":{"login":"a"},"body":"","state":"COMMENTED"},
             {"author":{"login":"b"},"body":"","state":"APPROVED"}]}}]}}}}"#;
         let prs = read_prs(out).expect("reviews parse");
@@ -1459,7 +1469,7 @@ mod tests {
     /// not show the reader the PR they already landed.
     #[test]
     fn open_prs_sort_ahead_of_settled_ones() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[
             {"number":9,"state":"MERGED"},{"number":3,"state":"OPEN"},
             {"number":7,"state":"CLOSED"},{"number":5,"state":"OPEN"}]}}}}"#;
         let prs = read_prs(out).expect("list parses");
@@ -1513,11 +1523,23 @@ mod tests {
     /// it came from — so only `headRef` going null says the ref is gone.
     /// Verified against the live API: deleting the branch flipped `headRef` to
     /// null and left `headRefName` exactly as it was.
+    /// The connections are read together, and the open one is not a filter
+    /// on the other: a merged PR and an open one on the same branch both
+    /// come back, open first, whichever alias each arrived under.
+    #[test]
+    fn open_and_settled_connections_are_both_read() {
+        let out = r#"{"data":{"repository":{
+          "open":{"nodes":[{"number":9,"headRefName":"fix/thing","state":"OPEN"}]},
+          "settled":{"nodes":[{"number":7,"headRefName":"fix/thing","state":"MERGED"}]}}}}"#;
+        let numbers: Vec<u64> = read_prs(out).unwrap().iter().map(|pr| pr.number).collect();
+        assert_eq!(numbers, vec![9, 7]);
+    }
+
     #[test]
     fn head_ref_says_whether_the_branch_is_still_there() {
         let out = |head_ref: &str| {
             format!(
-                r#"{{"data":{{"repository":{{"pullRequests":{{"nodes":[
+                r#"{{"data":{{"repository":{{"open":{{"nodes":[
                   {{"number":1,"headRefName":"fix/thing","headRef":{head_ref}}}]}}}}}}}}"#
             )
         };
@@ -1578,7 +1600,7 @@ mod tests {
     /// an error on work already landed.
     #[test]
     fn a_missing_head_ref_field_reads_as_gone() {
-        let out = r#"{"data":{"repository":{"pullRequests":{"nodes":[
+        let out = r#"{"data":{"repository":{"open":{"nodes":[
             {"number":1,"headRefName":"fix/thing"}]}}}}"#;
         let prs = read_prs(out).expect("parses");
         assert!(!prs[0].head_ref_exists);
