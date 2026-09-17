@@ -330,6 +330,18 @@ async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, 
     Ok(settings_view().await)
 }
 
+/// What the webview needs to run PostHog for itself, or `None` where it may not.
+///
+/// Surveys are drawn by `posthog-js` and by nothing else, so the SDK is the one
+/// thing here the Rust POST cannot stand in for. `None` is the refusal and the
+/// frontend initialises nothing on it — see [`analytics::identity`] for why the
+/// answer is one value rather than a consent flag the other side pairs with a
+/// lookup of its own.
+#[tauri::command]
+async fn analytics_identity() -> Option<analytics::SurveyIdentity> {
+    analytics::identity().await
+}
+
 /// Reports a feature whose only chokepoint is in the frontend.
 ///
 /// The backend reports its own — this exists for the handful, like the handoff
@@ -700,6 +712,7 @@ pub fn run() {
             local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,
+            analytics_identity,
             track_feature,
             track_active_day,
             list_slash_commands,

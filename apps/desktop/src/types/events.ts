@@ -1634,6 +1634,32 @@ export type Subagent = { id: string,
  */
 label: string | null, };
 
+/**
+ * What the webview needs to speak to PostHog for itself.
+ *
+ * Handed over whole rather than looked up on the other side, and that is the
+ * whole of why this type exists: a frontend reading `analytics_enabled` for
+ * itself would be a second reader of consent, free to answer differently from
+ * this one — which is the shape DRA-199 was already caught by once. Here the
+ * answer to "may I", "as whom" and "where to" is one value, and its absence is
+ * the refusal.
+ */
+export type SurveyIdentity = { key: string, host: string, 
+/**
+ * The install id, so the SDK and this module are one person in PostHog
+ * rather than two. Bootstrapped on the other side, never `identify`d into
+ * existence — a person is already what the POSTs create.
+ */
+distinctId: string, 
+/**
+ * [`base_properties`], to be `$set` as **person** properties on the other
+ * side. Event properties are what this module sends and what surveys
+ * cannot target on, so without this the SDK arrives and the reason for
+ * wanting it — targeting a survey at a version or an OS — still does not
+ * work.
+ */
+personProperties: Record<string, string | number | boolean>, };
+
 export type ToolResult = { 
 /**
  * Result content flattened to text; harnesses vary between a bare string

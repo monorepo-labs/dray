@@ -38,7 +38,9 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::{json, Map, Value};
+use ts_rs::TS;
 
 use crate::settings;
 
@@ -105,6 +107,59 @@ pub async fn enabled() -> bool {
 /// the same variable is how the flag and the switch drawn from it drift apart.
 pub fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
+}
+
+/// What the webview needs to speak to PostHog for itself.
+///
+/// Handed over whole rather than looked up on the other side, and that is the
+/// whole of why this type exists: a frontend reading `analytics_enabled` for
+/// itself would be a second reader of consent, free to answer differently from
+/// this one — which is the shape DRA-199 was already caught by once. Here the
+/// answer to "may I", "as whom" and "where to" is one value, and its absence is
+/// the refusal.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SurveyIdentity {
+    pub key: String,
+    pub host: String,
+    /// The install id, so the SDK and this module are one person in PostHog
+    /// rather than two. Bootstrapped on the other side, never `identify`d into
+    /// existence — a person is already what the POSTs create.
+    pub distinct_id: String,
+    /// [`base_properties`], to be `$set` as **person** properties on the other
+    /// side. Event properties are what this module sends and what surveys
+    /// cannot target on, so without this the SDK arrives and the reason for
+    /// wanting it — targeting a survey at a version or an OS — still does not
+    /// work.
+    #[ts(type = "Record<string, string | number | boolean>")]
+    pub person_properties: Map<String, Value>,
+}
+
+/// Who the webview may report as, or `None` where it may not report at all.
+///
+/// The SDK on the other side exists for **surveys**, which are drawn by
+/// `posthog-js` and by nothing else — there is no way to render one from here.
+/// It captures no events of its own, so this is less a second analytics client
+/// than a second surface of the same consent, and consent is still read in one
+/// place: [`settings::ensure_install_id`] answers `None` for an install that
+/// opted out, and that `None` is what stops the SDK ever being initialised.
+pub async fn identity() -> Option<SurveyIdentity> {
+    // Same order as `send`: no key compiled in is the ordinary case for a local
+    // build, and checking it first keeps a build that sends nothing from
+    // reading the settings file to find that out.
+    let key = API_KEY.filter(|key| !key.is_empty())?;
+
+    if env_opt_out() {
+        return None;
+    }
+
+    Some(SurveyIdentity {
+        key: key.to_string(),
+        host: host().to_string(),
+        distinct_id: settings::ensure_install_id().await?,
+        person_properties: base_properties().clone(),
+    })
 }
 
 /// Enqueues one event, or drops it if this run opted out.
@@ -418,6 +473,23 @@ mod tests {
 
         assert_eq!(props["kind"], json!("parse_failure"));
         assert_eq!(props["stage"], json!("map"));
+    }
+
+    /// What the webview `$set`s as person properties, and the whole reason
+    /// [`SurveyIdentity`] carries them: a survey targets *persons*, so these
+    /// are the only fields a survey can be aimed with. `source` most of all —
+    /// it is what tells an app person from a marketing-site one, and the site
+    /// reports into the same project. Dropping one of these from
+    /// [`base_properties`] costs a targeting option in PostHog's UI and says
+    /// nothing at all here, which is what this pins.
+    #[test]
+    fn the_person_properties_carry_what_a_survey_is_targeted_by() {
+        let props = base_properties();
+
+        assert_eq!(props["source"], json!("app"));
+        assert_eq!(props["app_version"], json!(env!("CARGO_PKG_VERSION")));
+        assert!(props.contains_key("os"));
+        assert!(props.contains_key("arch"));
     }
 
     /// What a panic report may carry. A dependency's path names the machine it
