@@ -120,6 +120,17 @@ export async function startSurveys(): Promise<void> {
       capture_pageview: false,
       capture_pageleave: false,
       disable_session_recording: true,
+      // The SDK fetches surveys and never draws one. `disable_surveys` would
+      // take the fetch with it; this leaves `getActiveMatchingSurveys` — the
+      // discovery call — working while the display loop stays quiet, which is
+      // what lets `SurveyCard` be the only card on screen.
+      //
+      // It is also what frees the survey from having to be typed `api` in
+      // PostHog. That type exists on the wire but the UI need not offer it, and
+      // an ordinary **popover** survey left to itself would draw PostHog's card
+      // beside ours. Suppressed here instead, so how the survey is written over
+      // there cannot put two questions on screen.
+      disable_surveys_automatic_display: true,
       loaded: (ph) => ph.setPersonProperties(found.personProperties),
     });
     return;

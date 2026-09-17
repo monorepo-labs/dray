@@ -1,11 +1,18 @@
 // A survey PostHog writes and Dray draws.
 //
-// **API mode**: PostHog holds the questions, who sees them and when, and
+// PostHog holds the questions, who sees them and when, and
 // `getActiveMatchingSurveys` is the discovery call its own docs point custom
 // integrations at. What it deliberately does not hold is the *look* — the stock
 // popover is a white card with PostHog's byline, which in a glass dark window
 // reads as pasted on. So the card is [SurveyCard](../components/SurveyCard.tsx)
 // and everything below is the join between the two.
+//
+// **The survey is written as an ordinary popover over there**, not as the `api`
+// type: that type exists on the wire but PostHog's UI need not offer it, and
+// resting on one that might not be there would make the whole feature depend on
+// a radio button. `disable_surveys_automatic_display` in
+// [surveys.ts](./surveys.ts) is what makes that safe — the SDK fetches and
+// never draws, whatever the survey calls itself.
 //
 // The one thing this costs over letting the SDK draw it: the response payload
 // is ours to build, and a wrong key lands the answer somewhere the survey
