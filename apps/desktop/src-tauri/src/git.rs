@@ -111,6 +111,23 @@ fn parse_worktree_branch_names(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether any remote here points at GitHub.
+///
+/// Asked in one place only: where `gh` is missing, which is the one state in
+/// which nothing else can answer a GitHub question at all. Any remote counts,
+/// not just `origin`, since a fork workflow leaves `origin` on the fork and the
+/// answer is the same either way.
+///
+/// Both URL spellings hold `github.com`, so one substring covers `https://` and
+/// `git@`. An enterprise host does not, and reads here as no GitHub remote —
+/// the cost is a missing install prompt for a reader who is already using a
+/// GitHub this app cannot name, never a wrong answer for anyone with `gh`.
+pub async fn has_github_remote(cwd: &str) -> bool {
+    git(cwd, &["remote", "-v"])
+        .await
+        .is_some_and(|out| out.contains("github.com"))
+}
+
 /// The ref a `-w` worktree forks from. Mirrors the CLI's own resolution, which
 /// reads `origin/HEAD` and falls back through `origin/main` then `origin/master`
 /// — so the composer names the same commit the CLI will actually use.
@@ -1773,6 +1790,39 @@ mod tests {
         run(at, &["commit", "-qm", "init"]).await.unwrap();
 
         dir
+    }
+
+    /// The question asked where `gh` is missing, and the whole of what keeps a
+    /// machine without the CLI from growing a PR tab on every session: a repo
+    /// with no GitHub remote must answer no, and a remote that is not `origin`
+    /// must still answer yes.
+    #[tokio::test]
+    async fn a_github_remote_is_found_under_any_name() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+
+        assert!(
+            !has_github_remote(at).await,
+            "a repo with no remote at all has no GitHub remote",
+        );
+
+        run(at, &["remote", "add", "origin", "https://gitlab.com/a/b.git"])
+            .await
+            .unwrap();
+        assert!(
+            !has_github_remote(at).await,
+            "somebody else's host is not GitHub",
+        );
+
+        run(at, &["remote", "add", "upstream", "git@github.com:a/b.git"])
+            .await
+            .unwrap();
+        assert!(
+            has_github_remote(at).await,
+            "the ssh spelling counts, and so does a remote that isn't origin",
+        );
+
+        fs::remove_dir_all(&dir).await.ok();
     }
 
     /// Adds a worktree the way Claude Code does — under `.claude/worktrees/`,

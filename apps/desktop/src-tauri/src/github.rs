@@ -14,6 +14,7 @@ use tokio::{process::Command, sync::Mutex};
 use ts_rs::TS;
 
 use crate::binpath;
+use crate::git;
 
 /// Where a check ended up, flattened from the two different shapes GitHub
 /// reports one in. Callers branch on this and never on the wire's own strings.
@@ -876,7 +877,29 @@ pub async fn prs_for_branch(
     cwd: String,
     branch: String,
 ) -> Result<Vec<PullRequest>, PrUnavailable> {
-    prs_for_branch_inner(&cwd, &branch).await.map_err(unavailable)
+    match prs_for_branch_inner(&cwd, &branch).await.map_err(unavailable) {
+        // With no `gh`, *every* directory answers `NoCli` — the first call
+        // fails before anything has looked at the checkout — and the panel
+        // keeps its tab for that reason so the install can be offered. So git
+        // is asked the question `gh` would have answered, or a machine without
+        // the CLI grows a PR tab on sessions that have nothing to do with
+        // GitHub.
+        Err(PrUnavailable::NoCli) if !git::has_github_remote(&cwd).await => {
+            Err(PrUnavailable::NoRemote)
+        }
+        answer => answer,
+    }
+}
+
+/// Probes for `gh` again, and answers whether it is there now.
+///
+/// The panel's recheck button, pressed by a reader who has just installed the
+/// CLI on its say-so. The absence is cached for the life of the process, so
+/// without this the install they were asked to make appears to change nothing.
+#[tauri::command]
+pub async fn recheck_gh() -> bool {
+    binpath::forget_gh();
+    binpath::gh().await.is_some()
 }
 
 /// Maps a raw `gh` failure onto the reason the panel branches on. Split out so

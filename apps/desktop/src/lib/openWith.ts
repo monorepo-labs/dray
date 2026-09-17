@@ -118,6 +118,14 @@ export type Opener = {
   /// Which of them it opens with when the stored one is gone or unset.
   pick: (apps: ExternalApp[], stored: string | null) => ExternalApp | null;
   open: (app: ExternalApp, path: string, line?: number) => Promise<void>;
+  /// The button's face. Absent means "Open", with the app named in the tooltip
+  /// instead — which is what a control in a tab row has room for. A control
+  /// standing alone in an empty state has room to say which app outright, and
+  /// wants to: there is nothing else on that pane to read it off.
+  label?: (app: ExternalApp) => string;
+  /// The tooltip. Absent means `Open in <app>`, which repeats a [label] that
+  /// already names the app.
+  hint?: (app: ExternalApp, path: string) => string;
 };
 
 export const DIR_OPENER: Opener = {
@@ -128,6 +136,40 @@ export const DIR_OPENER: Opener = {
   // Any app beats none — this button has to open *something*.
   pick: (apps, stored) => apps.find((app) => app.path === stored) ?? apps[0] ?? null,
   open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
+};
+
+/// Which terminal the reader last had Dray open for them, by bundle path.
+///
+/// Its own key rather than [OPEN_DIR_KEY]'s: that one holds editors and Finder
+/// too, so a reader who last opened their checkout in VS Code would find this
+/// control standing in a terminal-shaped hole with an editor's name on it.
+export const RUN_IN_KEY = "ade.runInTerminal";
+
+/// A terminal, opened at a directory — nothing is typed and nothing is run.
+///
+/// The PR pane's, where the reader has a command to run and Dray has no
+/// business running it: macOS lets no app put text on another's prompt without
+/// an Accessibility grant, and everything short of that either executes on
+/// their behalf or needs a permission whose denial is silent. So the command is
+/// copied where it is shown and this opens the place to paste it.
+///
+/// `open -a <terminal> <dir>` is the shape [KNOWN](../../src-tauri/src/apps.rs)
+/// already promises for every terminal it lists, so this needs nothing new on
+/// the Rust side.
+export const TERMINAL_OPENER: Opener = {
+  key: RUN_IN_KEY,
+  choices: (apps) => apps.filter((app) => app.kind === "terminal"),
+  // Any terminal beats none, [DIR_OPENER]'s reading rather than the file
+  // opener's: every entry here does the one thing this button promises, so
+  // there is no "correct quiet answer" to prefer over whichever leads the
+  // table. Never empty on a mac — Terminal.app is in it.
+  pick: (apps, stored) => {
+    const terminals = TERMINAL_OPENER.choices(apps);
+    return terminals.find((app) => app.path === stored) ?? terminals[0] ?? null;
+  },
+  open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
+  label: (app) => `Open in ${app.name}`,
+  hint: (app, path) => `Opens ${path} in ${app.name}`,
 };
 
 export const FILE_OPENER: Opener = {

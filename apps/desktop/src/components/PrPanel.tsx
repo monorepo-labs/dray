@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -7,12 +8,14 @@ import {
   ChevronRight,
   CircleDashed,
   CircleSlash,
+  Copy,
   ExternalLink,
   MinusCircle,
   X,
 } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import OpenInButton from "@/components/OpenInButton";
 import PrStateIcon from "@/components/PrStateIcon";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
@@ -25,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { usePullRequest, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
+import { TERMINAL_OPENER } from "@/lib/openWith";
 import {
   firstLine,
   mergeReadiness,
@@ -51,6 +55,10 @@ type PrPanelProps = PrData & {
   /// The branch this session's work lands on. Null for a session in a
   /// directory that is not a repo.
   branch: string | null;
+  /// Where this session runs, which is the directory a terminal opened from
+  /// the missing-CLI state lands in — so the command it was opened to paste
+  /// runs against this repo.
+  cwd: string;
 };
 
 const TONE_TEXT: Record<Tone, string> = {
@@ -62,14 +70,26 @@ const TONE_TEXT: Record<Tone, string> = {
 };
 
 /// What to say when we couldn't ask, in the words of what the reader would do
-/// about it. `no_cli` and `no_remote` hide the tab outright, so they are here
-/// only for the window between a stale render and the tab going away.
+/// about it. `no_remote` hides the tab outright, so it is here only for the
+/// window between a stale render and the tab going away; `no_cli` gets a block
+/// of its own below rather than a line, since it is the one of these the reader
+/// has never heard of.
 const UNAVAILABLE: Record<PrUnavailable["kind"], string> = {
   no_cli: "GitHub CLI (gh) is not installed.",
   not_authenticated: "GitHub CLI is not logged in. Run `gh auth login` to see pull requests here.",
   no_remote: "This directory has no GitHub remote.",
   other: "",
 };
+
+/// Homebrew, because this app is macOS only and that is how `gh` arrives here.
+/// A reader without it has the command to search for, which is the same place
+/// GitHub's own install page would have sent them.
+const INSTALL_COMMAND = "brew install gh";
+const LOGIN_COMMAND = "gh auth login";
+
+/// How long "Copied" stands on the button, matching the composer notices that
+/// make the same offer.
+const COPIED_MS = 1600;
 
 /// The pull requests opened from this session's branch, one collapsible row
 /// each — the shape the changes panel already uses, because the question is the
@@ -79,7 +99,16 @@ const UNAVAILABLE: Record<PrUnavailable["kind"], string> = {
 /// thing here the reader wrote themselves, it is usually the longest thing on
 /// the page, and it pushes the checks — the part that changes — below the fold.
 /// The title links out for anyone who wants the rest.
-export default function PrPanel({ branch, prs, error, loading, acting, act }: PrPanelProps) {
+export default function PrPanel({
+  branch,
+  cwd,
+  prs,
+  error,
+  loading,
+  acting,
+  act,
+  refresh,
+}: PrPanelProps) {
   if (!branch) {
     return <Empty>This session is not on a branch, so it has no pull request.</Empty>;
   }
@@ -87,6 +116,9 @@ export default function PrPanel({ branch, prs, error, loading, acting, act }: Pr
   // An error only takes the pane when there is nothing to take it from. A
   // refresh that failed against rows already on screen is reported under the
   // header instead, where it can't hide what it failed to update.
+  if (!prs.length && (error?.kind === "no_cli" || error?.kind === "not_authenticated")) {
+    return <MissingCli kind={error.kind} cwd={cwd} loading={loading} refresh={refresh} />;
+  }
   if (!prs.length && error) {
     return <Empty tone="error">{UNAVAILABLE[error.kind] || errorText(error)}</Empty>;
   }
@@ -132,6 +164,131 @@ export default function PrPanel({ branch, prs, error, loading, acting, act }: Pr
 
 function errorText(error: PrUnavailable): string {
   return error.kind === "other" ? error.detail : "";
+}
+
+/// The two states the reader can install or log their way out of, and the only
+/// place in the app that says what `gh` is for.
+///
+/// Muted, not the error tone: nothing failed. They are in a GitHub repo — the
+/// backend answers `no_remote` and hides the tab where they are not — and have
+/// simply never set up the thing this pane runs on, which nobody could guess.
+/// So the pane spends its space on the cure rather than on a complaint.
+///
+/// **Copied, never run**, which is the whole shape of the two controls. macOS
+/// lets no app put text on another's prompt without an Accessibility grant, so
+/// the honest offers are "here is the command" and "here is somewhere to paste
+/// it" — and a button that ran an install on the reader's behalf would be this
+/// app deciding what to execute in their shell. The copy sits *on* the command
+/// because that is the thing being taken; the terminal opens at the session's
+/// own directory, so what they paste runs against this repo.
+///
+/// **Recheck rather than "restart Dray"**: `recheck_gh` throws away the cached
+/// absence, so an install made on this pane's say-so is found from this pane.
+/// It says when it still finds nothing, since a button that redraws the same
+/// screen reads as a broken button — the one thing a pane asking for an install
+/// cannot afford to look like. The logged-in half has no such answer to give
+/// (`gh` is right there; only GitHub knows whether the login took), so it
+/// leans on `loading` instead, which is the same promise made quieter.
+export function MissingCli({
+  kind,
+  cwd,
+  loading,
+  refresh,
+}: {
+  kind: "no_cli" | "not_authenticated";
+  cwd: string;
+  loading: boolean;
+  refresh: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [stillMissing, setStillMissing] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+
+  const command = kind === "no_cli" ? INSTALL_COMMAND : LOGIN_COMMAND;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+    } catch (err) {
+      console.error("failed to copy the command", err);
+      return;
+    }
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), COPIED_MS);
+  };
+
+  const recheck = async () => {
+    // Logging in changes nothing about where `gh` is, so that half only asks
+    // GitHub again.
+    if (kind !== "no_cli") return refresh();
+
+    setChecking(true);
+    setStillMissing(false);
+    try {
+      // A rejection is the bridge failing, which is no answer about `gh` — but
+      // it leaves the reader on this same pane either way, so it reads as the
+      // miss it is indistinguishable from.
+      if (await invoke<boolean>("recheck_gh")) refresh();
+      else setStillMissing(true);
+    } catch {
+      setStillMissing(true);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
+      <p className="max-w-64 text-balance text-center text-ui text-muted-foreground">
+        {kind === "no_cli"
+          ? "This branch's pull requests belong here. Dray reads them through GitHub's CLI."
+          : "GitHub's CLI is here but not logged in."}
+      </p>
+
+      {/* The copy rides the command rather than sitting with the buttons
+          below: it acts on this string and nothing else, where the row under
+          it is about where to put it. `pr-1` against `pl-2` — the button
+          carries its own padding on the side the text doesn't. */}
+      <div className="flex items-center gap-1 rounded-md border border-border py-1 pr-1 pl-2 dark:border-input">
+        <code className="font-mono text-code text-foreground">{command}</code>
+        <button
+          type="button"
+          aria-label={`Copy ${command}`}
+          onClick={() => void copy()}
+          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        {/* Opens a terminal and nothing else — see [TERMINAL_OPENER]. Draws
+            nothing where no terminal was detected, which on a mac cannot
+            happen. */}
+        <OpenInButton path={cwd} opener={TERMINAL_OPENER} />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6"
+          disabled={checking || loading}
+          onClick={() => void recheck()}
+        >
+          {checking || loading ? "Looking…" : "Recheck"}
+        </Button>
+      </div>
+
+      {stillMissing && (
+        <p className="max-w-64 text-balance text-center text-ui text-muted-foreground">
+          Still no <code className="text-foreground">gh</code> — Dray looks where your login shell
+          looks.
+        </p>
+      )}
+    </div>
+  );
 }
 
 /// One pull request: a row that says what it is and how big it is, opening onto

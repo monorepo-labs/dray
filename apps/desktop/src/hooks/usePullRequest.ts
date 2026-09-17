@@ -82,15 +82,24 @@ function asUnavailable(e: unknown): PrUnavailable {
 
 /// Whether the tab should exist at all for this session.
 ///
-/// Hidden for the two states where a PR tab is a promise the app can't keep: no
-/// `gh` on the machine, and a directory that is not a GitHub repo. Both are
-/// properties of the setup rather than of the work, so a tab that only ever
-/// says "you can't use this" is chrome on every session forever.
+/// Shown where there is a pull request to draw, and for the two states the
+/// reader can set up their way out of: no `gh`, and a `gh` that is logged out.
 ///
-/// A logged-out `gh` keeps the tab: whoever installed it works with GitHub, and
-/// the fix is one command that the panel can name.
+/// Those two are the whole exception, and the missing one keeps the tab as a
+/// deliberate reversal — it used to hide for the reason `no_remote` still
+/// does. The reader is in a GitHub repo (the backend answers `no_remote` where
+/// they are not), so the tab is the only place the app can say that one command
+/// puts their pull requests on this screen. Nothing else says it: the sidebar
+/// marks fail silently and the handoff row's Create PR only fails inside the
+/// agent's turn.
+///
+/// Every other failure follows the rows, which is what keeps a *refresh* that
+/// failed from taking the tab away from pull requests already on screen — those
+/// draw the sentence under the header instead. With no rows it hides, because a
+/// tab that can only ever say "this went wrong" is one the eye skips past on
+/// every session that will never have a PR.
 export function prTabVisible(prs: PullRequest[], error: PrUnavailable | null): boolean {
-  if (error) return error.kind !== "no_cli" && error.kind !== "no_remote";
+  if (error?.kind === "no_cli" || error?.kind === "not_authenticated") return true;
   return prs.length > 0;
 }
 

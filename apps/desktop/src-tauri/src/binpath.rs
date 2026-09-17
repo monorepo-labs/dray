@@ -15,11 +15,14 @@ use crate::harness::Harness;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
 
 static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
-static GH_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+/// Not a `OnceLock` like the two beside it, because this one caches an
+/// *absence* and that absence is what the reader is being asked to fix — see
+/// [`forget_gh`].
+static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
 static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
@@ -67,10 +70,31 @@ async fn or_bare(name: &str) -> PathBuf {
 /// install it. A spawn error naming the binary would be the same fact worded as
 /// a crash.
 ///
-/// The answer is cached including its absence, so installing `gh` while the app
-/// runs needs a restart — the same bargain the login-shell probe already makes.
+/// The absence is cached too — the probe below costs a login shell and the PR
+/// panel asks on every session — but unlike every other answer here it can be
+/// thrown away, since [`forget_gh`] is how a reader who has just installed `gh`
+/// gets an answer without restarting the app.
 pub async fn gh() -> Option<PathBuf> {
-    cached(&GH_PATH, resolve("gh")).await
+    // Cloned out and the guard dropped before the probe: `resolve` awaits, and
+    // a std guard must not be held across one.
+    let cached = GH_PATH.read().unwrap().clone();
+    if let Some(hit) = cached {
+        return hit;
+    }
+    let found = resolve("gh").await;
+    // Resolved outside the lock: `resolve` spawns a login shell, and holding a
+    // write guard across it would park every other caller behind it.
+    *GH_PATH.write().unwrap() = Some(found.clone());
+    found
+}
+
+/// Forgets where `gh` is, so the next [`gh`] call probes again.
+///
+/// The PR panel's recheck button is the only caller: without it, installing the
+/// CLI the panel just asked for changes nothing until the app is restarted, and
+/// nothing on screen would say so.
+pub fn forget_gh() {
+    *GH_PATH.write().unwrap() = None;
 }
 
 /// The absolute path to a `codex` that can actually speak app-server.
@@ -320,10 +344,14 @@ pub fn known_dirs() -> Vec<PathBuf> {
 /// sibling: mise's npm backend puts the CLI under `installs/npm-<pkg>` and
 /// node under `installs/node`, proto puts globals one dir over from its node.
 pub fn resolved_bin_dirs() -> Vec<PathBuf> {
+    // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
+    // one here that can be empty because nothing has asked yet.
+    let gh = GH_PATH.read().unwrap().clone().flatten();
     [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
         .into_iter()
         .flatten()
-        .chain(GH_PATH.get().into_iter().flatten())
+        .cloned()
+        .chain(gh)
         .filter(|path| path.is_absolute())
         .filter_map(|path| path.parent().map(Path::to_path_buf))
         .chain(node_dir().cloned())

@@ -753,6 +753,7 @@ pub fn run() {
             github::delete_branch,
             github::reopen_pr,
             github::mark_pr_ready,
+            github::recheck_gh,
             quit::confirm_quit,
             quit::dismiss_quit,
             docs::read_doc,

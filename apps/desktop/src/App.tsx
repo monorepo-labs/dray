@@ -1773,7 +1773,11 @@ function App() {
               />
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>
-              <PrPanel branch={prBranch} {...pullRequests} />
+              <PrPanel
+                branch={prBranch}
+                cwd={selectedSession?.cwd ?? ""}
+                {...pullRequests}
+              />
             </TabBody>
             <TabBody active={hasDocsTab && activeTab === "docs"}>
               <DocsPanel

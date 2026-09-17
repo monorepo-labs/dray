@@ -119,7 +119,7 @@ export default function OpenInButton({
               // row is 24px, so 16 leaves 4px of air above and below.
               <AppIcon app={pick} className="size-4" />
             )}
-            Open
+            {opener.label?.(pick) ?? "Open"}
           </button>
         </TooltipTrigger>
         {/* The app's name, which the button itself does not carry — the icon
@@ -132,7 +132,7 @@ export default function OpenInButton({
             run long and truncating one clips exactly where the cure starts —
             the same reason a failed turn's notice wraps. */}
         <TooltipContent side="bottom" className={cn(error && "max-w-xs text-wrap")}>
-          {error ?? `Open in ${pick.name}`}
+          {error ?? opener.hint?.(pick, path) ?? `Open in ${pick.name}`}
         </TooltipContent>
       </Tooltip>
 
