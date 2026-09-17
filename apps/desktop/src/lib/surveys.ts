@@ -43,6 +43,26 @@ let identified: string | null = null;
 /// that is no longer the newest is discarded rather than believed.
 let generation = 0;
 
+/// The launch-time call, so everything downstream can wait on the same one.
+let launch: Promise<void> | null = null;
+
+/// Starts the SDK once, at launch. Later calls hand back the first promise
+/// rather than reading consent again — [`startSurveys`] is what does that.
+export function launchSurveys(): Promise<void> {
+  launch ??= startSurveys();
+  return launch;
+}
+
+/// Whether the SDK is running, once the launch call has finished deciding.
+///
+/// A survey asks this rather than `started` directly, or a read landing before
+/// launch resolves is answered "no SDK" when the truth is "not yet" — and there
+/// is no second ask, since the survey is looked for once.
+export async function surveysStarted(): Promise<boolean> {
+  await launch;
+  return started;
+}
+
 /// Starts PostHog, or does nothing at all where this install has opted out.
 ///
 /// Safe to call more than once: the second call re-reads consent and is what

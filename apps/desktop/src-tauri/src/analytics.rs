@@ -154,11 +154,27 @@ pub async fn identity() -> Option<SurveyIdentity> {
         return None;
     }
 
+    let mut person_properties = base_properties().clone();
+
+    // How many sessions this install has ever held, so a survey can be aimed at
+    // somebody who has used Dray enough to have an opinion of it. PostHog has
+    // no other way to know — nothing it receives counts sessions, and the index
+    // is the only place the answer lives.
+    //
+    // Added here rather than folded into `base_properties`, which is a
+    // `OnceLock` answering once for the life of the process where this moves
+    // every time a session is made. A failed read leaves the property absent,
+    // which a survey targeting a minimum reads as **not** matching — the safe
+    // direction, since the cure is opening the app again.
+    if let Ok(sessions) = crate::store::read_index().await {
+        person_properties.insert("session_count".into(), sessions.len().into());
+    }
+
     Some(SurveyIdentity {
         key: key.to_string(),
         host: host().to_string(),
         distinct_id: settings::ensure_install_id().await?,
-        person_properties: base_properties().clone(),
+        person_properties,
     })
 }
 
