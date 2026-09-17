@@ -15,6 +15,7 @@ use crate::harness::Harness;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
 
@@ -23,6 +24,9 @@ static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// *absence* and that absence is what the reader is being asked to fix — see
 /// [`forget_gh`].
 static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
+/// Bumped by every [`forget_gh`], so a probe already running when the reader
+/// installed `gh` cannot put its own miss back over the answer.
+static GH_GENERATION: AtomicU64 = AtomicU64::new(0);
 static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
@@ -81,10 +85,23 @@ pub async fn gh() -> Option<PathBuf> {
     if let Some(hit) = cached {
         return hit;
     }
+
+    // Read before the probe, compared after it — the same bargain the issue
+    // caches make with their own generation. A probe that started before
+    // [`forget_gh`] is answering a question about the machine as it was, and
+    // the reader has since installed the very binary it did not find: publish
+    // it and the recheck they just made is undone by a read older than it.
+    let generation = GH_GENERATION.load(Ordering::Acquire);
     let found = resolve("gh").await;
+
     // Resolved outside the lock: `resolve` spawns a login shell, and holding a
     // write guard across it would park every other caller behind it.
-    *GH_PATH.write().unwrap() = Some(found.clone());
+    let mut slot = GH_PATH.write().unwrap();
+    if GH_GENERATION.load(Ordering::Acquire) == generation {
+        *slot = Some(found.clone());
+    }
+    // Answered either way. The caller asked before the forget and this is the
+    // honest answer to *their* question; only the cache has to refuse it.
     found
 }
 
@@ -93,8 +110,14 @@ pub async fn gh() -> Option<PathBuf> {
 /// The PR panel's recheck button is the only caller: without it, installing the
 /// CLI the panel just asked for changes nothing until the app is restarted, and
 /// nothing on screen would say so.
+///
+/// Bumping under the same lock the value is written through is what makes the
+/// refusal above stick: a probe cannot slip between the clear and the bump and
+/// come back looking current.
 pub fn forget_gh() {
-    *GH_PATH.write().unwrap() = None;
+    let mut slot = GH_PATH.write().unwrap();
+    *slot = None;
+    GH_GENERATION.fetch_add(1, Ordering::Release);
 }
 
 /// The absolute path to a `codex` that can actually speak app-server.

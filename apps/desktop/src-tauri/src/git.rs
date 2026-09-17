@@ -118,14 +118,38 @@ fn parse_worktree_branch_names(raw: &str) -> Vec<String> {
 /// not just `origin`, since a fork workflow leaves `origin` on the fork and the
 /// answer is the same either way.
 ///
-/// Both URL spellings hold `github.com`, so one substring covers `https://` and
-/// `git@`. An enterprise host does not, and reads here as no GitHub remote —
-/// the cost is a missing install prompt for a reader who is already using a
-/// GitHub this app cannot name, never a wrong answer for anyone with `gh`.
+/// Compared on the URL's **host**, never as a substring of the output: a
+/// remote *named* `github.com-mirror` pointing at somewhere else would pass a
+/// contains-check, and so would the host `github.com.example.net` — the trap
+/// `is_upload` documents on the tracker's own uploads. An enterprise host is
+/// not `github.com` and reads here as no GitHub remote, costing a missing
+/// install prompt to a reader already on a GitHub this app cannot name.
 pub async fn has_github_remote(cwd: &str) -> bool {
-    git(cwd, &["remote", "-v"])
-        .await
-        .is_some_and(|out| out.contains("github.com"))
+    // `remote -v` is `<name>\t<url> (fetch)`, so the URL is the second field
+    // and the name is deliberately never looked at.
+    git(cwd, &["remote", "-v"]).await.is_some_and(|out| {
+        out.lines()
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .any(|url| remote_host(url) == Some("github.com"))
+    })
+}
+
+/// The host out of a git remote URL, or `None` for a local path.
+///
+/// Hand-rolled rather than a URL parser because half of these are not URLs:
+/// `git@github.com:owner/repo.git` is scp syntax, which `url::Url` refuses
+/// outright. Everything else — `https://`, `ssh://`, `git://` — differs from it
+/// only in having a scheme to drop first.
+fn remote_host(url: &str) -> Option<&str> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    // Any userinfo goes with it, `@` being what separates the two.
+    let authority = after_scheme.rsplit_once('@').map_or(after_scheme, |(_, host)| host);
+    // Whichever comes first ends the host: `/` on a URL path, `:` on a port or
+    // on scp syntax's own separator.
+    let host = authority.split(['/', ':']).next().filter(|h| !h.is_empty())?;
+    // A relative path (`../mirror.git`) has no host, and neither has a plain
+    // one — both would otherwise answer with their first segment.
+    (!url.starts_with('.') && !url.starts_with('/')).then_some(host)
 }
 
 /// The ref a `-w` worktree forks from. Mirrors the CLI's own resolution, which
@@ -1814,6 +1838,16 @@ mod tests {
             "somebody else's host is not GitHub",
         );
 
+        // A remote whose *name* holds the host, pointing somewhere else: what a
+        // contains-check over `remote -v` cannot tell from the real thing.
+        run(at, &["remote", "add", "github.com-mirror", "https://example.test/a/b.git"])
+            .await
+            .unwrap();
+        assert!(
+            !has_github_remote(at).await,
+            "the name is not the host",
+        );
+
         run(at, &["remote", "add", "upstream", "git@github.com:a/b.git"])
             .await
             .unwrap();
@@ -1823,6 +1857,31 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The host rule on its own, where a repo per case would be a repo per
+    /// line. The lookalikes are the point: each one passes a substring test.
+    #[test]
+    fn a_remote_url_answers_with_its_host_alone() {
+        for url in [
+            "https://github.com/a/b.git",
+            "git@github.com:a/b.git",
+            "ssh://git@github.com/a/b.git",
+            "git://github.com/a/b",
+            "https://token@github.com/a/b.git",
+        ] {
+            assert_eq!(remote_host(url), Some("github.com"), "{url}");
+        }
+
+        for url in [
+            "https://github.com.example.net/a/b.git",
+            "git@notgithub.com:a/b.git",
+            "https://gitlab.com/a/b.git",
+            "/srv/mirrors/github.com/a/b.git",
+            "../github.com/a/b.git",
+        ] {
+            assert_ne!(remote_host(url), Some("github.com"), "{url}");
+        }
     }
 
     /// Adds a worktree the way Claude Code does — under `.claude/worktrees/`,
