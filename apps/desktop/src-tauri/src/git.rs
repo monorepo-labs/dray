@@ -141,15 +141,23 @@ pub async fn has_github_remote(cwd: &str) -> bool {
 /// outright. Everything else — `https://`, `ssh://`, `git://` — differs from it
 /// only in having a scheme to drop first.
 fn remote_host(url: &str) -> Option<&str> {
-    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let after_scheme = match url.split_once("://") {
+        Some((_, rest)) => rest,
+        // No scheme leaves scp syntax as the only other form carrying a host,
+        // and its colon is what says so. Required rather than assumed, or a
+        // local path — `github.com/mirrors/repo` is a legal relative remote —
+        // hands its first segment back as a hostname. A colon *after* a slash
+        // is a path that merely holds one.
+        None => match url.split_once(':') {
+            Some((head, _)) if !head.contains('/') => url,
+            _ => return None,
+        },
+    };
     // Any userinfo goes with it, `@` being what separates the two.
     let authority = after_scheme.rsplit_once('@').map_or(after_scheme, |(_, host)| host);
     // Whichever comes first ends the host: `/` on a URL path, `:` on a port or
     // on scp syntax's own separator.
-    let host = authority.split(['/', ':']).next().filter(|h| !h.is_empty())?;
-    // A relative path (`../mirror.git`) has no host, and neither has a plain
-    // one — both would otherwise answer with their first segment.
-    (!url.starts_with('.') && !url.starts_with('/')).then_some(host)
+    authority.split(['/', ':']).next().filter(|host| !host.is_empty())
 }
 
 /// The ref a `-w` worktree forks from. Mirrors the CLI's own resolution, which
@@ -1879,6 +1887,9 @@ mod tests {
             "https://gitlab.com/a/b.git",
             "/srv/mirrors/github.com/a/b.git",
             "../github.com/a/b.git",
+            // A legal relative remote, and the one local path that reads as a
+            // host: no scheme and no scp colon to say otherwise.
+            "github.com/mirrors/repo",
         ] {
             assert_ne!(remote_host(url), Some("github.com"), "{url}");
         }
