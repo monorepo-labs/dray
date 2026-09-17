@@ -31,11 +31,25 @@ let started = false;
 /// goes stale exactly there and nowhere else.
 let identified: string | null = null;
 
+/// Which consent answer is the current one. Taken before the read and checked
+/// after it, the same bargain `navGen` makes in `App` and the issue caches make
+/// with theirs.
+///
+/// The startup call is fire-and-forget, so it can still be suspended at its own
+/// read when the reader opts out and the settings call makes a second one. The
+/// answers can then land in either order — and an *older* one landing last used
+/// to be acted on, which starts the SDK under an identity consent has since
+/// withdrawn. The refusal has to win however the reads interleave, so a read
+/// that is no longer the newest is discarded rather than believed.
+let generation = 0;
+
 /// Starts PostHog, or does nothing at all where this install has opted out.
 ///
 /// Safe to call more than once: the second call re-reads consent and is what
 /// the settings toggle goes through.
 export async function startSurveys(): Promise<void> {
+  const mine = ++generation;
+
   let identity: SurveyIdentity | null = null;
   try {
     identity = await invoke<SurveyIdentity | null>("analytics_identity");
@@ -45,6 +59,12 @@ export async function startSurveys(): Promise<void> {
     console.error("[surveys]", e);
     return;
   }
+
+  // Somebody asked after this read started, so their answer is the current one
+  // and this is a reading of consent as it used to be. Dropped rather than
+  // acted on, in *both* directions — a stale `null` that opted the SDK out
+  // would be as wrong as a stale identity that started it.
+  if (mine !== generation) return;
 
   if (!identity) {
     // Opted out. Nothing to start, and anything already running stops — the
