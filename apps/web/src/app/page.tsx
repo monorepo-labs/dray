@@ -3,6 +3,7 @@ import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import { DownloadButton } from "@/components/DownloadButton";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
+import { FxGlyph } from "@/components/FxGlyph";
 import { Nav } from "@/components/Nav";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
@@ -63,11 +64,16 @@ export default function Home() {
           <span className="whitespace-nowrap">
             <OpenAIGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
             Codex
-          </span>{" "}
-          and{" "}
+          </span>
+          ,{" "}
           <span className="whitespace-nowrap">
             <PiGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
             pi
+          </span>{" "}
+          and{" "}
+          <span className="whitespace-nowrap">
+            <FxGlyph className="mr-1.5 inline-block size-[0.9em] align-[-0.12em]" />
+            fx
           </span>{" "}
           — on your existing subscriptions. Fast, and it feels right.
         </p>
