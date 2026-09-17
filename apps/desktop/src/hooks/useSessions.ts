@@ -14,7 +14,7 @@ import {
 } from "@/hooks/useNotices";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { DEFAULT_MODEL_FOR, fxListFor, fxProviderOf, isUnsetModel, rememberedModel, UNSET_MODEL, usableEffort, usableFxModel, usableModel } from "@/lib/model";
+import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
@@ -1530,14 +1530,13 @@ useEffect(() => {
       // A model belongs to exactly one harness, so switching harness leaves the
       // pick naming something the new one cannot run. Repaired here, where the
       // real list has just landed, rather than guessed at when the toggle moved.
-      // fx repairs per provider, restoring that provider's last model — but
-      // never a pick the cache can name a provider for: that is a session's
-      // own model, and this read may be landing after the reader moved onto
-      // it from the session whose switch asked for it.
-      setModelId((current) => {
-        if (harness !== "fx") return usableModel(list, current, harness);
-        return fxProviderOf(readFxModelCache(), current) ? current : repairFxModel(list, current);
-      });
+      // fx repairs per provider, restoring that provider's last model — see
+      // `landedFxModel` for the pick it must leave alone.
+      setModelId((current) =>
+        harness === "fx"
+          ? landedFxModel(readFxModelCache(), list, current, readFxPicks())
+          : usableModel(list, current, harness),
+      );
     })
     .finally(() => {
       if (!cancelled) setLoadingModels(false);
@@ -1573,17 +1572,13 @@ const reloadModels = () => setModelsGeneration((n) => n + 1);
 /// Nothing happens for a provider never visited (gateway on a cold install),
 /// which is the one case that still waits on the probe's loading state.
 const seedFxModels = (provider: string) => {
-  const cached = readFxModelCache()[provider];
+  const cache = readFxModelCache();
+  const cached = cache[provider];
+  if (cached?.length) setModelsByHarness((prev) => ({ ...prev, fx: cached }));
   // Restore this provider's last model at once too, so the trigger and the
-  // list's own mark are right on the same frame the rows appear. With nothing
-  // cached the pick still has to leave the old provider, or the list on
-  // screen keeps following it and the switch reads as having done nothing.
-  if (!cached?.length) {
-    setModelId(readFxPicks()[provider] ?? UNSET_MODEL);
-    return;
-  }
-  setModelsByHarness((prev) => ({ ...prev, fx: cached }));
-  setModelId((current) => repairFxModel(cached, current));
+  // list's own mark are right on the same frame the rows appear — and with
+  // nothing cached, `seededFxModel` says why the pick still moves.
+  setModelId((current) => seededFxModel(cache, provider, current, readFxPicks()));
 };
 
 useEffect(() => {

@@ -136,6 +136,34 @@ export function fxListFor(
   return cache[own] ?? active;
 }
 
+/// The pick once fx's global list lands. Kept where the cache names its
+/// provider — that is a session's own model, and the read may be landing after
+/// the reader moved onto it from the session whose switch asked for it — else
+/// repaired against the landed list as [`usableFxModel`] does.
+export function landedFxModel(
+  cache: Record<string, Model[]>,
+  landed: Model[],
+  current: ModelId,
+  picks: Record<string, ModelId>,
+): ModelId {
+  return fxProviderOf(cache, current) ? current : usableFxModel(landed, current, picks);
+}
+
+/// The pick the moment a provider is switched to: repaired against that
+/// provider's cached list, or with none cached its last pick — the pick still
+/// has to leave the old provider, or [`fxListFor`] keeps drawing the old
+/// provider's list and the switch reads as having done nothing.
+export function seededFxModel(
+  cache: Record<string, Model[]>,
+  provider: string,
+  current: ModelId,
+  picks: Record<string, ModelId>,
+): ModelId {
+  const cached = cache[provider];
+  if (!cached?.length) return picks[provider] ?? UNSET_MODEL;
+  return usableFxModel(cached, current, picks);
+}
+
 /// The effort a model will actually run at, given what the reader last picked
 /// for it.
 ///
