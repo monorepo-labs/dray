@@ -43,26 +43,6 @@ let identified: string | null = null;
 /// that is no longer the newest is discarded rather than believed.
 let generation = 0;
 
-/// The launch-time call, so everything downstream can wait on the same one.
-let launch: Promise<void> | null = null;
-
-/// Starts the SDK once, at launch. Later calls hand back the first promise
-/// rather than reading consent again — [`startSurveys`] is what does that.
-export function launchSurveys(): Promise<void> {
-  launch ??= startSurveys();
-  return launch;
-}
-
-/// Whether the SDK is running, once the launch call has finished deciding.
-///
-/// A survey asks this rather than `started` directly, or a read landing before
-/// launch resolves is answered "no SDK" when the truth is "not yet" — and there
-/// is no second ask, since the survey is looked for once.
-export async function surveysStarted(): Promise<boolean> {
-  await launch;
-  return started;
-}
-
 /// Starts PostHog, or does nothing at all where this install has opted out.
 ///
 /// Safe to call more than once: the second call re-reads consent and is what
@@ -120,17 +100,6 @@ export async function startSurveys(): Promise<void> {
       capture_pageview: false,
       capture_pageleave: false,
       disable_session_recording: true,
-      // The SDK fetches surveys and never draws one. `disable_surveys` would
-      // take the fetch with it; this leaves `getActiveMatchingSurveys` — the
-      // discovery call — working while the display loop stays quiet, which is
-      // what lets `SurveyCard` be the only card on screen.
-      //
-      // It is also what frees the survey from having to be typed `api` in
-      // PostHog. That type exists on the wire but the UI need not offer it, and
-      // an ordinary **popover** survey left to itself would draw PostHog's card
-      // beside ours. Suppressed here instead, so how the survey is written over
-      // there cannot put two questions on screen.
-      disable_surveys_automatic_display: true,
       loaded: (ph) => ph.setPersonProperties(found.personProperties),
     });
     return;

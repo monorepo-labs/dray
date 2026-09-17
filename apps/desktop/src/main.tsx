@@ -4,7 +4,7 @@ import "streamdown/styles.css";
 import App from "./App";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
-import { launchSurveys } from "@/lib/surveys";
+import { startSurveys } from "@/lib/surveys";
 
 // Coming back to check on a session an agent is running sends no prompt and
 // starts nothing, so it is the one kind of use the backend's own call sites
@@ -17,7 +17,7 @@ onFocusChange((focused) => {
 // Here for the same reason, and not in an effect for the same reason: the SDK
 // lives for the process, and a mount that runs twice would initialise it twice.
 // It refuses itself where the install has opted out, so this is unconditional.
-void launchSurveys();
+void startSurveys();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

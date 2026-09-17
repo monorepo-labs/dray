@@ -15,7 +15,6 @@ import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
-import SurveyCard from "@/components/SurveyCard";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
@@ -39,7 +38,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
-import { useSurvey } from "@/hooks/useSurvey";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { trackFeature } from "@/lib/analytics";
@@ -696,10 +694,6 @@ function App() {
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
-
-  // Looked for once, at launch. Who gets one and when is PostHog's answer, not
-  // this app's — see `useSurvey`.
-  const { survey, close: closeSurvey } = useSurvey();
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -2051,14 +2045,6 @@ function App() {
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
-    {/* Opposite corner to the notices, which are top-left: both can be up at
-        once, and a question is the one of the two that waits for the reader
-        rather than expiring on its own. */}
-    {survey && (
-      <div className="pointer-events-none fixed right-3 bottom-3 z-50 flex justify-end">
-        <SurveyCard survey={survey} onClose={closeSurvey} />
-      </div>
-    )}
     <DragGhost />
     <QuitDialog />
     <LinkDialog />
