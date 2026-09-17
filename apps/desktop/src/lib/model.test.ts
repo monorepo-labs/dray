@@ -8,6 +8,7 @@ import {
   UNSET_MODEL,
   usableEffort,
   usableFxModel,
+  fxListFor,
   usableModel,
 } from "./model";
 import type { Effort, Model } from "@/types/events";
@@ -137,6 +138,27 @@ describe("usableFxModel", () => {
   /// An empty list has not arrived yet, so the pick stands.
   it("leaves the pick alone until the list lands", () => {
     expect(usableFxModel([], "gpt56_sol" as never, { gateway: "x" })).toBe("gpt56_sol");
+  });
+});
+
+describe("fxListFor", () => {
+  const GATEWAY = [model("anthropic/fable", "gateway")];
+  const CODEX = [model("gpt-5.6-sol", "codex")];
+  const cache = { gateway: GATEWAY, codex: CODEX };
+
+  /// The bug: fx's provider moved under session A, and session B's picker drew
+  /// A's list. B's pick names its own provider, so its list follows the pick.
+  it("draws the picked model's provider over the active one", () => {
+    expect(fxListFor(cache, "anthropic/fable" as never, CODEX)).toBe(GATEWAY);
+  });
+
+  it("draws the active list where the pick is on it", () => {
+    expect(fxListFor(cache, "gpt-5.6-sol" as never, CODEX)).toBe(CODEX);
+  });
+
+  it("draws the active list for a pick no provider names, and for none", () => {
+    expect(fxListFor(cache, "nobody/knows" as never, CODEX)).toBe(CODEX);
+    expect(fxListFor(cache, UNSET_MODEL, CODEX)).toBe(CODEX);
   });
 });
 

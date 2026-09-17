@@ -110,6 +110,32 @@ export function usableFxModel(
   return UNSET_MODEL;
 }
 
+/// The provider serving this model, from the lists fx has answered so far, or
+/// `undefined` where none of them names it. What lets a session's model say
+/// which provider it belongs to without a field on the index for it.
+export function fxProviderOf(cache: Record<string, Model[]>, id: ModelId): string | undefined {
+  if (isUnsetModel(id)) return undefined;
+  return Object.keys(cache).find((provider) => cache[provider].some((m) => m.id === id));
+}
+
+/// The fx list the composer draws: the one serving `picked`, where the cache
+/// knows it, else `active` — the list fx's global provider last answered.
+///
+/// fx's provider is one setting for the whole machine, and the composer used to
+/// draw its list from that alone — so switching provider in one session put the
+/// new provider's thumb and rows under every other fx session's picker, drew
+/// their models as bare ids, and let ⇧⇥ cycle them onto the wrong provider.
+/// The pick is per session and names its provider, so the list follows it.
+export function fxListFor(
+  cache: Record<string, Model[]>,
+  picked: ModelId,
+  active: Model[],
+): Model[] {
+  const own = fxProviderOf(cache, picked);
+  if (!own || own === active[0]?.provider) return active;
+  return cache[own] ?? active;
+}
+
 /// The effort a model will actually run at, given what the reader last picked
 /// for it.
 ///
