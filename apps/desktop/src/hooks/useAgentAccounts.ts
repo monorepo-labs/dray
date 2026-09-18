@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
@@ -27,10 +27,19 @@ export function useAgentAccounts(cwd: string) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Which read owns the rows. `cwd` can move under a mounted tab, and four
+  // child processes take long enough that the read it started can land *after*
+  // the one that replaced it — which would draw one directory's accounts under
+  // another's, and clear `busy` while the live probe is still running.
+  const generation = useRef(0);
+
   const load = useCallback(async () => {
+    const mine = ++generation.current;
     setBusy(true);
     try {
-      setAgents(await invoke<AgentAccounts[]>("agent_accounts", { cwd }));
+      const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd });
+      if (mine !== generation.current) return;
+      setAgents(next);
       // A read that worked describes the page now, so whatever failed before it
       // no longer does — and the sentence is the only thing that would still be
       // claiming otherwise.
@@ -39,9 +48,9 @@ export function useAgentAccounts(cwd: string) {
       // The list is kept: a failed refresh must not blank rows that were read
       // a moment ago and are still true. Same reading the PR marks cache takes
       // of a failed `gh`.
-      setError(String(err));
+      if (mine === generation.current) setError(String(err));
     } finally {
-      setBusy(false);
+      if (mine === generation.current) setBusy(false);
     }
   }, [cwd]);
 
