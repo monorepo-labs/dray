@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, type LucideIcon } from "lucide-react";
 import { Fragment } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -24,10 +25,33 @@ export default function ShortcutKeys({
         <Fragment key={i}>
           {i > 0 && <span className="text-muted-foreground">/</span>}
           {caps.map((cap, j) => (
-            <Kbd key={j}>{cap}</Kbd>
+            <Kbd key={j}>{capContent(cap)}</Kbd>
           ))}
         </Fragment>
       ))}
     </KbdGroup>
   );
+}
+
+/// The arrow glyphs `keyLabel` spells, as icons.
+///
+/// A `←` is a text character drawn on the font's own baseline, so inside a cap
+/// it sits a pixel high beside `⌘` and thins out at keycap size. The icon is
+/// centred in its own box and stroked like every other glyph in the chrome.
+/// Read off the formatted cap rather than the chord, since two chords sharing
+/// modifiers fold into one cap (`←→`) before this ever sees them.
+const ARROW_ICONS: Record<string, LucideIcon> = {
+  "\u2190": ArrowLeft,
+  "\u2191": ArrowUp,
+  "\u2192": ArrowRight,
+  "\u2193": ArrowDown,
+};
+
+function capContent(cap: string) {
+  const chars = [...cap];
+  if (!chars.some((c) => ARROW_ICONS[c])) return cap;
+  return chars.map((c, i) => {
+    const Icon = ARROW_ICONS[c];
+    return Icon ? <Icon key={i} /> : <span key={i}>{c}</span>;
+  });
 }

@@ -32,6 +32,8 @@ export const SHORTCUTS = [
   { id: "session.next", label: "Next session", group: "Sessions", chord: k("ArrowDown", { shift: true }) },
   { id: "group.prev", label: "Previous project", group: "Sessions", chord: k("ArrowUp", { alt: true }) },
   { id: "group.next", label: "Next project", group: "Sessions", chord: k("ArrowDown", { alt: true }) },
+  { id: "filter.prev", label: "Previous project filter", group: "Sessions", chord: k("ArrowLeft", { alt: true }) },
+  { id: "filter.next", label: "Next project filter", group: "Sessions", chord: k("ArrowRight", { alt: true }) },
   { id: "search", label: "Search sessions", group: "Sessions", chord: k("f") },
   { id: "pane.1", label: "Focus pane 1", group: "Sessions", chord: k("1") },
   { id: "pane.2", label: "Focus pane 2", group: "Sessions", chord: k("2") },

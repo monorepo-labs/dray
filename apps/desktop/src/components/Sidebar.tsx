@@ -7,7 +7,6 @@ import {
   CircleDot,
   GitBranchPlus,
   Unlink,
-  Inbox,
   Pin,
   Plus,
   Search,
@@ -1134,7 +1133,7 @@ export default function Sidebar({
         <div className="flex items-center gap-0.5">
           {/* The icon names the destination, not the current view: `CheckCheck`
               (the row control's single `Check`, doubled — every settled one) goes
-              to the settled list, `Inbox` comes back. A pressed state on one icon
+              to the settled list, `Undo2` comes back. A pressed state on one icon
               can't say that on its own, so the glyph swaps instead. */}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1145,7 +1144,7 @@ export default function Sidebar({
                 onClick={onToggleArchived}
                 className="text-muted-foreground hover:text-foreground"
               >
-                {showArchived ? <Inbox /> : <CheckCheck />}
+                {showArchived ? <Undo2 /> : <CheckCheck />}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -1527,6 +1526,23 @@ function ProjectFilter({
   // last entry would just look broken.
   const cycle = () => onChange(entries[(activeIndex + 1) % entries.length].path);
 
+  // The dots are the one thing on screen that says which entry of how many,
+  // which is exactly what a switch raises — so a switch shows them for a beat
+  // whether or not the cursor is anywhere near. ⌘⌥←/→ moves this control with
+  // the pointer nowhere near it, and hover-only left that step invisible.
+  // Skipped on mount, since arriving is not switching.
+  const [flashing, setFlashing] = useState(false);
+  const settled = useRef(false);
+  useEffect(() => {
+    if (!settled.current) {
+      settled.current = true;
+      return;
+    }
+    setFlashing(true);
+    const done = setTimeout(() => setFlashing(false), 1200);
+    return () => clearTimeout(done);
+  }, [activeIndex]);
+
   // The band is the control, not the label: aiming at 20 characters of text
   // is what read as the tap working only sometimes. Nothing inside is a button
   // — one click target, so there is no inner element to swallow a tap or fire
@@ -1570,19 +1586,43 @@ function ProjectFilter({
         <DotTrack
           count={entries.length}
           activeIndex={activeIndex}
-          className="opacity-0 transition-opacity duration-150 group-hover/projects:opacity-100"
+          className={cn(
+            "transition-opacity duration-150 group-hover/projects:opacity-100",
+            flashing ? "opacity-100" : "opacity-0",
+          )}
         />
       </div>
     </div>
   );
 
-  if (!menuMode) return band;
+  // The chord rides a real tooltip rather than sitting in the band, which is
+  // where the rest of the app's chrome keeps one — inline it took width from a
+  // project name already truncating at 40 characters, and appearing on hover
+  // slid the dots sideways as it arrived.
+  //
+  // Its own delay, against the provider's zero: everywhere else a tooltip is
+  // the only thing a bare icon has to say for itself, where this control names
+  // itself on its face. Passing over it on the way to the list below should not
+  // put a chip on screen.
+  const withHint = (trigger: React.ReactNode) =>
+    entries.length < 2 ? (
+      trigger
+    ) : (
+      <Tooltip delayDuration={400}>
+        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="px-1.5">
+          <ShortcutKeys ids={["filter.prev", "filter.next"]} />
+        </TooltipContent>
+      </Tooltip>
+    );
+
+  if (!menuMode) return withHint(band);
 
   // The band is the trigger, so a tap anywhere on it opens the list rather
   // than a second smaller target on the label.
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>{band}</DropdownMenuTrigger>
+      {withHint(<DropdownMenuTrigger asChild>{band}</DropdownMenuTrigger>)}
       <DropdownMenuContent align="start" className="min-w-52">
         <DropdownMenuRadioGroup
           // Radix radio values are strings, so All rides on the empty one — no
