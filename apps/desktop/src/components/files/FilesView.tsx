@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PanelLeft,
   PanelLeftClose,
@@ -153,6 +153,7 @@ export default function FilesView({
       style={style}
     >
       <Filter
+        active={active}
         query={query}
         onQuery={(next) => {
           setQuery(next);
@@ -252,6 +253,7 @@ export default function FilesView({
 /// and already watched — and an empty box draws the *tree*, since that is what
 /// an empty filter means here rather than a ranked list of everything.
 function Filter({
+  active,
   query,
   onQuery,
   matches,
@@ -262,6 +264,7 @@ function Filter({
   onSide,
   onShown,
 }: {
+  active: boolean;
   query: string;
   onQuery: (next: string) => void;
   matches: readonly { path: string }[];
@@ -272,6 +275,15 @@ function Filter({
   onSide: (next: Side) => void;
   onShown: (next: boolean) => void;
 }) {
+  // Arriving on the view puts the caret here, since searching is what the
+  // reader came for more often than walking the tree — and the tree is one
+  // Escape away. Only on arrival: opening a file keeps the view active, so
+  // nothing pulls focus back out from under them.
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (active) box.current?.focus();
+  }, [active]);
+
   const other: Side = side === "left" ? "right" : "left";
   const Icon = side === "left" ? PanelRight : PanelLeft;
 
@@ -280,6 +292,7 @@ function Filter({
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
+          ref={box}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
