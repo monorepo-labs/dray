@@ -280,6 +280,11 @@ const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
 
+/// How many settled rows the window opens by, and opens by again at each edge.
+/// Deep enough that the first step always overflows the sidebar — a window that
+/// fits would fire no scroll event and never open again.
+const SETTLED_STEP = 40;
+
 /// What the app has heard about every session this run.
 ///
 /// Optional throughout, and its absence is not a default so much as a different
@@ -917,6 +922,48 @@ export default function Sidebar({
     [groups],
   );
 
+  // The settled list only ever grows, and every row in it mounts a context
+  // menu, a PR mark and an orb — so it draws a window that opens as the reader
+  // scrolls rather than mounting a whole history at once. The active list is a
+  // worklist and stays whole. Paging the read itself would buy nothing: the
+  // index is one file parsed whole however few entries are asked for.
+  const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
+  useEffect(() => {
+    setSettledLimit(SETTLED_STEP);
+  }, [showArchived, search, projectFilter, space]);
+
+  // ⌘⇧↑/↓ steps every row the walk knows about, drawn or not, so a step past
+  // the window opens it far enough to draw what it landed on — otherwise the
+  // selection moves with nothing in the sidebar saying where to.
+  useEffect(() => {
+    if (!showArchived || !selectedSessionId) return;
+    let n = 0;
+    for (const group of groups) {
+      for (const row of group.rows) {
+        if (row.item.sessionId === selectedSessionId) {
+          if (n >= settledLimit)
+            setSettledLimit(Math.ceil((n + 1) / SETTLED_STEP) * SETTLED_STEP);
+          return;
+        }
+        n += 1;
+      }
+    }
+  }, [showArchived, selectedSessionId, groups, settledLimit]);
+
+  // A prefix of `groups`, so `groupKeys` still indexes by position.
+  const drawn = useMemo(() => {
+    if (!showArchived || rowCount <= settledLimit) return groups;
+    let left = settledLimit;
+    const out: SessionGroup[] = [];
+    for (const group of groups) {
+      if (left <= 0) break;
+      out.push(group.rows.length <= left ? group : { ...group, rows: group.rows.slice(0, left) });
+      left -= group.rows.length;
+    }
+    return out;
+  }, [groups, showArchived, settledLimit, rowCount]);
+  const more = showArchived && rowCount > settledLimit;
+
   // A run's identity is its project and its position among that project's runs,
   // never the state it holds. An unsplit project's state is whatever its
   // strongest row happens to be, so keying on that remounted every row in the
@@ -1157,11 +1204,25 @@ export default function Sidebar({
 
       {/* No right padding: the scrollbar gutter is the right-hand spacing. The
           rows balance the track's extra width themselves with `pr-0.5`. */}
-      <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0">
+      <div
+        className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0"
+        // Nearing the bottom opens the settled window further. Bound to the
+        // container that already scrolls rather than to a sentinel row and an
+        // observer, which is one more thing to mount per step.
+        onScroll={
+          more
+            ? (e) => {
+                const el = e.currentTarget;
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 240)
+                  setSettledLimit((n) => n + SETTLED_STEP);
+              }
+            : undefined
+        }
+      >
         {rowCount === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          groups.map((group, index) => {
+          drawn.map((group, index) => {
             // A project heading is drawn only where the list spans projects:
             // under a filter the label above already names the one project
             // every row belongs to, and a heading repeating it would be a
@@ -1172,7 +1233,7 @@ export default function Sidebar({
             // Only the first of a project's state runs names the project. The
             // rest sit under it and repeating it on each would say the runs
             // belonged to different repos.
-            const previous = groups[index - 1];
+            const previous = drawn[index - 1];
             const opensProject =
               group.kind === "project" &&
               (previous?.kind !== "project" ||
@@ -1279,7 +1340,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {rowCount > 1 && (
+        {rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!showArchived && splits.length > 0}
