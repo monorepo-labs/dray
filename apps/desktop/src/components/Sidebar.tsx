@@ -281,8 +281,6 @@ const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
 const STATE_SPLIT_MIN = 3;
 
 /// How many settled rows the window opens by, and opens by again at each edge.
-/// Deep enough that the first step always overflows the sidebar — a window that
-/// fits would fire no scroll event and never open again.
 const SETTLED_STEP = 40;
 
 /// What the app has heard about every session this run.
@@ -964,6 +962,27 @@ export default function Sidebar({
   }, [groups, showArchived, settledLimit, rowCount]);
   const more = showArchived && rowCount > settledLimit;
 
+  // A window the list does not overflow fires no scroll event, so scrolling
+  // alone strands every row past the first step on a tall screen — and on a
+  // sidebar dragged wider, where the rows the reader can see stay the same but
+  // the question is asked again. The observer asks it at every size the list is
+  // drawn at, and `settledLimit` in the deps is what lets one step follow
+  // another until the list overflows or runs out.
+  const listRef = useRef<HTMLDivElement>(null);
+  const openMore = () => {
+    const el = listRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240)
+      setSettledLimit((n) => n + SETTLED_STEP);
+  };
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !more) return;
+    openMore();
+    const observer = new ResizeObserver(openMore);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [more, settledLimit]);
+
   // A run's identity is its project and its position among that project's runs,
   // never the state it holds. An unsplit project's state is whatever its
   // strongest row happens to be, so keying on that remounted every row in the
@@ -1205,19 +1224,12 @@ export default function Sidebar({
       {/* No right padding: the scrollbar gutter is the right-hand spacing. The
           rows balance the track's extra width themselves with `pr-0.5`. */}
       <div
+        ref={listRef}
         className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0"
         // Nearing the bottom opens the settled window further. Bound to the
         // container that already scrolls rather than to a sentinel row and an
         // observer, which is one more thing to mount per step.
-        onScroll={
-          more
-            ? (e) => {
-                const el = e.currentTarget;
-                if (el.scrollHeight - el.scrollTop - el.clientHeight < 240)
-                  setSettledLimit((n) => n + SETTLED_STEP);
-              }
-            : undefined
-        }
+        onScroll={more ? openMore : undefined}
       >
         {rowCount === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
