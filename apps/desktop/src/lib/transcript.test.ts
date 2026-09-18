@@ -600,6 +600,31 @@ describe("a call whose background task the child still holds", () => {
     expect(resultByCallId.get("c1")?.text).toMatch(ABANDONED);
   });
 
+  /// The notification a background task closes on dies with the child that
+  /// would send it, so a run the harness has stopped naming is over however it
+  /// went — otherwise the panel keeps it shimmering with a Stop button for the
+  /// rest of the session.
+  it("is done once the task drains, with or without a notification", () => {
+    const answered = (seq: number, callId: string): AgentEvent =>
+      event(seq, {
+        type: "tool_call_completed",
+        callId,
+        result: {
+          text: "Command running in background with ID: t1",
+          isError: false,
+          structured: null,
+          exitCode: null,
+          durationMs: null,
+          images: [],
+        },
+      } as AgentEventPayload);
+
+    const log = [callStarted(0, "c1"), spawn(1, "c1", "t1"), answered(2, "c1")];
+
+    expect(buildTranscript(log, true, new Set(["t1"])).subagentById.get("c1")?.done).toBe(false);
+    expect(buildTranscript(log, true, new Set()).subagentById.get("c1")?.done).toBe(true);
+  });
+
   /// fx reports nothing at all about a child: no events, no progress, and no
   /// handle a stop could name. Both readings that follow from that are made
   /// here rather than in the renderer, so both are pinned here.

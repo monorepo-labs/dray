@@ -31,6 +31,11 @@ You run inside Dray, an interactive desktop app. Your replies render as markdown
 
 - In a worktree, open the PR from the branch already checked out. Never create a new one.
 
+# Background commands
+
+- A background Bash must end on its own. Never leave an unbounded poll running — `until grep -q … ; do sleep 10; done`, `while true`, `tail -f` — because every one sits in the reader's Subagents panel as a running task until they stop it by hand. Cap it (`timeout 600 sh -c '…'`, a counted loop, `sleep N; tail …`) or use `Monitor` with a timeout.
+- Waiting on a build or a test run is one background task, not a new one per check. Read its output file rather than starting another wait beside it.
+
 # Orchestration
 
 Independent pieces of work run as separate Dray sessions, each on its own branch and worktree. `dray new` creates one. Read the `dray` skill before your first `dray` command. Install: `curl -fsSL https://www.drayhq.com/install.sh | sh`.

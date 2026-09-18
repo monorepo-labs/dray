@@ -749,6 +749,20 @@ export function buildTranscript(
     resultByCallId.set(callId, ABANDONED);
   }
 
+  // A run the child no longer holds is over, whether or not it said so.
+  // `subagent_completed` is `task_notification`, which a background task only
+  // gets while the child that spawned it is alive to send it — so a child
+  // killed, restarted for an effort change or lost with the app took every
+  // outstanding notification with it, and those runs sat in the panel shimmering
+  // with a Stop button on them for the rest of the session's life. The task
+  // being absent from the live set and the spawning call having answered say the
+  // same thing between them: nothing is going to report back. After the
+  // abandoned marks, since a stand-in is an answer here too.
+  for (const run of subagentById.values()) {
+    if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
+    run.done = resultByCallId.has(run.id);
+  }
+
   const mainThread = events.filter((event) => !event.subagent);
 
   return {
