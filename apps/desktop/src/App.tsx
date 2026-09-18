@@ -136,6 +136,7 @@ function App() {
     statusBySession,
     askingSessions,
     archivedShown,
+    archivedRequested,
     setShowArchived,
     models,
     refreshModels,
@@ -1682,10 +1683,8 @@ function App() {
           onDelete={deleteSession}
           onMarkUnread={markSessionUnread}
           archivedShown={archivedShown}
-          // The other side of what is *drawn*, not of what was last asked for:
-          // pressed again while the fetch is still out, this asks for the side
-          // already on its way rather than bouncing back to the one being left.
-          onToggleArchived={() => setShowArchived(!archivedShown)}
+          archivedRequested={archivedRequested}
+          onToggleArchived={() => setShowArchived((v) => !v)}
           updateStatus={updateStatus}
           updateBlocked={anyRunning}
           updateManual={updateManual}

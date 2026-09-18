@@ -229,8 +229,8 @@ export function useSessions() {
     /// armed with the settled sessions' repos and spawns a `gh` per repo for
     /// rows about to leave the screen (7 here where the active list holds 2).
     ///
-    /// `showArchived` is the *request* and stays the fetch effect's alone.
-    /// Nothing outside this hook needs it, which is why it is not returned.
+    /// The toggle's own control is the exception and reads `showArchived`
+    /// instead — see the pair it is handed down as.
     const archivedShown = indexSide ?? showArchived;
     // One entry per harness, never one list plus a note saying whose it is.
     //
@@ -2476,6 +2476,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

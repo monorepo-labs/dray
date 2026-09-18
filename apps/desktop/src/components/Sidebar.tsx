@@ -132,6 +132,15 @@ type SidebarProps = {
   /// almost every row into a run that did not exist: see `archivedShown` in
   /// [`useSessions`].
   archivedShown: boolean;
+  /// What the toggle has been set *to*, which moves on the press where
+  /// `archivedShown` waits for the read that follows it.
+  ///
+  /// The toggle's own glyph and label are the only things that read it, and
+  /// they have to: the list cannot move until its rows arrive, so with the
+  /// control waiting too a press changed nothing on screen for the length of a
+  /// fetch and a 499-row mount, which reads as a press that did not register.
+  /// Anything else reading it is the remount `archivedShown` exists to avoid.
+  archivedRequested: boolean;
   onToggleArchived: () => void;
   /// Already narrowed to the active space by the caller, like `items` — so
   /// everything below reads one list and the filter, the headings and the rows
@@ -866,6 +875,7 @@ export default function Sidebar({
   onDelete,
   onMarkUnread,
   archivedShown,
+  archivedRequested,
   onToggleArchived,
   projects,
   spaces,
@@ -1216,15 +1226,15 @@ export default function Sidebar({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={archivedShown ? "Show active" : "Show settled"}
+                aria-label={archivedRequested ? "Show active" : "Show settled"}
                 onClick={onToggleArchived}
                 className="text-muted-foreground hover:text-foreground"
               >
-                {archivedShown ? <Undo2 /> : <CheckCheck />}
+                {archivedRequested ? <Undo2 /> : <CheckCheck />}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {archivedShown ? "Show active" : "Show settled"}
+              {archivedRequested ? "Show active" : "Show settled"}
             </TooltipContent>
           </Tooltip>
         </div>
