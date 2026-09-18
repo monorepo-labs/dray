@@ -45,6 +45,7 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import AccountsSettings from "@/components/settings/AccountsSettings";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
@@ -93,6 +94,7 @@ export default function SettingsDialog({
   onInstallUpdate,
   updateChannel,
   onUpdateChannelChange,
+  cwd,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
@@ -127,6 +129,9 @@ export default function SettingsDialog({
   /// `useLocalStorage` here would write a value the checking effect never sees.
   updateChannel: UpdateChannel;
   onUpdateChannelChange: (next: UpdateChannel) => void;
+  /// Where the Accounts tab's login terminal opens — the selected session's
+  /// directory, since pi and fx both allow a credential per project.
+  cwd: string;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
   const transcription = useTranscriptionSettings(open);
@@ -137,10 +142,13 @@ export default function SettingsDialog({
           dialog is described *by* — left unset, Radix warns about the missing
           `aria-describedby` and pointing it at a row would read that row's copy
           out as the dialog's purpose. */}
-      {/* Wider than the dialog default. That default is sized for a question and
-          two buttons; this holds prose, and at 25rem the analytics sentence broke
-          across three lines with two words on the last one. */}
-      <DialogContent aria-describedby={undefined} className="max-w-136">
+      {/* Wider than the dialog default, and wider again since the groups moved
+          to a rail: that default is sized for a question and two buttons, this
+          holds prose, and the rail now takes 8rem off the panel before the
+          prose starts. At 34rem with a rail the analytics sentence went back to
+          breaking over three lines, which is the measure the width was set by
+          in the first place. */}
+      <DialogContent aria-describedby={undefined} className="max-w-176">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
@@ -172,6 +180,7 @@ export default function SettingsDialog({
                 onMoveSpace={onMoveSpace}
               />
             ),
+            accounts: <AccountsSettings cwd={cwd} />,
             transcription: (
               <TranscriptionSettings
                 status={transcription.status}
@@ -1041,6 +1050,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 const SETTINGS_TABS = [
   "appearance",
   "spaces",
+  "accounts",
   "transcription",
   "integrations",
   "shortcuts",
@@ -1055,6 +1065,7 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   spaces: "Spaces",
   transcription: "Transcription",
   integrations: "Integrations",
+  accounts: "Accounts",
   about: "About",
 };
 
@@ -1096,14 +1107,20 @@ function SettingsTabs({
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex gap-5">
+      {/* A rail down the side, which reverses this dialog's first shape and the
+          reason is that the dialog moved. Tabs across the top were right at
+          28rem, where a rail would have taken a third of the width from prose
+          that was already breaking over three lines. At 34rem with seven groups
+          the row was the thing that broke instead — wrapping onto a second line,
+          which reads as two rows of tabs rather than one list — and a rail is a
+          column that grows down, where a row can only grow into the panel. */}
       <div
         role="tablist"
         aria-label="Settings"
+        aria-orientation="vertical"
         onKeyDown={onKeyDown}
-        // Wraps rather than clips: six tabs fit the width today, and a seventh
-        // must show up on a second line, never past the edge.
-        className="flex flex-wrap items-center gap-0.5"
+        className="flex w-32 shrink-0 flex-col gap-0.5"
       >
         {SETTINGS_TABS.map((value, i) => (
           <TabButton
@@ -1118,7 +1135,7 @@ function SettingsTabs({
             tabIndex={tab === value ? 0 : -1}
             active={tab === value}
             onClick={() => setTab(value)}
-            className="cursor-pointer"
+            className="cursor-pointer text-left"
           >
             {TAB_LABELS[value]}
           </TabButton>
@@ -1145,8 +1162,10 @@ function SettingsTabs({
         // Capped against the viewport as well as fixed: the height is still
         // one number for every tab, so nothing jumps on a switch, but a short
         // window gets a dialog that fits inside it rather than one running off
-        // both ends.
-        className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+        // both ends. `min-w-0` because a flex child's default `auto` refuses to
+        // go narrower than its content, which a long command string would
+        // otherwise widen the whole dialog to fit.
+        className="-mx-1 flex h-[32rem] max-h-[60vh] min-w-0 flex-1 flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
       >
         {children[tab]}
       </div>

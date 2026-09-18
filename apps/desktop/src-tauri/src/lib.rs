@@ -17,6 +17,7 @@ macro_rules! fail {
     };
 }
 
+pub mod accounts;
 pub mod analytics;
 pub mod apps;
 pub mod attachments;
@@ -775,6 +776,10 @@ pub fn run() {
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,
+            accounts::agent_accounts,
+            accounts::agent_auth_options,
+            accounts::add_agent_account,
+            accounts::sign_out_agent,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,

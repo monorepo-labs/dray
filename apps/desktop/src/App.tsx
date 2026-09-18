@@ -2084,6 +2084,11 @@ function App() {
       onInstallUpdate={installUpdate}
       updateChannel={updateChannel}
       onUpdateChannelChange={setUpdateChannel}
+      // The composer's own directory: the selected session's where there is
+      // one, the picked project otherwise. A login run in the wrong tree is
+      // the one thing that would make the Accounts tab lie, since pi and fx
+      // both allow a credential per project.
+      cwd={composerCwd ?? ""}
     />
     <WorktreeDialog
       prompt={worktreePrompt}
