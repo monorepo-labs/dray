@@ -17,7 +17,12 @@ import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 /// component calling this exists only while its tab is on screen. Mounting is
 /// the gate, and a flag beside it would be a second answer to the same
 /// question.
-export function useAgentAccounts() {
+///
+/// `cwd` is the selected session's directory, and every probe runs there — a
+/// CLI resolves its own config against the directory it is started in, so this
+/// has to ask where the agent runs, and it is the directory the sign-in
+/// terminal opens in too.
+export function useAgentAccounts(cwd: string) {
   const [agents, setAgents] = useState<AgentAccounts[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +30,7 @@ export function useAgentAccounts() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      setAgents(await invoke<AgentAccounts[]>("agent_accounts"));
+      setAgents(await invoke<AgentAccounts[]>("agent_accounts", { cwd }));
       // A read that worked describes the page now, so whatever failed before it
       // no longer does — and the sentence is the only thing that would still be
       // claiming otherwise.
@@ -38,7 +43,7 @@ export function useAgentAccounts() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [cwd]);
 
   useEffect(() => {
     void load();

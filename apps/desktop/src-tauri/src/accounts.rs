@@ -20,7 +20,7 @@ use crate::binpath;
 use crate::harness::{agent_path, Harness};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -254,19 +254,26 @@ pub struct AgentAccounts {
     pub error: Option<String>,
 }
 
-/// Every harness, asked at once.
+/// Every harness, asked at once, in the directory the agents themselves run in.
 ///
 /// Concurrent because they are independent and serial would spend the sum of
 /// four spawns on an answer that costs the slowest one.
-pub async fn all() -> Vec<AgentAccounts> {
-    futures_util::future::join_all(Harness::ALL.map(one)).await
+///
+/// **`cwd` is the session's, and asking there is the whole point**: a CLI
+/// resolves its own config against the directory it is started in, so "who is
+/// this agent running as" has to be asked where the agent runs or the tab can
+/// answer for a context the session never uses. It is the same directory
+/// [`run_agent_login`] opens its terminal in, so the read and the write cannot
+/// disagree about which project is being signed into.
+pub async fn all(cwd: &str) -> Vec<AgentAccounts> {
+    futures_util::future::join_all(Harness::ALL.map(|harness| one(harness, cwd))).await
 }
 
-async fn one(harness: Harness) -> AgentAccounts {
+async fn one(harness: Harness, cwd: &str) -> AgentAccounts {
     let installed = binpath::agent_installed(harness).await;
 
     let (accounts, error) = if installed {
-        match probe(harness).await {
+        match probe(harness, cwd).await {
             Ok(accounts) => (accounts, None),
             // `{:#}` rather than `to_string`, which on an anyhow chain prints
             // the outermost context alone — the same trap the dictation
@@ -416,12 +423,12 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
     }
 }
 
-async fn probe(harness: Harness) -> anyhow::Result<Vec<Account>> {
+async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
     match harness {
-        Harness::ClaudeCode => claude().await,
-        Harness::Codex => codex().await,
-        Harness::Pi => pi().await,
-        Harness::Fx => fx().await,
+        Harness::ClaudeCode => claude(cwd).await,
+        Harness::Codex => codex(cwd).await,
+        Harness::Pi => pi(cwd).await,
+        Harness::Fx => fx(cwd).await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -444,18 +451,25 @@ struct Said {
 /// **stderr** — stdout is empty — where the other three answer on stdout. A
 /// reader of stdout alone gets a correct yes/no from Codex and no identity at
 /// all, which is the half of the row worth having.
-async fn run(harness: Harness, args: &[&str]) -> anyhow::Result<Said> {
+async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said> {
     let bin = binpath::agent_binary(harness).await;
-    let output = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        Command::new(&bin)
-            .args(args)
-            .env("PATH", agent_path(&bin))
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("{} took too long to answer", harness.label()))??;
+    let mut command = Command::new(&bin);
+    command
+        .args(args)
+        .env("PATH", agent_path(&bin))
+        .stdin(Stdio::null());
+
+    // Only where it is still there. A session whose worktree was removed keeps
+    // its recorded `cwd`, and spawning into a directory that no longer exists
+    // fails with ENOENT before the binary is reached — which would read as the
+    // CLI being broken. The process directory is the honest fallback.
+    if !cwd.is_empty() && Path::new(cwd).is_dir() {
+        command.current_dir(cwd);
+    }
+
+    let output = tokio::time::timeout(PROBE_TIMEOUT, command.output())
+        .await
+        .map_err(|_| anyhow::anyhow!("{} took too long to answer", harness.label()))??;
 
     Ok(Said {
         ok: output.status.success(),
@@ -487,8 +501,8 @@ struct ClaudeStatus {
 /// Every field is optional even though the installed CLI sends them all: this
 /// is somebody else's JSON, and a field that moved must cost the detail line
 /// rather than the row.
-async fn claude() -> anyhow::Result<Vec<Account>> {
-    let stdout = run(Harness::ClaudeCode, &["auth", "status", "--json"]).await?.out;
+async fn claude(cwd: &str) -> anyhow::Result<Vec<Account>> {
+    let stdout = run(Harness::ClaudeCode, &["auth", "status", "--json"], cwd).await?.out;
     let status: ClaudeStatus = serde_json::from_str(&stdout)
         .map_err(|err| anyhow::anyhow!("couldn't read what claude said about its login: {err}"))?;
 
@@ -531,8 +545,8 @@ async fn claude() -> anyhow::Result<Vec<Account>> {
 /// field `login --with-api-key` writes — so it is the honest answer to "what
 /// will saving a key change", and the row says it before the reader finds out
 /// by being billed differently.
-async fn codex() -> anyhow::Result<Vec<Account>> {
-    let said = run(Harness::Codex, &["login", "status"]).await?;
+async fn codex(cwd: &str) -> anyhow::Result<Vec<Account>> {
+    let said = run(Harness::Codex, &["login", "status"], cwd).await?;
     // **stderr first**, measured: `codex login status` leaves stdout empty and
     // writes "Logged in using ChatGPT" to stderr. stdout is kept as the
     // fallback rather than dropped, since a CLI moving its own output back to
@@ -613,7 +627,7 @@ struct PiCheck {
 /// anyway, per provider, because `pi auth check` says *what kind* of credential
 /// and, for a provider that is configured but expired, why it will not serve —
 /// which the list cannot say at all.
-async fn pi() -> anyhow::Result<Vec<Account>> {
+async fn pi(cwd: &str) -> anyhow::Result<Vec<Account>> {
     let models = crate::harness::pi::models::list().await;
     let mut providers: Vec<String> = crate::harness::pi::models::by_provider(&models)
         .into_iter()
@@ -629,11 +643,11 @@ async fn pi() -> anyhow::Result<Vec<Account>> {
         }
     }
 
-    Ok(futures_util::future::join_all(providers.into_iter().map(pi_provider)).await)
+    Ok(futures_util::future::join_all(providers.into_iter().map(|provider| pi_provider(provider, cwd))).await)
 }
 
-async fn pi_provider(provider: String) -> Account {
-    let checked = pi_check(&provider).await;
+async fn pi_provider(provider: String, cwd: &str) -> Account {
+    let checked = pi_check(&provider, cwd).await;
 
     let (state, auth_type, detail) = match checked {
         Some(check) if check.status == "ready" => (
@@ -671,10 +685,11 @@ async fn pi_provider(provider: String) -> Account {
 /// `--no-refresh`, or reading the page silently renews the reader's OAuth token
 /// as a side effect of looking at it. A stale credential should be reported as
 /// stale; refreshing it is what the next turn is for.
-async fn pi_check(provider: &str) -> Option<PiCheck> {
+async fn pi_check(provider: &str, cwd: &str) -> Option<PiCheck> {
     run(
         Harness::Pi,
         &["auth", "check", "--provider", provider, "--json", "--no-refresh"],
+        cwd,
     )
     .await
     .ok()
@@ -717,8 +732,8 @@ struct FxStatus {
 /// Unlike pi's, fx's providers *are* nameable — `fx login [vercel|codex|grok]`
 /// is the whole list — so all three are drawn whether connected or not, which
 /// is what makes signing into a new one reachable from the rows themselves.
-async fn fx() -> anyhow::Result<Vec<Account>> {
-    let stdout = run(Harness::Fx, &["status", "--json"]).await?.out;
+async fn fx(cwd: &str) -> anyhow::Result<Vec<Account>> {
+    let stdout = run(Harness::Fx, &["status", "--json"], cwd).await?.out;
     let status: FxStatus = serde_json::from_str(&stdout)
         .map_err(|err| anyhow::anyhow!("couldn't read what fx said about its providers: {err}"))?;
 
@@ -983,7 +998,11 @@ pub async fn add_account(
             let provider = provider.ok_or("Pick a provider first.")?;
             // Asked of pi rather than of the shortlist, which is why a provider
             // added after this build still works and a typo is still refused.
-            match pi_check(&provider).await {
+            //
+            // No cwd, unlike the probes: the only thing read out of this is
+            // whether pi knows the *name*, which no project directory can move,
+            // and the store this is about to write is under `$HOME`.
+            match pi_check(&provider, "").await {
                 Some(check) if check.status == "not_ready" && check.reason.as_deref() == Some("provider_not_found") => {
                     return Err(format!("pi doesn't know a provider called {provider}."))
                 }
@@ -1113,9 +1132,13 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
 /// child process. Uncached and re-asked on every open: the reader arrives here
 /// *because* they are about to change a login, so a cached answer would be
 /// stale exactly when it is being read.
+///
+/// `cwd` is the selected session's directory — see [`all`] for why the probes
+/// are asked there. Empty is ordinary: the new-task composer has no session
+/// yet.
 #[tauri::command]
-pub async fn agent_accounts() -> Vec<AgentAccounts> {
-    all().await
+pub async fn agent_accounts(cwd: String) -> Vec<AgentAccounts> {
+    all(&cwd).await
 }
 
 /// The ways into one harness, for the Add-account flow's second step.
@@ -1500,7 +1523,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn what_the_installed_agents_answer() {
-        for agent in all().await {
+        for agent in all("").await {
             println!(
                 "{} installed={} providers={} error={:?}",
                 agent.label,

@@ -129,9 +129,9 @@ export default function SettingsDialog({
   /// `useLocalStorage` here would write a value the checking effect never sees.
   updateChannel: UpdateChannel;
   onUpdateChannelChange: (next: UpdateChannel) => void;
-  /// Where the Accounts tab's login terminal opens. A courtesy: every one of
-  /// the four keeps its credentials under the reader's home, so nothing about
-  /// an account depends on the directory.
+  /// Where the Accounts tab asks its questions: every probe runs here and the
+  /// login terminal opens here, since a CLI resolves its own config against the
+  /// directory it is started in.
   cwd: string;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);

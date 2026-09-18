@@ -764,6 +764,8 @@ The cost, stated: a `.command` handed to `open` is run by **Terminal.app alone**
 
 **Three states, not two.** A probe that could not run must not read as *signed out*, which would send the reader to fix a login that was never broken — so `AccountState::Unknown` draws its own colour, the sidebar rail's `accent-command` beside `accent-add`.
 
+**Every probe runs in the session's own directory**, the one the sign-in terminal opens in. A CLI resolves its config against the directory it is started in, so "who is this agent running as" has to be asked where the agent runs, or the read and the write disagree about which project is being signed into. Only where it is still there: a settled session keeps a `cwd` whose worktree is gone, and spawning into a missing directory fails with ENOENT before the binary is reached — `binpath`'s own trap — so the process directory stands in. `add_account`'s `pi auth check` is deliberately the exception, reading whether pi knows a *name*, which no directory moves.
+
 **Nothing is cached and nothing polls.** The reader is on this page because they are about to change a login, so a cached answer would be stale exactly where it is read, and all four probes measure under 250ms. Mounting is the gate — the dialog switches tab bodies rather than hiding them, so `useAgentAccounts` takes no `enabled` flag. A terminal sign-in sends nothing back, so Refresh is how the page learns; four children on a timer to catch a browser round trip would be worse than a button. `what_the_installed_agents_answer` is the `#[ignore]`d live test every parser here was written against — run it when a CLI changes what it says.
 
 ### Closing with ⌘W

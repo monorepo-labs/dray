@@ -624,7 +624,7 @@ export default function AccountsSettings({
   // which is the gate. Four child processes on every settings open, whichever
   // tab the reader wanted, is the cost the external-app scan next door is
   // deliberately not paying either.
-  const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts();
+  const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(cwd);
   const [signingIn, setSigningIn] = useState<{
     harness: Harness;
     provider: string | null;

@@ -2084,10 +2084,9 @@ function App() {
       onInstallUpdate={installUpdate}
       updateChannel={updateChannel}
       onUpdateChannelChange={setUpdateChannel}
-      // Where the Accounts tab's terminal opens: the selected session's
-      // directory, the picked project otherwise. A courtesy and nothing more —
-      // all four credential stores are under the reader's home, so no probe and
-      // no sign-in here depends on which tree it runs in.
+      // Where the Accounts tab runs its probes and opens its terminal: the
+      // selected session's directory, the picked project otherwise. Empty is
+      // ordinary — a new task has no session yet.
       cwd={composerCwd ?? ""}
     />
     <WorktreeDialog
