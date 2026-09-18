@@ -315,12 +315,17 @@ impl StatusTracker {
         self.set(SessionStatus::Completed)
     }
 
-    /// The user read the finished session. Only `Completed` clears — selecting
-    /// a running session must not stop it reading as busy.
-    pub fn mark_seen(&mut self) -> Option<SessionStatus> {
-        (self.status == SessionStatus::Completed)
-            .then(|| self.set(SessionStatus::Idle))
-            .flatten()
+    /// The user read the finished session, or marked a read one unread again.
+    /// Only the two resting states move: selecting a running session must not
+    /// stop it reading as busy, and marking one unread mid-turn must not claim
+    /// its turn ended.
+    pub fn mark_read(&mut self, read: bool) -> Option<SessionStatus> {
+        let (from, to) = if read {
+            (SessionStatus::Completed, SessionStatus::Idle)
+        } else {
+            (SessionStatus::Idle, SessionStatus::Completed)
+        };
+        (self.status == from).then(|| self.set(to)).flatten()
     }
 
     fn set(&mut self, next: SessionStatus) -> Option<SessionStatus> {
@@ -1459,16 +1464,22 @@ impl SessionManager {
         delete_session(session_id).await
     }
 
-    /// Clears a finished session's unread mark: `Completed` → `Idle`, anything
-    /// else untouched. Returns the status as written, `None` for no change.
+    /// Moves a session's unread mark: `Completed` → `Idle` on a read, `Idle` →
+    /// `Completed` on an unread, anything else untouched. Returns the status as
+    /// written, `None` for no change.
     ///
     /// The live tracker is updated first so the in-memory machine agrees with
     /// the index; a session with no live process falls back to the index alone.
-    pub async fn mark_idle(&self, session_id: &str) -> Result<Option<SessionStatus>> {
+    pub async fn mark_read(&self, session_id: &str, read: bool) -> Result<Option<SessionStatus>> {
+        let (from, to) = if read {
+            (SessionStatus::Completed, SessionStatus::Idle)
+        } else {
+            (SessionStatus::Idle, SessionStatus::Completed)
+        };
         let sessions_guard = self.sessions.lock().await;
 
         if let Some(session) = sessions_guard.get(session_id) {
-            let Some(next) = session.status.lock().await.mark_seen() else {
+            let Some(next) = session.status.lock().await.mark_read(read) else {
                 return Ok(None);
             };
             set_session_status(session_id, next).await?;
@@ -1477,9 +1488,9 @@ impl SessionManager {
         drop(sessions_guard);
 
         match get_session_index_item(session_id).await? {
-            Some(item) if item.status == SessionStatus::Completed => {
-                set_session_status(session_id, SessionStatus::Idle).await?;
-                Ok(Some(SessionStatus::Idle))
+            Some(item) if item.status == from => {
+                set_session_status(session_id, to).await?;
+                Ok(Some(to))
             }
             _ => Ok(None),
         }
@@ -3384,7 +3395,7 @@ mod tests {
 
         // Reading the finished session moves it off `Completed`, the one
         // transition that touches the status without touching the turn.
-        tracker.mark_seen();
+        tracker.mark_read(true);
         check(&tracker);
         assert!(
             forkable_with_a_task_running,
@@ -3393,17 +3404,22 @@ mod tests {
     }
 
     /// Only a finished-and-unread session clears on read; selecting a running
-    /// one must not stop it reading as busy.
+    /// one must not stop it reading as busy. Unread is the same rule mirrored:
+    /// only an idle session takes the mark back.
     #[test]
-    fn mark_seen_clears_only_completed() {
+    fn mark_read_moves_only_the_resting_states() {
         let mut tracker = StatusTracker::default();
-        assert_eq!(tracker.mark_seen(), None, "idle has nothing to clear");
+        assert_eq!(tracker.mark_read(true), None, "idle has nothing to clear");
 
         tracker.on_send();
-        assert_eq!(tracker.mark_seen(), None, "a running session stays busy");
+        assert_eq!(tracker.mark_read(true), None, "a running session stays busy");
+        assert_eq!(tracker.mark_read(false), None, "and cannot be marked unread");
 
         tracker.on_event(&turn_completed());
-        assert_eq!(tracker.mark_seen(), Some(SessionStatus::Idle));
-        assert_eq!(tracker.mark_seen(), None, "already read");
+        assert_eq!(tracker.mark_read(true), Some(SessionStatus::Idle));
+        assert_eq!(tracker.mark_read(true), None, "already read");
+
+        assert_eq!(tracker.mark_read(false), Some(SessionStatus::Completed));
+        assert_eq!(tracker.mark_read(false), None, "already unread");
     }
 }

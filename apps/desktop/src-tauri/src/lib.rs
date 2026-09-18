@@ -579,17 +579,19 @@ async fn answer_questions(
         .map_err(|e| e.to_string())
 }
 
-/// Clears a finished session's unread mark. The frontend calls this when the
-/// user views the session; a `completed` badge is "finished and unread", so
-/// reading is what retires it. Returns the status as written, `None` when
-/// nothing changed — the session wasn't `completed`, or the id is unknown.
+/// Moves a session's unread mark. The frontend calls this with `read` when the
+/// user views the session — a `completed` badge is "finished and unread", so
+/// reading is what retires it — and without it when they ask for the mark back
+/// from the row's menu. Returns the status as written, `None` when nothing
+/// changed: the session was not in the state that moves, or the id is unknown.
 #[tauri::command]
-async fn mark_session_idle(
+async fn mark_session_read(
     session_id: &str,
+    read: bool,
     manager: State<'_, SessionManager>,
 ) -> Result<Option<SessionStatus>, String> {
     manager
-        .mark_idle(session_id)
+        .mark_read(session_id, read)
         .await
         .map_err(|e| e.to_string())
 }
@@ -742,7 +744,7 @@ pub fn run() {
             fork_session,
             worktree_disposition,
             remove_session_worktree,
-            mark_session_idle,
+            mark_session_read,
             interrupt_session,
             stop_task,
             cancel_queued,

@@ -1105,7 +1105,11 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   // does not show; see `ANSWERED_BY_OPENING`.
   dismissNotice(sessionId, ANSWERED_BY_OPENING);
 
-  // Opening a finished session is reading it.
+  // Opening a finished session is reading it — a mark the reader set by hand
+  // included, since selecting the row is them coming back to it. Released on
+  // every selection rather than only its own: the mark survives being looked
+  // away from, and the next visit is what answers it.
+  keptUnreadRef.current = null;
   const clicked = sessionIndexItems.find((i) => i.sessionId === sessionId);
   if ((statusBySession[sessionId] ?? clicked?.status) === "completed") {
     markSessionRead(sessionId);
@@ -2087,7 +2091,20 @@ const markSessionRead = (sessionId: string) => {
   dismissNotice(sessionId, ANSWERED_BY_OPENING);
   // Cleared locally first — the click must feel instant. Losing the write
   // costs one stale unread dot after a restart, so a failure isn't surfaced.
-  void invoke("mark_session_idle", { sessionId }).catch(() => {});
+  void invoke("mark_session_read", { sessionId, read: true }).catch(() => {});
+};
+
+/// The reader asked for the unread mark back, from the row's own menu. The
+/// reverse of `markSessionRead`, and it has to hold against the path that would
+/// take it straight off again: the session may be the one on screen, so
+/// `keptUnreadRef` is what the focus listener reads to leave a deliberate mark
+/// alone. One id rather than a set — the mark is only under threat while the
+/// reader is looking at the session, and they look at one at a time.
+const keptUnreadRef = useRef<string | null>(null);
+const markSessionUnread = (sessionId: string) => {
+  keptUnreadRef.current = sessionId;
+  setStatusBySession((prev) => ({ ...prev, [sessionId]: "completed" }));
+  void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
 /// Tell the reader about something that happened in a session, on exactly one
@@ -2166,6 +2183,7 @@ useEffect(
       if (!focused) return;
       const shown = [selectedSessionIdRef.current, ...onScreenRef.current];
       for (const sessionId of shown) {
+        if (sessionId === keptUnreadRef.current) continue;
         if (sessionId && statusBySessionRef.current[sessionId] === "completed") {
           markSessionRead(sessionId);
         }
@@ -2440,6 +2458,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

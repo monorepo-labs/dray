@@ -3,6 +3,7 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  Circle,
   CircleDashed,
   CircleDot,
   GitBranchPlus,
@@ -122,6 +123,9 @@ type SidebarProps = {
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  /// Puts the unread mark back on a session the reader has already read, so it
+  /// rejoins the Completed run.
+  onMarkUnread: (sessionId: string) => void;
   showArchived: boolean;
   onToggleArchived: () => void;
   /// Already narrowed to the active space by the caller, like `items` — so
@@ -852,6 +856,7 @@ export default function Sidebar({
   onSetFlags,
   onFork,
   onDelete,
+  onMarkUnread,
   showArchived,
   onToggleArchived,
   projects,
@@ -1266,6 +1271,7 @@ export default function Sidebar({
                     onFork={onFork}
                     onDelete={onDelete}
                     onDetach={onDetach}
+                    onMarkUnread={onMarkUnread}
                   />
                 ))}
               </Fragment>
@@ -1716,6 +1722,7 @@ function RowMenu({
   forkDisabled,
   onDelete,
   onDetach,
+  onMarkUnread,
   children,
 }: {
   onFork: (worktree: boolean) => void;
@@ -1730,6 +1737,10 @@ function RowMenu({
   /// a disabled item on every row in the list would be noise rather than a
   /// promise of something coming.
   onDetach?: () => void;
+  /// Absent where the mark would say nothing: a settled session is a history
+  /// row with no Completed run to rejoin, and one already unread or mid-turn
+  /// has nothing to take back.
+  onMarkUnread?: () => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -1831,6 +1842,13 @@ function RowMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
 
+            {onMarkUnread && (
+              <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
+                <Circle />
+                Mark as unread
+              </ContextMenuItem>
+            )}
+
             {onDetach && (
               <ContextMenuItem className="text-ui" onSelect={onDetach}>
                 <Unlink />
@@ -1884,6 +1902,7 @@ function SessionRow({
   onFork,
   onDelete,
   onDetach,
+  onMarkUnread,
 }: {
   item: SessionIndexItem;
   /// Levels below the top; 0 draws no connector at all. See [`sessionRows`] —
@@ -1923,6 +1942,7 @@ function SessionRow({
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  onMarkUnread: (sessionId: string) => void;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
   // means a row selected by click — already in view — doesn't scroll at all.
@@ -1942,6 +1962,14 @@ function SessionRow({
       forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      // Only a read, finished session can take the mark back: a settled one
+      // has left the live list the Completed run lives in, and anything but
+      // `idle` is either already unread or still working.
+      onMarkUnread={
+        status === "idle" && !item.archived
+          ? () => onMarkUnread(item.sessionId)
+          : undefined
+      }
     >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}

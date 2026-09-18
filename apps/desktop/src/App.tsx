@@ -186,6 +186,7 @@ function App() {
     handleAnswerQuestions,
     handleSelectSessionIndexItem,
     handleNewSession,
+    markSessionUnread,
     setSessionFlags,
     forkSession,
     unlinkIssue,
@@ -1679,6 +1680,7 @@ function App() {
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
           onDelete={deleteSession}
+          onMarkUnread={markSessionUnread}
           showArchived={showArchived}
           onToggleArchived={() => setShowArchived((v) => !v)}
           updateStatus={updateStatus}
