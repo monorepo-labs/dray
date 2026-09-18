@@ -39,8 +39,19 @@ const SPACE = /\s/;
 /// against — the same rule `parseIdentifier` takes next door.
 const ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
-/// A whole placed tag, from the `&` to the closing paren. Lazy in the title, so
-/// the first id in the run closes it rather than the last.
+/// A whole placed tag, from the `&` to the closing paren.
+///
+/// **Lazy in the title, so the *first* id closes the tag rather than the last,
+/// and that is a deliberate trade rather than an oversight.** Two tags in one
+/// sentence is an ordinary prompt — "ask &A (id) and &B (id) to compare" — and
+/// a greedy read swallows everything between the first `&` and the last id,
+/// taking the second tag into the first one's title and losing it.
+///
+/// What it costs is the opposite case: a *title* that itself carries a
+/// parenthesised id, which a session titled after a prompt holding a tag can
+/// have. There the tag paints short and the real id is left beside it as plain
+/// text. Cosmetic only — the text is sent untouched, so the agent still reads
+/// both ids — where the greedy read loses a tag outright. Both pinned by test.
 const TAG = new RegExp(`^&(.+?) \\((${ID})\\)`);
 
 /// The tag being typed, or `null` when the caret isn't in one.
@@ -142,4 +153,27 @@ export function filterSessions(
       !s.archived &&
       (!needle || s.title.toLowerCase().includes(needle)),
   );
+}
+
+/// The titles this list holds more than once.
+///
+/// A title is the whole row, so two rows carrying one are the same row twice
+/// and the reader picks between them by guessing — which addresses a real and
+/// *different* session, silently. Titles are generated from a first prompt, so
+/// two goes at one task genuinely collide.
+///
+/// The Files view's `tabLabels` takes exactly this reading: a name only stops
+/// being unambiguous when a second one arrives, so the row that has to say more
+/// is decided by the list rather than by the row. Nothing is added to the
+/// ordinary row, which is the whole point of computing this at all.
+export function ambiguousTitles(sessions: SessionIndexItem[]): Set<string> {
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+
+  for (const { title } of sessions) {
+    if (seen.has(title)) twice.add(title);
+    seen.add(title);
+  }
+
+  return twice;
 }

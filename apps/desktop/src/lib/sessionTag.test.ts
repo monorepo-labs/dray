@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { highlightSegments } from "@/lib/highlight";
 import {
+  ambiguousTitles,
   applySession,
   filterSessions,
   parseSessionTag,
@@ -98,6 +99,13 @@ describe("filterSessions", () => {
     expect(filterSessions(sessions, ID, "").map((s) => s.sessionId)).toEqual([OTHER]);
   });
 
+  it("names only the titles carried twice", () => {
+    expect(ambiguousTitles(sessions)).toEqual(new Set());
+    expect(
+      ambiguousTitles([...sessions, item({ sessionId: "d", title: "Rewrite the parser" })]),
+    ).toEqual(new Set(["Rewrite the parser"]));
+  });
+
   it("narrows on one word of the title", () => {
     expect(filterSessions(sessions, null, "login").map((s) => s.sessionId)).toEqual([ID]);
     expect(filterSessions(sessions, null, "nothing")).toEqual([]);
@@ -119,5 +127,29 @@ describe("highlightSegments", () => {
 
   it("leaves an ampersand in prose alone", () => {
     expect(highlightSegments("Ben & Jerry (not a tag)").every((s) => s.kind === "text")).toBe(true);
+  });
+
+  // What the lazy title in `TAG` buys, and the reason a greedy read is wrong:
+  // greedy runs to the last id on the line and takes the second tag into the
+  // first one's title, losing it entirely.
+  it("keeps two tags in one sentence apart", () => {
+    const text = `ask ${sessionTag("Fix login", ID)} and ${sessionTag("Rewrite parser", OTHER)} to compare`;
+    const tags = highlightSegments(text).filter((s) => s.kind === "session");
+
+    expect(tags.map((s) => s.sessionId)).toEqual([ID, OTHER]);
+    expect(tags.map((s) => s.inner)).toEqual(["&Fix login", "&Rewrite parser"]);
+  });
+
+  // And what it costs, stated rather than fixed: a title carrying a
+  // parenthesised id of its own closes the tag early. The run paints short and
+  // the real id stays plain text beside it — cosmetic, since the text is sent
+  // untouched and the agent reads both.
+  it("closes early on a title that carries an id of its own", () => {
+    const tag = highlightSegments(`&Investigate (${ID}) failure (${OTHER})`).find(
+      (s) => s.kind === "session",
+    )!;
+
+    expect(tag.sessionId).toBe(ID);
+    expect(tag.inner).toBe("&Investigate");
   });
 });
