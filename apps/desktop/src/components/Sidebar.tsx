@@ -1530,14 +1530,15 @@ function ProjectFilter({
   // which is exactly what a switch raises — so a switch shows them for a beat
   // whether or not the cursor is anywhere near. ⌘⌥←/→ moves this control with
   // the pointer nowhere near it, and hover-only left that step invisible.
-  // Skipped on mount, since arriving is not switching.
+  // Skipped on mount, since arriving is not switching — and held as the index
+  // last flashed for rather than as a "have we mounted" flag, or StrictMode
+  // replaying the mount effect over a ref that survives it reads the replay as
+  // a switch and flashes the dots on every open.
   const [flashing, setFlashing] = useState(false);
-  const settled = useRef(false);
+  const flashed = useRef(activeIndex);
   useEffect(() => {
-    if (!settled.current) {
-      settled.current = true;
-      return;
-    }
+    if (flashed.current === activeIndex) return;
+    flashed.current = activeIndex;
     setFlashing(true);
     const done = setTimeout(() => setFlashing(false), 1200);
     return () => clearTimeout(done);

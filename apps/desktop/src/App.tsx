@@ -1145,6 +1145,11 @@ function App() {
   /// could account for.
   const changeSpace = (next: string | null) => {
     setStoredSpace(next);
+    // Resetting the filter is leaving it, so its pick is recorded here too —
+    // without this a space switch is the one way out of a filter that forgets
+    // what was open in it. Nothing is restored: the effect below closes a
+    // transcript that falls outside the space being entered.
+    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
     setProjectFilter(null);
 
     for (const notice of getNotices()) {
@@ -1171,9 +1176,13 @@ function App() {
   /// and nowhere else.
   const filterSelection = useRef<Record<string, string | null>>({});
 
-  /// Drops a session from every filter's memory. Settling and deleting both
-  /// take the row off the list, so a filter still naming it would reopen a
+  /// Drops a session from every filter's memory, so a filter cannot reopen a
   /// transcript the reader has just put away.
+  ///
+  /// Settling alone calls it. A deleted session is gone from the index, which
+  /// is what `changeProjectFilter` judges a remembered id against — so delete
+  /// needs nothing here, and calling it there would only lose the memory on a
+  /// delete that *failed*.
   const forgetFilterSelection = (sessionId: string) => {
     for (const key of Object.keys(filterSelection.current)) {
       if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
@@ -1669,10 +1678,7 @@ function App() {
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
-          onDelete={(sessionId) => {
-            forgetFilterSelection(sessionId);
-            return deleteSession(sessionId);
-          }}
+          onDelete={deleteSession}
           showArchived={showArchived}
           onToggleArchived={() => setShowArchived((v) => !v)}
           updateStatus={updateStatus}
