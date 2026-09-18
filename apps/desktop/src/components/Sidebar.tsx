@@ -1965,8 +1965,17 @@ function SessionRow({
       // Only a read, finished session can take the mark back: a settled one
       // has left the live list the Completed run lives in, and anything but
       // `idle` is either already unread or still working.
+      //
+      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
+      // holding a copied conversation the CLI has not carried out yet and no
+      // turn of its own. An unread mark there would put a session that has
+      // never run into the Completed run and onto the dock badge. The flag is
+      // cleared by the first send, which is also the first turn there is
+      // anything to read. Known ceiling: a session whose spawn failed outright
+      // sits at `idle` having run nothing either, and the index says nothing
+      // that tells it from one that has run and been read.
       onMarkUnread={
-        status === "idle" && !item.archived
+        status === "idle" && !item.archived && !item.forkFrom
           ? () => onMarkUnread(item.sessionId)
           : undefined
       }
