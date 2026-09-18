@@ -945,15 +945,19 @@ export default function Sidebar({
   // worklist and stays whole. Paging the read itself would buy nothing: the
   // index is one file parsed whole however few entries are asked for.
   const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
+  // Reset on the press, not on the rows landing: the request moves first, so
+  // the window is already at its first step by the time the settled rows
+  // arrive, and the read's commit draws one step rather than wherever the
+  // reader last scrolled to and then a second commit at the step.
   useEffect(() => {
     setSettledLimit(SETTLED_STEP);
-  }, [showArchived, search, projectFilter, space]);
+  }, [archivedRequested, search, projectFilter, space]);
 
   // ⌘⇧↑/↓ steps every row the walk knows about, drawn or not, so a step past
   // the window opens it far enough to draw what it landed on — otherwise the
   // selection moves with nothing in the sidebar saying where to.
   useEffect(() => {
-    if (!showArchived || !selectedSessionId) return;
+    if (!archivedShown || !selectedSessionId) return;
     let n = 0;
     for (const group of groups) {
       for (const row of group.rows) {
@@ -965,11 +969,11 @@ export default function Sidebar({
         n += 1;
       }
     }
-  }, [showArchived, selectedSessionId, groups, settledLimit]);
+  }, [archivedShown, selectedSessionId, groups, settledLimit]);
 
   // A prefix of `groups`, so `groupKeys` still indexes by position.
   const drawn = useMemo(() => {
-    if (!showArchived || rowCount <= settledLimit) return groups;
+    if (!archivedShown || rowCount <= settledLimit) return groups;
     let left = settledLimit;
     const out: SessionGroup[] = [];
     for (const group of groups) {
@@ -978,8 +982,8 @@ export default function Sidebar({
       left -= group.rows.length;
     }
     return out;
-  }, [groups, showArchived, settledLimit, rowCount]);
-  const more = showArchived && rowCount > settledLimit;
+  }, [groups, archivedShown, settledLimit, rowCount]);
+  const more = archivedShown && rowCount > settledLimit;
 
   // A window the list does not overflow fires no scroll event, so scrolling
   // alone strands every row past the first step on a tall screen — and on a
