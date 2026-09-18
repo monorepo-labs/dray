@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Sliders } from "lucide-react";
-import AgentIcon from "@/components/AgentIcon";
+import AgentIcon, { ProviderIcon } from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
+  defaultStars,
+  FX_STARS_SEEDED_KEY,
   STARRED_MODELS_KEY,
   topLevel,
   underMore,
@@ -70,14 +72,17 @@ export function nextEffort(model: Model | undefined, current: Effort | null): Ef
   return cycle[(i + 1) % cycle.length];
 }
 
-/// fx's provider, as a segmented control at the top of the model menu.
+/// fx's provider, as a segmented control of marks.
 ///
 /// fx's list is its *active provider's*, and the provider is a global fx
-/// setting (`fx provider …`, written to `~/.fx/settings.json`). Beside the
-/// agent control and built the same way: a segmented control says "one of
-/// these" where stacked rows read as more models. Text, not icons — the
-/// providers have no brand mark here. The active one is read off the rows fx
-/// answered with.
+/// setting (`fx provider …`, written to `~/.fx/settings.json`). It shares the
+/// agent control's track rather than sitting in a well of its own, taking the
+/// slot ⌘⇧A's keycap holds for every other harness: fx is the one agent with a
+/// second thing to pick, and a second well under the first read as two rows of
+/// chrome above a list of three models. The chord is lost from sight there and
+/// nowhere else, which is the trade — marks, not words, is what makes the two
+/// controls fit one track. The active one is read off the rows fx answered
+/// with.
 ///
 /// Unlike the agent beside it, this is *not* creation-time. fx takes a provider
 /// switch in place and a switched session keeps it: the change persists onto
@@ -99,57 +104,55 @@ function ProviderRow({
   current,
   busy,
   onPick,
+  className = "",
 }: {
-  providers: readonly { id: string; short: string; label: string }[];
+  providers: readonly { id: string; label: string }[];
   /// Index into `providers` of the one in force, or -1 before fx has said.
   active: number;
   current: string | undefined;
   busy: boolean;
   onPick: (id: string) => void;
+  className?: string;
 }) {
   const row = (
     <div
       role="radiogroup"
       aria-label="Provider"
-      // Dimmed on the track rather than per button, so the moving thumb goes
+      // Dimmed on the group rather than per button, so the moving thumb goes
       // with it — a lit thumb over dead buttons reads as one of them still
-      // being pressable.
-      className={`mb-1 flex items-center rounded-md bg-surface-well p-1 ${busy ? "opacity-45" : ""}`}
+      // being pressable. On the group and not the track it shares, or a turn in
+      // flight would dim the agent control beside it too.
+      className={`relative flex items-center ${busy ? "opacity-45" : ""} ${className}`}
     >
-      <div className="relative flex flex-1 items-center">
-        {/* The moving thumb, one segment wide, placed by index — the switch
-            slides across rather than blinking between pills. Hidden until a
-            provider is known, so first run reads as "none picked" rather than
-            the first segment being silently selected. */}
-        {active >= 0 && (
-          <span
-            aria-hidden
-            className="absolute top-0 left-0 h-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
-            style={{
-              width: `${100 / providers.length}%`,
-              transform: `translateX(${active * 100}%)`,
-            }}
-          />
-        )}
-        {providers.map((provider) => (
-          <button
-            key={provider.id}
-            type="button"
-            role="radio"
-            aria-checked={provider.id === current}
-            aria-label={provider.label}
-            // A switch mid-turn would move the list and the pick under a prompt
-            // already running, and a queued prompt carries no live control
-            // change with it either. The turn is seconds to minutes, so waiting
-            // is the whole cure.
-            aria-disabled={busy}
-            onClick={() => !busy && onPick(provider.id)}
-            className="relative z-10 flex h-6 flex-1 items-center justify-center rounded-sm text-ui opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
-          >
-            {provider.short}
-          </button>
-        ))}
-      </div>
+      {/* The moving thumb, one segment wide, placed by index — the switch
+          slides across rather than blinking between pills. Hidden until a
+          provider is known, so first run reads as "none picked" rather than
+          the first segment being silently selected. */}
+      {active >= 0 && (
+        <span
+          aria-hidden
+          className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+          style={{ transform: `translateX(${active * 100}%)` }}
+        />
+      )}
+      {providers.map((provider) => (
+        <button
+          key={provider.id}
+          type="button"
+          role="radio"
+          aria-checked={provider.id === current}
+          aria-label={provider.label}
+          // A switch mid-turn would move the list and the pick under a prompt
+          // already running, and a queued prompt carries no live control
+          // change with it either. The turn is seconds to minutes, so waiting
+          // is the whole cure.
+          aria-disabled={busy}
+          onClick={() => !busy && onPick(provider.id)}
+          className="relative z-10 flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+        >
+          <ProviderIcon provider={provider.id} className="size-3.5" />
+        </button>
+      ))}
     </div>
   );
 
@@ -161,7 +164,7 @@ function ProviderRow({
     <Tooltip>
       <TooltipTrigger asChild>{row}</TooltipTrigger>
       {/* `max-w-none whitespace-nowrap` for the trigger tooltip's reason — the
-          menu is 202px and the default `max-w-xs` wraps a sentence this long
+          menu is 200px and the default `max-w-xs` wraps a sentence this long
           onto two rows. */}
       <TooltipContent side="top" className="max-w-none whitespace-nowrap">
         Provider can't be changed mid-stream
@@ -262,6 +265,28 @@ export default function ModelSelector({
   // mounted copies would desync the moment one of them wrote.
   const [starred, setStarred] = useLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
 
+  // fx's shortlist starts empty, and an empty shortlist is a picker that
+  // cannot pick. Seed a provider's defaults the first time its list lands —
+  // once each, marked, so unstarring them all leaves the menu empty as asked
+  // rather than putting ours back on the next visit. Marked even where the
+  // list names none of them, since that is an answer too.
+  const [seeded, setSeeded] = useLocalStorage<string[]>(FX_STARS_SEEDED_KEY, []);
+  useEffect(() => {
+    const provider = models[0]?.provider;
+    if (harness !== "fx" || !provider || seeded.includes(provider)) return;
+    // A reader who already starred something here predates the marker; their
+    // list is the answer and ours would arrive as three rows nobody asked for.
+    if (models.some((m) => starred.includes(m.id))) {
+      setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
+      return;
+    }
+    setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
+    const seeds = defaultStars(provider, models);
+    if (seeds.length) {
+      setStarred((prev) => [...prev, ...seeds.filter((id) => !prev.includes(id))]);
+    }
+  }, [harness, models, seeded, setSeeded, setStarred]);
+
   const shortlisted = usesShortlist(harness);
   // Shared with Shift+Tab, which cycles exactly what this draws — a chord
   // landing on a model the menu never offered is the bug the sharing prevents.
@@ -361,9 +386,16 @@ export default function ModelSelector({
             setOpen(false);
           }}
         >
-          {model.label}
+          {/* Truncated, not wrapped, and the menu is not widened to fit: a
+              gateway id is its provider plus its model (`anthropic/claude-
+              opus-5`) and the longest of them would set the width of a menu
+              whose other rows are half that. `min-w-0` is what lets it shrink
+              at all — a flex item's floor is its content otherwise — and the
+              effort beside it keeps its width, being the shorter word and the
+              one a reader is comparing down the column. */}
+          <span className="min-w-0 truncate">{model.label}</span>
           {rowEffort(model) && (
-            <span className="text-muted-foreground/60">
+            <span className="shrink-0 text-muted-foreground/60">
               {EFFORT_LABELS[rowEffort(model)!]}
             </span>
           )}
@@ -399,8 +431,8 @@ export default function ModelSelector({
         className="text-ui"
         onSelect={() => onChange(model.id, null)}
       >
-        {model.label}
-        {model.id === modelId && <Check className="ml-auto size-3.5" />}
+        <span className="min-w-0 truncate">{model.label}</span>
+        {model.id === modelId && <Check className="ml-auto size-3.5 shrink-0" />}
       </DropdownMenuItem>
     );
 
@@ -450,7 +482,12 @@ export default function ModelSelector({
 
       <DropdownMenuContent
         align="start"
-        className="min-w-[202px]"
+        // Fixed, not `min-w`: the base class sizes the menu to
+        // `--radix-dropdown-menu-trigger-width`, so the trigger's own label set
+        // the width — and fx's gateway names a model by its vendor too
+        // (`anthropic/claude-opus-5`), which made the menu visibly wider on
+        // that one harness for no reason a reader could see. Rows truncate.
+        className="w-[200px]"
         // The trigger is also the tooltip trigger, so Radix returning focus to
         // it on close reopens the tooltip on that focus and leaves it stuck
         // until the next click. Don't refocus the trigger — the composer takes
@@ -463,12 +500,8 @@ export default function ModelSelector({
             models is one visit rather than two. `mb-1` is the whole separation
             from the list below: a rule there drew a box round a control that is
             already a different shape. */}
-        {canSwitchHarness && (
-          <div
-            role="radiogroup"
-            aria-label="Agent"
-            className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1"
-          >
+        {(canSwitchHarness || harness === "fx") && (
+          <div className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1">
             {/* The one moving part. A thumb under the marks, placed by index,
                 so switching reads as the selection sliding across rather than
                 one pill blinking out and another in. Unknown harness parks it
@@ -478,82 +511,87 @@ export default function ModelSelector({
                 come up *past* the surface the menu is drawn at, out of the well
                 the track cuts. `--accent` is a white veil on glass, which over
                 a scrim is a few percent of light and read as nothing. */}
-            <div className="relative flex items-center">
-              <span
-                aria-hidden
-                className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
-                style={{ transform: `translateX(${Math.max(activeAgent, 0) * 100}%)` }}
+            {canSwitchHarness && (
+              <div role="radiogroup" aria-label="Agent" className="relative flex items-center">
+                <span
+                  aria-hidden
+                  className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+                  style={{ transform: `translateX(${Math.max(activeAgent, 0) * 100}%)` }}
+                />
+                {/* Dimmed by opacity, not by colour. A muted-to-foreground ladder
+                    only moves a mark drawn in `currentColor`, so it lit Codex on
+                    hover and left Claude — which carries its own rust — sitting
+                    at one state forever. Opacity is the one dial both marks
+                    answer to. */}
+                {AGENTS.map((agent) => {
+                  const missing = availability?.some(
+                    (a) => a.harness === agent.id && !a.available,
+                  );
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={agent.id === harness}
+                      aria-label={
+                        missing ? `${agent.label} (not installed)` : agent.label
+                      }
+                      onClick={() => onHarnessChange(agent.id)}
+                      className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+                    >
+                      <AgentIcon harness={agent.id} brand className="size-3.5" />
+                      {/* Marked, not disabled. Disabling leaves nowhere to say
+                          why — a tooltip is the only slot left, and the cure is
+                          two lines and two buttons. Picking it is what draws the
+                          notice under the composer, so the mark is an invitation
+                          to find out rather than a closed door.
+  
+                          Drawn as a dot rather than a colour: the marks are
+                          brand art and already carry their own, so recolouring
+                          one says "Codex" more than it says "missing". */}
+                      {missing && (
+                        <span
+                          aria-hidden
+                          className="absolute -top-px -right-px size-1.5 rounded-full bg-destructive ring-1 ring-surface-well"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {/* fx's providers take the slot the chord's keycap holds for every
+                other harness, on the same track: fx is the one agent with a
+                second thing to pick, and a well of its own under this one read
+                as two rows of chrome above a list of three models. The hint is
+                lost from sight here and nowhere else — ⌘⇧A still cycles.
+
+                Unlike the agent beside it, this is *not* creation-time. fx
+                takes a provider switch in place, and a switched session keeps
+                it: the change persists onto fx's own session record, so a later
+                `session/resume` comes back on it rather than on whatever the
+                settings file names by then (`provider_switch.jsonl`). The
+                session itself moves at the next send, where `fx::set_model`
+                carries the provider across with the model — a model names its
+                provider, and fx refuses one belonging to another. */}
+            {harness === "fx" ? (
+              <ProviderRow
+                providers={FX_PROVIDERS}
+                active={activeProvider}
+                current={currentProvider}
+                busy={busy}
+                onPick={switchProvider}
+                // Hard against the agent marks, not pushed to the far edge:
+                // the provider qualifies fx, and a gap between them reads as
+                // two unrelated controls sharing a track.
+                className="-ml-0.5"
               />
-              {/* Dimmed by opacity, not by colour. A muted-to-foreground ladder
-                  only moves a mark drawn in `currentColor`, so it lit Codex on
-                  hover and left Claude — which carries its own rust — sitting
-                  at one state forever. Opacity is the one dial both marks
-                  answer to. */}
-              {AGENTS.map((agent) => {
-                const missing = availability?.some(
-                  (a) => a.harness === agent.id && !a.available,
-                );
-                return (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={agent.id === harness}
-                    aria-label={
-                      missing ? `${agent.label} (not installed)` : agent.label
-                    }
-                    onClick={() => onHarnessChange(agent.id)}
-                    className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
-                  >
-                    <AgentIcon harness={agent.id} brand className="size-3.5" />
-                    {/* Marked, not disabled. Disabling leaves nowhere to say
-                        why — a tooltip is the only slot left, and the cure is
-                        two lines and two buttons. Picking it is what draws the
-                        notice under the composer, so the mark is an invitation
-                        to find out rather than a closed door.
-
-                        Drawn as a dot rather than a colour: the marks are
-                        brand art and already carry their own, so recolouring
-                        one says "Codex" more than it says "missing". */}
-                    {missing && (
-                      <span
-                        aria-hidden
-                        className="absolute -top-px -right-px size-1.5 rounded-full bg-destructive ring-1 ring-surface-well"
-                      />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            {/* Inside the track, in the width the two marks leave: a hint you
-                have to hover to find is one nobody finds. */}
-            <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
+            ) : (
+              /* Inside the track, in the width the marks leave: a hint you have
+                 to hover to find is one nobody finds. */
+              <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
+            )}
           </div>
-        )}
-
-        {/* fx's list is its *active provider's*, and the provider is a global
-            fx setting (`fx provider …`, written to `~/.fx/settings.json`).
-            Beside the agent control and built the same way: a segmented control
-            says "one of these" where stacked rows read as more models. Text,
-            not icons — the providers have no brand mark here. The active one is
-            read off the rows fx answered with.
-
-            Unlike the agent beside it, this is *not* creation-time. fx takes a
-            provider switch in place, and a switched session keeps it: the
-            change persists onto fx's own session record, so a later
-            `session/resume` comes back on it rather than on whatever the
-            settings file names by then (`provider_switch.jsonl`). The session
-            itself moves at the next send, where `fx::set_model` carries the
-            provider across with the model — a model names its provider, and fx
-            refuses one belonging to another. */}
-        {harness === "fx" && (
-          <ProviderRow
-            providers={FX_PROVIDERS}
-            active={activeProvider}
-            current={currentProvider}
-            busy={busy}
-            onPick={switchProvider}
-          />
         )}
 
         {/* Grouped only where a heading says something: pi answers with a

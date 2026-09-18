@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   byProvider,
+  defaultStars,
   matchesQuery,
   shortlist,
   toggleStar,
@@ -116,6 +117,29 @@ describe("toggleStar", () => {
   it("adds a missing star and removes a present one", () => {
     expect(toggleStar([], XAI.id)).toEqual([XAI.id]);
     expect(toggleStar([XAI.id, SOL.id], XAI.id)).toEqual([SOL.id]);
+  });
+});
+
+describe("defaultStars", () => {
+  /// One needle answers for both spellings: the gateway prefixes a model with
+  /// its vendor where fx's own providers name it bare.
+  it("matches a whole id and a last segment alike", () => {
+    const gateway = [model("openai/gpt-5.6-sol"), model("spacexai/grok-4.6")];
+    expect(defaultStars("gateway", gateway)).toEqual([
+      "openai/gpt-5.6-sol",
+      "spacexai/grok-4.6",
+    ]);
+    expect(defaultStars("grok", [model("grok-4.6")])).toEqual(["grok-4.6"]);
+  });
+
+  /// A needle naming nothing the provider serves seeds nothing, which is the
+  /// state the picker was in before defaults existed.
+  it("seeds only what the list holds", () => {
+    expect(defaultStars("codex", [SPARK])).toEqual([]);
+    expect(defaultStars("codex", [model("gpt-5.6-sol"), SPARK])).toEqual([
+      "gpt-5.6-sol",
+    ]);
+    expect(defaultStars("nobody", [model("gpt-5.6-sol")])).toEqual([]);
   });
 });
 

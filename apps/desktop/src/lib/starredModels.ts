@@ -22,6 +22,38 @@ export function usesShortlist(harness: Harness): boolean {
   return SHORTLISTED.includes(harness);
 }
 
+/// Which fx providers have had their defaults seeded, so it happens once each.
+export const FX_STARS_SEEDED_KEY = "ade.fxStarsSeeded";
+
+/// What fx's picker opens on, per provider, before the reader has starred
+/// anything there.
+///
+/// A shortlisted harness with no stars draws an empty menu, and "No models
+/// shortlisted yet" over a picker that cannot pick is a feature asking to be
+/// set up before it works at all. These are *seeded as real stars* the first
+/// time a provider's list lands rather than drawn as a special case, so the
+/// reader unstars, adds to and reorders them like any others — the list stops
+/// being ours the moment they touch it.
+const FX_DEFAULT_STARS: Record<string, string[]> = {
+  gateway: ["gpt-5.6-sol", "grok-4.6", "claude-opus-5"],
+  codex: ["gpt-6-astra", "gpt-5.6-sol"],
+  grok: ["grok-4.6"],
+};
+
+/// The default stars for `provider`, narrowed to models it actually serves.
+///
+/// A needle matches a whole id or its last segment: the gateway names a model
+/// `openai/gpt-5.6-sol` where fx's own providers name the same thing
+/// `gpt-5.6-sol`, so one needle answers for both. A needle naming nothing in
+/// the list — fx renamed it, or the account cannot reach it — seeds nothing,
+/// which is the same state as before this existed.
+export function defaultStars(provider: string, models: Model[]): ModelId[] {
+  const needles = FX_DEFAULT_STARS[provider] ?? [];
+  return models
+    .filter((m) => needles.some((n) => m.id === n || m.id.endsWith(`/${n}`)))
+    .map((m) => m.id);
+}
+
 /// The models the composer's picker draws.
 ///
 /// Starred ones in the list's own order, plus the session's **current** model

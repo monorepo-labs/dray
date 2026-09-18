@@ -250,12 +250,40 @@ fn read_page(answer: &Value) -> Option<Page> {
 ///
 /// Tier is counted across the whole list rather than per page, or a second page
 /// would start its own top level and put four rows in a two-row cycle.
+///
+/// **The wire's order is not the tier, measured.** Codex answers `gpt-5.6-sol`
+/// ahead of `gpt-6-astra` — its own recommendation first, not its newest — so
+/// reading position as rank put last generation's flagship at the top of the
+/// picker and of ⇧⇥'s cycle. A model this build *names* therefore takes
+/// [`codex_models`]'s order, which is Dray's own answer to which it would put
+/// first, and one it has never heard of **leads**: a model no table here holds
+/// is the new one, and having it top the picker the day it ships is what
+/// reading the list was for. Stable, so several unknowns keep the wire's
+/// order among themselves.
 fn fold(rows: Vec<Row>) -> Vec<Model> {
-    rows.iter()
+    let table = codex_models();
+    let mut models: Vec<Model> = rows
+        .iter()
         .filter(|row| !row.hidden && !row.id.is_empty())
-        .enumerate()
-        .map(|(at, row)| row_to_model(row, at))
-        .collect()
+        .map(row_to_model)
+        .collect();
+
+    models.sort_by_key(|model| {
+        match table.iter().position(|known| known.id == model.id) {
+            Some(at) => at as i64,
+            // Named by `every_codex_model` alone is a generation the picker
+            // retired, still runnable and still answerable by Codex: it sinks
+            // rather than leads, or "unknown here" would promote last year's.
+            None if every_codex_model().iter().any(|m| m.id == model.id) => i64::MAX,
+            None => -1,
+        }
+    });
+
+    for (at, model) in models.iter_mut().enumerate() {
+        model.secondary = at >= TOP_LEVEL;
+    }
+
+    models
 }
 
 /// One page, for a caller that has the whole answer in hand — the tests.
@@ -272,7 +300,9 @@ fn read_rows(answer: &Value) -> Vec<Model> {
 /// would read as unknown and the composer would move it to the default. So a
 /// row Dray already knows keeps the table's id and label, and only a model this
 /// build has never heard of is minted from the wire.
-fn row_to_model(row: &Row, at: usize) -> Model {
+/// Tier is left to [`fold`], which is the only place that knows a row's final
+/// position — the wire's own is not it.
+fn row_to_model(row: &Row) -> Model {
     let known = every_codex_model().into_iter().find(|m| m.arg == row.id);
     let efforts = ladder(row);
 
@@ -291,7 +321,7 @@ fn row_to_model(row: &Row, at: usize) -> Model {
         // One vendor, so there is nothing for the picker to group by.
         provider: String::new(),
         accepts_images: accepts_images(row),
-        secondary: at >= TOP_LEVEL,
+        secondary: false,
         supports_fast: supports_fast(row),
     }
 }

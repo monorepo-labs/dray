@@ -37,12 +37,12 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
 
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
 /// (`fx provider <gateway|codex|grok>`), not discovered — the *models* are.
-/// `label` is fx's own full name for the tooltip; `short` is our own text for
-/// the segmented provider control, where three full names would not fit.
-export const FX_PROVIDERS: { id: string; label: string; short: string }[] = [
-  { id: "gateway", label: "Vercel AI Gateway", short: "Vercel" },
-  { id: "codex", label: "Codex subscription", short: "Codex" },
-  { id: "grok", label: "Grok subscription", short: "Grok" },
+/// `label` is fx's own full name, and it is the screen reader's alone — the
+/// control is marks, drawn by `ProviderIcon`.
+export const FX_PROVIDERS: { id: string; label: string }[] = [
+  { id: "gateway", label: "Vercel AI Gateway" },
+  { id: "codex", label: "Codex subscription" },
+  { id: "grok", label: "Grok subscription" },
 ];
 
 /// Which model each harness was last left on. Absent key = never picked one.
