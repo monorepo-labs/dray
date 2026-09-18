@@ -71,7 +71,7 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
 }
 
 /// Every pid under `root`, `root` included.
-fn descendants(root: u32) -> HashSet<u32> {
+pub(crate) fn descendants(root: u32) -> HashSet<u32> {
     let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
         return HashSet::new();
     };

@@ -462,6 +462,26 @@ async fn remove_session_worktree(
         .map_err(|e| e.to_string())
 }
 
+/// Writes the flags, and on settle stops the session — child, its process
+/// tree, browser tabs. The stop is best-effort and after the write: the flag
+/// has landed either way, and failing the command would tell the frontend a
+/// settle that happened did not.
+#[tauri::command]
+async fn set_session_flags(
+    session_id: &str,
+    archived: Option<bool>,
+    pinned: Option<bool>,
+    manager: State<'_, SessionManager>,
+) -> Result<Option<SessionIndexItem>, Fail> {
+    let updated = store::set_session_flags(session_id, archived, pinned).await?;
+    if updated.is_some() && archived == Some(true) {
+        if let Err(e) = manager.settle(session_id).await {
+            eprintln!("could not stop settled session {session_id}: {e}");
+        }
+    }
+    Ok(updated)
+}
+
 /// Removes a session for good: its child, its index entry, and its log. `false`
 /// means the index never held the id, which the sidebar treats the same as a
 /// success — either way the row it was asked to remove is gone.
@@ -736,7 +756,7 @@ pub fn run() {
             git::log_commits,
             git::log_branch_commits,
             work_status,
-            store::set_session_flags,
+            set_session_flags,
             store::detach_session,
             delete_session,
             fork_session,

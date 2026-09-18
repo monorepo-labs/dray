@@ -2281,9 +2281,9 @@ function SessionRow({
               </RowAction>
             )}
 
-            {/* No Settle while a turn is in flight: the write would land, but
-                the child keeps running and the row moves to the settled list
-                mid-work. Unsettle stays, since a settled row has no turn. */}
+            {/* No Settle while a turn is in flight: settling kills the child,
+                so the turn would die mid-work with nothing saying so. Unsettle
+                stays, since a settled row has no turn. */}
             {(item.archived || status !== "in_progress") && (
               <RowAction
                 label={item.archived ? "Unsettle" : "Settle"}

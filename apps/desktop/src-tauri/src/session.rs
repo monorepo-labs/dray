@@ -1409,15 +1409,26 @@ impl SessionManager {
         self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
     }
 
-    /// The child goes first and its lock is released before the disk work, so a
-    /// dying process can't append one last event to a file we just removed.
-    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+    /// Stops what a session has running and nothing else: the child with
+    /// everything it started, and its browser tabs. Log and index entry stay,
+    /// so an unsettle resumes as any idle session does. Settle and delete both
+    /// come through here — settling is the reader saying the work is done,
+    /// and a child left running behind a settled row was a dev server and a
+    /// page nobody could see.
+    pub async fn settle(&self, session_id: &str) -> Result<()> {
         let running = self.sessions.lock().await.remove(session_id);
         if let Some(session) = running {
-            session.kill().await?;
+            session.kill_tree().await?;
         }
         #[cfg(all(feature = "cef", target_os = "macos"))]
         crate::cef::close_session(session_id);
+        Ok(())
+    }
+
+    /// The child goes first and its lock is released before the disk work, so a
+    /// dying process can't append one last event to a file we just removed.
+    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+        self.settle(session_id).await?;
 
         // Best-effort for the same reason the attachments below are, and with
         // one cost worth naming: a removal that fails here orphans the tree
@@ -2216,6 +2227,31 @@ impl Session {
 
         let _ = self.child.kill().await?;
         Ok(())
+    }
+
+    /// [`kill`](Self::kill), then everything the child had started — a
+    /// background Bash, a dev server. `kill` alone signals the agent's own pid,
+    /// so those were orphaned and kept running under launchd. Only delete and
+    /// settle take this route: a respawn wants the dev server to survive it.
+    ///
+    /// The tree is read *before* the child dies, since a dead parent's children
+    /// are reparented and the walk can no longer find them. Killed after, so a
+    /// pi or fx asked to exit cleanly still gets to.
+    pub async fn kill_tree(self) -> Result<()> {
+        let root = self.child.id();
+        let tree = match root {
+            Some(pid) => tokio::task::spawn_blocking(move || crate::local_servers::descendants(pid))
+                .await
+                .unwrap_or_default(),
+            None => Default::default(),
+        };
+        let killed = self.kill().await;
+        for pid in tree.into_iter().filter(|&p| Some(p) != root) {
+            // ponytail: pid reuse between the walk and this signal is a window
+            // nothing here closes; process groups would, if it ever bites.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+        killed
     }
 }
 

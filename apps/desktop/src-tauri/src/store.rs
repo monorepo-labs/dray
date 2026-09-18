@@ -856,12 +856,13 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
     Ok(Some(updated))
 }
 
-#[tauri::command]
+/// The index write alone. The command in `lib.rs` wraps it, since settling
+/// also stops the session and that needs the manager.
 pub async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
     pinned: Option<bool>,
-) -> Result<Option<SessionIndexItem>, Fail> {
+) -> Result<Option<SessionIndexItem>> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
