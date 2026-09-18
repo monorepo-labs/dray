@@ -53,15 +53,9 @@ export default function SubagentPanel({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      {/* An agent that polls in the background — `until grep …; do sleep; done`
-          on a log line that never lands — leaves a task per attempt, and a
-          session read to have eight of them going. Each row's Stop ends one;
-          this ends the lot, drawn only where there is a lot to end, since with
-          one the row's own button already is the whole job.
-
-          Built like a row — the same padding on the text, the same margin on
-          the control — so it is exactly one row tall and the list reads as one
-          column. */}
+      {/* Only above two or more: with one, the row's own button is the whole
+          job. Built like a row — same text padding, same control margin — so
+          it is exactly one row tall. */}
       {stoppable.length > 1 && (
         <div className="sticky top-0 z-10 flex items-center border-b border-border bg-sidebar text-ui text-muted-foreground">
           <span className="flex-1 px-3 py-2.5">{stoppable.length} running</span>
