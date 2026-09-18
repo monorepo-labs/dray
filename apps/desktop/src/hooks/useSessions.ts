@@ -214,6 +214,24 @@ export function useSessions() {
     /// Which archived side `sessionIndexItems` was read for; `null` until the
     /// first read lands. See the fetch effect for why `showArchived` cannot serve.
     const [indexSide, setIndexSide] = useState<boolean | null>(null);
+
+    /// Which side the rows on screen actually belong to — the one the loaded
+    /// list was read for, not the one the toggle has just asked for.
+    ///
+    /// The two disagree for the length of a fetch, and everything that *draws*
+    /// those rows or spends against them has to read this rather than
+    /// `showArchived`. Drawn by the side just asked for, the settled list is
+    /// regrouped into runs it has no business in: the run keys are what the
+    /// render keys its `Fragment`s by, so 453 of 499 rows move to a key that
+    /// did not exist a frame earlier and React unmounts and remounts every one
+    /// of them — measured at ~190ms in the webview, for a list that is replaced
+    /// wholesale a frame later. `repoPaths` reads it too, or `usePrMarks` is
+    /// armed with the settled sessions' repos and spawns a `gh` per repo for
+    /// rows about to leave the screen (7 here where the active list holds 2).
+    ///
+    /// `showArchived` is the *request* and stays the fetch effect's alone.
+    /// Nothing outside this hook needs it, which is why it is not returned.
+    const archivedShown = indexSide ?? showArchived;
     // One entry per harness, never one list plus a note saying whose it is.
     //
     // A single list held the *previous* harness's answer until the next landed,
@@ -2458,6 +2476,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
 
 }

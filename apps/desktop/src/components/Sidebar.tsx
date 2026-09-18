@@ -126,7 +126,12 @@ type SidebarProps = {
   /// Puts the unread mark back on a session the reader has already read, so it
   /// rejoins the Completed run.
   onMarkUnread: (sessionId: string) => void;
-  showArchived: boolean;
+  /// Which side the rows handed down are from — the side the index was read
+  /// for, never the side the toggle was last pressed to. The two differ for the
+  /// length of a fetch, and drawing this list by the other one's rules re-keys
+  /// almost every row into a run that did not exist: see `archivedShown` in
+  /// [`useSessions`].
+  archivedShown: boolean;
   onToggleArchived: () => void;
   /// Already narrowed to the active space by the caller, like `items` — so
   /// everything below reads one list and the filter, the headings and the rows
@@ -860,7 +865,7 @@ export default function Sidebar({
   onFork,
   onDelete,
   onMarkUnread,
-  showArchived,
+  archivedShown,
   onToggleArchived,
   projects,
   spaces,
@@ -909,15 +914,15 @@ export default function Sidebar({
   // reading and comes back as one run per project — see [`LiveSessions`].
   const live = useMemo(
     () =>
-      showArchived
+      archivedShown
         ? undefined
         : { statusBySession, asking: askingSessions },
-    [showArchived, statusBySession, askingSessions],
+    [archivedShown, statusBySession, askingSessions],
   );
   // No split runs in the settled list, for the reason it draws no Pinned group.
   const groups = useMemo(
-    () => sessionGroups(items, projects, live, showArchived, showArchived ? [] : splits),
-    [items, projects, live, showArchived, splits],
+    () => sessionGroups(items, projects, live, archivedShown, archivedShown ? [] : splits),
+    [items, projects, live, archivedShown, splits],
   );
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
@@ -1020,14 +1025,14 @@ export default function Sidebar({
   const emptyText = search.trim()
     ? `No tasks matching "${search.trim()}".`
     : projectFilter
-      ? showArchived
+      ? archivedShown
         ? "Nothing settled in this project."
         : "No tasks in this project."
       : space
-        ? showArchived
+        ? archivedShown
           ? `Nothing settled in ${space}.`
           : `No tasks in ${space}.`
-        : showArchived
+        : archivedShown
           ? "Nothing settled yet."
           : "No tasks yet.";
 
@@ -1211,15 +1216,15 @@ export default function Sidebar({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={showArchived ? "Show active" : "Show settled"}
+                aria-label={archivedShown ? "Show active" : "Show settled"}
                 onClick={onToggleArchived}
                 className="text-muted-foreground hover:text-foreground"
               >
-                {showArchived ? <Undo2 /> : <CheckCheck />}
+                {archivedShown ? <Undo2 /> : <CheckCheck />}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {showArchived ? "Show active" : "Show settled"}
+              {archivedShown ? "Show active" : "Show settled"}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -1317,12 +1322,12 @@ export default function Sidebar({
                     // "what did I finish today" — so everything older is held back
                     // rather than filtered out. Only there: the active list is a
                     // worklist, where an older row is still open work.
-                    faded={showArchived && !isToday(item.modified)}
+                    faded={archivedShown && !isToday(item.modified)}
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
                     // since it animates a claim that something is happening now.
-                    marksLive={!showArchived}
+                    marksLive={!archivedShown}
                     nested={isNested(item, items)}
                     // A row drawn under Pinned below the top is there because
                     // its parent is — `splitPinned` only carries a nest whole.
@@ -1336,7 +1341,7 @@ export default function Sidebar({
                     }
                     onSelect={onSelect}
                     onDragStart={
-                      onDropSession && !showArchived
+                      onDropSession && !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
                         : undefined
                     }
@@ -1360,8 +1365,8 @@ export default function Sidebar({
         {rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
-            grouped={!showArchived && splits.length > 0}
-            splittable={!!onDropSession && !showArchived && !splitLearned}
+            grouped={!archivedShown && splits.length > 0}
+            splittable={!!onDropSession && !archivedShown && !splitLearned}
           />
         )}
       </div>
