@@ -1417,12 +1417,15 @@ impl SessionManager {
     /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
         let running = self.sessions.lock().await.remove(session_id);
-        if let Some(session) = running {
-            session.kill_tree().await?;
-        }
+        // The tabs close whatever the kill answered: the session is already
+        // out of the map, so nothing would come back to close them.
+        let killed = match running {
+            Some(session) => session.kill_tree().await,
+            None => Ok(()),
+        };
         #[cfg(all(feature = "cef", target_os = "macos"))]
         crate::cef::close_session(session_id);
-        Ok(())
+        killed
     }
 
     /// The child goes first and its lock is released before the disk work, so a
@@ -2234,24 +2237,24 @@ impl Session {
     /// so those were orphaned and kept running under launchd. Only delete and
     /// settle take this route: a respawn wants the dev server to survive it.
     ///
-    /// The tree is read *before* the child dies, since a dead parent's children
-    /// are reparented and the walk can no longer find them. Killed after, so a
-    /// pi or fx asked to exit cleanly still gets to.
+    /// The descendants go *before* the parent, and straight off the walk. A
+    /// dead parent's children are reparented and the walk can no longer find
+    /// them; and a pid held across the parent's shutdown could belong to
+    /// some other process by the time it is signalled. Signalled while the
+    /// parent lives, a pid the walk just found is still its child. Cost:
+    /// anything spawned during a pi or fx graceful exit is missed.
     pub async fn kill_tree(self) -> Result<()> {
-        let root = self.child.id();
-        let tree = match root {
-            Some(pid) => tokio::task::spawn_blocking(move || crate::local_servers::descendants(pid))
+        if let Some(root) = self.child.id() {
+            let tree = tokio::task::spawn_blocking(move || crate::local_servers::descendants(root))
                 .await
-                .unwrap_or_default(),
-            None => Default::default(),
-        };
-        let killed = self.kill().await;
-        for pid in tree.into_iter().filter(|&p| Some(p) != root) {
-            // ponytail: pid reuse between the walk and this signal is a window
-            // nothing here closes; process groups would, if it ever bites.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                .unwrap_or_default();
+            for pid in tree.into_iter().filter(|&p| p != root) {
+                // ponytail: a process group set at spawn would make this one
+                // signal with no walk; four spawn sites to change if this bites.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
         }
-        killed
+        self.kill().await
     }
 }
 
