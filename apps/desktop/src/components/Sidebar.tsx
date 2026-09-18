@@ -1760,9 +1760,11 @@ function RowMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
 
       {/* Portaled, so a click in here never reaches the row's select handler. */}
-      {/* Wide enough for the confirm step's two buttons, which is the widest
-          thing this menu ever holds — the width is fixed rather than fitted so
-          the frame doesn't resize under the cursor when Delete swaps them in. */}
+      {/* Fixed rather than fitted, so the frame doesn't resize under the cursor
+          when Delete swaps the confirm step in. Set by the longest row it draws
+          — 'Detach from parent', not the confirm buttons, which answer a
+          question the heading above them has already asked and are one word
+          each because of it. */}
       {/*
           The digit listener lives up here rather than on the sub's own content:
           `SubContent` renders through a portal, so a handler placed there only
@@ -1773,7 +1775,7 @@ function RowMenu({
           the two elements the key lands on.
       */}
       <ContextMenuContent
-        className="w-48"
+        className="w-40"
         onKeyDown={(e) => {
           if (!forkOpen) return;
           const picked = forkRefs.current[Number(e.key) - 1];
@@ -1804,7 +1806,7 @@ function RowMenu({
                 onSelect={onDelete}
                 className="flex-1 justify-center bg-destructive/10 text-ui"
               >
-                Yes, Delete
+                Delete
               </ContextMenuItem>
             </div>
           </>
@@ -1845,7 +1847,7 @@ function RowMenu({
             {onMarkUnread && (
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
-                Mark as unread
+                Mark unread
               </ContextMenuItem>
             )}
 
