@@ -235,6 +235,10 @@ Write it as a message to a colleague, not as a note to yourself.
 Send when there is something the other session genuinely needs. A message costs
 it a whole turn, so "done" on its own is rarely worth one.
 
+A prompt can name a session as `&Title (id)`, picked from the composer's `&`
+menu. The id in the parentheses is the address — use it as written rather than
+looking the session up again.
+
 ## Driving the browser
 
 Every session has its own browser, drawn in the app beside the chat. `dray

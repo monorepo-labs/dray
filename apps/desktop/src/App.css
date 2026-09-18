@@ -207,6 +207,15 @@
      is also what every issue tracker's own links are, so the tag reads as one
      before it is read as a word. */
   --accent-issue: oklch(0.82 0.13 310);
+  /* A session tag. The fourth that can share one sentence with the rest
+     (`/review &Fix login (…) #DRA-53 @src/lib/issue.ts`), so it takes the same
+     lightness and chroma and the last hue the wheel has room for: red is
+     `--destructive`'s and the two ends of the remaining gap are 70° from
+     command and from mention alike, which is the spacing those two already
+     keep. It lands on `--accent-add`'s hue, and that is a collision only on
+     paper — additions are drawn in diffs and on the sidebar rail, never inside
+     a run of prompt text, so the two are never read side by side. */
+  --accent-session: oklch(0.82 0.13 160);
 
   /* What a raised surface becomes under transparency: a veil rather than a
      fill. White here, black in light — a white veil on a light page is
@@ -378,6 +387,11 @@
      nothing at all — so an issue tag drew as plain prose in every ported light
      palette alike, and nothing said why. Violet at the trio's own lightness. */
   --accent-issue: oklch(0.55 0.16 310);
+  /* Teal at the same lightness, for the dark ramp's reason. Declared here as
+     well as there because a token no block sets resolves to nothing at all,
+     which is how the issue tag spent a while drawing as plain prose on every
+     light palette with nothing saying why. */
+  --accent-session: oklch(0.55 0.16 160);
 
   /* Far shallower than dark's 22%: the same scrim over a near-white surface
      reads as a hole rather than a recess. */
@@ -606,7 +620,8 @@
 
     .text-accent-command,
     .text-accent-mention,
-    .text-accent-issue {
+    .text-accent-issue,
+    .text-accent-session {
       color: inherit;
     }
   }
@@ -870,6 +885,7 @@
   --color-accent-command: var(--accent-command);
   --color-accent-mention: var(--accent-mention);
   --color-accent-issue: var(--accent-issue);
+  --color-accent-session: var(--accent-session);
   --color-accent-merge: var(--accent-merge);
   --color-accent-merge-hover: var(--accent-merge-hover);
   --color-accent-merge-foreground: var(--accent-merge-foreground);

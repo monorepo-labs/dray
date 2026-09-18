@@ -17,6 +17,7 @@
 /// whichever surface the reader noticed second.
 import { findPromptPaths } from "@/lib/filePath";
 import { OPENERS, parseIdentifier } from "@/lib/issue";
+import { parseSessionTag } from "@/lib/sessionTag";
 import { parseSlashCommand } from "@/lib/slash";
 
 export type Segment = {
@@ -25,6 +26,7 @@ export type Segment = {
     | "command"
     | "mention"
     | "issue"
+    | "session"
     | "url"
     | "strong"
     | "em"
@@ -43,6 +45,9 @@ export type Segment = {
   /// file without it and whose `text` keeps it, so the whole reference is one
   /// link and the click can land on the line.
   line?: number;
+  /// The session a `session` tag addresses, so a surface drawing the tag does
+  /// not have to parse the id back out of the text it is painting.
+  sessionId?: string;
 };
 
 /// What each run is painted, kept here with the rule that produces it so the
@@ -54,6 +59,7 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   command: "text-accent-command",
   mention: "text-accent-mention",
   issue: "text-accent-issue",
+  session: "text-accent-session",
   // Underlined and nothing else: a URL is already its own colour of word,
   // and it must read the same in the composer, where it is only text. The
   // decoration follows the *text* rather than naming a page token, since the
@@ -396,6 +402,23 @@ export function highlightSegments(text: string): Segment[] {
       if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
       segments.push(mark);
       plainFrom = i + mark.text.length;
+      i = plainFrom - 1;
+      continue;
+    }
+
+    // A session tag holds spaces, so it is the one run here matched by shape
+    // rather than walked to the next whitespace: the title is the reader's own
+    // words and the id that closes it is what makes the whole thing one thing.
+    // `inner` is the title half, which is what the transcript draws — the id is
+    // an address, and a reader who wanted to read one would not have picked
+    // from a menu.
+    if (opener === "&" && (i === 0 || SPACE.test(text[i - 1]))) {
+      const tag = parseSessionTag(text, i);
+      if (!tag) continue;
+
+      if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
+      segments.push({ kind: "session", text: tag.text, inner: tag.head, sessionId: tag.id });
+      plainFrom = i + tag.text.length;
       i = plainFrom - 1;
       continue;
     }

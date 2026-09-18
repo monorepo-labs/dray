@@ -854,6 +854,23 @@ function App() {
   // resolves against the same directory for the same reason, and off the same
   // expression so the two can't answer for different trees.
   const composerCwd = selectedSession?.cwd ?? projectPath;
+  // What the `&` picker offers: the space's sessions in the repo this composer
+  // is aimed at. The **space** is the same outer scope `visibleSessions` takes,
+  // and for the same reason — a session another space is running must not be
+  // nameable from here any more than it is drawable. The project filter is
+  // deliberately not applied: that is a way of looking at the sidebar, where
+  // this follows where the prompt is actually going, and the two come apart the
+  // moment a session is open in a project the reader has filtered away.
+  const composerProject = selectedSession?.projectPath ?? projectPath;
+  const composerSessions = useMemo(
+    () =>
+      sessionIndexItems.filter(
+        (i) =>
+          sessionInSpace(projects, space, i.projectPath) &&
+          (!composerProject || i.projectPath === composerProject),
+      ),
+    [sessionIndexItems, projects, space, composerProject],
+  );
   const { commands: slashCommands, loading: slashCommandsLoading } = useSlashCommands(
     composerCwd,
     harness,
@@ -1915,6 +1932,8 @@ function App() {
           isNewTask={!selectedSession}
           target={composerTarget}
           issuesConnected={issuesConnected}
+          sessions={composerSessions}
+          statusBySession={statusBySession}
           modelTakesImages={modelTakesImages}
           error={error}
           onDismissError={() => setError(null)}

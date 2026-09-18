@@ -244,6 +244,20 @@ export default function UserMessage({
                 );
               }
 
+              // The title alone, dropping the id the tag carries for the agent's
+              // sake — the same divergence `splitMention` makes, and for the
+              // same reason: the composer has to lay every glyph out, this has
+              // only to be read. Inert, like an unresolved issue tag: the
+              // session it names is a click away in the sidebar, and a button
+              // here would be a second way to do one thing.
+              if (segment.kind === "session" && segment.inner) {
+                return (
+                  <span key={i} className={SEGMENT_COLOR.session} title={segment.text}>
+                    {segment.inner}
+                  </span>
+                );
+              }
+
               if (segment.kind === "url") {
                 return (
                   <button

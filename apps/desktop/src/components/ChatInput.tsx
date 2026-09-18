@@ -5,6 +5,7 @@ import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 import AttachmentTray from "@/components/composer/AttachmentTray";
 import FileMentionMenu from "@/components/composer/FileMentionMenu";
 import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
+import SessionMentionMenu from "@/components/composer/SessionMentionMenu";
 import SlashCommandMenu from "@/components/composer/SlashCommandMenu";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,7 @@ import { applyIssue, issueSpan } from "@/lib/issue";
 import { registerComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
 import { applyMention, mentionSpan } from "@/lib/mention";
+import { applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
 import {
   applyCommand,
   filterCommands,
@@ -32,7 +34,15 @@ import {
   slashQuery,
 } from "@/lib/slash";
 import { cn } from "@/lib/utils";
-import type { Attachment, FileMatch, Issue, QueuedMessage, SlashCommand } from "@/types/events";
+import type {
+  Attachment,
+  FileMatch,
+  Issue,
+  QueuedMessage,
+  SessionIndexItem,
+  SessionStatus,
+  SlashCommand,
+} from "@/types/events";
 
 type ChatInputProps = {
   /// `attachments` is what the tray held. Only paths cross the bridge — the
@@ -56,6 +66,14 @@ type ChatInputProps = {
   /// placeholder and nowhere else — the picker itself simply finds nothing
   /// without one.
   issuesConnected?: boolean;
+  /// What the `&` picker offers: the sessions the sidebar is currently drawing,
+  /// already narrowed by space and project filter there so that one array
+  /// answers for the list, the chords and this.
+  sessions?: SessionIndexItem[];
+  /// Live status per session, for the picker's row marks. The index entry's own
+  /// `status` stands in where a session is absent from this — it carries a
+  /// `completed` across a restart, where this is empty until something moves.
+  statusBySession?: Record<string, SessionStatus>;
   /// Interrupts the running turn. Reachable while `busy` and the box is empty —
   /// with something typed the same button sends, since a prompt written during a
   /// turn is queued onto it rather than refused.
@@ -197,6 +215,8 @@ export default function ChatInput({
   commandsLoading = false,
   cwd = null,
   issuesConnected = false,
+  sessions = [],
+  statusBySession = {},
   onStop,
   onCancelQueued,
   onCancelRecording,
@@ -276,6 +296,15 @@ export default function ChatInput({
   const issue = issueSpan(message, caret);
   const { issues, loading: issuesLoading } = useIssueSearch(issue?.query ?? null);
 
+  // The fourth, and exclusive with the other three for the same reason again:
+  // the caret sits in one token, and a token opening with `&` is none of them.
+  // Reads memory the app already holds, so unlike the `#` picker there is no
+  // waiting state to draw.
+  // Not memoized, unlike the command list beside it: this is one pass over the
+  // sidebar's own array, where that one groups and ranks.
+  const session = sessionSpan(message, caret);
+  const sessionMatches = session ? filterSessions(sessions, sessionId, session.query) : [];
+
   // Flattened in render order, so arrowing through the list and drawing it
   // can't disagree about which row an index names.
   const commandMatches = useMemo(() => groups.flatMap((group) => group.items), [groups]);
@@ -283,7 +312,13 @@ export default function ChatInput({
   // Only the count is shared between the two pickers — the lists themselves stay
   // separate all the way to the pick, so nothing has to be narrowed back out of
   // a union that `mention` already decided.
-  const rowCount = mention ? files.length : issue ? issues.length : commandMatches.length;
+  const rowCount = mention
+    ? files.length
+    : issue
+      ? issues.length
+      : session
+        ? sessionMatches.length
+        : commandMatches.length;
   // A harness that publishes none at all, as against a query matching none of
   // the ones it does — `/xyzzy` in a Claude session still shuts the picker
   // quietly, since there the reader can see what the list holds. Silence is
@@ -301,7 +336,7 @@ export default function ChatInput({
   const menuOpen =
     !dismissed &&
     (rowCount > 0 || issuesLoading || noCommands) &&
-    (query !== null || mention !== null || issue !== null);
+    (query !== null || mention !== null || issue !== null || session !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
   // its end — and an undefined row only shows up as a crash on the keystroke
@@ -312,10 +347,13 @@ export default function ChatInput({
   // every keystroke and would reset the selection on a bare cursor move.
   const mentionQuery = mention?.query ?? null;
   const issueQuery = issue?.query ?? null;
+  const sessionQuery = session?.query ?? null;
   useEffect(() => {
     setActiveIndex(0);
-    if (query === null && mentionQuery === null && issueQuery === null) setDismissed(false);
-  }, [query, mentionQuery, issueQuery]);
+    if (query === null && mentionQuery === null && issueQuery === null && sessionQuery === null) {
+      setDismissed(false);
+    }
+  }, [query, mentionQuery, issueQuery, sessionQuery]);
 
   const pickCommand = (command: SlashCommand) => {
     const next = applyCommand(message, command.name);
@@ -342,6 +380,15 @@ export default function ChatInput({
     textareaRef.current?.focus();
   };
 
+  const pickSession = (picked: SessionIndexItem) => {
+    if (!session) return;
+
+    const next = applySession(message, session, picked.title, picked.sessionId);
+    pendingCaretRef.current = next.caret;
+    setMessage(next.text);
+    textareaRef.current?.focus();
+  };
+
   /// The keyboard's way into whichever list is drawn. A click calls the same
   /// functions directly, so the two routes cannot diverge.
   const pickRow = (index: number) => {
@@ -354,6 +401,12 @@ export default function ChatInput({
     if (issue) {
       const picked = issues[index];
       if (picked) pickIssue(picked);
+      return;
+    }
+
+    if (session) {
+      const picked = sessionMatches[index];
+      if (picked) pickSession(picked);
       return;
     }
 
@@ -790,6 +843,16 @@ export default function ChatInput({
                 bare={isNewTask}
                 loading={issuesLoading}
               />
+            ) : session ? (
+              <SessionMentionMenu
+                sessions={sessionMatches}
+                statusBySession={statusBySession}
+                activeIndex={active}
+                onPick={pickSession}
+                onHover={setActiveIndex}
+                placement={isNewTask ? "below" : "above"}
+                bare={isNewTask}
+              />
             ) : (
               <SlashCommandMenu
                 groups={groups}
@@ -993,6 +1056,22 @@ export default function ChatInput({
                           <span key={i} className={SEGMENT_COLOR.mention}>
                             <span className="opacity-45">{dir}</span>
                             {name}
+                          </span>
+                        );
+                      }
+
+                      // Same bargain, other direction: a session tag's id is
+                      // 36 characters the reader has no use for, and the
+                      // transcript drops it — here it can only be dimmed, since
+                      // one glyph fewer slides everything after it out of
+                      // register with the textarea underneath.
+                      if (segment.kind === "session" && segment.inner) {
+                        return (
+                          <span key={i} className={SEGMENT_COLOR.session}>
+                            {segment.inner}
+                            <span className="opacity-45">
+                              {segment.text.slice(segment.inner.length)}
+                            </span>
                           </span>
                         );
                       }
