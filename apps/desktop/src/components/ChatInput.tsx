@@ -40,7 +40,6 @@ import type {
   Issue,
   QueuedMessage,
   SessionIndexItem,
-  SessionStatus,
   SlashCommand,
 } from "@/types/events";
 
@@ -70,10 +69,6 @@ type ChatInputProps = {
   /// already narrowed by space and project filter there so that one array
   /// answers for the list, the chords and this.
   sessions?: SessionIndexItem[];
-  /// Live status per session, for the picker's row marks. The index entry's own
-  /// `status` stands in where a session is absent from this — it carries a
-  /// `completed` across a restart, where this is empty until something moves.
-  statusBySession?: Record<string, SessionStatus>;
   /// Interrupts the running turn. Reachable while `busy` and the box is empty —
   /// with something typed the same button sends, since a prompt written during a
   /// turn is queued onto it rather than refused.
@@ -209,6 +204,11 @@ const WORDMARK_MASK = {
 /// broken — has the same answer both times.
 const NO_COMMANDS_NOTE = "This agent publishes no slash commands";
 
+/// What the `&` picker says instead of nothing. Says *other* out loud, since
+/// the reader is sitting in one: "no tasks" would read as the sidebar being
+/// empty, which it plainly is not.
+const NO_SESSIONS_NOTE = "No other tasks in this project";
+
 export default function ChatInput({
   onSend,
   commands = [],
@@ -216,7 +216,6 @@ export default function ChatInput({
   cwd = null,
   issuesConnected = false,
   sessions = [],
-  statusBySession = {},
   onStop,
   onCancelQueued,
   onCancelRecording,
@@ -304,6 +303,18 @@ export default function ChatInput({
   // sidebar's own array, where that one groups and ranks.
   const session = sessionSpan(message, caret);
   const sessionMatches = session ? filterSessions(sessions, sessionId, session.query) : [];
+  // Whether `&` is worth naming in the placeholder. The same question the
+  // picker answers, asked of the unfiltered list — one session in a project is
+  // every project's first state, and a tag pointing at nothing but itself is a
+  // feature the reader would go looking for and not find.
+  const canMentionSession = filterSessions(sessions, sessionId, "").length > 0;
+  // A project with nothing else in it, as against a query matching none of what
+  // is there. The `/` picker's distinction exactly: a query that finds nothing
+  // closes quietly, because the reader can see the list it failed against,
+  // where a list that is empty *for good* has to say so or the key reads as
+  // Dray being broken. The placeholder already withholds `&` here, so this is
+  // for somebody who reached for it anyway.
+  const noSessions = session !== null && !canMentionSession;
 
   // Flattened in render order, so arrowing through the list and drawing it
   // can't disagree about which row an index names.
@@ -335,7 +346,7 @@ export default function ChatInput({
   // has neither state.
   const menuOpen =
     !dismissed &&
-    (rowCount > 0 || issuesLoading || noCommands) &&
+    (rowCount > 0 || issuesLoading || noCommands || noSessions) &&
     (query !== null || mention !== null || issue !== null || session !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
@@ -846,7 +857,7 @@ export default function ChatInput({
             ) : session ? (
               <SessionMentionMenu
                 sessions={sessionMatches}
-                statusBySession={statusBySession}
+                emptyNote={noSessions ? NO_SESSIONS_NOTE : undefined}
                 activeIndex={active}
                 onPick={pickSession}
                 onHover={setActiveIndex}
@@ -928,14 +939,28 @@ export default function ChatInput({
                     const mirror = mirrorRef.current;
                     if (mirror) mirror.scrollTop = e.currentTarget.scrollTop;
                   }}
-                  // Names `#` only where it would do something. An unconnected
-                  // reader offered a tag they cannot use learns the app is
-                  // missing a feature rather than that they haven't set one up.
+                  // The two that are always there lead, and the two that come
+                  // and go trail — so the line grows and shrinks at its end
+                  // rather than reshuffling. `&` and `#` are named only where
+                  // they would do something: a reader offered a tag they cannot
+                  // use learns the app is missing a feature rather than that
+                  // they haven't set one up.
+                  //
+                  // `&tasks`, not `&sessions`. Task is the word this app says
+                  // out loud — the sidebar's own button is New task — where
+                  // session is what the index, the CLI and this file call the
+                  // same thing.
                   placeholder={
                     isNewTask
-                      ? issuesConnected
-                        ? "Describe a task. #issues. @files. /skills and commands."
-                        : "Describe a task. @files. /skills and commands."
+                      ? [
+                          "Describe a task.",
+                          "@files.",
+                          "/skills.",
+                          canMentionSession && "&tasks.",
+                          issuesConnected && "#issues.",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")
                       : target
                         ? target
                         : "Send follow-up"

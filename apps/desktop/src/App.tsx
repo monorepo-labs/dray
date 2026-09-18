@@ -1933,7 +1933,6 @@ function App() {
           target={composerTarget}
           issuesConnected={issuesConnected}
           sessions={composerSessions}
-          statusBySession={statusBySession}
           modelTakesImages={modelTakesImages}
           error={error}
           onDismissError={() => setError(null)}

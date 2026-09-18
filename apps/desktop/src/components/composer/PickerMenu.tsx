@@ -290,16 +290,17 @@ export default function PickerMenu<T>({
           // border there is nothing for the rows to be held away from, and the
           // gap only reads as the list sitting oddly short of its own edge.
           //
-          // The right inset is the exception, and it is `scrollbar-overlay`'s
-          // reserved gutter rather than padding — the sidebar's own answer to
-          // this, and here for the same reason. macOS draws an overlay
-          // scrollbar, which takes no layout space, so the thumb landed *on*
-          // the highlighted row's rounded end. `p-1`'s 4px was never enough to
-          // clear it either; `bare`, holding no inset at all, is only where it
-          // was impossible to miss.
+          // No scrollbar at all, and that is the one place this list departs
+          // from every other scrolling box in the app. A picker is walked with
+          // ↑/↓ and closes on the pick, so the bar is never *used* — it only
+          // ever reported how many rows were left, which the list's own cut-off
+          // edge already says. It was an overlay bar besides, taking no layout
+          // space, so the thumb sat on the highlighted row's rounded end: the
+          // gutter that used to be reserved for it goes with it, and `p-1` is
+          // now an even inset again.
           className={cn(
-            "scrollbar-overlay overflow-x-hidden overflow-y-auto overscroll-contain",
-            bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1 pr-0",
+            "scrollbar-none overflow-x-hidden overflow-y-auto overscroll-contain",
+            bare ? "max-h-[14rem]" : "max-h-[14.5rem] p-1",
           )}
         >
           {/* A row's height and inset, so the box is the size one row makes and

@@ -1,30 +1,5 @@
 import PickerMenu from "@/components/composer/PickerMenu";
-import { cn } from "@/lib/utils";
-import type { SessionIndexItem, SessionStatus } from "@/types/events";
-
-/// The mark on the left of a row, saying what that session is doing.
-///
-/// The sidebar's own pair, read from the same two facts: yellow while a turn is
-/// running, green where one finished and has not been read. Idle draws nothing,
-/// which is what makes the few that do worth looking at — and the slot stays
-/// either way, or a row's title would sit at a different indent from the one
-/// above it.
-function StatusMark({ status }: { status: SessionStatus }) {
-  return (
-    <span className="flex w-1.5 shrink-0 items-center justify-center">
-      {status !== "idle" && (
-        <span
-          role="img"
-          aria-label={status === "in_progress" ? "Working" : "Unread"}
-          className={cn(
-            "size-1.5 rounded-full",
-            status === "in_progress" ? "bg-accent-command" : "bg-accent-add",
-          )}
-        />
-      )}
-    </span>
-  );
-}
+import type { SessionIndexItem } from "@/types/events";
 
 /// The `&` picker's rows.
 ///
@@ -32,23 +7,27 @@ function StatusMark({ status }: { status: SessionStatus }) {
 /// project's sessions, most recently touched first — so there is nothing a
 /// heading would separate.
 ///
-/// The title leads because it is the whole of what a session is recognised by,
-/// and the branch trails dimmed because it is the only thing telling two
-/// sessions with one title apart. No id anywhere on the row: it is what the
-/// pick writes into the text, and it says nothing to the person choosing.
+/// **The title is the whole row.** Every other picker leads with an icon
+/// carrying a fact the name doesn't — a file's type, an issue's state — where a
+/// session's title is already the only thing anybody tells two of them apart
+/// by. A status mark was tried on both edges and taken off: it draws for a
+/// working or unread session and nothing else, so it is absent from most rows,
+/// and what the reader is doing here is naming a session rather than checking
+/// on one. The sidebar is where that question is asked and answered.
 export default function SessionMentionMenu({
   sessions,
-  statusBySession,
   activeIndex,
   onPick,
   onHover,
+  emptyNote,
   placement = "above",
   bare = false,
 }: {
   sessions: SessionIndexItem[];
-  /// Live status, which outranks the index entry's own — that one carries a
-  /// `completed` across a restart and nothing newer.
-  statusBySession: Record<string, SessionStatus>;
+  /// Drawn where this project holds no other task. A query matching nothing
+  /// leaves it unset and the picker simply closes, the reading the `#` and `@`
+  /// pickers take of the same case.
+  emptyNote?: string;
   activeIndex: number;
   onPick: (session: SessionIndexItem) => void;
   onHover: (index: number) => void;
@@ -58,29 +37,17 @@ export default function SessionMentionMenu({
   return (
     <PickerMenu
       groups={[{ label: null, items: sessions }]}
-      label="Sessions"
+      // What a screen reader announces, so it takes the reader's word rather
+      // than the index's: this app says task everywhere it speaks out loud.
+      label="Tasks"
       keyOf={(session) => session.sessionId}
       activeIndex={activeIndex}
       onPick={onPick}
       onHover={onHover}
       placement={placement}
       bare={bare}
-      renderItem={(session) => (
-        <>
-          <StatusMark status={statusBySession[session.sessionId] ?? session.status} />
-
-          <span className="min-w-0 truncate font-medium">{session.title}</span>
-
-          {/* Trailing, so it can't push the title off its own left edge — and
-              the worktree name where there is one, since that is the word the
-              reader has seen in the sidebar and on the branch. */}
-          {(session.worktreeName ?? session.branch) && (
-            <span className="ml-auto shrink-0 truncate text-muted-foreground">
-              {session.worktreeName ?? session.branch}
-            </span>
-          )}
-        </>
-      )}
+      emptyNote={emptyNote}
+      renderItem={(session) => <span className="min-w-0 truncate">{session.title}</span>}
     />
   );
 }
