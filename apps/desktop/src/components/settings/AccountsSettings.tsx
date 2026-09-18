@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   Copy,
@@ -8,11 +10,10 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  X,
+  SquareTerminal,
 } from "lucide-react";
 
 import AgentIcon from "@/components/AgentIcon";
-import OpenInButton from "@/components/OpenInButton";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -22,9 +23,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { inputClassName } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import SettingsHeaderAction from "@/components/settings/headerAction";
 import { useAgentAccounts, useAuthOptions } from "@/hooks/useAgentAccounts";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
-import { TERMINAL_OPENER } from "@/lib/openWith";
 import { cn } from "@/lib/utils";
 import type { Account, AccountState, AgentAccounts, Harness } from "@/types/events";
 
@@ -41,13 +43,16 @@ const STATE_LABELS: Record<AccountState, string> = {
   unknown: "Couldn't tell",
 };
 
-/// Which harnesses hold more than one credential, and so have something to
-/// *add* rather than only something to change.
+/// Which harnesses have something to *add* rather than only something to change.
 ///
-/// Claude and Codex hold exactly one each: signing in again replaces it, which
-/// is the ⋯ menu's "change sign-in method" and not an addition. An Add button on
-/// those rows promised a second account neither CLI can hold.
-const MULTI_ACCOUNT: Harness[] = ["pi", "fx"];
+/// pi alone, and it is about whether the providers can be *listed* rather than
+/// how many credentials the CLI holds. Claude and Codex hold one each: signing
+/// in again replaces it, which is the ⋯ menu's "change sign-in method" and not
+/// an addition. fx holds three and every one of them is already a row, signed
+/// in or not — so Add opened a form to reach a provider the reader could sign
+/// into from the row in front of them. pi publishes no provider list at all,
+/// which is what leaves a name only the reader can supply.
+const MULTI_ACCOUNT: Harness[] = ["pi"];
 
 /// The picker row that swaps the list for a text field. Not a provider id, and
 /// it never reaches Rust: `effectiveProvider` resolves it to whatever was typed.
@@ -75,24 +80,36 @@ function StateDot({ state }: { state: AccountState }) {
   );
 }
 
-/// A command the reader runs, with a copy on it.
+/// The command an interactive sign-in takes: a button that runs it, and a copy
+/// for the reader who would rather take it somewhere else.
 ///
-/// **Dray shows it and never runs it.** macOS lets no app put text on another's
-/// prompt without an Accessibility grant, so the honest pair is the string with
-/// a copy beside a terminal opened at the working directory — which is also
-/// what lets the reader's *own* terminal be honoured. Handing a `.command`
-/// script to `open` could not: measured, only Terminal.app runs one, and
-/// Ghostty and Warp accept it and run nothing.
+/// **Dray opens the terminal and runs it**, which reverses this tab's first
+/// shape. Showing the string beside a terminal opened at the working directory
+/// was the careful reading — macOS lets no app type into another's prompt — but
+/// what it asked of somebody who had just pressed Sign in was to copy a
+/// command, find the window that had opened and paste it. The `.command` script
+/// route needs no Accessibility grant at all, so the caution was about a
+/// permission that was never involved.
 ///
-/// Taken from the PR panel's setup pane, with **one difference that is the
-/// whole of why it is written out here**: there the chip and the terminal
-/// button sit on separate rows, so their heights never had to agree. Side by
-/// side they do — the chip's `py-1` around a `size-6` button comes to 34px
-/// against [OpenInButton]'s 26 — so the chip is pinned to `h-6` and its copy
-/// button to `size-5`, which is the button's own height rather than a third
-/// number. Changing `OpenInButton` instead would move it in the PR panel too,
-/// where nothing is wrong with it.
-function CommandRow({ command, cwd }: { command: string; cwd: string }) {
+/// The cost is stated and accepted: such a file is run by **Terminal.app
+/// alone** — measured, with Ghostty and Warp accepting the open and running
+/// nothing — so the terminal picked next door is not honoured here. That pick
+/// still stands for opening a *directory*, which is all the table behind it
+/// promises, and the copy button is what serves anybody who wants this
+/// elsewhere.
+///
+/// The chip is pinned to `h-6` with a `size-5` copy inside it so it matches the
+/// button beside it: its own `py-1` around a `size-6` button comes to 34px
+/// where a small button draws at 26.
+function CommandRow({
+  command,
+  onRun,
+  busy,
+}: {
+  command: string;
+  onRun: () => void;
+  busy: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -114,9 +131,10 @@ function CommandRow({ command, cwd }: { command: string; cwd: string }) {
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         </button>
       </div>
-      {/* The reader's own terminal, from the pick they already made next door —
-          not Terminal.app, and not a second setting to find. */}
-      <OpenInButton path={cwd} opener={TERMINAL_OPENER} />
+      <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onRun}>
+        <SquareTerminal className="size-3.5" />
+        Run in Terminal
+      </Button>
     </div>
   );
 }
@@ -131,12 +149,21 @@ function CommandRow({ command, cwd }: { command: string; cwd: string }) {
 function AccountRow({
   account,
   busy,
+  confirming,
   onChange,
+  onAskSignOut,
+  onCancelSignOut,
   onSignOut,
 }: {
   account: Account;
   busy: boolean;
+  /// Whether this row is the one asking. Held by the parent rather than here,
+  /// the reading the transcription rows already take: one press should leave
+  /// one question on screen, not one per row that has ever been pressed.
+  confirming: boolean;
   onChange: () => void;
+  onAskSignOut: () => void;
+  onCancelSignOut: () => void;
   onSignOut: () => void;
 }) {
   const signedIn = account.state === "logged_in";
@@ -164,35 +191,68 @@ function AccountRow({
         {subtext && <p className="truncate text-ui text-muted-foreground">{subtext}</p>}
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" disabled={busy} aria-label={`${account.label} options`}>
-            <MoreHorizontal className="size-3.5" />
+      {/* Asked in the row, not in a dialog — a modal over the whole window for
+          a credential the reader can put back is more than the question is
+          worth, and it is the reading the transcription rows already take.
+          Nothing is undoable here, but every one of these is a sign-in away.
+
+          It is a question because the menu item next to Reauthorize *was*
+          undoable and this one is not: one slip sent `codex logout` with
+          nothing between the press and the credential. */}
+      {confirming ? (
+        <div className="flex items-center gap-1">
+          <span className="text-ui text-muted-foreground">Sign out?</span>
+          <Button variant="ghost" size="sm" onClick={onCancelSignOut}>
+            Cancel
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {/* Three wordings, and the middle one is the fix: with a single
-              method there is nothing to *change*, so fx's Codex and Grok rows —
-              a subscription and nothing else — offered an action the form could
-              not carry out. Reauthorize is what one method allows, and it is
-              also the answer for a credential that has quietly gone stale. */}
-          <DropdownMenuItem onSelect={onChange}>
-            {account.state !== "logged_in"
-              ? "Sign in"
-              : account.canChangeMethod
-                ? "Change sign-in method"
-                : "Reauthorize"}
-          </DropdownMenuItem>
-          {/* Absent rather than disabled where the CLI has no non-interactive
-              sign-out: a greyed item invites a hover for a reason there is
-              nowhere to put. */}
-          {account.canSignOut && (
-            <DropdownMenuItem variant="destructive" onSelect={onSignOut}>
-              Sign out
+          <Button variant="destructive" size="sm" disabled={busy} onClick={onSignOut}>
+            Sign out
+          </Button>
+        </div>
+      ) : /* A row with nothing signed in has exactly one thing to offer, and
+             `can_sign_out` follows being signed in on every harness — so its
+             menu was one item behind a caret, which is a button with a step in
+             front of it. The action is drawn on the row instead, and the menu
+             is kept for the signed-in half, where there are genuinely two. */
+      !signedIn ? (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onChange}>
+          Sign in
+        </Button>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              aria-label={`${account.label} options`}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          {/* Wide enough for the longest item to stay on one line: the menu's
+              own width is its trigger's, and a ⋯ button is 28px, so "Change
+              sign-in method" wrapped over two. */}
+          <DropdownMenuContent align="end" className="min-w-48">
+            {/* Two wordings, and the second is the fix: with a single method
+                there is nothing to *change*, so fx's Codex and Grok rows — a
+                subscription and nothing else — offered an action the form could
+                not carry out. Reauthorize is what one method allows, and it is
+                also the answer for a credential that has quietly gone stale. */}
+            <DropdownMenuItem onSelect={onChange}>
+              {account.canChangeMethod ? "Change sign-in method" : "Reauthorize"}
             </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            {/* Absent rather than disabled where the CLI has no non-interactive
+                sign-out: a greyed item invites a hover for a reason there is
+                nowhere to put. */}
+            {account.canSignOut && (
+              <DropdownMenuItem variant="destructive" onSelect={onAskSignOut}>
+                Sign out
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }
@@ -262,7 +322,6 @@ function SignInForm({
   reauth,
   cwd,
   onDone,
-  onCancel,
   onSubmit,
 }: {
   agent: AgentAccounts;
@@ -273,7 +332,6 @@ function SignInForm({
   reauth: boolean;
   cwd: string;
   onDone: () => void;
-  onCancel: () => void;
   onSubmit: (
     harness: Harness,
     provider: string | null,
@@ -285,6 +343,11 @@ function SignInForm({
   const [typed, setTyped] = useState("");
   const [auth, setAuth] = useState<string | null>(currentAuth);
   const [key, setKey] = useState("");
+  // The terminal route's own two bits of state. Separate from the page's
+  // `busy`, which is about the probes: opening a terminal neither reads nor
+  // writes a credential, so it must not disable the list behind it.
+  const [running, setRunning] = useState(false);
+  const [runFailed, setRunFailed] = useState<string | null>(null);
 
   const needsProvider = agent.providers.length > 0;
   // A row in the list rather than a field standing open beside it. The field
@@ -320,7 +383,11 @@ function SignInForm({
 
   return (
     <form
-      className="flex flex-col gap-3 rounded-xl border border-border/60 p-3"
+      // `mt-6` because this card is the panel's only child and the panel starts
+      // at the dialog's top edge: without it the card's own top corner runs
+      // under the close cross, which is absolute against the dialog and sits
+      // outside every layout in here.
+      className="mt-6 flex flex-col gap-3 rounded-xl border border-border/60 p-3"
       onSubmit={(e) => {
         e.preventDefault();
         if (!ready || !picked?.needsKey) return;
@@ -329,15 +396,14 @@ function SignInForm({
         );
       }}
     >
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 text-ui font-medium">
-          <AgentIcon harness={agent.harness} className="size-4 text-muted-foreground" />
-          {again ? "Reauthorize" : "Sign in to"} {agent.label}
-        </span>
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel} aria-label="Cancel">
-          <X className="size-3.5" />
-        </Button>
-      </div>
+      {/* No control of its own on this row: leaving is a back arrow up in the
+          dialog's header, level with the close cross, where the reader already
+          looks to get out of something. A cross here said "close" a few pixels
+          from the one that closes the dialog. */}
+      <span className="flex items-center gap-2 text-ui font-medium">
+        <AgentIcon harness={agent.harness} className="size-4 text-muted-foreground" />
+        {again ? "Reauthorize" : "Sign in to"} {agent.label}
+      </span>
 
       {needsProvider && (
         <>
@@ -444,14 +510,30 @@ function SignInForm({
         </label>
       )}
 
-      {/* A command route ends here rather than at a button: there is nothing
-          for Dray to do, so a Save would be a control that ran nothing. The
-          reader copies, pastes, and comes back to Refresh. */}
+      {/* A command route ends at its own button rather than at the form's: the
+          sign-in happens over in the terminal, so there is nothing here to
+          Save. The reader comes back to Refresh once it has landed. */}
       {picked && !picked.needsKey && (
         <div className="flex gap-3">
           <span className="w-20 shrink-0 pt-1.5 text-ui text-muted-foreground">Run</span>
           <div className="min-w-0 flex-1">
-            <CommandRow command={picked.command ?? ""} cwd={cwd} />
+            <CommandRow
+              command={picked.command ?? ""}
+              busy={running}
+              onRun={() => {
+                setRunFailed(null);
+                setRunning(true);
+                void invoke("run_agent_login", {
+                  harness: agent.harness,
+                  provider: effectiveProvider,
+                  auth: picked.id,
+                  cwd,
+                })
+                  .catch((err) => setRunFailed(String(err)))
+                  .finally(() => setRunning(false));
+              }}
+            />
+            {runFailed && <p className="pt-1.5 text-ui text-destructive">{runFailed}</p>}
           </div>
         </div>
       )}
@@ -531,7 +613,9 @@ export default function AccountsSettings({
   cwd,
 }: {
   /// Where the terminal button opens. The selected session's directory where
-  /// there is one, since pi and fx both allow a credential per project.
+  /// there is one. A courtesy, and the whole of what the directory decides: all
+  /// four stores live under the reader's home, so a sign-in run in one tree is
+  /// a sign-in everywhere.
   cwd: string;
 }) {
   // Owned here rather than in `App`, unlike the issue tracker's, and the
@@ -552,6 +636,10 @@ export default function AccountsSettings({
     /// announced itself as a fresh sign-in.
     reauth: boolean;
   } | null>(null);
+  // Which row is asking "sign out?", as one id rather than a flag per row: one
+  // press should leave one question on screen. `harness:provider`, since a
+  // provider name alone repeats across harnesses.
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const agent = agents?.find((a) => a.harness === signingIn?.harness) ?? null;
 
@@ -562,16 +650,50 @@ export default function AccountsSettings({
           to see which account they are on. Both facts are already said where
           they are true: the command row shows what to run, and the key field
           says whose store it lands in. */}
-      <div className="flex justify-end">
-        {/* Refresh is not a convenience. Nothing comes back from a terminal, so
-            after a sign-in the page's own read is the only way it learns.
-            Nothing polls instead: a sign-in can take a browser round trip, and
-            four children on a timer to catch it is worse than a button. */}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void refresh()}>
-          {busy ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
-          Refresh
-        </Button>
-      </div>
+      {/* Refresh is not a convenience. Nothing comes back from a terminal, so
+          after a sign-in the page's own read is the only way it learns. Nothing
+          polls instead: a sign-in can take a browser round trip, and four
+          children on a timer to catch it is worse than a button.
+
+          Up in the dialog's header rather than down here, and a glyph rather
+          than a word: it acts on the whole tab, not on the rows nearest it, and
+          a row of its own pushed every account down the page and scrolled away
+          the moment the reader went looking for it. The name it loses off its
+          face it keeps in a real tooltip and in `aria-label`.
+
+          The form takes the strip over instead: a back arrow leading it, level
+          with the close cross, where a reader already looks to get out of
+          something. Refresh has nothing to re-read while a credential is being
+          written, and the two would have sat a few pixels apart meaning
+          different kinds of "leave". */}
+      <SettingsHeaderAction>
+        {signingIn ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Back"
+            className="mr-auto"
+            onClick={() => setSigningIn(null)}
+          >
+            <ArrowLeft className="size-3.5" />
+          </Button>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh"
+                disabled={busy}
+                onClick={() => void refresh()}
+              >
+                {busy ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh</TooltipContent>
+          </Tooltip>
+        )}
+      </SettingsHeaderAction>
 
       {error && <p className="text-ui text-destructive">{error}</p>}
 
@@ -579,9 +701,12 @@ export default function AccountsSettings({
         // The probes spawn four children, so the first open has a real wait in
         // it. A spinner rather than empty rows: an empty list here would read
         // as "no agent is signed in", which is a claim rather than a delay.
+        // It says what is being waited for, not how — "Asking each agent" was
+        // Dray describing its own four children to somebody who came to read
+        // one list.
         <div className="flex items-center gap-2 py-4 text-ui text-muted-foreground">
           <Spinner className="size-3.5" />
-          Asking each agent&hellip;
+          Loading accounts&hellip;
         </div>
       ) : agent && signingIn ? (
         <SignInForm
@@ -593,19 +718,16 @@ export default function AccountsSettings({
           cwd={cwd}
           onSubmit={addAccount}
           onDone={() => setSigningIn(null)}
-          onCancel={() => setSigningIn(null)}
         />
       ) : (
         agents.map((agent) => {
-          // fx holds three providers and pi any number, so "add" only means
-          // something while one is unsigned — with all three fx providers
-          // connected there is nothing left to add, and the ⋯ menu is where a
-          // connected one gets changed.
-          const canAdd =
-            agent.installed &&
-            MULTI_ACCOUNT.includes(agent.harness) &&
-            (agent.providers.length === 0 ||
-              agent.providers.length > agent.accounts.filter((a) => a.state === "logged_in").length);
+          // pi's rows are the providers it is *configured* for, and its own
+          // list is a seed rather than a catalogue — a name this build never
+          // heard of is still one `pi auth check` can answer for, so there is
+          // always something left to add. fx used to count unsigned providers
+          // here; with all three drawn as rows there is nothing for the count
+          // to gate.
+          const canAdd = agent.installed && MULTI_ACCOUNT.includes(agent.harness);
 
           return (
             <div key={agent.harness} className="flex flex-col gap-1.5">
@@ -618,25 +740,35 @@ export default function AccountsSettings({
                 <MissingAgent agent={agent} />
               ) : (
                 <>
-                  {agent.accounts.map((account) => (
-                    <AccountRow
-                      key={account.provider ?? account.label}
-                      account={account}
-                      busy={busy}
-                      onChange={() =>
-                        setSigningIn({
-                          harness: agent.harness,
-                          provider: account.provider,
-                          // The method in use, matched back to the option id it
-                          // came from — the row carries a label ("OAuth") where
-                          // the form picks by id ("oauth").
-                          currentAuth: authIdOf(account.authType),
-                          reauth: account.state === "logged_in",
-                        })
-                      }
-                      onSignOut={() => void signOut(agent.harness, account.provider)}
-                    />
-                  ))}
+                  {agent.accounts.map((account) => {
+                    const id = `${agent.harness}:${account.provider ?? ""}`;
+                    return (
+                      <AccountRow
+                        key={account.provider ?? account.label}
+                        account={account}
+                        busy={busy}
+                        confirming={confirming === id}
+                        onChange={() => {
+                          setConfirming(null);
+                          setSigningIn({
+                            harness: agent.harness,
+                            provider: account.provider,
+                            // The method in use, matched back to the option id
+                            // it came from — the row carries a label ("OAuth")
+                            // where the form picks by id ("oauth").
+                            currentAuth: authIdOf(account.authType),
+                            reauth: account.state === "logged_in",
+                          });
+                        }}
+                        onAskSignOut={() => setConfirming(id)}
+                        onCancelSignOut={() => setConfirming(null)}
+                        onSignOut={() => {
+                          setConfirming(null);
+                          void signOut(agent.harness, account.provider);
+                        }}
+                      />
+                    );
+                  })}
 
                   {/* Installed, and nothing to show. pi is the case: its rows
                       come from the model list, so a pi nobody has signed into

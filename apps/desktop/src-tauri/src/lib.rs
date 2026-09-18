@@ -780,6 +780,7 @@ pub fn run() {
             accounts::agent_auth_options,
             accounts::add_agent_account,
             accounts::sign_out_agent,
+            accounts::run_agent_login,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,

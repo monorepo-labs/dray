@@ -26,6 +26,10 @@ export function useAgentAccounts() {
     setBusy(true);
     try {
       setAgents(await invoke<AgentAccounts[]>("agent_accounts"));
+      // A read that worked describes the page now, so whatever failed before it
+      // no longer does — and the sentence is the only thing that would still be
+      // claiming otherwise.
+      setError(null);
     } catch (err) {
       // The list is kept: a failed refresh must not blank rows that were read
       // a moment ago and are still true. Same reading the PR marks cache takes

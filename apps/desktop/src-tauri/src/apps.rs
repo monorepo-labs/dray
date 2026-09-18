@@ -360,15 +360,34 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
         command.push_str(arg);
     }
 
+    run_in_terminal(&command, &cwd).await
+}
+
+/// Runs one shell line in Terminal.app at `cwd`.
+///
+/// **The caller owns what is in that line**, and every one of them composes it
+/// from a closed set — this harness's [`Harness::login_args`], or an
+/// [`crate::accounts::AuthOption`] whose command is a literal in that table.
+/// Nothing a frontend typed may reach here: the string is written into a shell
+/// script, so the safety is in where it came from and not in any escaping this
+/// could do to it.
+pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
+    }
+
     // Terminal runs a `.command` from the reader's home, not from the script's
     // own directory, so the `cd` is what puts the login in the session's tree.
-    // Self-delete last: a reader who closes the window mid-login leaks one file
-    // into a temp dir macOS reaps on its own.
-    let script = format!(
-        "#!/bin/sh\ncd {} || exit 1\n{}\nrm -f -- \"$0\"\n",
-        sh_quote(&cwd),
-        command
-    );
+    // Omitted where there is no directory to name — the Accounts tab is reached
+    // with no session selected — since `cd ''` fails and would take the command
+    // with it. Self-delete last: a reader who closes the window mid-login leaks
+    // one file into a temp dir macOS reaps on its own.
+    let enter = if cwd.is_empty() {
+        String::new()
+    } else {
+        format!("cd {} || exit 1\n", sh_quote(cwd))
+    };
+    let script = format!("#!/bin/sh\n{enter}{command}\nrm -f -- \"$0\"\n");
 
     let path = std::env::temp_dir().join(format!("dray-login-{}.command", uuid::Uuid::now_v7()));
     write_script(&path, &script)

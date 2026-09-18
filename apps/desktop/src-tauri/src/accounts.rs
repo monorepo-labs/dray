@@ -156,14 +156,12 @@ pub struct AuthOption {
     /// The command to run, spelled the way the reader would type it, for every
     /// option Dray cannot carry out.
     ///
-    /// **Shown and copied, never run.** macOS lets no app put text on
-    /// another's prompt without an Accessibility grant, so the honest pair is
-    /// this string with a copy on it beside a terminal opened at the working
-    /// directory — the same bargain the PR panel's setup pane already makes,
-    /// and the reason this is a `String` here rather than a script composed in
-    /// [`crate::apps`]. It also means the reader's own terminal is honoured,
-    /// which a `.command` file handed to `open` could never do: only
-    /// Terminal.app runs one.
+    /// **Shown, copyable, and run by [`run_agent_login`] on the reader's say
+    /// so.** Every one of these is a literal in [`auth_options`], which is what
+    /// makes running it safe: the frontend names an option id and the string is
+    /// looked up here, so nothing anybody typed reaches a command line. The
+    /// string is still drawn, since a reader is owed sight of what a button is
+    /// about to run in their shell.
     pub command: Option<String>,
     /// What the reader should know before picking it — where it bills, or what
     /// they will have to do once they are in the terminal.
@@ -540,16 +538,13 @@ async fn codex() -> anyhow::Result<Vec<Account>> {
     // fallback rather than dropped, since a CLI moving its own output back to
     // the ordinary stream should cost nothing.
     let text = if said.err.is_empty() { said.out } else { said.err };
-    let signed_in = codex_signed_in(said.ok, &text);
+    let state = codex_state(said.ok, &text);
+    let signed_in = state == AccountState::LoggedIn;
 
     Ok(vec![Account {
         provider: None,
         label: "OpenAI".to_string(),
-        state: if signed_in {
-            AccountState::LoggedIn
-        } else {
-            AccountState::LoggedOut
-        },
+        state,
         detail: text.lines().next().filter(|line| !line.is_empty()).map(str::to_string),
         auth_type: signed_in.then(codex_auth_mode).flatten(),
         can_sign_out: signed_in,
@@ -557,14 +552,22 @@ async fn codex() -> anyhow::Result<Vec<Account>> {
     }])
 }
 
-/// Whether Codex's own answer means signed in.
+/// What Codex's own answer means, in three states rather than two.
 ///
-/// Both halves are needed and neither survived both captures alone: a
-/// signed-out `codex` exits non-zero *and* says so in words, and reading the
-/// exit code alone would make any future non-zero exit — a config warning, a
-/// network hiccup — report the reader as signed out.
-fn codex_signed_in(ok: bool, text: &str) -> bool {
-    ok && !text.to_lowercase().contains("not logged in")
+/// A signed-out `codex` exits non-zero *and* says so in words, so both halves
+/// are read — and the third state is what the pair buys. **A non-zero exit that
+/// does not say "not logged in" is `Unknown`**, not signed out: a config error
+/// or a broken install would otherwise report a perfectly good account as
+/// missing and send the reader off to replace a credential that was never the
+/// problem. Same reading the dot's third colour exists for.
+fn codex_state(ok: bool, text: &str) -> AccountState {
+    if text.to_lowercase().contains("not logged in") {
+        AccountState::LoggedOut
+    } else if ok {
+        AccountState::LoggedIn
+    } else {
+        AccountState::Unknown
+    }
 }
 
 /// How Codex is signed in, read off its own credential file.
@@ -761,16 +764,88 @@ fn pi_auth_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".pi/agent/auth.json"))
 }
 
+/// Serializes Dray's own read-modify-write of pi's credential file.
+///
+/// The file is rewritten **whole**, so two of these interleaving loses whichever
+/// read first — and the pair that can do it is ordinary: saving a key while a
+/// sign-out is in flight. It cannot lock against *pi*, which is a second writer
+/// with no lock to take; what it removes is this process racing itself.
+static PI_STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// pi's credential file, or an empty map.
 ///
-/// A missing or unreadable file reads as *no credentials* rather than as an
-/// error: every caller either lists what is there or is about to write into it,
-/// and both are correct against an empty map.
+/// **For reading only.** A missing, unreadable or malformed file all read as no
+/// credentials here, which is right for a caller listing what is there: the
+/// worst case is a row saying a provider is not configured when it is, and the
+/// probe next door answers the same question independently.
+///
+/// A *writer* must take [`pi_auth_strict`] instead, or an unreadable file would
+/// be replaced by a map holding one entry.
 fn pi_auth() -> Map<String, Value> {
     pi_auth_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str::<Map<String, Value>>(&raw).ok())
         .unwrap_or_default()
+}
+
+/// pi's credential file for a caller about to rewrite it.
+///
+/// **A file that cannot be read or cannot be parsed is an error, never an empty
+/// map**, and the difference is every other credential in it: the file is
+/// rewritten whole, so treating a transient read failure or a malformed byte as
+/// "no credentials" writes a file holding one entry and silently drops every
+/// OAuth record `/login` put there. Only *absent* is empty, which is the
+/// ordinary state of a machine that has never signed pi in.
+///
+/// Malformed is refused rather than recovered from — the opposite of
+/// `settings::update`, and for the opposite reason: bytes that cannot be parsed
+/// cannot be preserved, and what would be lost here is credentials rather than
+/// preferences.
+fn pi_auth_strict() -> Result<Map<String, Value>, String> {
+    let path = pi_auth_path().ok_or("no home directory")?;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(err) => return Err(format!("couldn't read pi's credentials: {err}")),
+    };
+    if raw.trim().is_empty() {
+        return Ok(Map::new());
+    }
+    serde_json::from_str(&raw).map_err(|err| {
+        format!("pi's credential file isn't readable JSON ({err}), so Dray won't overwrite it.")
+    })
+}
+
+/// Reads pi's store, lets `edit` change it, and puts it back — or changes
+/// nothing at all.
+///
+/// One function because both writers need the same four guarantees: the lock
+/// above, a strict read, `0600` on the *create*, and a rename rather than a
+/// truncating write. `edit` answers `Err` to call the whole thing off, which is
+/// what a sign-out for a provider pi does not hold does.
+fn pi_edit_store(edit: impl FnOnce(&mut Map<String, Value>) -> Result<(), String>) -> Result<(), String> {
+    let path = pi_auth_path().ok_or("no home directory")?;
+    let dir = path.parent().ok_or("no pi directory")?.to_path_buf();
+
+    // Held across the read, the edit and the rename — the whole point of it —
+    // and nothing in here awaits, so it cannot be held across a suspend.
+    let _guard = PI_STORE.lock().unwrap_or_else(|err| err.into_inner());
+
+    let mut auth = pi_auth_strict()?;
+    edit(&mut auth)?;
+    let body = serde_json::to_string_pretty(&auth).map_err(|err| err.to_string())?;
+
+    std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't reach pi's directory: {err}"))?;
+    let tmp = dir.join(format!("auth.json.dray-{}", uuid::Uuid::now_v7()));
+    write_private(&tmp, &body).map_err(|err| format!("couldn't write pi's credentials: {err}"))?;
+    if let Err(err) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("couldn't replace pi's credentials: {err}"));
+    }
+
+    // The model list is per provider, so a credential moving is a new list.
+    crate::harness::pi::models::forget();
+    Ok(())
 }
 
 /// Which providers pi holds a credential for, **names only**.
@@ -790,54 +865,25 @@ fn pi_store_providers() -> Vec<String> {
 /// the row says the credential is not configured instead of claiming a save
 /// that did nothing.
 ///
-/// Read-modify-write under a temp file and a rename, at `0600` **on the
-/// create** — `fs::write` creates at the process umask, so any other order
-/// leaves a window where the reader's key is world-readable, the same reading
-/// the tracker key's own write records.
-async fn pi_write_key(provider: &str, key: &str) -> Result<(), String> {
-    let path = pi_auth_path().ok_or("no home directory")?;
-    let dir = path.parent().ok_or("no pi directory")?.to_path_buf();
-    std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't reach pi's directory: {err}"))?;
-
-    let mut auth = pi_auth();
-    auth.insert(
-        provider.to_string(),
-        serde_json::json!({ "type": "api_key", "key": key }),
-    );
-    let body = serde_json::to_string_pretty(&auth).map_err(|err| err.to_string())?;
-
-    let tmp = dir.join(format!("auth.json.dray-{}", uuid::Uuid::now_v7()));
-    write_private(&tmp, &body).map_err(|err| format!("couldn't write pi's credentials: {err}"))?;
-    if let Err(err) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("couldn't replace pi's credentials: {err}"));
-    }
-
-    // The model list is per provider, so a new credential is a new list.
-    crate::harness::pi::models::forget();
-    Ok(())
+/// Every other credential in the file is left exactly as it was — see
+/// [`pi_edit_store`], which is where that promise is actually kept.
+fn pi_write_key(provider: &str, key: &str) -> Result<(), String> {
+    pi_edit_store(|auth| {
+        auth.insert(
+            provider.to_string(),
+            serde_json::json!({ "type": "api_key", "key": key }),
+        );
+        Ok(())
+    })
 }
 
 /// Removes one provider from pi's store.
 fn pi_forget_provider(provider: &str) -> Result<(), String> {
-    let path = pi_auth_path().ok_or("no home directory")?;
-    let dir = path.parent().ok_or("no pi directory")?.to_path_buf();
-
-    let mut auth = pi_auth();
-    if auth.remove(provider).is_none() {
-        return Err(format!("pi holds no credential for {provider}."));
-    }
-    let body = serde_json::to_string_pretty(&auth).map_err(|err| err.to_string())?;
-
-    let tmp = dir.join(format!("auth.json.dray-{}", uuid::Uuid::now_v7()));
-    write_private(&tmp, &body).map_err(|err| format!("couldn't write pi's credentials: {err}"))?;
-    if let Err(err) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("couldn't replace pi's credentials: {err}"));
-    }
-
-    crate::harness::pi::models::forget();
-    Ok(())
+    pi_edit_store(|auth| {
+        auth.remove(provider)
+            .map(|_| ())
+            .ok_or_else(|| format!("pi holds no credential for {provider}."))
+    })
 }
 
 /// Creates at `0600` and writes, never a `chmod` after.
@@ -946,7 +992,7 @@ pub async fn add_account(
                 // nothing to do with what was typed.
                 _ => {}
             }
-            pi_write_key(&provider, &key).await
+            pi_write_key(&provider, &key)
         }
         _ => Err(format!("{} cannot take a key here.", harness.label())),
     }
@@ -967,6 +1013,10 @@ async fn codex_set_key(key: &str) -> Result<(), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Bounded below, and this is what makes the bound real: a timeout drops
+        // the future, and without it the child lives on holding the key it was
+        // handed.
+        .kill_on_drop(true)
         .spawn()
         .map_err(|err| format!("couldn't run codex: {err}"))?;
 
@@ -980,9 +1030,9 @@ async fn codex_set_key(key: &str) -> Result<(), String> {
         // stdin left open holds the child forever.
     }
 
-    let output = child
-        .wait_with_output()
+    let output = tokio::time::timeout(PROBE_TIMEOUT, child.wait_with_output())
         .await
+        .map_err(|_| "codex took too long to take the key.".to_string())?
         .map_err(|err| format!("codex didn't finish: {err}"))?;
 
     if output.status.success() {
@@ -1027,13 +1077,22 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
     };
 
     let bin = binpath::agent_binary(harness).await;
-    let output = Command::new(&bin)
-        .args(&args)
-        .env("PATH", agent_path(&bin))
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|err| format!("couldn't run {}: {err}", harness.label()))?;
+    // Bounded like the probes, and `kill_on_drop` is what makes the bound real:
+    // a CLI that decides to prompt instead of answering would otherwise hold
+    // the page busy for the life of the app, with Refresh and every row's menu
+    // disabled behind it.
+    let output = tokio::time::timeout(
+        PROBE_TIMEOUT,
+        Command::new(&bin)
+            .args(&args)
+            .env("PATH", agent_path(&bin))
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| format!("{} took too long to sign out.", harness.label()))?
+    .map_err(|err| format!("couldn't run {}: {err}", harness.label()))?;
 
     if output.status.success() {
         return Ok(());
@@ -1080,6 +1139,41 @@ pub async fn add_agent_account(
 #[tauri::command]
 pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
     sign_out(harness, provider).await
+}
+
+/// Runs an interactive sign-in in a terminal.
+///
+/// **No shell string crosses the bridge.** The caller names the same closed set
+/// `add_agent_account` takes — harness, provider, option id — and the command
+/// is looked up here in [`auth_options`], where every one of them is a literal.
+/// A frontend can therefore ask for a flow this build offered and nothing else,
+/// which is the rule `permissions.rs` states and the reason this is not simply
+/// handed the string the row is already showing.
+///
+/// Terminal.app rather than the terminal picked next door: handed a `.command`
+/// file, it is the only one measured to run it. That pick still stands for
+/// *opening a directory*, which is all the table behind it promises.
+#[tauri::command]
+pub async fn run_agent_login(
+    harness: Harness,
+    provider: Option<String>,
+    auth: String,
+    cwd: String,
+) -> Result<(), String> {
+    let provider = provider.filter(|p| !p.is_empty());
+    if let Some(provider) = provider.as_deref() {
+        if !plausible_provider(provider) {
+            return Err(format!("{provider} is not a provider name."));
+        }
+    }
+
+    let command = auth_options(harness, provider.as_deref())
+        .into_iter()
+        .find(|option| option.id == auth)
+        .and_then(|option| option.command)
+        .ok_or_else(|| format!("{} has no such sign-in.", harness.label()))?;
+
+    crate::apps::run_in_terminal(&command, &cwd).await
 }
 
 #[cfg(test)]
@@ -1153,15 +1247,26 @@ mod tests {
     ///
     /// The words are what make this safe against a future non-zero exit for
     /// some unrelated reason, and the code is what makes it safe against Codex
-    /// rewording the sentence. Neither alone survived both captures.
+    /// rewording the sentence. Neither alone survived both captures — and the
+    /// last case is the one that matters most: a failure Codex does not explain
+    /// must not be reported as a login that is missing.
     #[test]
     fn codex_is_read_from_its_words_and_its_exit_code_together() {
-        assert!(codex_signed_in(true, "Logged in using ChatGPT"));
-        assert!(!codex_signed_in(false, "Not logged in"));
+        assert_eq!(codex_state(true, "Logged in using ChatGPT"), AccountState::LoggedIn);
+        assert_eq!(codex_state(false, "Not logged in"), AccountState::LoggedOut);
         // Reworded and still signed in: the code carries it.
-        assert!(codex_signed_in(true, "Authenticated as somebody"));
+        assert_eq!(codex_state(true, "Authenticated as somebody"), AccountState::LoggedIn);
         // Exited clean and said otherwise: the words carry it.
-        assert!(!codex_signed_in(true, "Not logged in. Run `codex login`."));
+        assert_eq!(
+            codex_state(true, "Not logged in. Run `codex login`."),
+            AccountState::LoggedOut
+        );
+        // Broke for some other reason and said nothing about a login: unknown,
+        // never signed out.
+        assert_eq!(
+            codex_state(false, "error: config.toml is not valid"),
+            AccountState::Unknown
+        );
     }
 
     /// pi answers in snake case, which is a log line rather than a sentence

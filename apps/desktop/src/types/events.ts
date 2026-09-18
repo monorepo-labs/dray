@@ -461,14 +461,12 @@ needsKey: boolean,
  * The command to run, spelled the way the reader would type it, for every
  * option Dray cannot carry out.
  *
- * **Shown and copied, never run.** macOS lets no app put text on
- * another's prompt without an Accessibility grant, so the honest pair is
- * this string with a copy on it beside a terminal opened at the working
- * directory — the same bargain the PR panel's setup pane already makes,
- * and the reason this is a `String` here rather than a script composed in
- * [`crate::apps`]. It also means the reader's own terminal is honoured,
- * which a `.command` file handed to `open` could never do: only
- * Terminal.app runs one.
+ * **Shown, copyable, and run by [`run_agent_login`] on the reader's say
+ * so.** Every one of these is a literal in [`auth_options`], which is what
+ * makes running it safe: the frontend names an option id and the string is
+ * looked up here, so nothing anybody typed reaches a command line. The
+ * string is still drawn, since a reader is owed sight of what a button is
+ * about to run in their shell.
  */
 command: string | null, 
 /**
