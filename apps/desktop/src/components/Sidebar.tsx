@@ -945,12 +945,16 @@ export default function Sidebar({
   // worklist and stays whole. Paging the read itself would buy nothing: the
   // index is one file parsed whole however few entries are asked for.
   const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
+  const listRef = useRef<HTMLDivElement>(null);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
-  // reader last scrolled to and then a second commit at the step.
+  // reader last scrolled to and then a second commit at the step. The scroll
+  // offset goes with it, or a shorter list opens clamped to its bottom edge
+  // and the observer there opens the next step at once.
   useEffect(() => {
     setSettledLimit(SETTLED_STEP);
+    listRef.current?.scrollTo({ top: 0 });
   }, [archivedRequested, search, projectFilter, space]);
 
   // ⌘⇧↑/↓ steps every row the walk knows about, drawn or not, so a step past
@@ -991,7 +995,6 @@ export default function Sidebar({
   // the question is asked again. The observer asks it at every size the list is
   // drawn at, and `settledLimit` in the deps is what lets one step follow
   // another until the list overflows or runs out.
-  const listRef = useRef<HTMLDivElement>(null);
   const openMore = () => {
     const el = listRef.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240)

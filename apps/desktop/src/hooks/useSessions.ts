@@ -1524,13 +1524,24 @@ const deleteSession = async (sessionId: string) => {
 // toggle flips it at once while the list still holds the other side, and a
 // reader pruning "sessions no longer listed" against that would prune them
 // all.
+//
+// A read outlived by a second press is dropped: two reads in flight land in
+// whatever order the backend answers, and the earlier one landing last put
+// the side just left back on screen under a toggle saying otherwise.
 useEffect(() => {
+  let cancelled = false;
   invoke<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
     .then((items) => {
+      if (cancelled) return;
       setSessionIndexItems(items);
       setIndexSide(showArchived);
     })
-    .catch((e) => setError(String(e)));
+    .catch((e) => {
+      if (!cancelled) setError(String(e));
+    });
+  return () => {
+    cancelled = true;
+  };
 }, [showArchived])
 
 useEffect(() => {
