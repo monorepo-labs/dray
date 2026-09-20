@@ -1196,14 +1196,26 @@ function SettingsTabs({
           // Capped against the viewport as well as fixed: the height is still
           // one number for every tab, so nothing jumps on a switch, but a short
           // window gets a dialog that fits inside it rather than one running off
-          // both ends. No right gutter, deliberately: the close cross is drawn
+          // both ends. No *text* gutter, deliberately: the close cross is drawn
           // over this panel's top corner, but only the *first row of one tab*
           // ever reaches it, so that row keeps its own `pr-7` and every
-          // sentence in every other tab keeps the full measure. A gutter here
+          // sentence in every other tab keeps the full measure. A gutter there
           // was 28px of empty column down the whole dialog to clear a 16px
           // glyph. Header actions dodge it by another route — they are drawn in
           // the strip above, which reserves the corner itself.
-          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+          //
+          // `scrollbar-overlay` is the sidebar's own treatment and it is here
+          // for the corners: the base layer's 8px bar is drawn whenever a tab
+          // overflows, and this box runs the dialog's full height — so the bar
+          // met the close cross at one end and the dialog's rounded corner at
+          // the other, which reads as chrome laid over the window rather than a
+          // panel that scrolls. Thin and transparent until the cursor is over
+          // it. Its `scrollbar-gutter: stable` is wanted here too, and is a
+          // different thing from the text gutter above: a few px, and what it
+          // buys is Appearance and Transcription measuring the same, where
+          // otherwise every row shifts on the switch between a tab that
+          // overflows and one that does not.
+          className="scrollbar-overlay -mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
         >
           <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
         </div>
