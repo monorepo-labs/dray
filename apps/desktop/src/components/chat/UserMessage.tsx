@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
 
 import SessionAvatar from "@/components/SessionAvatar";
 import FileLink from "@/components/chat/FileLink";
@@ -45,6 +45,16 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// The line the backend writes into the prompt for the receiving agent is taken
 /// back off here, since the row above already says who is talking — safe to
 /// mute precisely because the field, not the prose, is what draws it.
+///
+/// A pasted wall — a stack trace, a whole file — is clamped to twenty lines
+/// with a "Show more" under the text, the shape `CommitMessage` already uses.
+/// Long enough that a typed prompt is never collapsed and only a paste is.
+/// Nothing is truncated: the reader's own words stay reachable, since a prompt
+/// is the one thing in the transcript they wrote. The button sits *inside*
+/// the bubble, where it stays attached to the text it opens — under it, it was
+/// a loose word floating in the transcript's own background with nothing
+/// saying which message it belonged to. It is muted and at the interface size,
+/// which is what keeps it from reading as a last line the reader wrote.
 ///
 /// An issue tag is the one coloured run that is also a *link*: it opens the
 /// issue in the tracker, where the reader can act on it rather than only read
@@ -94,6 +104,27 @@ export default function UserMessage({
   // those, so this row is what is left to say about them.
   const missing = images.filter((image) => !image.path && !image.url);
 
+  const [open, setOpen] = useState(false);
+  const bodyRef = useRef<HTMLSpanElement>(null);
+  const [clipped, setClipped] = useState(false);
+
+  // Measured rather than counted off the string: whether 20 lines hold a prompt
+  // depends on how wide the column is, and a "Show more" expanding to the same
+  // 20 lines is a control that does nothing. Read only while collapsed —
+  // expanded, the element is its own full height and reports no overflow, which
+  // would retire the button that collapses it again.
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el || open) return;
+
+    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open]);
+
   return (
     <div className="flex flex-col items-end gap-1.5">
       {/* Topmost, above even the attachments: who is talking is read before
@@ -141,7 +172,10 @@ export default function UserMessage({
               every other message sideways. Anywhere rather than `break-words`:
               only `anywhere` shrinks min-content width, which is the part that
               sets that scroll width. */}
-          <span className="text-chat whitespace-pre-wrap wrap-anywhere">
+          <span
+            ref={bodyRef}
+            className={cn("text-chat whitespace-pre-wrap wrap-anywhere", !open && "line-clamp-20")}
+          >
             {/* Plain runs concatenate back to `text` exactly, so the spacing the
                 user typed survives — nothing here is rebuilt from a parse.
                 A mention is the one run drawn shorter than it was sent: the
@@ -278,6 +312,20 @@ export default function UserMessage({
               );
             })}
           </span>
+
+          {/* Drawn while open too, or the bubble opens with no way back. Muted
+              and at the interface size rather than the chat one, which is what
+              keeps it reading as the app's control and not as a last line the
+              reader wrote. */}
+          {(clipped || open) && (
+            <button
+              type="button"
+              onClick={() => setOpen((prev) => !prev)}
+              className="mt-1 block cursor-pointer text-ui text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {open ? "Show less" : "Show more"}
+            </button>
+          )}
         </div>
       )}
 
