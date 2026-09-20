@@ -149,6 +149,65 @@ export function withLineBreaks(text: string): string {
 /// rather than from the match's own `path`, which is what keeps the round trip
 /// exact even where the two differ — and they do wherever a locator is on: the
 /// run keeps `:12`, the path in `inner` does not.
+/// An issue tag and the title written after it, joined into one run.
+///
+/// **Nothing closes an issue tag's title, so the scanner cannot find its end.**
+/// `issueTag` writes `#DRA-53 Some title` and the sentence carries straight on
+/// from there — unlike a session tag, which `(uuid)` closes and which is matched
+/// by shape. So the end has to come from whoever knows the title, and the two
+/// surfaces know it differently: the composer remembers what its picker wrote,
+/// while the transcript has the prompt's own `IssueRef`s, which are persisted
+/// and so survive a restart. Hence `titleOf` rather than one lookup baked in.
+///
+/// A pass over the finished segments for `withPaths`'s first reason — there is
+/// nothing to key on mid-scan — and `inner` keeps the `#DRA-53` half so a
+/// surface can still draw the identifier if it wants it.
+///
+/// The title is checked against the text rather than trusted, so a title the
+/// reader has since edited stops being claimed and the tag falls back to naming
+/// itself.
+export function withIssueTitles(
+  segments: Segment[],
+  titleOf: (identifier: string) => string | null,
+): Segment[] {
+  const out: Segment[] = [];
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
+    const after = segments[i + 1];
+
+    if (segment.kind !== "issue" || after?.kind !== "text") {
+      out.push(segment);
+      continue;
+    }
+
+    const title = titleOf(segment.text.slice(1));
+    if (!title || !after.text.startsWith(` ${title}`)) {
+      out.push(segment);
+      continue;
+    }
+
+    out.push({ ...segment, text: `${segment.text} ${title}`, inner: segment.text });
+
+    // What is left of the run the title came off the front of. Dropped entirely
+    // where the tag ended the prompt, or the walk gains an empty run.
+    const rest = after.text.slice(title.length + 1);
+    if (rest) out.push({ ...after, text: rest });
+
+    i += 1;
+  }
+
+  return out;
+}
+
+/// The face an issue chip or tag shows: the `#`, then the title where one was
+/// joined on, else the identifier it already was.
+export function issueFace(segment: Segment): string {
+  if (!segment.inner) return segment.text;
+
+  return `#${segment.text.slice(segment.inner.length + 1)}`;
+}
+
 export function withPaths(segments: Segment[]): Segment[] {
   const out: Segment[] = [];
 

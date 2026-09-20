@@ -98,12 +98,12 @@ import { useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
-import type { Issue, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft } from "@/hooks/useDraft";
-import { issueTag } from "@/lib/issue";
+import { issueTag, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer } from "@/lib/composerFocus";
@@ -292,33 +292,21 @@ function App() {
 
   /// The issue the pane is showing while the issues page has the column.
   ///
-  /// Kept as the whole row rather than an identifier: the list already read
-  /// every field a header draws, so the pane can be complete before its own
-  /// detail read lands — the same bargain the session panel makes with a
-  /// session's links.
-  const [pickedIssue, setPickedIssue] = useState<Issue | null>(null);
+  /// Kept as a whole row rather than an identifier: the list already read every
+  /// field a header draws, so the pane can be complete before its own detail
+  /// read lands — the same bargain the session panel makes with a session's
+  /// links. A *link* rather than an `Issue`, since a tag clicked in a prompt
+  /// carries one of those and nothing more, and every field this holds for is
+  /// on it.
+  const [pickedIssue, setPickedIssue] = useState<IssueRef | null>(null);
 
   const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
 
-  /// The picked issue as a link, which is the shape the panel reads.
+  /// The picked issue as the one-element list the panel reads.
   ///
   /// Memoized because it is an array: a fresh one each render would re-run the
   /// detail read on every keystroke in the page's search box.
-  const pickedIssueRefs = useMemo(
-    () =>
-      pickedIssue
-        ? [
-            {
-              tracker: pickedIssue.tracker,
-              id: pickedIssue.id,
-              identifier: pickedIssue.identifier,
-              title: pickedIssue.title,
-              url: pickedIssue.url,
-            },
-          ]
-        : [],
-    [pickedIssue],
-  );
+  const pickedIssueRefs = useMemo(() => (pickedIssue ? [pickedIssue] : []), [pickedIssue]);
 
   const pickedIssueData = useSessionIssues(pickedIssueRefs, issuesOpen && !!pickedIssue);
 
@@ -1079,6 +1067,19 @@ function App() {
     if (!issuesOpen) setViewTab("files");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesOpened]);
+
+  // An issue tag clicked in a prompt takes the column to the issues page and
+  // opens the pane on it. Installed once: nothing here is per-session, and the
+  // reader's place in the conversation is kept the way every other trip to this
+  // page keeps it — the session stays selected and is still there on the way
+  // back.
+  useEffect(() => {
+    setIssueOpener((issue) => {
+      setPickedIssue(issue);
+      setIssuesOpen(true);
+    });
+    return () => setIssueOpener(null);
+  }, []);
 
   // A link in the transcript opens as a new tab in the session's browser and
   // brings the pane up on it, unless the full view already has it. ⌘-click,

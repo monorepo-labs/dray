@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Image } from "lucide-react";
 import type { CSSProperties } from "react";
 
@@ -11,11 +10,13 @@ import { absolutePath } from "@/lib/filePath";
 import {
   SEGMENT_COLOR,
   highlightSegments,
+  issueFace,
   splitMention,
+  withIssueTitles,
   withLineBreaks,
   withPaths,
 } from "@/lib/highlight";
-import { issueUrl, parseIdentifier } from "@/lib/issue";
+import { openIssue, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -47,10 +48,11 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// mute precisely because the field, not the prose, is what draws it.
 ///
 /// An issue tag is the one coloured run that is also a *link*: it opens the
-/// issue in the tracker, where the reader can act on it rather than only read
-/// it. The URL comes off the event's own `issues` and never out of the text, so
-/// a tag naming an issue that never resolved stays coloured and inert instead
-/// of becoming a link to nowhere.
+/// issue on the issues page, where the reader can read it and move its status
+/// without leaving the conversation, and ⌘-click leaves for the tracker. The
+/// link comes off the event's own `issues` and never out of the text, so a tag
+/// naming an issue that never resolved stays coloured and inert instead of
+/// becoming a link to nowhere.
 export default function UserMessage({
   text,
   images = [],
@@ -83,7 +85,15 @@ export default function UserMessage({
   const { cwd: sessionCwd } = useChatSession();
   const cwd = writtenIn ?? sessionCwd;
   const body = withLineBreaks(stripSenderPrefix(text, from));
-  const segments = withPaths(highlightSegments(body));
+  // The prompt's own links are what bound an issue tag's title, and they are
+  // persisted — so a message replayed after a restart reads exactly as it did
+  // live, where the composer's in-memory record of what it typed would be gone.
+  const segments = withPaths(
+    withIssueTitles(
+      highlightSegments(body),
+      (identifier) => issues.find((issue) => issue.identifier === identifier)?.title ?? null,
+    ),
+  );
 
   // A prompt running a branded plugin's own command. Null for everything else,
   // which is nearly every message.
@@ -215,15 +225,17 @@ export default function UserMessage({
 
               if (segment.kind === "issue") {
                 const identifier = parseIdentifier(segment.text.slice(1));
-                const url = identifier ? issueUrl(issues, identifier) : null;
+                const link = identifier
+                  ? issues.find((issue) => issue.identifier === identifier)
+                  : undefined;
 
                 // Inert without a link, which is the resting state of a tag
                 // whose issue never resolved — a button that opens nothing is
                 // worse than a word that was never one.
-                if (!url) {
+                if (!link) {
                   return (
                     <span key={i} className={SEGMENT_COLOR.issue}>
-                      {segment.text}
+                      {issueFace(segment)}
                     </span>
                   );
                 }
@@ -232,28 +244,28 @@ export default function UserMessage({
                   <button
                     key={i}
                     type="button"
-                    title={`Open ${identifier} in ${new URL(url).hostname}`}
                     // Underlined on hover rather than at rest: the colour
                     // already sets it apart from the sentence, and a permanent
                     // underline through a prompt reads as a correction.
                     className={cn(SEGMENT_COLOR.issue, "cursor-pointer hover:underline")}
-                    onClick={() => void openUrl(url)}
+                    onClick={(e) => openIssue(link, e)}
                   >
-                    {segment.text}
+                    {issueFace(segment)}
                   </button>
                 );
               }
 
-              // The title alone, dropping the id the tag carries for the agent's
-              // sake — the same divergence `splitMention` makes, and for the
-              // same reason: the composer has to lay every glyph out, this has
-              // only to be read. Inert, like an unresolved issue tag: the
-              // session it names is a click away in the sidebar, and a button
-              // here would be a second way to do one thing.
+              // The title alone — the `&` goes with the id, since neither is
+              // something the reader needs to read back. The sigil is what the
+              // *picker* is reached by, and by the time a prompt is sent the
+              // colour has already said which kind of thing this is. Inert, like
+              // an unresolved issue tag: the session it names is a click away in
+              // the sidebar, and a button here would be a second way to do one
+              // thing.
               if (segment.kind === "session" && segment.inner) {
                 return (
-                  <span key={i} className={SEGMENT_COLOR.session} title={segment.text}>
-                    {segment.inner}
+                  <span key={i} className={SEGMENT_COLOR.session}>
+                    {segment.inner.slice(1)}
                   </span>
                 );
               }

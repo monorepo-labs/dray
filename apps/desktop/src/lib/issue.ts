@@ -16,6 +16,7 @@
 /// [mention.ts]: ./mention.ts
 import { channel } from "@/lib/channel";
 import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 /// The tag token the caret is sitting in.
 type IssueSpan = {
@@ -64,6 +65,36 @@ export function issueSpan(text: string, caret: number): IssueSpan | null {
   return { start, end, query: text.slice(start + 1, end) };
 }
 
+/// Where a tag in a prompt goes when it is clicked. `App` installs one that
+/// opens the issues page on it; a module slot rather than a prop, since the run
+/// is drawn several components below anything that knows the page exists —
+/// [`setLinkOpener`]'s own bargain, for the same reason.
+///
+/// [`setLinkOpener`]: ./openLink.ts
+let opener: ((issue: IssueRef) => void) | null = null;
+
+export function setIssueOpener(fn: ((issue: IssueRef) => void) | null): void {
+  opener = fn;
+}
+
+/// A click on an issue tag in the transcript.
+///
+/// It opens **here**, on the issues page, where the reader can read the
+/// description and move the status without leaving the conversation they are
+/// in. ⌘-click (Ctrl elsewhere) leaves for the tracker — the same thing the
+/// modifier means on an issue row, a file link and a link in the transcript.
+/// With nothing installed to open it here, out there is the only answer left.
+export function openIssue(
+  issue: IssueRef,
+  event?: { metaKey: boolean; ctrlKey: boolean },
+): void {
+  if (!event?.metaKey && !event?.ctrlKey && opener) {
+    opener(issue);
+    return;
+  }
+  if (issue.url) void openUrl(issue.url).catch(console.error);
+}
+
 /// The text of a tag: the identifier, then the title.
 ///
 /// The same string Rust's `tag_text` writes when `--issue` names one, and both
@@ -76,6 +107,31 @@ export function issueSpan(text: string, caret: number): IssueSpan | null {
 /// because there is nothing painted that isn't really there.
 export function issueTag(identifier: string, title: string): string {
   return title ? `#${identifier} ${title}` : `#${identifier}`;
+}
+
+/// Titles this app has written into a prompt, by identifier.
+///
+/// **Nothing closes an issue tag's title, so nothing can read its end back out
+/// of the text.** A session tag is closed by `(uuid)` and can be matched by
+/// shape; `#DRA-53 Some title` runs straight into the sentence after it, which
+/// is exactly what makes it read as prose — right for the transcript, where the
+/// title *is* words in a sentence, and useless to the composer's chip, which has
+/// to know where the tag ends before it can draw it as one thing.
+///
+/// So the side that writes the title remembers it. Held in memory only, like the
+/// draft it is written into: a tag in the box was either picked here this run,
+/// or typed by hand — and a hand-typed `#DRA-53` genuinely has no title after it,
+/// which is the same answer this gives.
+const placedTitles = new Map<string, string>();
+
+/// Records what was written after `#<identifier>`, so a chip can find its end.
+export function rememberIssueTitle(identifier: string, title: string): void {
+  if (title) placedTitles.set(identifier, title);
+}
+
+/// The remembered title, for [`withIssueTitles`] to check the text against.
+export function placedIssueTitle(identifier: string): string | null {
+  return placedTitles.get(identifier) ?? null;
 }
 
 /// The text with the tag at `span` replaced, and where the caret goes after.

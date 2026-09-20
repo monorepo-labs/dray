@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
 import FileMentionMenu from "@/components/composer/FileMentionMenu";
 import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
+import RichInput from "@/components/composer/RichInput";
 import SessionMentionMenu from "@/components/composer/SessionMentionMenu";
 import SlashCommandMenu from "@/components/composer/SlashCommandMenu";
 import { Button } from "@/components/ui/button";
@@ -20,10 +21,10 @@ import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
-import { SEGMENT_COLOR, highlightSegments, splitMention } from "@/lib/highlight";
-import { applyIssue, issueSpan } from "@/lib/issue";
+import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { registerComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
+import { insertText } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import { applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
 import {
@@ -237,10 +238,14 @@ export default function ChatInput({
   onRemoveWorktree,
 }: ChatInputProps) {
   const [message, setMessage] = useDraft(sessionId);
-  const [resizeTick, setResizeTick] = useState(0);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const mirrorRef = useRef<HTMLDivElement>(null);
+  // Read by the session-switch effect below, which must stay keyed on the
+  // session alone: the draft it wants is the one that arrived *with* that
+  // switch, and depending on `message` would rerun it on every keystroke and
+  // drag the caret back to the end mid-sentence.
+  const messageRef = useRef(message);
+  messageRef.current = message;
 
   // Where the caret is, tracked so the picker can tell a command being typed
   // from a slash that has already been left behind.
@@ -249,10 +254,6 @@ export default function ChatInput({
   // soon as the caret leaves the command, so the next `/` reopens it.
   const [dismissed, setDismissed] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  // Set by a pick, applied once React has painted the new value — a controlled
-  // textarea otherwise puts the caret at the end, which is wrong whenever the
-  // completed command has arguments after it.
-  const pendingCaretRef = useRef<number | null>(null);
 
   const [recent, recordCommand] = useRecentCommands();
 
@@ -262,11 +263,6 @@ export default function ChatInput({
   // read here — `onDragDropEvent` is the only source, and it reports paths
   // rather than `File` handles, which is exactly what the backend wants anyway.
   const [dragging, setDragging] = useState(false);
-
-  // The runs that take a colour. Empty of anything but plain text most of the
-  // time, which is what the overlay below checks before mounting at all.
-  const segments = useMemo(() => highlightSegments(message), [message]);
-  const highlighted = segments.some((segment) => segment.kind !== "text");
 
   // Two modes, and the difference is deliberate. With nothing typed this is
   // browsing, so the list is grouped — what you just used, then what shipped
@@ -368,36 +364,41 @@ export default function ChatInput({
 
   const pickCommand = (command: SlashCommand) => {
     const next = applyCommand(message, command.name);
-    pendingCaretRef.current = next.caret;
     setMessage(next.text);
-    textareaRef.current?.focus();
+    setCaret(next.caret);
+    editorRef.current?.focus();
   };
 
   const pickFile = (file: FileMatch) => {
     if (!mention) return;
 
     const next = applyMention(message, mention, file.path);
-    pendingCaretRef.current = next.caret;
     setMessage(next.text);
-    textareaRef.current?.focus();
+    setCaret(next.caret);
+    editorRef.current?.focus();
   };
 
   const pickIssue = (picked: Issue) => {
     if (!issue) return;
 
+    // Nothing closes a title in the text, so the chip cannot find its end on its
+    // own — this is the one place that knows where the title stops, because it
+    // is the place that wrote it.
+    rememberIssueTitle(picked.identifier, picked.title);
+
     const next = applyIssue(message, issue, picked.identifier, picked.title);
-    pendingCaretRef.current = next.caret;
     setMessage(next.text);
-    textareaRef.current?.focus();
+    setCaret(next.caret);
+    editorRef.current?.focus();
   };
 
   const pickSession = (picked: SessionIndexItem) => {
     if (!session) return;
 
     const next = applySession(message, session, picked.title, picked.sessionId);
-    pendingCaretRef.current = next.caret;
     setMessage(next.text);
-    textareaRef.current?.focus();
+    setCaret(next.caret);
+    editorRef.current?.focus();
   };
 
   /// The keyboard's way into whichever list is drawn. A click calls the same
@@ -425,73 +426,15 @@ export default function ChatInput({
     if (command) pickCommand(command);
   };
 
-  useLayoutEffect(() => {
-    const pending = pendingCaretRef.current;
-    if (pending === null) return;
-    pendingCaretRef.current = null;
-
-    textareaRef.current?.setSelectionRange(pending, pending);
-    setCaret(pending);
-  }, [message]);
-
-  // Grow to fit, then scroll. Height must be cleared before scrollHeight is read
-  // or it reports the current height and the box can never shrink back down.
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    // Referenced rather than reached via `parentElement`, so the freeze below
-    // keeps working as the composer's nesting changes.
-    const card = cardRef.current;
-    if (!el || !card) return;
-
-    const style = getComputedStyle(el);
-    const lineHeight = parseFloat(style.lineHeight) || 20;
-    const chrome =
-      parseFloat(style.paddingTop) +
-      parseFloat(style.paddingBottom) +
-      parseFloat(style.borderTopWidth) +
-      parseFloat(style.borderBottomWidth);
-
-    // Freeze the card while measuring: reading scrollHeight forces a layout with
-    // the textarea at 0px, and if that phantom layout reaches the flex column the
-    // chat pane momentarily grows and the browser clamps its scrollTop — the
-    // transcript ratchets up a few pixels on every value change.
-    card.style.height = `${card.offsetHeight}px`;
-    el.style.height = "0px";
-    // scrollHeight includes padding, so the row cap has to as well.
-    const rows = isNewTask ? NEW_TASK_MAX_ROWS : MAX_ROWS;
-    el.style.height = `${Math.min(el.scrollHeight, lineHeight * rows + chrome)}px`;
-    card.style.height = "";
-  }, [message, resizeTick, isNewTask]);
-
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-
-    el.focus();
+    editorRef.current?.focus();
     // The draft that just came back is text this composer has never had a caret
     // in, so the picker state left over from the session being switched away
     // from describes nothing here. Landing at the end is also where typing
     // resumes: a draft is an unfinished sentence.
-    const end = el.value.length;
-    el.setSelectionRange(end, end);
-    setCaret(end);
+    setCaret(messageRef.current.length);
     setDismissed(false);
   }, [sessionId]);
-
-  // The sizing effect first measures against fallback font metrics, which can
-  // clamp an empty box to the row cap; nothing re-measures until the next
-  // keystroke, so the composer opens ten rows tall with a scrollbar. Waiting on
-  // document.fonts.ready isn't enough — the promise can resolve a frame before
-  // the new metrics reach layout, and that one shot is all it gets. Observing
-  // the box re-measures whenever its size actually changes, font swap included.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-
-    const observer = new ResizeObserver(() => setResizeTick((t) => t + 1));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   // ⌥ as well as ⌘, so the chord can't collide with the webview's own ⌘O.
   useHotkey("attach", () => void pickAttachments(sessionId));
@@ -524,8 +467,12 @@ export default function ChatInput({
       // without them.
       void onCancelQueued().then((cancelled) => {
         if (!cancelled) return;
-        setMessage(before ? `${before}\n${cancelled.text}` : cancelled.text);
-        textareaRef.current?.focus();
+        const restored = before ? `${before}\n${cancelled.text}` : cancelled.text;
+        setMessage(restored);
+        // Taking a prompt back is the start of editing it, so the caret lands
+        // where the writing resumes rather than where it sat before the send.
+        setCaret(restored.length);
+        editorRef.current?.focus();
       });
       return true;
     }
@@ -701,6 +648,9 @@ export default function ChatInput({
 
     onSend(trimmed, attachments);
     setMessage("");
+    // The box is empty, so the caret has nowhere else to be — and left where it
+    // was it would name a position past the end of whatever is typed next.
+    setCaret(0);
     clearAttachments(sessionId);
   };
 
@@ -924,21 +874,21 @@ export default function ChatInput({
                 sit beside the text, and past it they stay at the bottom. */}
             <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
               <div className="relative min-w-0 flex-1">
-                <textarea
+                <RichInput
                   // Registered as well as held, so dictation can hand focus
                   // back from `App`, which has no route to this element.
-                  ref={(el) => {
-                    textareaRef.current = el;
+                  innerRef={(el) => {
+                    editorRef.current = el;
                     registerComposer(el);
                   }}
-                  rows={1}
-                  autoFocus
                   value={message}
-                  // Kept in step with the overlay below, which cannot scroll itself.
-                  onScroll={(e) => {
-                    const mirror = mirrorRef.current;
-                    if (mirror) mirror.scrollTop = e.currentTarget.scrollTop;
+                  caret={caret}
+                  onChange={(next, at) => {
+                    setMessage(next);
+                    setCaret(at);
                   }}
+                  onCaretChange={setCaret}
+                  maxRows={isNewTask ? NEW_TASK_MAX_ROWS : MAX_ROWS}
                   // The two that are always there lead, and the two that come
                   // and go trail — so the line grows and shrinks at its end
                   // rather than reshuffling. `&` and `#` are named only where
@@ -965,20 +915,13 @@ export default function ChatInput({
                         ? target
                         : "Send follow-up"
                   }
-                  onChange={(e) => {
-                    setMessage(e.currentTarget.value);
-                    setCaret(e.currentTarget.selectionStart);
-                  }}
-                  // Fires for arrow keys, clicks, and drags alike, so the picker
-                  // follows the caret however it moved rather than only on typing.
-                  onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
                   onKeyDown={(e) => {
                     // Enter is the composer's on its own and with Shift, and
                     // nobody else's: a modified one belongs to whatever document
-                    // binding claims it — `queue.send` is ⌘⏎ by default and the
-                    // reader may rebind it onto any modifier. Those listeners run
-                    // *after* this one, so anything done here happens as well as
-                    // the chord: picking a row, sending the draft, or growing a
+                    // binding claims it — `queue.send` is CmdEnter by default and
+                    // the reader may rebind it onto any modifier. Those listeners
+                    // run *after* this one, so anything done here happens as well
+                    // as the chord: picking a row, sending the draft, or growing a
                     // list marker behind a flush.
                     const plainEnter = !e.metaKey && !e.ctrlKey && !e.altKey;
 
@@ -1019,96 +962,32 @@ export default function ChatInput({
                         return;
                       }
 
-                      // A newline inside a list carries the marker with it. Only
-                      // with the selection collapsed: over a range the native
-                      // newline replaces the selection, which this cannot.
-                      const el = e.currentTarget;
-                      if (el.selectionStart !== el.selectionEnd) return;
-                      const next = continueList(message, el.selectionStart);
-                      if (!next) return;
+                      // Always handled, never left to the browser. A
+                      // contenteditable's own Enter inserts a block or a break of
+                      // its choosing, and every element in this tree means
+                      // something — one arriving uninvited is a newline the value
+                      // cannot see. `insertText` puts in the one character the
+                      // string needs and keeps the browser's undo stack.
                       e.preventDefault();
-                      pendingCaretRef.current = next.caret;
-                      setMessage(next.text);
+
+                      // A newline inside a list carries the marker with it. Only
+                      // with the selection collapsed: over a range the newline
+                      // replaces the selection, which this cannot.
+                      const next = window.getSelection()?.isCollapsed
+                        ? continueList(message, caret)
+                        : null;
+
+                      if (next) {
+                        setMessage(next.text);
+                        setCaret(next.caret);
+                        return;
+                      }
+
+                      insertText("\n");
                     }
                   }}
-                  // `py-1` puts one line at 28px — the buttons' own height — so the
-                  // first row looks centered against them without being. `min-w-0`
-                  // moved to the wrapper, where it still stops one long unbroken
-                  // token setting the flex item's floor and pushing the buttons off
-                  // the row.
-                  className={cn(
-                    "block w-full resize-none overflow-y-auto bg-transparent placeholder:text-muted-foreground focus:outline-none",
-                    TEXT_BOX,
-                    isNewTask ? "px-0" : "px-1",
-                    // Hands the glyphs to the overlay only while there is something
-                    // to colour. Every other moment the textarea draws its own text
-                    // as before, so the usual case keeps no dependency on the
-                    // overlay rendering correctly.
-                    highlighted ? "text-transparent caret-foreground" : "text-foreground",
-                  )}
+                  className={cn(TEXT_BOX, isNewTask ? "px-0" : "px-1")}
                 />
-
-                {/* Draws the text the textarea is hiding, so a command or a file
-                    mention can take a colour — a textarea has no way to style part
-                    of its value. Painted *over* the textarea rather than under it,
-                    so a selection band sits behind these glyphs instead of covering
-                    them; the caret still shows, since it falls between them.
-
-                    Mounted only alongside `text-transparent` above, and built from
-                    the same segments the transcript renders, so neither the two
-                    copies of the text nor the two surfaces can disagree about what
-                    is coloured. `TEXT_BOX` and the padding are shared with the
-                    textarea for the same reason — any drift shows up as doubled
-                    text. */}
-                {highlighted && (
-                  <div
-                    ref={mirrorRef}
-                    aria-hidden
-                    className={cn(
-                      "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-foreground",
-                      TEXT_BOX,
-                      isNewTask ? "px-0" : "px-1",
-                    )}
-                  >
-                    {segments.map((segment, i) => {
-                      // Every glyph the textarea lays out has to be laid out here
-                      // too, so a mention is dimmed rather than shortened — the
-                      // transcript is where it collapses to the filename.
-                      if (segment.kind === "mention") {
-                        const { dir, name } = splitMention(segment.text);
-
-                        return (
-                          <span key={i} className={SEGMENT_COLOR.mention}>
-                            <span className="opacity-45">{dir}</span>
-                            {name}
-                          </span>
-                        );
-                      }
-
-                      // Same bargain, other direction: a session tag's id is
-                      // 36 characters the reader has no use for, and the
-                      // transcript drops it — here it can only be dimmed, since
-                      // one glyph fewer slides everything after it out of
-                      // register with the textarea underneath.
-                      if (segment.kind === "session" && segment.inner) {
-                        return (
-                          <span key={i} className={SEGMENT_COLOR.session}>
-                            {segment.inner}
-                            <span className="opacity-45">
-                              {segment.text.slice(segment.inner.length)}
-                            </span>
-                          </span>
-                        );
-                      }
-
-                      return (
-                        <span key={i} className={SEGMENT_COLOR[segment.kind]}>
-                          {segment.text}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
 
               {controls}

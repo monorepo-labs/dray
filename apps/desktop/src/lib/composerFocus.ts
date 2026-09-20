@@ -2,14 +2,14 @@
 ///
 /// Dictation is the caller: the mic button lives in `ComposerToolbar`, which
 /// reaches `ChatInput` as an opaque `ReactNode`, and the recorder itself is
-/// owned by `App` — so neither can reach the textarea through props. Same gap
+/// owned by `App` — so neither can reach the text box through props. Same gap
 /// `useDraft` and `useAttachments` name, and the same fix: one module-level
 /// value, since there is only ever one composer on screen.
-let composer: HTMLTextAreaElement | null = null;
+let composer: HTMLElement | null = null;
 
 /// Called by the composer's own `ref`. `null` on unmount, which is ordinary —
 /// the composer unmounts whenever the reader leaves the Chat tab.
-export function registerComposer(el: HTMLTextAreaElement | null) {
+export function registerComposer(el: HTMLElement | null) {
   composer = el;
 }
 

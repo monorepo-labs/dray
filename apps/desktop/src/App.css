@@ -613,43 +613,51 @@
     background-color: var(--secondary);
   }
 
+  /* This is the one palette that *fills* the bubble, and it is what makes the
+     tags a problem here and nowhere else. */
   .user-bubble {
     background: var(--primary);
     color: var(--primary-foreground);
     box-shadow: none;
 
-    .text-accent-command,
-    .text-accent-mention,
-    .text-accent-issue,
-    .text-accent-session {
-      color: inherit;
+    /* **The bubble is a dark surface as far as a tag is concerned**, whatever
+       mode the window is in — a saturated fill with near-white prose on it — so
+       the runs inside it take dark mode's answer and not this palette's: light
+       and saturated, where the light palette's own accents are mid-tone and sink
+       into it. They were flattened to `inherit` once and boxed on a white fill
+       twice, and all three cost the same thing: the one surface where colour
+       says which kind of thing a word is, saying nothing.
+
+       **Two hues are rotated, and that is what actually fixed it.** Lightness
+       and chroma cannot separate a hue from itself: session reads here because
+       it is 90° off the fill, where mention at 245 and issue at 310 sat 5° and
+       60° off a hue-250 blue and stayed weak however bright they were drawn. So
+       mention goes to cyan and issue to pink on this surface alone. The cost,
+       stated: a mention is blue in the composer and cyan in the bubble, so the
+       kind is no longer one colour across both — paid because a run nobody can
+       tell from the sentence around it was not naming a kind at all.
+
+       Declared as the variables rather than as four colour rules, so anything
+       drawn in the bubble later reads the same set without being listed here —
+       and skipped on a branded bubble, whose fill is light and wants the
+       palette's own. */
+    &:not([data-brand]) {
+      --accent-command: oklch(0.85 0.19 75);
+      --accent-mention: oklch(0.92 0.19 205);
+      /* Past the gamut at this lightness, deliberately: the browser maps it back
+         to the lightest pink sRGB has, which is what was wanted and what a
+         hand-written in-gamut value would have to be re-derived per display. */
+      --accent-issue: oklch(1 0.195 330);
+      --accent-session: oklch(0.95 0.19 150);
     }
   }
 
-  /* The exception to that `inherit`, and the only accent that gets one. The
-     page's own `--accent-command` measures 1.53:1 on this fill — invisible —
-     but lightness is what carries contrast here, and at hue 110 sRGB holds
-     0.19 chroma all the way up at L 0.94, where hue 75 clips below 0.08. So
-     the run stays unmistakably yellow at 2.77:1, against the 3.14:1 the white
-     prose beside it already sits at.
-
-     Mention keeps the `inherit` above and cannot be fixed: it is hue 245 and so
-     is the fill, so any version of it reads as the bubble rather than as a word
-     on it. Issue is left alone with it — one accent is the idiom worth carrying
-     into this mode, three is a palette.
-
-     Not in the branded bubble, whose fill is a light green this would vanish
-     against; its ink is `--foreground` and the run inherits that. */
-  .user-bubble:not([data-brand]) .text-accent-command {
-    color: oklch(0.94 0.19 110);
-  }
-
-  /* The one palette that *fills* the bubble, so the wash the rule above paints
-     goes over a saturated blue and cannot be seen at all. Here the brand takes
-     the fill instead — the same idiom this mode already uses to say "this is a
-     message you sent", in the colour that says whose command it runs. Ink back
-     to `--foreground`, since the fill is a light green and `--primary-foreground`
-     is near-white; the accent runs inherit it as they do the white above. */
+  /* A prompt running a branded plugin's command takes the brand as its fill —
+     the same idiom this mode already uses to say "this is a message you sent",
+     in the colour that says whose command it runs. Ink back to `--foreground`,
+     since the fill is a light green and `--primary-foreground` is near-white —
+     and the accents with it, since that fill is *light*: the set above is drawn
+     for a dark surface and would be a wash on this one. */
   .user-bubble[data-brand] {
     background: var(--brand);
     color: var(--foreground);
