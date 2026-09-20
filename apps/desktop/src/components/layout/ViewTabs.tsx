@@ -6,7 +6,7 @@ import type { ShortcutId } from "@/lib/shortcuts";
 /// Which view fills the main column. Set and order in one, unlike the right
 /// panel's tabs: none of these are conditional, so a Terminal view joins by
 /// being added here and given a body.
-export const VIEW_TABS = ["chat", "changes", "browser", "files"] as const;
+export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
 
 export type ViewTab = (typeof VIEW_TABS)[number];
 
