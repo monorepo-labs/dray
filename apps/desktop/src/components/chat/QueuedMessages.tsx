@@ -1,6 +1,7 @@
 import { CornerDownLeft } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import ClampedBody from "@/components/chat/ClampedBody";
 import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -83,8 +84,10 @@ export default function QueuedMessages({
                   data-brand={brand ? "" : undefined}
                   style={brand ? ({ "--brand": brand } as CSSProperties) : undefined}
                 >
-                  {/* Same bubble, same break rule — see `UserMessage`. */}
-                  <span className="whitespace-pre-wrap wrap-anywhere">
+                  {/* Same bubble, same break rule and the same twenty-line
+                      clamp — see `ClampedBody` for why a held prompt cannot be
+                      bounded differently to the delivered one. */}
+                  <ClampedBody>
                     {highlightSegments(body).map((segment, s) => {
                       // Same marks the delivered bubble draws — see `inlineMark`
                       // for why a queued prompt cannot read differently.
@@ -106,7 +109,7 @@ export default function QueuedMessages({
                         </span>
                       );
                     })}
-                  </span>
+                  </ClampedBody>
                 </div>
               )}
             </div>
