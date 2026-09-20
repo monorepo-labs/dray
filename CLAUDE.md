@@ -626,7 +626,7 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 
 **⌘⇧C toggles it and there is no button**, kept per anchor and in memory, the right panel's own bargain: what the column holds differs from one conversation to the next, so putting away a fan-out of six says nothing about the next one. A permanent control in the titlebar would be chrome for a thing most conversations never have — so the chord is taught at the foot of the list instead, which is the only thing standing between a reader and a column they cannot get back.
 
-**No divider and no heading.** A border is what a split draws between two places to work, and this is one place with a list beside it; the fixed width and the rows' own marks say the rest.
+**An edge rather than a divider, and no heading.** A *flat* border is what a split draws between two places to work, and this is one place with a list beside it — so there was none at all for a while, and then one drawn only while the right panel was out. What it is now is a `border-image` ramp in `--border`'s own colour, full strength at the composer's end and gone by the top: that reads as the column having a side rather than as the screen being cut in two, so it needs no condition and there is none. `border-image` rather than a gradient on a pseudo-element, since this column **scrolls** and an absolutely-placed child is positioned against the padding box and slides away up the list. The fixed width and the rows' own marks say the rest.
 
 ## The browser
 

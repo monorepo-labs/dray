@@ -102,16 +102,30 @@ export default function Crew({
   chat,
 }: CrewProps) {
   return (
-    // No divider. A border is what a split draws between two places to work,
-    // and this is one place with a list beside it — the rows' own indent and
-    // the width they stop at say where the conversation ends.
+    // **An edge, not a divider, and the ramp is what makes it one.** A flat
+    // border is what a split draws between two places to work, and this is one
+    // place with a list beside it — which is why there was none here at all for
+    // a while, and why a flat one drawn only while the right panel was out was
+    // the first attempt at a middle. Ramped, it stops being that argument: it
+    // is full strength at the composer's end and gone by the top, so it reads
+    // as this column having a side rather than as the screen being cut in two,
+    // and it says the same thing whether or not a panel is open. `--border` is
+    // already a 10% white, so the ramp is 0 to 100 *of that* — the panel's own
+    // flat `border-l border-border` in the same colour, arriving.
+    //
+    // `border-image` rather than a gradient on a pseudo-element: this column
+    // scrolls, and an absolutely-placed child is positioned against the padding
+    // box and would slide away up the list. A border is painted on the border
+    // box and stays. It costs `border-color` being ignored here, which is why
+    // the token is named inside the gradient instead.
+    //
     // Scrolls, hint and all. A fan-out has no ceiling on how many sessions it
     // starts, and the rows past the window's edge were simply clipped — with
     // the chord that puts the column away clipped along with them. The hint
     // scrolls with the list rather than being pinned under it, since it is the
     // end of the list rather than a status bar.
     <div
-      className="flex min-h-0 shrink-0 flex-col overflow-y-auto"
+      className="flex min-h-0 shrink-0 flex-col overflow-y-auto border-l [border-image:linear-gradient(to_bottom,transparent,var(--border))_1]"
       style={{ width: CREW_W }}
     >
       {/* No heading. The fixed width and the rows' own marks already say this is

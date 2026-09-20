@@ -802,12 +802,22 @@ function App() {
     else if (id === selectedSessionId && crewAnchorId) focusSession(crewAnchorId);
   };
 
-  // ⌘-click: the one way out of the arrangement from inside it. The anchor is
-  // dropped outright rather than left to the selection change to clear it —
-  // the row this is usually pressed on is the focused one, which is already
-  // selected, so there is no change coming and the arrangement would simply
-  // stand. Collapsed on the way out, or coming back would find a row already
-  // open for a session just read whole.
+  // Leaving the arrangement outright, rather than leaving it to the selection
+  // change to clear the anchor. Both callers act on a row that is usually the
+  // focused one — already selected — so there is no change coming to read the
+  // write on, and the arrangement would simply stand. The bump is what causes
+  // the render that reads it; it is skipped where no anchor is held, which is
+  // every ordinary sidebar click.
+  const leaveCrew = () => {
+    keepCrewRef.current = false;
+    if (!crewRef.current) return;
+    crewRef.current = null;
+    crewMoved((n) => n + 1);
+  };
+
+  // ⌘-click: the one way out of the arrangement from inside it. Collapsed on
+  // the way out, or coming back would find a row already open for a session
+  // just read whole.
   const openCrewRowInMain = (id: string) => {
     setCrewOpen((prev) => {
       if (!prev.has(id)) return prev;
@@ -815,9 +825,7 @@ function App() {
       next.delete(id);
       return next;
     });
-    crewRef.current = null;
-    keepCrewRef.current = false;
-    crewMoved((n) => n + 1);
+    leaveCrew();
     void handleSelectSessionIndexItem(id);
   };
 
@@ -1914,8 +1922,18 @@ function App() {
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
+          // The sidebar is the reader leaving the crew, and it has to say so
+          // outright rather than lean on the selection moving. A row already
+          // selected — the crew member they are reading — moves nothing, so
+          // the anchor stood and the main column went on drawing the parent:
+          // the click read as broken, and the only way into that session's
+          // full view was ⌘-clicking it over in the crew, or clicking away to
+          // another row and back.
           onSelect={(sessionId) =>
-            goToSession(() => void handleSelectSessionIndexItem(sessionId))
+            goToSession(() => {
+              leaveCrew();
+              void handleSelectSessionIndexItem(sessionId);
+            })
           }
           groups={spaceGroups}
           onDropSession={dropSession}
