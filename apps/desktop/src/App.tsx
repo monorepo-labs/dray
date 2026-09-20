@@ -665,7 +665,13 @@ function App() {
   // on return, taking the scroll pin and the mounted turns with it both ways.
   // `crewDrawn` is the column itself, which is the reading every gate on being
   // *seen* takes.
-  const crewExists = !activeGroup && crew.length > 0;
+  // A grouped *anchor* has no crew: its column is already several
+  // conversations side by side, so there is nowhere for the list to go. The
+  // question is asked of the anchor and never of the selection — a child that
+  // happens to sit in a split group would otherwise swap the whole column for
+  // that group the moment its row was clicked, which is the arrangement
+  // leaving on the one gesture that is supposed to stay inside it.
+  const crewExists = crew.length > 0 && !groupOf(spaceGroups, crewAnchorId);
   const crewAvailable = crewExists && !issuesOpen && viewTab === "chat";
   const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
   const crewHidden = !!(crewAnchorId && crewHiddenBy[crewAnchorId]);
@@ -675,7 +681,10 @@ function App() {
   // dragged to; a split holds several deliberately small ones, so the same
   // floor there would refuse the layout the reader asked for. The crew rides
   // on top of it because it is fixed-width and never gives any of it back.
-  useChatColumnFloor(!activeGroup, crewDrawn ? CREW_W : 0);
+  // What the main column is actually showing. With a crew up that is the
+  // anchor, which `crewExists` has already established is in no group.
+  const mainGroup = crewUp ? null : activeGroup;
+  useChatColumnFloor(!mainGroup, crewDrawn ? CREW_W : 0);
 
   const toggleCrew = () => {
     if (crewAnchorId) setCrewHiddenBy((prev) => ({ ...prev, [crewAnchorId]: !crewHidden }));
@@ -695,7 +704,8 @@ function App() {
   // conversations is one box that can send into the wrong one, so it says
   // which before anything is typed.
   const composerTarget =
-    splitTarget ?? (mainSessionId !== selectedSessionId ? selectedSession?.title ?? null : null);
+    (mainGroup && splitTarget) ??
+    (mainSessionId !== selectedSessionId ? selectedSession?.title ?? null : null);
   // Composing into the focused session, so every other transcript gives way.
   // The emptiness alone, never the text: every mounted transcript is below
   // this, and subscribing to the string would rerender them all per keystroke.
@@ -724,7 +734,10 @@ function App() {
   // would each wipe the other's. The anchor rides along because the main
   // column is drawing it while something else is selected, which is exactly
   // the state the eviction sweep would otherwise read as nobody looking.
-  const onScreenKey = [memberKey, crewShown, crewUp ? crewAnchorId : null]
+  // The grid's members only where the grid is what the column draws — a crew
+  // child that happens to sit in a split group is on screen as a strip, not as
+  // that group.
+  const onScreenKey = [mainGroup ? memberKey : "", crewShown, crewUp ? crewAnchorId : null]
     .filter(Boolean)
     .join("\n");
   useEffect(() => {
@@ -1637,8 +1650,8 @@ function App() {
   // screen*: with none ⌘1 has nothing to point at and must not eat the key,
   // and under the Diff tab or the issues page ⌘W would close a pane the
   // reader cannot see.
-  const gridShown = !!activeGroup && !issuesOpen && viewTab === "chat";
-  const paneIds = activeGroup ? paneOrder(activeGroup) : [];
+  const gridShown = !!mainGroup && !issuesOpen && viewTab === "chat";
+  const paneIds = mainGroup ? paneOrder(mainGroup) : [];
   // Keyboard focus moves with the pane. A click moves it by itself, but a
   // chord left it on whatever the old pane held — a link, a subagent control
   // — and Enter there then acted through the *selected* session, since every
@@ -1946,7 +1959,7 @@ function App() {
             // The group's name over a grid: each pane's header already names
             // its session, and the focused one's repeated up here read as a
             // second line of the same row.
-            standIn={issuesOpen ? "Issues" : activeGroup ? groupName(activeGroup) : null}
+            standIn={issuesOpen ? "Issues" : mainGroup ? groupName(mainGroup) : null}
             className="flex-1"
           />
 
@@ -2240,7 +2253,7 @@ function App() {
           make: the transcript keeps its scroll position and its highlighted
           diffs, and the repo view keeps its selection and its reads. */}
       <TabBody active={!issuesOpen && viewTab === "chat"}>
-      {activeGroup ? (
+      {mainGroup ? (
         <SplitView
           columns={paneColumns}
           focusedId={selectedSessionId}
