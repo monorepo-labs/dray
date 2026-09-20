@@ -1152,8 +1152,14 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   try {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
+      // Held whoever asked for it — a loaded transcript is worth having and the
+      // sweep decides when it stops being. The *answer* is the other question:
+      // a click that landed while this read was out has already claimed the
+      // request and moved the reader somewhere this read did not put them, so
+      // saying it landed would let a caller tear down for a move that is no
+      // longer theirs. The rollback below takes the same reading.
       upsertSession(withEarlyEvents(snapshot));
-      return true;
+      return selectionRequestRef.current === sessionId;
     }
 
     // The id resolves to nothing on disk, so the selection has to go back where
