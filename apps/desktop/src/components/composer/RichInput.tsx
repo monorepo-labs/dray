@@ -4,13 +4,12 @@ import { SEGMENT_COLOR, highlightSegments } from "@/lib/highlight";
 import {
   caretOf,
   diffRange,
-  insertText,
-  locate,
+  selectionRange,
   placeCaret,
   readValue,
   renderInto,
 } from "@/lib/richDom";
-import { chipSignature, placeSegments, type Placed } from "@/lib/richText";
+import { chipSignature, placeSegments, pushEntry, type Entry, type Placed } from "@/lib/richText";
 import { cn } from "@/lib/utils";
 
 /// The fill each kind of chip takes.
@@ -53,8 +52,16 @@ const CHIP_ACCENT: Partial<Record<Placed["segment"]["kind"], string>> = {
 /// than the glyphs. `em`, so it follows the reader's composer size. Weight went
 /// for the same reason: the fill already separates the run, and 500 against the
 /// prose's 400 was a second way to say it.
+/// **`inline`, never `inline-block`, and that is about the caret.** An
+/// inline-block's height joins the line box, so a chip 18.8px tall on a 21px
+/// line pushed it to 24px — which made the caret taller than the text beside it
+/// and left lines holding a tag further apart than lines without one. An inline
+/// box's padding paints without taking part in that calculation, so the line
+/// stays the composer's own and the fill still draws round the face.
+/// `whitespace-nowrap` is what keeps the fill in one piece, since an inline box
+/// breaking across two lines would be drawn as two.
 const CHIP_SHAPE =
-  "inline-block cursor-default whitespace-nowrap rounded-sm px-1 align-baseline text-[0.94em] leading-tight";
+  "inline cursor-default whitespace-nowrap rounded-sm px-1 align-baseline text-[0.94em] leading-tight";
 
 /// What a run is painted.
 ///
@@ -100,14 +107,21 @@ type Props = {
 /// **It is uncontrolled while ordinary prose is typed, and that is the whole
 /// design.** React writes to this subtree only when the *chips* move — a tag
 /// completed, a tag deleted into, a draft arriving from elsewhere. Every other
-/// keystroke is the browser's own, which is what keeps the caret, the selection
-/// and the undo stack behaving natively rather than being reimplemented here.
-/// The overlay this replaces failed for exactly the opposite reason: it redrew a
-/// second copy of the text on every frame and spent its whole life trying to
-/// keep that copy in register.
+/// keystroke is the browser's own, which is what keeps the caret and the
+/// selection behaving natively rather than being reimplemented here. The overlay
+/// this replaces failed for exactly the opposite reason: it redrew a second copy
+/// of the text on every frame and spent its whole life trying to keep that copy
+/// in register.
 ///
-/// Programmatic changes go in through `insertText` rather than by rebuilding, so
-/// a pick is one undoable edit rather than a lost history.
+/// **Nothing here asks the browser to edit for it.** A change arriving from
+/// anywhere but the keyboard — a pick, dictation, a paste, ⇧⏎ — is computed as a
+/// string and drawn by `renderInto`, with the caret placed at the index it
+/// belongs at. `execCommand` was the other route and it is gone: it existed only
+/// to keep the browser's undo history, which a chip rebuild destroys anyway
+/// (undo is ours, see `history`), and what it cost was the browser deciding what
+/// a programmatic edit means. Its `insertLineBreak` adds a *second* newline
+/// under `pre-wrap` so the new line has something to draw, which put a character
+/// in the value nobody typed and left the caret a line above the text.
 export default function RichInput({
   value,
   caret,
@@ -136,6 +150,26 @@ export default function RichInput({
   /// the next keystroke. Focus needs no such nudge: `selectionchange` reports the
   /// caret the moment it lands, which re-runs this by itself.
   const [blurs, setBlurs] = useState(0);
+  /// The undo stack, **ours and not the browser's**.
+  ///
+  /// A chip appearing rebuilds the subtree, and WebKit records its own history
+  /// against the nodes that were there — so after one rebuild ⌘Z restores a
+  /// snapshot that no longer matches and takes most of the sentence with it.
+  /// Nothing can repair that stack, and the rebuild is the feature, so the
+  /// native one is refused outright (`preventDefault` on every ⌘Z, whether or
+  /// not there is anything to undo) and this stands in.
+  ///
+  /// Entries are whole values rather than edits: the text is a few hundred
+  /// characters and a list of them costs nothing beside being obviously right.
+  /// `run` is what makes undo land on word boundaries the way a textarea does —
+  /// consecutive single characters of one kind collapse into the entry they
+  /// started, and anything else opens a new one.
+  const history = useRef<Entry[]>([{ text: value, caret, run: null }]);
+  const at = useRef(0);
+  /// Set while an undo is being applied, so the effect that records does not
+  /// record the restore as a fresh edit.
+  const restoring = useRef(false);
+
   /// The caret as of the last commit, which is what tells a caret the caller
   /// *asked* for from one that simply hasn't moved since.
   const lastCaret = useRef(0);
@@ -160,24 +194,23 @@ export default function RichInput({
     const placed = placeSegments(highlightSegments(value), focused.current ? target : null);
     const next = chipSignature(placed);
 
-    // Put an outside change in as an edit first. Reduced to the range that
-    // actually moved, a pick is the tag alone, which the browser records as one
-    // undoable step — where rebuilding the tree would throw the history away.
-    if (arrived && focused.current) applyEdit(el, domValue.current, value);
-
-    // Rebuild only where the chips moved or the edit above could not land.
-    // Ordinary typing reaches neither and the tree is left exactly as the
-    // browser left it.
-    if (next !== signature.current || readValue(el) !== value) {
+    // Rebuilt where the chips moved, where the value arrived from outside, or
+    // where the tree has drifted from the string. Ordinary typing is none of
+    // those — the browser has already put the character in — so it reaches
+    // nothing here and the tree is left exactly as the browser left it.
+    if (arrived || next !== signature.current || readValue(el) !== value) {
       renderInto(el, placed, classOf);
       if (focused.current) placeCaret(el, target);
-    } else if (arrived && focused.current && caretOf(el) !== target) {
-      placeCaret(el, target);
     }
 
     domValue.current = value;
     signature.current = next;
     lastCaret.current = target;
+
+    // A restore is already in the history — recording it would file the state
+    // undone back onto the end and make the press look inert.
+    if (restoring.current) restoring.current = false;
+    else at.current = pushEntry(history.current, at.current, value, target);
 
     // Said back, so the pickers are reading the caret the box actually has.
     if (target !== caret) onCaretChange(target);
@@ -233,29 +266,46 @@ export default function RichInput({
         setBlurs((n) => n + 1);
         onBlur?.();
       }}
-      onKeyDown={onKeyDown}
+      onKeyDown={(event) => {
+        // Taken before anything else looks at it: the chord must never reach
+        // the browser's own history, and `ChatInput`'s handler has no business
+        // seeing a key this one answers.
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+          event.preventDefault();
+          const to = at.current + (event.shiftKey ? 1 : -1);
+          const entry: Entry | undefined = history.current[to];
+          if (entry) {
+            at.current = to;
+            restoring.current = true;
+            onChange(entry.text, entry.caret);
+          }
+          return;
+        }
+
+        onKeyDown?.(event);
+      }}
       // Plain text only. The default would paste somebody else's markup into a
       // tree whose every element means something here, and a pasted `<span>`
       // carrying `data-tag` would be a chip addressing a session at random.
       onPaste={(event) => {
         event.preventDefault();
-        const text = event.clipboardData.getData("text/plain");
-        if (text) insertText(text);
+        drop(ref.current, event.clipboardData.getData("text/plain"), onChange);
       }}
       // Tauri intercepts a *file* drop before the webview sees it, so what
       // reaches here is text from another app — which would arrive as markup for
       // the reason above.
       onDrop={(event) => {
         event.preventDefault();
-        const text = event.dataTransfer.getData("text/plain");
-        if (text) insertText(text);
+        drop(ref.current, event.dataTransfer.getData("text/plain"), onChange);
       }}
       className={cn(
-        // `text-foreground` is not decoration: `--color-composer` exists beside
-        // `--text-composer`, so a bare `text-composer` on this box resolves as a
-        // *colour* and paints the prose in the card's own fill — invisible. The
-        // textarea this replaces escaped it only by carrying an explicit colour
-        // alongside, which is what this is.
+        // `text-foreground` is not decoration. The size class this box carries
+        // used to be `text-composer`, which collided with `--color-composer` and
+        // resolved as a *colour* — the card's own fill, painting the prose
+        // invisible. The token is `--text-prompt` now and the collision is gone,
+        // but the colour still has to be stated: a size utility sets no colour,
+        // and the one inherited here is the card's text colour rather than the
+        // foreground.
         "relative block w-full overflow-y-auto whitespace-pre-wrap break-words text-foreground outline-none",
         // `lh` is the line box's own height, so the cap follows the composer's
         // font size wherever the reader sets it — which is the whole of what the
@@ -275,24 +325,21 @@ export default function RichInput({
   );
 }
 
-/// Puts `next` in place of `prev` as one edit over the range they differ on.
+/// Puts `text` in at the caret, replacing whatever is selected.
 ///
-/// `insertText` rather than a rebuild, so the browser records it on its own undo
-/// stack. Returns whether it landed — it will not with the selection outside
-/// this box, which is why the caller checks the tree afterwards rather than
-/// trusting this.
-function applyEdit(el: HTMLElement, prev: string, next: string): boolean {
-  const { start, end, text } = diffRange(prev, next);
-  const from = locate(el, start);
-  const to = locate(el, end);
+/// The value is computed here and handed back rather than typed into the tree,
+/// the same as every other outside change — which is why it needs both ends of
+/// the selection and not just the caret.
+function drop(
+  el: HTMLElement | null,
+  text: string,
+  onChange: (value: string, caret: number) => void,
+): void {
+  if (!el || !text) return;
 
-  const range = document.createRange();
-  range.setStart(from.node, from.offset);
-  range.setEnd(to.node, to.offset);
+  const at = selectionRange(el);
+  if (!at) return;
 
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-
-  return text === "" ? document.execCommand("delete") : insertText(text);
+  const value = readValue(el);
+  onChange(value.slice(0, at.start) + text + value.slice(at.end), at.start + text.length);
 }

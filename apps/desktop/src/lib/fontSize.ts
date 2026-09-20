@@ -3,7 +3,7 @@
 /// Each slot is one of the semantic `text-*` utilities in App.css, which read
 /// their size off an overridable `--fs-<slot>` on `<html>`; this is the only
 /// thing that writes one. Composer and tool output are deliberately absent —
-/// both keep the size App.css gives them, and `--fs-composer`/`--fs-tool` stay
+/// both keep the size App.css gives them, and `--fs-prompt`/`--fs-tool` stay
 /// as hooks nothing writes.
 ///
 /// Defaults are the rem values in App.css at a 16px root, stated here in px

@@ -156,3 +156,92 @@ export function chipSignature(placed: Placed[]): string {
     .map((p) => `${p.start}:${p.segment.text.length}:${p.label}`)
     .join("\u0000");
 }
+
+/// One state the composer has been in, and how it got there.
+export type Entry = {
+  text: string;
+  caret: number;
+  /// The kind of keystroke that produced it, where it was one: a single
+  /// character typed, or a single character removed. `null` for everything else
+  /// — a paste, a pick, a selection replaced, a space — and `null` is what ends
+  /// a run, so undo lands on word boundaries rather than on every letter.
+  run: "insert" | "delete" | null;
+};
+
+/// The most states kept. Reached only by a long sitting at one draft, and the
+/// cost of the oldest going is one more press doing nothing.
+const HISTORY_MAX = 200;
+
+/// Files `text` as the composer's newest state, and answers the new index.
+///
+/// **Consecutive single characters of one kind collapse into one entry**, which
+/// is what makes ⌘Z take back a word rather than a letter. A run is broken by
+/// anything that is not one more character of the same kind in the same place —
+/// whitespace included, since that is where a word ends.
+///
+/// The redo tail is dropped on the first edit after an undo, which is what every
+/// editor does and the only honest answer: the states ahead described a future
+/// that has just been rewritten.
+export function pushEntry(history: Entry[], at: number, text: string, caret: number): number {
+  const top = history[at];
+
+  if (top.text === text) {
+    // A pure caret move. Kept on the entry, so undoing back to it puts the caret
+    // where the reader left it rather than where the edit happened to end.
+    top.caret = caret;
+    return at;
+  }
+
+  const [start, removed, added] = spanOf(top.text, text);
+  const run =
+    removed === 0 && added.length === 1 && !/\s/.test(added)
+      ? "insert"
+      : added.length === 0 && removed === 1
+        ? "delete"
+        : null;
+
+  // Contiguity is judged against the caret the previous entry was left at, so a
+  // character typed somewhere else opens an entry of its own.
+  const joins =
+    run !== null &&
+    run === top.run &&
+    (run === "insert" ? start === top.caret : start + 1 === top.caret);
+
+  // Everything ahead of the cursor is a future this edit has replaced.
+  history.length = at + 1;
+
+  if (joins) {
+    history[at] = { text, caret, run };
+    return at;
+  }
+
+  history.push({ text, caret, run });
+
+  if (history.length > HISTORY_MAX) {
+    history.shift();
+    return at;
+  }
+
+  return at + 1;
+}
+
+/// What changed between two values: where, how many characters went, what
+/// arrived in their place.
+///
+/// The same prefix/suffix reading `diffRange` makes, stated again here so this
+/// half stays testable with no DOM anywhere near it.
+function spanOf(prev: string, next: string): [number, number, string] {
+  let start = 0;
+  while (start < prev.length && start < next.length && prev[start] === next[start]) start += 1;
+
+  let end = 0;
+  while (
+    end < prev.length - start &&
+    end < next.length - start &&
+    prev[prev.length - 1 - end] === next[next.length - 1 - end]
+  ) {
+    end += 1;
+  }
+
+  return [start, prev.length - start - end, next.slice(start, next.length - end)];
+}

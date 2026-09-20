@@ -877,10 +877,15 @@
      in the size setting, which is scoped to the conversation. */
   --text-ui: var(--fs-ui, 0.8125rem);
   --text-ui--line-height: 1.4;
-  /* Not `--text-input`: that collides with shadcn's `--color-input`, and the
-     color utility wins the `text-input` class name. */
-  --text-composer: var(--fs-composer, 0.875rem);
-  --text-composer--line-height: 1.5;
+  /* **Not `--text-composer`, and not `--text-input` before it.** A font-size
+     token and a colour token share one utility name, and the colour wins it —
+     `--color-input` is shadcn's and `--color-composer` is the composer card's
+     own fill, so `text-composer` painted the prose in the card's colour and
+     applied no size at all. The box then inherited 16px where this says 14,
+     which is also why its caret stood a line taller than the text beside it.
+     Nothing here may be named after a surface that has a fill. */
+  --text-prompt: var(--fs-prompt, 0.875rem);
+  --text-prompt--line-height: 1.5;
 
   --color-surface-raised: var(--surface-raised);
   --color-surface-well: var(--surface-well);

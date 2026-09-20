@@ -24,7 +24,6 @@ import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { registerComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
-import { insertText } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import { applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
 import {
@@ -168,7 +167,7 @@ const NEW_TASK_MAX_ROWS = 20;
 // of the text drift apart and show as ghosting — so they share one constant
 // rather than two matching class lists. The horizontal padding varies by state
 // and is applied at both call sites alongside this.
-const TEXT_BOX = "py-1 text-composer";
+const TEXT_BOX = "py-1 text-prompt";
 
 // `String.raw` because the glyphs are drawn with backslashes; an ordinary
 // template literal would eat them as escapes.
@@ -673,7 +672,7 @@ export default function ChatInput({
             extra `px-1` itself — inside the card those two sit on different
             edges, and matching only one of them is what reads as a shift. */}
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-2xl border border-hairline bg-card px-3 py-3">
-          <span className="px-1 text-composer text-muted-foreground">
+          <span className="px-1 text-prompt text-muted-foreground">
             Unsettle this task to send a follow-up.
           </span>
 
@@ -971,12 +970,14 @@ export default function ChatInput({
                         return;
                       }
 
-                      // Always handled, never left to the browser. A
-                      // contenteditable's own Enter inserts a block or a break of
-                      // its choosing, and every element in this tree means
-                      // something — one arriving uninvited is a newline the value
-                      // cannot see. `insertText` puts in the one character the
-                      // string needs and keeps the browser's undo stack.
+                      // Always handled, never left to the browser, and put in
+                      // as a *string* rather than as an edit. A contenteditable's
+                      // own Enter inserts a block or a break of its choosing, and
+                      // `execCommand` is no better: `insertLineBreak` under
+                      // `pre-wrap` adds a second newline so the opened line has
+                      // something to draw, which is a character nobody typed and
+                      // leaves the caret a line above the text. One character, at
+                      // one index, and `RichInput` draws what that says.
                       e.preventDefault();
 
                       // A newline inside a list carries the marker with it. Only
@@ -992,7 +993,8 @@ export default function ChatInput({
                         return;
                       }
 
-                      insertText("\n");
+                      setMessage(`${message.slice(0, caret)}\n${message.slice(caret)}`);
+                      setCaret(caret + 1);
                     }
                   }}
                   className={cn(TEXT_BOX, isNewTask ? "px-0" : "px-1")}

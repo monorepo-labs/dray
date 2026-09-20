@@ -30,12 +30,13 @@ function isBlock(el: HTMLElement): boolean {
 /// Every node contributing text, in document order.
 ///
 /// The cases are everything the tree can hold. A chip is worth its whole
-/// `data-tag` and is never descended into. A `<br>` is worth a newline **unless
-/// it closes its container**, where it is the filler every browser adds so that
-/// an empty line has something to draw — which is also why a value ending in a
-/// newline comes back as `text<br><br>` and reads correctly here. A block is
-/// worth a newline *before* it, since that is the whole of what a block means in
-/// a text box. Everything else is descended through.
+/// `data-tag` and is never descended into. A `<br>` is worth a newline unless it
+/// is a *placeholder* — the one every browser leaves behind so an empty line has
+/// something to draw — which is the last one in its container with nothing or
+/// another break before it, and is why a value ending in a newline comes back as
+/// `text<br><br>` and reads correctly here. A block is worth a newline *before*
+/// it, since that is the whole of what a block means in a text box. Everything
+/// else is descended through.
 ///
 /// The block rule is not defensive: `insertText` with a newline in it makes
 /// blocks in WebKit, so the composer's own ⇧⏎ and its paste handler both produce
@@ -43,10 +44,14 @@ function isBlock(el: HTMLElement): boolean {
 /// draws on two lines and sends as one.
 function* pieces(root: Node): Generator<{ node: Node; text: string }> {
   let first = true;
+  /// The last text yielded at this level, which is the only thing that tells a
+  /// trailing `<br>` apart from a trailing `<br>`. See below.
+  let prev = "";
 
   for (const node of Array.from(root.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
-      yield { node, text: (node as Text).data };
+      prev = (node as Text).data;
+      yield { node, text: prev };
       first = false;
       continue;
     }
@@ -56,13 +61,27 @@ function* pieces(root: Node): Generator<{ node: Node; text: string }> {
 
     const tag = node.getAttribute(TAG_ATTR);
     if (tag !== null) {
+      prev = tag;
       yield { node, text: tag };
       first = false;
       continue;
     }
 
     if (node.tagName === "BR") {
-      if (node === root.lastChild) continue;
+      // **A trailing `<br>` is two different things and position alone cannot
+      // tell them apart.** The browser leaves one behind as a *placeholder* —
+      // after the last character is deleted, and on the far side of a break so
+      // the empty line it opens can be seen — and it also uses one for the
+      // break itself. Reading every trailing one as nothing lost the newline
+      // ⇧⏎ had just inserted: the value did not change, so nothing rendered,
+      // and the character typed next committed the newline and itself together,
+      // which read as the break being slow rather than missing.
+      //
+      // What separates them is what comes before: a placeholder follows nothing
+      // or follows another break, where a real break follows text.
+      if (node === root.lastChild && (prev === "" || prev.endsWith("\n"))) continue;
+
+      prev = "\n";
       yield { node, text: "\n" };
       first = false;
       continue;
@@ -70,6 +89,10 @@ function* pieces(root: Node): Generator<{ node: Node; text: string }> {
 
     if (isBlock(node) && !first) yield { node, text: "\n" };
     yield* pieces(node);
+    // A block's own contents are unknown to this level, and the only reader of
+    // `prev` is the trailing-break rule — where a block ending the box is a
+    // line of its own, so a break after it is a placeholder either way.
+    prev = "\n";
     first = false;
   }
 }
@@ -231,25 +254,23 @@ export function renderInto(
   root.replaceChildren(...children);
 }
 
-/// Types `text` in at the selection, as the browser's own editing commands.
+/// The selection as a pair of indexes into the string, or `null` when it is not
+/// in this box.
 ///
-/// **A newline is `insertLineBreak`, never `insertText`.** Handed a `\n`,
-/// WebKit splits the current block and makes a `div` — which `pieces` now reads
-/// correctly, but which puts a shape into the tree that nothing here builds and
-/// that browsers disagree about. `insertLineBreak` makes the `<br>` this file
-/// already speaks, so the tree the reader edits stays the tree `renderInto`
-/// makes. Split rather than done in one pass because the two commands are the
-/// only way to say each half.
-export function insertText(text: string): boolean {
-  let ok = true;
-  const lines = text.split("\n");
+/// Both ends, where [`caretOf`] answers one: a paste replaces what is selected,
+/// and the value it replaces it in is this file's to compute now that nothing
+/// here asks the browser to edit for it.
+export function selectionRange(root: HTMLElement): { start: number; end: number } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
 
-  lines.forEach((line, i) => {
-    if (i > 0) ok = document.execCommand("insertLineBreak") && ok;
-    if (line) ok = document.execCommand("insertText", false, line) && ok;
-  });
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
 
-  return ok;
+  return {
+    start: offsetOf(root, range.startContainer, range.startOffset),
+    end: offsetOf(root, range.endContainer, range.endOffset),
+  };
 }
 
 /// The one range two strings differ over — common prefix and common suffix cut

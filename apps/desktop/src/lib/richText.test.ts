@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { highlightSegments } from "./highlight";
 import { rememberIssueTitle } from "./issue";
 import { diffRange } from "./richDom";
-import { chipLabel, chipSignature, placeSegments } from "./richText";
+import { chipLabel, chipSignature, placeSegments, pushEntry, type Entry } from "./richText";
 
 const ID = "0195f2a1-8c3d-7e4b-9f11-2ab7c0d3e5f6";
 
@@ -228,5 +228,77 @@ describe("diffRange", () => {
       const { start, end, text } = diffRange(before, after);
       expect(before.slice(0, start) + text + before.slice(end)).toBe(after);
     }
+  });
+});
+
+describe("undo history", () => {
+  /// Types `text` a character at a time from empty, the way the effect files it.
+  function type(text: string): { history: Entry[]; at: number } {
+    const history: Entry[] = [{ text: "", caret: 0, run: null }];
+    let at = 0;
+
+    for (let i = 1; i <= text.length; i += 1) {
+      at = pushEntry(history, at, text.slice(0, i), i);
+    }
+
+    return { history, at };
+  }
+
+  it("collapses a typed word into one entry", () => {
+    const { history, at } = type("hello");
+
+    expect(history.map((e) => e.text)).toEqual(["", "hello"]);
+    expect(at).toBe(1);
+  });
+
+  it("breaks the run at a space, so undo takes back one word", () => {
+    const { history } = type("hello there");
+
+    expect(history.map((e) => e.text)).toEqual(["", "hello", "hello ", "hello there"]);
+  });
+
+  it("keeps deletes in their own run", () => {
+    const history: Entry[] = [{ text: "", caret: 0, run: null }];
+    let at = pushEntry(history, 0, "ab", 2);
+    at = pushEntry(history, at, "a", 1);
+    at = pushEntry(history, at, "", 0);
+
+    expect(history.map((e) => e.text)).toEqual(["", "ab", ""]);
+    expect(at).toBe(2);
+  });
+
+  it("opens a new entry for a character typed somewhere else", () => {
+    const history: Entry[] = [{ text: "ab", caret: 2, run: null }];
+    let at = pushEntry(history, 0, "abc", 3);
+    at = pushEntry(history, at, "xabc", 1);
+
+    expect(history.map((e) => e.text)).toEqual(["ab", "abc", "xabc"]);
+  });
+
+  it("files a pick as its own entry, never joined to the word before it", () => {
+    const history: Entry[] = [{ text: "", caret: 0, run: null }];
+    let at = pushEntry(history, 0, "s", 1);
+    at = pushEntry(history, at, "see @src/lib/richText.ts ", 24);
+
+    expect(history).toHaveLength(3);
+    expect(history[2].run).toBeNull();
+  });
+
+  it("drops the redo tail once an edit lands on an undone state", () => {
+    const { history } = type("hi");
+    // Undone back to empty, then something else typed.
+    const at = pushEntry(history, 0, "x", 1);
+
+    expect(history.map((e) => e.text)).toEqual(["", "x"]);
+    expect(at).toBe(1);
+  });
+
+  it("moves the caret on the newest entry rather than filing a state", () => {
+    const { history, at } = type("hi");
+    const next = pushEntry(history, at, "hi", 0);
+
+    expect(next).toBe(at);
+    expect(history).toHaveLength(2);
+    expect(history[1].caret).toBe(0);
   });
 });
