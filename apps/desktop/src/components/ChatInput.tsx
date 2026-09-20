@@ -875,6 +875,15 @@ export default function ChatInput({
             <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
               <div className="relative min-w-0 flex-1">
                 <RichInput
+                  // **One editor per session, because the undo stack is the
+                  // browser's and nothing can clear it.** Outside changes are
+                  // applied through `execCommand` so a pick stays undoable, and
+                  // that puts a session switch on the same stack — ⌘Z in the
+                  // session moved to would restore the text of the one left, and
+                  // the input event would write it into *this* session's draft.
+                  // A remount is the only thing that ends a stack; the cost is
+                  // focus, which a switch was not keeping anyway.
+                  key={sessionId ?? "new"}
                   // Registered as well as held, so dictation can hand focus
                   // back from `App`, which has no route to this element.
                   innerRef={(el) => {

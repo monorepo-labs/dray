@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SEGMENT_COLOR, highlightSegments } from "@/lib/highlight";
 import {
@@ -128,6 +128,14 @@ export default function RichInput({
   const domValue = useRef("");
   const signature = useRef("");
   const focused = useRef(false);
+  /// Bumped on blur, purely to re-run the effect below.
+  ///
+  /// A blurred box has no run being edited, so the tag the caret was sitting in
+  /// has to chip — and losing focus moves nothing the effect already watches, so
+  /// without this a tag typed and then clicked away from stayed plain text until
+  /// the next keystroke. Focus needs no such nudge: `selectionchange` reports the
+  /// caret the moment it lands, which re-runs this by itself.
+  const [blurs, setBlurs] = useState(0);
   /// The caret as of the last commit, which is what tells a caret the caller
   /// *asked* for from one that simply hasn't moved since.
   const lastCaret = useRef(0);
@@ -173,7 +181,7 @@ export default function RichInput({
 
     // Said back, so the pickers are reading the caret the box actually has.
     if (target !== caret) onCaretChange(target);
-  }, [value, caret, onCaretChange]);
+  }, [value, caret, blurs, onCaretChange]);
 
   // A contenteditable has no `onSelect`, and the caret moves for reasons no
   // element-level handler sees — arrow keys, a drag, the OS putting it back. The
@@ -222,6 +230,7 @@ export default function RichInput({
       }}
       onBlur={() => {
         focused.current = false;
+        setBlurs((n) => n + 1);
         onBlur?.();
       }}
       onKeyDown={onKeyDown}

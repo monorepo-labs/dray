@@ -148,6 +148,22 @@ describe("issue titles", () => {
     expect(chip.label!.endsWith("…")).toBe(true);
   });
 
+  it("refuses a title that is only the start of a longer word", () => {
+    rememberIssueTitle("DRA-1", "Fix");
+    const [chip] = place("#DRA-1 Fixed the login", null);
+
+    expect(chip.label).toBe("#DRA-1");
+    expect(chip.segment.text).toBe("#DRA-1");
+  });
+
+  it("takes a title the sentence carries on after with punctuation", () => {
+    rememberIssueTitle("DRA-2", "Fix");
+    const [chip] = place("#DRA-2 Fix, then ship", null);
+
+    expect(chip.label).toBe("#Fix");
+    expect(chip.segment.text).toBe("#DRA-2 Fix");
+  });
+
   it("gives the title back once the reader edits it, rather than claiming it", () => {
     rememberIssueTitle("DRA-269", "Composer chips");
     const [chip] = place("#DRA-269 Composer chops", null);

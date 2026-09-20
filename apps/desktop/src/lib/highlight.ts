@@ -182,16 +182,24 @@ export function withIssueTitles(
     }
 
     const title = titleOf(segment.text.slice(1));
-    if (!title || !after.text.startsWith(` ${title}`)) {
+    // What would be left of the run the title came off the front of.
+    const rest = title ? after.text.slice(title.length + 1) : "";
+
+    // **The title has to end where the text does.** A prefix match alone splits
+    // a word: an issue titled `Fix` turns a hand-typed `#DRA-1 Fixed the login`
+    // into a `#Fix` tag with `ed the login` beside it. The tag as this app
+    // writes it is always followed by a space or by the end of the prompt, so
+    // demanding a boundary costs nothing real and is what makes a *coincidence*
+    // stop counting as a match.
+    if (!title || !after.text.startsWith(` ${title}`) || /^[\w-]/.test(rest)) {
       out.push(segment);
       continue;
     }
 
     out.push({ ...segment, text: `${segment.text} ${title}`, inner: segment.text });
 
-    // What is left of the run the title came off the front of. Dropped entirely
-    // where the tag ended the prompt, or the walk gains an empty run.
-    const rest = after.text.slice(title.length + 1);
+    // Dropped entirely where the tag ended the prompt, or the walk gains an
+    // empty run.
     if (rest) out.push({ ...after, text: rest });
 
     i += 1;
