@@ -44,7 +44,10 @@ export function crewRows(
   if (!parentId) return [];
   return items
     .filter((i) => i.parentSessionId === parentId && !i.archived && i.sessionId !== parentId)
-    .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
+    // Newest first, by when it was *started* rather than last touched: the
+    // sidebar's own ordering moves a row every time its turn ends, which here
+    // would slide an open transcript out from under somebody reading it.
+    .sort((a, b) => Date.parse(b.created) - Date.parse(a.created))
     .map((item) => rowState(item, live));
 }
 

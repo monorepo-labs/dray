@@ -105,7 +105,15 @@ export default function Crew({
     // No divider. A border is what a split draws between two places to work,
     // and this is one place with a list beside it — the rows' own indent and
     // the width they stop at say where the conversation ends.
-    <div className="flex shrink-0 flex-col" style={{ width: CREW_W }}>
+    // Scrolls, hint and all. A fan-out has no ceiling on how many sessions it
+    // starts, and the rows past the window's edge were simply clipped — with
+    // the chord that puts the column away clipped along with them. The hint
+    // scrolls with the list rather than being pinned under it, since it is the
+    // end of the list rather than a status bar.
+    <div
+      className="flex min-h-0 shrink-0 flex-col overflow-y-auto"
+      style={{ width: CREW_W }}
+    >
       {/* No heading. The fixed width and the rows' own marks already say this is
           a list rather than a workspace, and a label over five rows that each
           name themselves is a row of chrome spent on the one thing nobody has
@@ -128,7 +136,11 @@ export default function Crew({
               // strips leave, with no cap on how many may be open — a row
               // closing under somebody mid-sentence to make room is worse than
               // three tighter ones. A card is three lines and takes three.
-              openFully ? "flex-1" : "shrink-0",
+              // The floor is what keeps that honest once the column scrolls:
+              // `flex-1` shrinks to nothing before a flex container agrees to
+              // overflow, so enough closed rows would squeeze every open one to
+              // a line of its own header.
+              openFully ? "min-h-64 flex-1" : "shrink-0",
             )}
           >
             <CrewHeader
@@ -326,6 +338,13 @@ function CrewHeader({
           <span className={cn("truncate", focused && "font-medium", tone)}>
             {row.item.title}
           </span>
+          {/* The tone above is the whole of what says a row wants answering or
+              has finished, and colour alone says it to nobody using a screen
+              reader. The sidebar's own words, since the pair means the same
+              thing there. */}
+          {(row.asking || row.unread) && (
+            <span className="sr-only">{row.asking ? "Waiting for you" : "Unread"}</span>
+          )}
       {/* One slot, three tenants, and the order is the sidebar's own — so a
           reader who has learnt it over there already knows it here.
 
@@ -337,6 +356,9 @@ function CrewHeader({
           the least live thing about it — and the state is a standing fact, so
           it comes back the moment the turn ends. */}
           <span
+            // `role="img"` or the label is dropped on the floor: a bare `span`
+            // takes no accessible name, so the PR state was stated to nobody.
+            role={pr ? "img" : undefined}
             className="ml-auto flex size-5 shrink-0 items-center justify-center"
             aria-label={pr ? `Pull request #${pr.number}, ${prStateLabel(pr).toLowerCase()}` : undefined}
           >

@@ -67,12 +67,14 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "a", quiet))).toEqual(["c"]);
   });
 
-  // The sidebar's order, so a reader who has learnt one has learnt the other.
-  it("puts the newest first", () => {
+  // Newest first, and read off `created`: `modified` moves every time a
+  // session's turn ends, which would slide an open strip out from under
+  // somebody reading it.
+  it("puts the newest first and holds that order across a turn ending", () => {
     const items = [
+      item("old", "a", { created: "2026-09-01T00:00:00Z", modified: "2026-09-09T00:00:00Z" }),
       item("a", null),
-      item("old", "a", { modified: "2026-09-01T00:00:00Z" }),
-      item("new", "a", { modified: "2026-09-09T00:00:00Z" }),
+      item("new", "a", { created: "2026-09-05T00:00:00Z", modified: "2026-09-02T00:00:00Z" }),
     ];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["new", "old"]);
   });

@@ -14,6 +14,7 @@ import SessionHeader from "@/components/layout/SessionHeader";
 import ViewTabs from "@/components/layout/ViewTabs";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
   TooltipContent,
@@ -569,14 +570,23 @@ function PaneHeader({
     : pane.unread
       ? "text-accent-add"
       : undefined;
+  // **The whole row is the button**, not the title inside it. It was the title
+  // alone for a while, which left the avatar, the state mark and every pixel of
+  // gap between them dead: the row is plainly one control, so a click anywhere
+  // but on the words read as the page ignoring it. The parent header has no
+  // toggle and stays a plain row.
+  const Row = onToggle ? "button" : "div";
   return (
-    <div
-      // The parent header selects on press; a crew row does not, because its
-      // click is a toggle and what that *means* for selection depends on which
-      // way it went — see `toggle` in [`Demo`].
-      onPointerDown={onToggle ? undefined : onFocus}
+    <TitleTip enabled={Boolean(onToggle)}>
+    <Row
+      {...(onToggle
+        ? { type: "button" as const, onClick: onToggle, "aria-expanded": open }
+        : // The parent header selects on press; a crew row does not, because
+          // its click is a toggle and what that *means* for selection depends
+          // on which way it went — see `toggle` in [`Demo`].
+          { onPointerDown: onFocus })}
       className={cn(
-        "group relative flex h-8 shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-ui",
+        "group relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-left text-ui",
         // Selection is weight and colour, no fill. A filled row is how a *list*
         // marks the one thing it is showing, and with the borders gone it was
         // the loudest shape on the page — a lit band across the crew for a
@@ -589,24 +599,15 @@ function PaneHeader({
     >
       {onToggle && <StatusAvatar pane={pane} />}
 
-      <TitleTip enabled={Boolean(onToggle)}>
-        <button
-          type="button"
-          aria-expanded={onToggle ? open : undefined}
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-        >
-          <span className={cn("truncate", focused && "font-medium", tone)}>
-            {pane.session.title}
-          </span>
-          {branch && (
-            <span className="flex min-w-0 shrink items-center gap-1 text-muted-foreground">
-              <GitBranchIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{pane.session.branch}</span>
-            </span>
-          )}
-        </button>
-      </TitleTip>
+      <span className={cn("truncate", focused && "font-medium", tone)}>
+        {pane.session.title}
+      </span>
+      {branch && (
+        <span className="flex min-w-0 shrink items-center gap-1 text-muted-foreground">
+          <GitBranchIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{pane.session.branch}</span>
+        </span>
+      )}
 
       {/* What the branch has landing. Four controls have now been drawn in this
           slot and three were cut — a close, because a row is not the reader's to
@@ -659,7 +660,8 @@ function PaneHeader({
           )}
         </span>
       )}
-    </div>
+    </Row>
+    </TitleTip>
   );
 }
 
@@ -882,6 +884,27 @@ function OrchestrationSplit({
               </div>
             );
           })}
+
+          {/* The chord, under the last row rather than pinned to the foot of
+              the column. There is no button for this anywhere, so without a
+              line saying so the crew could be put away by somebody with no way
+              to get it back — and under the rows it reads as the end of the
+              list, where at the window's bottom edge it read as a status bar
+              the app had grown. No `mt-auto`, deliberately: an open row already
+              takes the rest of the height and pushes this down on its own.
+
+              Label left, held-back caps right, which is the sidebar's own hint
+              row. Caps first was tried and is worse: the label is what the eye
+              reads, and leading with the chord makes the row start on the one
+              part of it nobody is looking for. "Toggle", not "hide": the chord
+              is the only way *back* too. */}
+          <div className="flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
+            Toggle crew
+            <ShortcutKeys
+              ids={["crew.toggle"]}
+              className="[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60"
+            />
+          </div>
         </div>
       </div>
     </div>

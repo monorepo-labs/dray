@@ -73,20 +73,23 @@ function useChatFloor(): number {
   return useSyncExternalStore(layoutChanged.subscribe, () => chatFloor);
 }
 
-/// Called by `App` with whether the chat column is showing one conversation.
+/// Called by `App` with whether the chat column is showing one conversation,
+/// and what else is sharing that column's width.
 ///
-/// Split view is the exception: its panes are deliberately small, so a floor
-/// written for a single transcript would refuse a layout the reader asked for
-/// outright.
-export function useChatColumnFloor(single: boolean) {
+/// Split view is the exception to the first: its panes are deliberately small,
+/// so a floor written for a single transcript would refuse a layout the reader
+/// asked for outright. `beside` is the crew, which is fixed-width and refuses
+/// to shrink — so without it the sidebar and the panel could be dragged until
+/// the transcript was a sliver with the floor still reporting itself honoured.
+export function useChatColumnFloor(single: boolean, beside = 0) {
   useEffect(() => {
-    chatFloor = single ? CHAT_MIN : 0;
+    chatFloor = (single ? CHAT_MIN : 0) + beside;
     layoutChanged.emit();
     return () => {
       chatFloor = CHAT_MIN;
       layoutChanged.emit();
     };
-  }, [single]);
+  }, [single, beside]);
 }
 
 /// A pane the reader can drag wider, with its width remembered.
