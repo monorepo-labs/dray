@@ -1475,7 +1475,11 @@ function HintRow({
 /// Held back from the stock keycap: everywhere else a `Kbd` labels a control
 /// the eye is already on, but in a hint row it is the row, so the default fill
 /// makes a hint the loudest thing in the list.
-const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
+///
+/// Exported because the crew's foot teaches its chord the same way, and two
+/// copies of one hint style is the pair that drifts on whichever list nobody
+/// is looking at.
+export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
 /// From this many projects a tap opens a menu instead of stepping one. Tapping
 /// through a long list is a scrub rather than a pick, and the dots stop being

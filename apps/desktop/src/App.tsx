@@ -615,26 +615,49 @@ function App() {
   // during render off a ref rather than in an effect. An effect is a frame
   // behind, and this is a frame in which the crew is drawn against the session
   // the reader has just left: it appears, vanishes or lists somebody else's
-  // children for one paint. `crewAnchor` is idempotent on its own answer, so
-  // re-running it under a double invoke costs nothing.
+  // children for one paint.
   //
-  // `leftCrew` is the one selection that must *not* hold the anchor: ⌘-click
-  // means leaving, and the rule the anchor is built on is that it survives its
-  // own rows being selected. Cleared by every other route into a row, or
-  // ⌘-clicking a session once would stop it ever opening in the crew again.
+  // **Only a move made from inside the crew keeps it up.** Clicking a row or
+  // reaching into its transcript is navigation within an arrangement the
+  // reader is standing in; the sidebar and ⌘⇧↑/↓ are them leaving it, and the
+  // anchor surviving those made the sidebar look broken — selecting a crew
+  // member from over there moved the composer while the main column went on
+  // showing the parent, so the click read as having done nothing. So the ref
+  // is cleared on any selection this app did not route through `focusSession`,
+  // and `crewAnchor` then answers for the selected session alone.
   const crewRef = useRef<string | null>(null);
-  const [leftCrew, setLeftCrew] = useState<string | null>(null);
-  crewRef.current = crewAnchor(
-    visibleSessions,
-    selectedSessionId,
-    selectedSessionId && selectedSessionId === leftCrew ? null : crewRef.current,
-  );
+  const keepCrewRef = useRef(false);
+  const lastSelectedRef = useRef(selectedSessionId);
+  if (lastSelectedRef.current !== selectedSessionId) {
+    if (!keepCrewRef.current) crewRef.current = null;
+    keepCrewRef.current = false;
+    lastSelectedRef.current = selectedSessionId;
+  }
+  crewRef.current = crewAnchor(visibleSessions, selectedSessionId, crewRef.current);
   const crewAnchorId = crewRef.current;
   const crew = useMemo(
     () => crewRows(visibleSessions, crewAnchorId, { statusBySession, askingSessions }),
     [visibleSessions, crewAnchorId, statusBySession, askingSessions],
   );
-  const crewUp = !issuesOpen && viewTab === "chat" && !activeGroup && crew.length > 0;
+  // Whether this conversation has a crew to draw at all, and whether the reader
+  // wants it drawn. The second is ⌘⇧C and nothing else: no button, since a
+  // permanent control in the titlebar would be chrome for a thing most
+  // conversations never have. Stated cost — hidden, the column is reachable
+  // only by somebody who remembers the chord.
+  //
+  // Kept per conversation and in memory, the shape `panelOpens` above takes
+  // and for its reason: what the column *holds* differs from one conversation
+  // to the next, so a reader who put away a fan-out of six has said nothing
+  // about the next one. Keyed on the anchor, since that is whose crew it is.
+  // Not persisted, so a conversation never opened holds no entry and the map
+  // cannot outgrow the session list.
+  const crewAvailable = !issuesOpen && viewTab === "chat" && !activeGroup && crew.length > 0;
+  const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
+  const crewHidden = !!(crewAnchorId && crewHiddenBy[crewAnchorId]);
+  const crewUp = crewAvailable && !crewHidden;
+  const toggleCrew = () => {
+    if (crewAnchorId) setCrewHiddenBy((prev) => ({ ...prev, [crewAnchorId]: !crewHidden }));
+  };
 
   // **The main column keeps drawing the anchor, whatever is selected.** That is
   // the whole difference between this and the split grid: selecting a crew row
@@ -697,8 +720,11 @@ function App() {
   // among several and clicking into it has to mean what clicking into a row
   // means, or the way *back* to the conversation is the only move on screen
   // with no click behind it.
+  // This is also the one route that keeps the anchor, which is what makes it
+  // the crew's own way of moving the composer: everything else lands on
+  // `handleSelectSessionIndexItem` bare and takes the crew down with it.
   const focusSession = (id: string) => {
-    setLeftCrew(null);
+    keepCrewRef.current = true;
     void handleSelectSessionIndexItem(id);
   };
 
@@ -718,10 +744,11 @@ function App() {
     else if (id === selectedSessionId && crewAnchorId) focusSession(crewAnchorId);
   };
 
-  // ⌘-click: the one way out of the arrangement from inside it. The session
-  // opens as an ordinary full-width one, so the crew has to go with it —
-  // hence `leftCrew`, read by the anchor above. Collapsed on the way out, or
-  // coming back would find a row already open for a session just read whole.
+  // ⌘-click: the one way out of the arrangement from inside it. It takes the
+  // plain selection rather than `focusSession`, which is the whole of how it
+  // differs — nothing keeps the anchor, so the session opens full width like
+  // one picked from the sidebar. Collapsed on the way out, or coming back
+  // would find a row already open for a session just read whole.
   const openCrewRowInMain = (id: string) => {
     setCrewOpen((prev) => {
       if (!prev.has(id)) return prev;
@@ -729,7 +756,6 @@ function App() {
       next.delete(id);
       return next;
     });
-    setLeftCrew(id);
     void handleSelectSessionIndexItem(id);
   };
 
@@ -1649,6 +1675,10 @@ function App() {
     if (issuesOpen) return setPickedIssue(null);
     togglePanel();
   });
+  // Bound only where there is a crew, since `useHotkey` claims a chord it is
+  // listening for — unbound elsewhere, ⌘⇧B stays free for whatever the reader
+  // rebinds onto it rather than being swallowed by a column that isn't there.
+  useHotkey("crew.toggle", toggleCrew, { enabled: crewAvailable });
   // ⌘⇧[ / ⌘⇧] — the browser and editor chord for stepping through tabs, so it
   // arrives already known. The shift layout reaches `key`, so the character is
   // `{` rather than `[`; the physical key rides along for the engines that

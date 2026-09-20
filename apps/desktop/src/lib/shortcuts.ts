@@ -48,6 +48,11 @@ export const SHORTCUTS = [
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
   { id: "panel.toggle", label: "Toggle right panel", group: "Panels and views", chord: k("e") },
+  // The only way to the crew. It has no button anywhere, deliberately — the
+  // column is a fixed 320px and a permanent control for it would be chrome in
+  // the titlebar for a thing most conversations never have. ⌘⇧C is free of ⌘C,
+  // which `sameChord` compares Shift for, so copy is untouched.
+  { id: "crew.toggle", label: "Toggle crew", group: "Panels and views", chord: k("c", { shift: true }) },
   { id: "panel.tab.prev", label: "Previous panel tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
   { id: "panel.tab.next", label: "Next panel tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
   { id: "panel.refresh", label: "Refresh panel", group: "Panels and views", chord: k("r") },

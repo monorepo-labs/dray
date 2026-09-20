@@ -8,12 +8,15 @@ import PermissionRequest from "@/components/chat/PermissionRequest";
 import QuestionRequest from "@/components/chat/QuestionRequest";
 import Orb from "@/components/Orb";
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import { HINT_KEYS } from "@/components/Sidebar";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { PaneState } from "@/hooks/useSessions";
 import type { CrewRow } from "@/lib/crew";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript } from "@/lib/transcript";
+import { CREW_TAIL } from "@/lib/turnWindow";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, PrMark } from "@/types/events";
 
@@ -119,14 +122,6 @@ export default function Crew({
         return (
           <div
             key={id}
-            // Pointerdown bubbles here before the click it precedes, so a button
-            // inside a row acts on an already-focused session. Keyboard focus
-            // entering the row is the same claim — Tab onto a control in here,
-            // then Enter, must act through this session. Both are the split
-            // grid's own rule, and the header's own click still toggles: the
-            // two are separate questions and focusing is the quieter one.
-            onPointerDown={() => !focused && onFocus(id)}
-            onFocus={() => !focused && onFocus(id)}
             className={cn(
               "flex min-h-0 flex-col",
               // Only a *transcript* bids for height. Open rows share what the
@@ -152,6 +147,15 @@ export default function Crew({
               // — so the crew still reads as a list while one of it is being
               // written to.
               <div
+                // The transcript claims focus, the header does not — and the
+                // split is load-bearing rather than tidy. Pointerdown bubbles
+                // before the click it precedes, so a focus claim on the *row*
+                // fired before the header's own click could read `focused`,
+                // and collapsing somebody else's open row then bounced the
+                // composer to the anchor instead of leaving it where the
+                // reader had it. The header already focuses what it opens.
+                onPointerDown={() => !focused && onFocus(id)}
+                onFocus={() => !focused && onFocus(id)}
                 className={cn(
                   "min-h-0 flex-1 transition-opacity duration-150 ease-out",
                   composing && !focused && "opacity-35",
@@ -165,6 +169,10 @@ export default function Crew({
                     // at 320 it would sit over the text.
                     crowded
                     rail={false}
+                    // The newest turn or two and nothing above them — a strip
+                    // is a look in on work happening elsewhere, and ⌘-click is
+                    // there for reading the rest of it.
+                    tail={CREW_TAIL}
                     active={active && focused}
                   />
                 ) : (
@@ -175,6 +183,26 @@ export default function Crew({
           </div>
         );
       })}
+
+      {/* The chord, under the last row rather than pinned to the foot of the
+          column. There is no button for this anywhere, so without a line
+          saying so the crew could be put away by somebody with no way to get
+          it back — and under the rows it reads as the end of the list, where
+          at the window's bottom edge it read as a status bar the app had
+          grown. No `mt-auto`, deliberately: an open row already takes the rest
+          of the height and pushes this down on its own.
+
+          Drawn as the sidebar's own hint row — label left, held-back caps
+          right — since it is the same kind of sentence in the same kind of
+          list. Caps first was tried and is worse: the label is what the eye
+          reads, and leading with the chord makes the row start on the one part
+          of it nobody is looking for. "Toggle", not "hide": the chord is the
+          only way *back* too, and a hint naming one direction reads as a
+          control that only goes that way. */}
+      <div className="flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
+        Toggle crew
+        <ShortcutKeys ids={["crew.toggle"]} className={HINT_KEYS} />
+      </div>
     </div>
   );
 }
@@ -267,53 +295,37 @@ function CrewHeader({
       : undefined;
 
   return (
-    <div
-      className={cn(
-        "group relative flex h-8 shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-ui",
-        // Selection is weight and colour, no fill. A filled row is how a *list*
-        // marks the one thing it is showing, and in a column with no borders it
-        // was the loudest shape on screen — a lit band across the crew for a
-        // session that is merely where the composer happens to point. Hover is
-        // the same currency one step quieter, since a hover fill under an
-        // unfilled selection would make passing the cursor look more selected
-        // than selecting.
-        focused ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <RowAvatar row={row} />
-
-      <Tooltip delayDuration={TIP_DELAY}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-expanded={open}
-            // ⌘ is the app's own "out there, not here" — the transcript's link
-            // dialog and the issue rows both spend it that way, and a row
-            // drawn in the main column instead of in its strip is that
-            // sentence again.
-            onClick={(e) => (e.metaKey || e.ctrlKey ? onOpenInMain() : onToggle())}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-          >
-            <span className={cn("truncate", focused && "font-medium", tone)}>
-              {row.item.title}
-            </span>
-          </button>
-        </TooltipTrigger>
-        {/* The click is a keycap rather than the word, so the whole gesture is
-            one chip pair the eye takes in at once, with the sentence left to
-            say only what happens. `aria-label` on the glyph, since it is the
-            only copy of that word. */}
-        <TooltipContent side="left">
-          <KbdGroup>
-            <Kbd>⌘</Kbd>
-            <Kbd aria-label="click">
-              <MousePointerClick />
-            </Kbd>
-          </KbdGroup>
-          to open in the main chat
-        </TooltipContent>
-      </Tooltip>
-
+    // **The whole row is the button**, not the title inside it. It was the
+    // title alone for a while, which left the avatar, the state mark and every
+    // pixel of gap between them dead: the row was plainly one control, so a
+    // click anywhere but on the words read as the app ignoring it. A `button`
+    // rather than a div with a handler, since it is one — that is what gets it
+    // Enter, Space and a tab stop for free.
+    <Tooltip delayDuration={TIP_DELAY}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-expanded={open}
+          // ⌘ is the app's own "out there, not here" — the transcript's link
+          // dialog and the issue rows both spend it that way, and a row drawn
+          // in the main column instead of in its strip is that sentence again.
+          onClick={(e) => (e.metaKey || e.ctrlKey ? onOpenInMain() : onToggle())}
+          className={cn(
+            "group relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-left text-ui",
+            // Selection is weight and colour, no fill. A filled row is how a
+            // *list* marks the one thing it is showing, and in a column with no
+            // borders it was the loudest shape on screen — a lit band across
+            // the crew for a session that is merely where the composer happens
+            // to point. Hover is the same currency one step quieter, since a
+            // hover fill under an unfilled selection would make passing the
+            // cursor look more selected than selecting.
+            focused ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <RowAvatar row={row} />
+          <span className={cn("truncate", focused && "font-medium", tone)}>
+            {row.item.title}
+          </span>
       {/* One slot, three tenants, and the order is the sidebar's own — so a
           reader who has learnt it over there already knows it here.
 
@@ -324,23 +336,51 @@ function CrewHeader({
           because a row with a turn in flight is the one row whose PR state is
           the least live thing about it — and the state is a standing fact, so
           it comes back the moment the turn ends. */}
-      <span
-        className="ml-auto flex size-5 shrink-0 items-center justify-center"
-        title={pr ? `Pull request #${pr.number} · ${prStateLabel(pr).toLowerCase()}` : undefined}
-      >
-        {pr?.checksState === "RUNNING" ? (
-          <CircleDashed
-            className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-            strokeWidth={1.5}
-            aria-label="Checks running"
-          />
-        ) : row.busy ? (
-          <Orb state="listening" size={20} aria-label="Working" />
-        ) : (
-          pr && <PrStateIcon pr={pr} strokeWidth={1.5} />
-        )}
-      </span>
-    </div>
+          <span
+            className="ml-auto flex size-5 shrink-0 items-center justify-center"
+            aria-label={pr ? `Pull request #${pr.number}, ${prStateLabel(pr).toLowerCase()}` : undefined}
+          >
+            {pr?.checksState === "RUNNING" ? (
+              <CircleDashed
+                className="size-3.5 animate-spin text-accent-command [animation-duration:3s]"
+                strokeWidth={1.5}
+                aria-label="Checks running"
+              />
+            ) : row.busy ? (
+              <Orb state="listening" size={20} aria-label="Working" />
+            ) : (
+              pr && <PrStateIcon pr={pr} strokeWidth={1.5} />
+            )}
+          </span>
+        </button>
+      </TooltipTrigger>
+      {/* The click is a keycap rather than the word, so the whole gesture is
+          one chip pair the eye takes in at once, with the sentence left to say
+          only what happens. `aria-label` on the glyph, since it is the only
+          copy of that word.
+
+          It names ⌘-click alone and not the plain one: the row's own look says
+          it opens, and a tooltip repeating what a click does is the thing the
+          app's tooltip rule refuses. The PR state loses its `title` for the
+          same reason — a native tooltip inside a real one is two boxes racing,
+          and the glyph's `aria-label` is where that sentence belongs.
+
+          "Full view" and not "in the main chat", which was the old copy and
+          stopped being true: the main chat is the conversation that *started*
+          these, and ⌘-click does not put a row into it — it closes the crew
+          and gives the session the whole column, the way picking it out of the
+          sidebar would, and the change is the part the reader can see: a 320px
+          strip becoming the column. */}
+      <TooltipContent side="left">
+        <KbdGroup>
+          <Kbd>⌘</Kbd>
+          <Kbd aria-label="click">
+            <MousePointerClick />
+          </Kbd>
+        </KbdGroup>
+        to open in full view
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

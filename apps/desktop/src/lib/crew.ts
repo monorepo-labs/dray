@@ -94,11 +94,13 @@ function rowState(
 /// beside it. A session in the list is in the list, and what it started of its
 /// own is deliberately not drawn here at all; ⌘-click is how you go and look.
 ///
-/// Clause 1 is also narrower than "a child keeps its parent's crew". A child
-/// reached from the sidebar shows no crew and is full width, which is the
-/// settled behaviour: the crew lists what the selected session started, and
-/// this one started nothing. What it does not do is punish the reader for using
-/// the column they were given.
+/// Clause 1 is also narrower than "a child keeps its parent's crew", and the
+/// caller narrows it further: `previous` is passed only for a selection made
+/// from *inside* the crew. A child reached from the sidebar or with ⌘⇧↑/↓ shows
+/// no crew and opens full width, which is the settled behaviour — those are the
+/// reader leaving the arrangement, and an anchor that survived them left the
+/// main column on the parent while the composer moved, so the sidebar click
+/// read as having done nothing.
 export function crewAnchor(
   items: SessionIndexItem[],
   selectedId: string | null,

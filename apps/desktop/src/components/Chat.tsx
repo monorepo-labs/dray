@@ -85,6 +85,10 @@ type ChatProps = {
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
   active?: boolean;
+  /// Draw only the newest N turns and mount nothing above them. The crew's
+  /// strips take it; the main column does not — see [`CREW_TAIL`]. Unset is the
+  /// whole conversation, backfilled.
+  tail?: number;
 };
 
 /// How long an answered permission card holds its place before going.
@@ -165,6 +169,7 @@ export default function Chat({
   crowded = false,
   rail = true,
   active = true,
+  tail,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -333,10 +338,19 @@ export default function Chat({
     sessionId: null,
     start: 0,
   });
+  //
+  // `tail` replaces the whole arrangement rather than seeding it: a capped
+  // transcript draws its newest `tail` turns and mounts nothing above them, so
+  // the window is a plain count from the end with no state to key and no step
+  // to schedule.
   const mounted =
-    mount.sessionId === session?.sessionId ? mount.start : firstMount(turns.length);
+    tail != null
+      ? Math.max(0, turns.length - tail)
+      : mount.sessionId === session?.sessionId
+        ? mount.start
+        : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
-  const backfilling = mounted > 0;
+  const backfilling = tail == null && mounted > 0;
 
   // Where the oldest mounted turn sat before a step lands, for the
   // compensation below. A node, not the scroller's height: anything else
