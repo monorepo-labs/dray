@@ -10,6 +10,11 @@ type AppShellProps = {
   /// Right-hand inspector, when open. Sits outside the chat column so the
   /// composer stays scoped to the conversation rather than spanning both.
   panel?: ReactNode;
+  /// The crew — the sessions this conversation started — when it has any. Inside
+  /// the main column so it comes and goes with the view tabs, outside the chat
+  /// column for the panel's reason: a composer spanning a list of other
+  /// conversations does not say which one it talks to.
+  crew?: ReactNode;
   /// Holds the composer in the upper middle of the window and drops the
   /// transcript pane. The empty state has no transcript to anchor the composer
   /// against, so pinning it to the bottom leaves the one usable control as far
@@ -30,6 +35,7 @@ export default function AppShell({
   header,
   footer,
   panel,
+  crew,
   centered = false,
   overlay,
   children,
@@ -62,13 +68,19 @@ export default function AppShell({
             {overlay}
           </div>
         ) : (
-          <>
-            {/* `flex flex-col` so the view tabs' bodies, which size themselves
-                with `flex-1` the way the right panel's do, have a column to
-                grow in. */}
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
-            <div className="shrink-0">{footer}</div>
-          </>
+          // The crew runs the full height beside both, so its rows get the
+          // composer's band too rather than stopping short of it at a line
+          // nothing else on screen is drawn to.
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col">
+              {/* `flex flex-col` so the view tabs' bodies, which size themselves
+                  with `flex-1` the way the right panel's do, have a column to
+                  grow in. */}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+              <div className="shrink-0">{footer}</div>
+            </div>
+            {crew}
+          </div>
         )}
       </div>
 

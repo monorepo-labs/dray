@@ -51,17 +51,40 @@ export default function PermissionRequest({
   const [sent, setSent] = useState<string | null>(null);
 
   return (
-    <div className="rounded-2xl border border-border bg-muted/30 p-4">
-      {/* Outlined rather than filled: the card already sits on a tinted panel,
-          and a second fill inside it reads as a third surface. */}
+    // `--card`, the app's one surface-above-the-page token, rather than a wash
+    // of `--muted`. The wash is a tint of the page rather than a surface of its
+    // own, so on a light palette it landed as a grey slab that read as a
+    // disabled region — the one thing a card holding a live question must not
+    // look like. `--card` is what every other raised thing here is drawn on, so
+    // the question now sits on the same surface as the rest of the app.
+    <div className="rounded-2xl border border-border bg-card p-4">
+      {/* Outlined rather than filled: the card already sits on a raised
+          surface, and a second fill inside it reads as a third. */}
       {argument && (
         <pre className="mb-3 overflow-x-auto rounded-lg border border-border px-3 py-2.5 font-mono text-xs">
           {argument}
         </pre>
       )}
 
-      <p className="text-chat">{description}</p>
+      {/* `text-chat` at its own 1.65 leading, which is set for reading
+          paragraphs of an agent's prose. This is one sentence in a card,
+          and in a narrow one it wraps to two or three lines that then sit
+          further apart than the card's own gaps — the card reads as loose
+          before it reads as a question. `leading-snug` for a label. */}
+      <p className="text-chat leading-snug">{description}</p>
 
+      {/* One row, wrapping. It was a column under `@max-sm` for a while, and
+          what actually made the narrow card ragged was the label rather than
+          the width: `Always allow {the whole command}` could not share a
+          line with anything, so `Deny` fell under it alone and read as one
+          answer singled out. Cut to `Always allow`, the three fit a 320px
+          rail with room to spare, and stacking them spent ~70px saying what
+          one line already said.
+
+          A rule that keeps its subject — `Always allow in {dir}`, which is
+          shown nowhere else — still wraps here rather than overflowing, and
+          lands on its own line, which is the honest place for the longest
+          answer in the card. */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {[...options]
           .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])

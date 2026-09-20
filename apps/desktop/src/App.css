@@ -376,11 +376,20 @@
   /* The trio drops a full 0.27 from dark's 0.82, and the hues move with it — a
      yellow this dark turns olive at 90, so it slides to 75 to stay gold, and the
      blue gains chroma because a light page eats saturation the way a dark one
-     eats lightness. Tuned against the page rather than mirrored: each clears
+     eats lightness. Tuned against the page rather than mirrored: they clear
      4.5:1 on `--background`, the floor for a coloured word inside ordinary
-     prose. One lightness across all four, so no tag outranks another. */
+     prose. One lightness, so no tag outranks another.
+
+     Yellow is the exception, and deliberately. At the trio's own L 0.55 it
+     measures `#9d6400` — a brown, and the one colour here that is spent on
+     *attention* as much as on prose: it is the sidebar rail's "this session
+     wants you" mark and the spawned rail's asking title, where a brown reads
+     as a row already dealt with. Yellow's gamut peaks bright, so there is no
+     saturated gold at 4.5:1 — the choice is a gold nobody reads as gold or a
+     gold under the floor, and for a mark whose job is to be found the second
+     is the honest trade. 2.98:1 on the page, stated rather than glossed. */
   --accent-thinking: oklch(0.55 0.05 264);
-  --accent-command: oklch(0.55 0.13 75);
+  --accent-command: oklch(0.65 0.14 78);
   --accent-mention: oklch(0.55 0.16 245);
   /* Missing here until light mode had a page to be looked at on: the dark ramp
      declared it, no palette block did, and a token no block sets resolves to
@@ -561,7 +570,9 @@
      focus ring is the one mark that has to be found rather than noticed. */
   --ring: var(--primary);
   --destructive: oklch(0.55 0.2 25);
-  --accent-command: oklch(0.55 0.13 75);
+  /* Kept in step with the light ramp's own, above, where the reasoning for
+     yellow leaving the trio's lightness is written out. */
+  --accent-command: oklch(0.65 0.14 78);
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
   --surface-selected: oklch(0.9 0.012 250);

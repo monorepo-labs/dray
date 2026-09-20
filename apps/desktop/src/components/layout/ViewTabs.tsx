@@ -46,7 +46,24 @@ export default function ViewTabs({
       {VIEW_TABS.map((value) => (
         <Tooltip key={value}>
           <TooltipTrigger asChild>
-            <TabButton active={tab === value} onClick={() => onChange(value)}>
+            {/* No fill on the selected one, unlike the other two rows this
+                button serves. Those sit *inside* a panel they are the tabs of,
+                where a fill reads as the pane's own top edge; this row sits in
+                the titlebar beside the session's name, over the window's glass
+                and next to nothing, so the fill was a lozenge floating in the
+                chrome — the loudest shape in a strip whose whole job is to be
+                quiet. Colour alone marks it, the same currency the sidebar
+                spends on the selected session. */}
+            {/* And tighter with it. `px-2` was sized for the fill — it is the
+                lozenge's own inset, and with the lozenge gone it is a gap
+                between words that reads as four separate controls rather than
+                as one row. What the padding still buys is the click target, so
+                it comes down a rung rather than off. */}
+            <TabButton
+              active={tab === value}
+              className="bg-transparent px-1.5"
+              onClick={() => onChange(value)}
+            >
               {LABELS[value]}
             </TabButton>
           </TooltipTrigger>
