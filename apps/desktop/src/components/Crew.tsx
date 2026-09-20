@@ -127,6 +127,7 @@ export default function Crew({
         // promote a card to its transcript.
         const openFully = open.has(id);
         const focused = selectedId === id;
+        const pane = paneState(id);
         return (
           <div
             key={id}
@@ -140,7 +141,11 @@ export default function Crew({
               // `flex-1` shrinks to nothing before a flex container agrees to
               // overflow, so enough closed rows would squeeze every open one to
               // a line of its own header.
-              openFully ? "min-h-64 flex-1" : "shrink-0",
+              // A transcript still being read is not one yet: a row's first
+              // open is a round trip for its log, and growing on the click drew
+              // an empty box that filled when the read landed. Grown with the
+              // transcript instead, the rows below move once.
+              openFully && pane.session ? "min-h-64 flex-1" : "shrink-0",
             )}
           >
             <CrewHeader
@@ -175,7 +180,7 @@ export default function Crew({
               >
                 {openFully ? (
                   <Chat
-                    {...paneState(id)}
+                    {...pane}
                     {...chat}
                     // Narrowest the transcript gets, and no checkpoint rail:
                     // at 320 it would sit over the text.
@@ -188,7 +193,7 @@ export default function Crew({
                     active={active && focused}
                   />
                 ) : (
-                  <PendingCard row={row} events={paneState(id).session?.events} chat={chat} />
+                  <PendingCard row={row} events={pane.session?.events} chat={chat} />
                 )}
               </div>
             )}
