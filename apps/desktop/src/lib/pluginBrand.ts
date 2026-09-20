@@ -34,10 +34,11 @@ const PLUGIN_BRAND: Record<string, string> = {
 /// ordinary message.
 ///
 /// The colour itself, not a finished background: it rides onto the bubble as
-/// `--brand` and App.css decides what to do with it, because that answer is the
-/// palette's. Every theme layers it over the bubble's own fill; the default
-/// light one *fills* its bubble with `--primary`, where a translucent layer
-/// can't be seen at all, so there it takes the brand as the fill instead.
+/// `--brand` and App.css decides what to do with it. Every theme fills the
+/// bubble with it and inks it with a near-black mixed from it, the palette
+/// having no say in either — a wash over the bubble's own card was the first
+/// answer and landed as a different colour in every palette, none of them the
+/// brand.
 export function commandBrand(text: string): string | null {
   const command = parseSlashCommand(text);
   if (!command) return null;

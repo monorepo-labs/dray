@@ -663,24 +663,18 @@
     }
   }
 
-  /* A prompt running a branded plugin's command takes the brand as its fill —
-     the same idiom this mode already uses to say "this is a message you sent",
-     in the colour that says whose command it runs. Ink back to `--foreground`,
-     since the fill is a light green and `--primary-foreground` is near-white —
-     and the accents with it, since that fill is *light*: the set above is drawn
-     for a dark surface and would be a wash on this one.
-
-     The command run is the exception, and it is the one run this bubble always
-     holds: falling through leaves it on the page's own gold, picked against a
-     near-white page and barely there on a saturated green. It takes the ink
-     instead. The cost is real and small — a command is coloured and nothing
-     else, so here it reads as prose — and the fill is what says it in its
-     place: this bubble is only ever green because the message runs that
-     plugin's command. */
+  /* The brand fill is stated once for every palette, at the foot of this file,
+     and this restates two of its declarations for one reason: the rule above
+     fills this bubble, and a palette-scoped selector outweighs the plain
+     `.user-bubble[data-brand]` there however the branded one is written. So the
+     fill and the ink have to be taken back here or the blue would win. The
+     accents need no such line — the shared rule declares those *on* the bubble,
+     and a value set on the element beats one inherited from the palette without
+     specificity entering into it. This is the one palette that needs any of it,
+     since it is the only one that fills the bubble itself. */
   .user-bubble[data-brand] {
     background: var(--brand);
-    color: var(--foreground);
-    --accent-command: var(--foreground);
+    color: var(--brand-ink);
   }
 }
 
@@ -735,17 +729,6 @@
   --accent-thinking: #8c8fa1; /* overlay1 */
   --vibrancy-alpha: 50%;
 
-  /* Latte takes the brand as a fill rather than the wash every other palette
-     gets, the way the default light palette does above — a 16% wash over a
-     near-white card is a tint nobody reads as a colour, and on a light page
-     the brand's own green is legible enough to be the surface. Ink and the
-     command run both go to `--foreground` for that palette's own reasons,
-     stated there. */
-  .user-bubble[data-brand] {
-    background: var(--brand);
-    color: var(--foreground);
-    --accent-command: var(--foreground);
-  }
 }
 
 /* Gruvbox — https://github.com/morhetz/gruvbox, MIT. The distinct one in the
@@ -1044,13 +1027,38 @@
    colour arrives as `--brand` on the element ([pluginBrand.ts]) and this is
    where it becomes a surface.
 
-   A layer painted *over* the bubble rather than a fill replacing it: the bubble
-   is `bg-card` in fourteen of the fifteen palettes and a translucent wash lands
-   the same on all of them, leaving the text colour the palette chose alone. The
-   fifteenth answers for itself below. */
+   The fill, in every palette. A 16% wash over the bubble's own card was the
+   first answer and it left the text colour the palette chose alone, which is
+   what recommended it — but a wash that faint over a near-white card in a light
+   palette and over a near-black one in a dark palette is two different colours,
+   neither of them the brand, and on both it read as a tint rather than as a
+   thing that had been branded. Solid says it once and says it the same
+   everywhere.
+
+   **The ink has to come with it, and that is the whole cost.** A brand is a
+   colour somebody else picked and this one is a bright mint, so neither the
+   light palettes' dark foreground nor the dark palettes' near-white one is
+   right for all of them — the second is unreadable outright. So the ink is
+   derived from the fill instead and the palette has no say: 20% of the brand
+   over black, which is a near-black of the brand's own hue and better than 9:1
+   on Greptile's green. Stated ceiling: it assumes a *light* brand, which is the
+   only kind here — a dark one would want the mix taken towards white, and the
+   day a second vendor earns an entry is the day to decide that rather than
+   guess at it now.
+
+   Glass doesn't enter into it. `--card` becomes a veil under transparency and
+   this replaces `--card`, so a branded bubble is simply opaque where its
+   neighbours are not — which is what a fill is, and what the default light
+   palette's own bubble has always been. */
 .user-bubble[data-brand] {
-  background-image: linear-gradient(var(--brand-wash), var(--brand-wash));
-  --brand-wash: color-mix(in oklab, var(--brand) 16%, transparent);
+  --brand-ink: color-mix(in oklab, var(--brand) 20%, black);
+  background: var(--brand);
+  color: var(--brand-ink);
+  /* Declared on the bubble, so it beats the palette's own inherited value
+     whatever the selectors weigh. A command is coloured and nothing else, so on
+     this fill it reads as prose — and the fill is what says it in its place:
+     the bubble is only ever branded because the message runs that command. */
+  --accent-command: var(--brand-ink);
 }
 
 /* MarkdownTable's scroll box, horizontal-only. `overflow-y: auto` here feeds
