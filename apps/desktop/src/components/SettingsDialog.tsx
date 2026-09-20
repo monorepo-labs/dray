@@ -1204,18 +1204,24 @@ function SettingsTabs({
           // glyph. Header actions dodge it by another route — they are drawn in
           // the strip above, which reserves the corner itself.
           //
-          // `scrollbar-overlay` is the sidebar's own treatment and it is here
-          // for the corners: the base layer's 8px bar is drawn whenever a tab
-          // overflows, and this box runs the dialog's full height — so the bar
-          // met the close cross at one end and the dialog's rounded corner at
-          // the other, which reads as chrome laid over the window rather than a
-          // panel that scrolls. Thin and transparent until the cursor is over
-          // it. Its `scrollbar-gutter: stable` is wanted here too, and is a
-          // different thing from the text gutter above: a few px, and what it
-          // buys is Appearance and Transcription measuring the same, where
-          // otherwise every row shifts on the switch between a tab that
-          // overflows and one that does not.
-          className="scrollbar-overlay -mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+          // The track is inset from both ends, because this box runs the
+          // dialog's full height: left alone the bar met the close cross and
+          // the header strip at one end and the dialog's own rounded corner at
+          // the other, reading as chrome laid over the window rather than as a
+          // panel that scrolls. A margin on the track is the only place that
+          // inset can go — padding here is inside the scrollport and the bar
+          // spans it whatever the box is padded by.
+          //
+          // **Not `scrollbar-overlay`, and the two cannot be combined.** WebKit
+          // drops `::-webkit-scrollbar` styling outright for any element that
+          // sets the standard `scrollbar-width`/`scrollbar-color`, so the
+          // sidebar's hidden-until-hover treatment and this inset are a choice
+          // of one. The corner is the part that was wrong in both states, where
+          // a bar drawn while a tab overflows is what every other scroller in
+          // the app does. Static, so the warning on that utility — a
+          // hover-driven pseudo rule resolving late and never clearing — is not
+          // in play here.
+          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&::-webkit-scrollbar-track]:my-4 [&>*]:shrink-0"
         >
           <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
         </div>
