@@ -1096,7 +1096,14 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   setFastState(item.fast);
 };
 
-const handleSelectSessionIndexItem = async (sessionId: string) => {
+/// Answers whether the reader ended up on the session they asked for, which is
+/// what lets a caller tear something down only once the move is real — the crew
+/// anchor is the one that needs it. False covers all three ways this does not
+/// land: the id resolved to nothing and the selection rolled back, the read
+/// threw, and a later click claimed the request while this one was out. That
+/// last is not a failure, but the winning click owns the teardown and doing it
+/// twice is doing it for a session the reader has already left.
+const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean> => {
   // Claimed synchronously, so a click arriving during the read below is visible
   // to it immediately. The rendered selection cannot serve here — it is a render
   // behind, so a read finishing in that gap would still see itself as current.
@@ -1139,14 +1146,14 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   }
 
   if (sessions.some((s) => s.sessionId === sessionId)) {
-    return;
+    return true;
   }
 
   try {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
       upsertSession(withEarlyEvents(snapshot));
-      return;
+      return true;
     }
 
     // The id resolves to nothing on disk, so the selection has to go back where
@@ -1163,7 +1170,7 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
     // Only when this read is still the one being waited on. A click that landed
     // while it was out has already claimed the request, and rolling back onto
     // this answer would take the reader off the session they just asked for.
-    if (selectionRequestRef.current !== sessionId) return;
+    if (selectionRequestRef.current !== sessionId) return false;
 
     // Only a session still loaded can be gone back to, and that is judged here
     // rather than before the read, for two reasons that both end in this same
@@ -1188,6 +1195,8 @@ const handleSelectSessionIndexItem = async (sessionId: string) => {
   } catch (e) {
     fail(e);
   }
+
+  return false;
 }
 
 
