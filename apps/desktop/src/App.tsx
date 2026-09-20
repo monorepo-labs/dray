@@ -545,9 +545,6 @@ function App() {
     },
     [spaceGroups],
   );
-  const panelOpen = selectedSessionId
-    ? (panelOpens[openKey(selectedSessionId)] ?? panelOpens[selectedSessionId] ?? false)
-    : false;
   useEffect(() => {
     if (!activeGroup || !selectedSessionId) return;
     const key = `group:${activeGroup.id}`;
@@ -558,17 +555,6 @@ function App() {
   const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
   // Both take the session because one caller opens a session and its pane in
   // the same breath, before the selection has moved.
-  const setPanelOpen = useCallback(
-    (open: boolean | ((prev: boolean) => boolean), id = selectedSessionId) => {
-      if (!id) return;
-      const key = openKey(id);
-      setPanelOpens((prev) => {
-        const next = typeof open === "function" ? open(prev[key] ?? prev[id] ?? false) : open;
-        return { ...prev, [key]: next, [id]: next };
-      });
-    },
-    [selectedSessionId, openKey],
-  );
   const setPanelTab = useCallback(
     (tab: PanelTab | null, id = selectedSessionId) => {
       if (id) setPanelTabs((prev) => ({ ...prev, [id]: tab }));
@@ -576,16 +562,6 @@ function App() {
     [selectedSessionId],
   );
 
-  /// Whether the right pane is actually on screen, as against whether the
-  /// reader has asked for it.
-  ///
-  /// Two different questions, and conflating them was a bug worth naming: the
-  /// issues page fills the main column, so a pane left open beside it went on
-  /// describing the session the reader had *left* — its changes, its pull
-  /// request, its issue — with nothing on screen to say whose they were. The
-  /// preference is kept, so coming back restores the pane exactly as it was;
-  /// everything that draws or reads reads this instead.
-  const panelShown = panelOpen && !issuesOpen;
   const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
   const paneColumns = useMemo(
     () =>
@@ -677,6 +653,53 @@ function App() {
   const crewHidden = !!(crewAnchorId && crewHiddenBy[crewAnchorId]);
   const crewUp = crewExists && !crewHidden;
   const crewDrawn = crewAvailable && !crewHidden;
+
+  // **Whose preference the right pane follows.** A split group is one
+  // arrangement and answers under the group's id; the crew is the same shape —
+  // selecting a row moves the composer and not the arrangement — so it answers
+  // under the anchor. Keyed on the row instead, clicking down a crew of six
+  // opened and shut the pane row by row out of whatever each session last
+  // remembered from being read on its own, which reads as the panel flickering
+  // rather than as a preference being honoured. Reached from the sidebar or a
+  // chord the crew is down and the session answers for itself again, which is
+  // the same rule seen from the other side.
+  const panelKey =
+    crewUp && crewAnchorId ? crewAnchorId : selectedSessionId && openKey(selectedSessionId);
+  // The bare session id stands in for a group key the seeding effect below has
+  // not filled yet, or a session reads shut for the commit before it lands.
+  // Not offered to the crew: its key is a plain session id already, so falling
+  // through there would read the *row's* own flag — the very thing this is
+  // keyed away from.
+  const panelOpen = panelKey
+    ? (panelOpens[panelKey] ??
+      (!crewUp && selectedSessionId ? panelOpens[selectedSessionId] : undefined) ??
+      false)
+    : false;
+  const setPanelOpen = useCallback(
+    (open: boolean | ((prev: boolean) => boolean), id?: string | null) => {
+      // A caller naming a session means that one — it is opening a session and
+      // its pane in the same breath, before the selection has moved — where the
+      // default is the arrangement already on screen.
+      const key = id ? openKey(id) : panelKey;
+      if (!key) return;
+      setPanelOpens((prev) => {
+        const next = typeof open === "function" ? open(prev[key] ?? false) : open;
+        return id ? { ...prev, [key]: next, [id]: next } : { ...prev, [key]: next };
+      });
+    },
+    [panelKey, openKey],
+  );
+
+  /// Whether the right pane is actually on screen, as against whether the
+  /// reader has asked for it.
+  ///
+  /// Two different questions, and conflating them was a bug worth naming: the
+  /// issues page fills the main column, so a pane left open beside it went on
+  /// describing the session the reader had *left* — its changes, its pull
+  /// request, its issue — with nothing on screen to say whose they were. The
+  /// preference is kept, so coming back restores the pane exactly as it was;
+  /// everything that draws or reads reads this instead.
+  const panelShown = panelOpen && !issuesOpen;
   // One conversation keeps a readable floor whatever the panes beside it are
   // dragged to; a split holds several deliberately small ones, so the same
   // floor there would refuse the layout the reader asked for. The crew rides

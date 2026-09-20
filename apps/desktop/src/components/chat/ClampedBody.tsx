@@ -86,7 +86,14 @@ export default function ClampedBody({
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
-          className="mt-1 block cursor-pointer text-ui text-muted-foreground transition-colors hover:text-foreground"
+          // Held back by opacity off the bubble's own ink, never by a page
+          // token. `--muted-foreground` is a mid grey picked against the
+          // *page*, and light mode is the one palette that fills this bubble —
+          // so on that blue it was a dark word on a saturated fill, which is
+          // the one state a control offering the rest of a message cannot be
+          // in. The queued bubble beside it sets its own colour too, so
+          // inheriting is the only answer that holds for both.
+          className="mt-1 block cursor-pointer text-ui opacity-70 transition-opacity hover:opacity-100"
         >
           {open ? "Show less" : "Show more"}
         </button>

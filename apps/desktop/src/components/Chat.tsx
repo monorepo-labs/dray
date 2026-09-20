@@ -526,8 +526,19 @@ export default function Chat({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
-    setAtBottom(followRef.current);
+    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    // **A backfilling transcript may only re-arm the pin here, never drop it.**
+    // Opening a session mounts its newest turns and grows the rest in above
+    // them, and every one of those steps is a frame where the scroller is
+    // legitimately short of its end — the compensation above puts it back
+    // before paint, but the scroll events the growth fires are dispatched after
+    // it, some of them reading a position nobody scrolled to. One of those
+    // drops the pin, nothing re-arms it, and the open lands wherever that frame
+    // left it — which is the "it scrolled up on its own" every arrival at a
+    // long session. An upward gesture still wins instantly, since `onWheel` and
+    // the rail clear the pin themselves.
+    if (atEnd || !backfilling) followRef.current = atEnd;
+    setAtBottom(atEnd);
     syncActive();
   };
 
