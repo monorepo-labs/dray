@@ -176,6 +176,9 @@ export default function Chat({
   // Whether to keep pinning to the bottom. Cleared once the user scrolls up, so
   // reading back through a transcript isn't yanked forward by incoming deltas.
   const followRef = useRef(true);
+  // The content's height at the last scroll event, for telling a scroll the
+  // reader made from one the backfill caused — see `onScroll`.
+  const lastHeight = useRef(-1);
 
   // The same fact as the pin, but as state because the button renders from it.
   // Written from a scroll, a resize and a session switch alike: the transcript
@@ -537,7 +540,19 @@ export default function Chat({
     // left it — which is the "it scrolled up on its own" every arrival at a
     // long session. An upward gesture still wins instantly, since `onWheel` and
     // the rail clear the pin themselves.
-    if (atEnd || !backfilling) followRef.current = atEnd;
+    //
+    // **A height that did not move is the reader's own, and is honoured.** The
+    // wheel and the rail are not every way up: a scrollbar drag and a touch
+    // drag reach this and nothing else, and refusing them for the whole
+    // backfill would drag the reader back to the bottom for as long as it runs.
+    // What every bogus event above has in common is that the content changed
+    // size in the same frame — the growth is what fired them — so an event
+    // arriving at an unchanged height is one nobody but the reader could have
+    // caused. Scoped to backfilling, since a streaming turn grows on nearly
+    // every frame and would leave that drag refused again.
+    const grew = el.scrollHeight !== lastHeight.current;
+    lastHeight.current = el.scrollHeight;
+    if (atEnd || !backfilling || !grew) followRef.current = atEnd;
     setAtBottom(atEnd);
     syncActive();
   };
