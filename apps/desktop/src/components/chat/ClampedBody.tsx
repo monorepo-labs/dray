@@ -62,7 +62,21 @@ export default function ClampedBody({
         // `inert` would take the visible text off the accessibility tree along
         // with the hidden run, which is worse than the stray focus stop. Focus
         // bubbles, so this catches a control at any depth.
-        onFocus={() => setOpen(true)}
+        //
+        // Only where it is genuinely clipped, or tabbing to a link in the first
+        // line would open the whole wall and jump the transcript under the
+        // reader. Two readings, since either can be the one that answers: a
+        // control below the box's own bottom edge is clipped, and a box the
+        // browser has scrolled to reveal one was clipped a moment ago — it does
+        // that to `overflow: hidden` too, which is what would otherwise leave
+        // the rect looking perfectly visible.
+        onFocus={(e) => {
+          const el = body.current;
+          if (!el || open) return;
+          const below =
+            e.target.getBoundingClientRect().bottom > el.getBoundingClientRect().bottom;
+          if (el.scrollTop > 0 || below) setOpen(true);
+        }}
       >
         {children}
       </span>
