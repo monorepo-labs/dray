@@ -668,10 +668,19 @@
      in the colour that says whose command it runs. Ink back to `--foreground`,
      since the fill is a light green and `--primary-foreground` is near-white —
      and the accents with it, since that fill is *light*: the set above is drawn
-     for a dark surface and would be a wash on this one. */
+     for a dark surface and would be a wash on this one.
+
+     The command run is the exception, and it is the one run this bubble always
+     holds: falling through leaves it on the page's own gold, picked against a
+     near-white page and barely there on a saturated green. It takes the ink
+     instead. The cost is real and small — a command is coloured and nothing
+     else, so here it reads as prose — and the fill is what says it in its
+     place: this bubble is only ever green because the message runs that
+     plugin's command. */
   .user-bubble[data-brand] {
     background: var(--brand);
     color: var(--foreground);
+    --accent-command: var(--foreground);
   }
 }
 
@@ -725,6 +734,18 @@
   --accent-mention: #1e66f5; /* blue */
   --accent-thinking: #8c8fa1; /* overlay1 */
   --vibrancy-alpha: 50%;
+
+  /* Latte takes the brand as a fill rather than the wash every other palette
+     gets, the way the default light palette does above — a 16% wash over a
+     near-white card is a tint nobody reads as a colour, and on a light page
+     the brand's own green is legible enough to be the surface. Ink and the
+     command run both go to `--foreground` for that palette's own reasons,
+     stated there. */
+  .user-bubble[data-brand] {
+    background: var(--brand);
+    color: var(--foreground);
+    --accent-command: var(--foreground);
+  }
 }
 
 /* Gruvbox — https://github.com/morhetz/gruvbox, MIT. The distinct one in the
