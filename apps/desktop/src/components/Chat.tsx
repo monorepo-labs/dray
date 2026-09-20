@@ -551,7 +551,15 @@ export default function Chat({
     // is what a height-based reading of the same fact could not manage, since
     // a streaming turn grows on nearly every frame.
     const moved = el.scrollTop !== pinnedTop.current;
-    if (atEnd || moved) followRef.current = atEnd;
+    if (atEnd) {
+      // Re-arming records the position too, or the next event is judged
+      // against where an earlier pin left the scroller rather than where the
+      // reader just put it.
+      followRef.current = true;
+      pinnedTop.current = el.scrollTop;
+    } else if (moved) {
+      followRef.current = false;
+    }
     setAtBottom(atEnd);
     syncActive();
   };
