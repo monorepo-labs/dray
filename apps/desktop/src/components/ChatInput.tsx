@@ -24,6 +24,7 @@ import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { registerComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
+import { selectionRange } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
 import { applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
 import {
@@ -993,8 +994,17 @@ export default function ChatInput({
                         return;
                       }
 
-                      setMessage(`${message.slice(0, caret)}\n${message.slice(caret)}`);
-                      setCaret(caret + 1);
+                      // **Both ends, since a newline typed over a selection
+                      // replaces it.** `caret` is the selection's start alone, so
+                      // slicing on it would leave the selected text sitting after
+                      // the break the reader meant to put in its place — and
+                      // send it. The editor is the only thing that can answer
+                      // where the selection ends.
+                      const box = editorRef.current;
+                      const at = (box && selectionRange(box)) ?? { start: caret, end: caret };
+
+                      setMessage(`${message.slice(0, at.start)}\n${message.slice(at.end)}`);
+                      setCaret(at.start + 1);
                     }
                   }}
                   className={cn(TEXT_BOX, isNewTask ? "px-0" : "px-1")}
