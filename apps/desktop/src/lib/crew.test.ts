@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crewAnchor, crewRows } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
@@ -148,5 +148,25 @@ describe("crewAnchor", () => {
   it("drops an anchor whose own rows have all been archived", () => {
     const settled = [item("a", null), item("b", "a", { archived: true })];
     expect(crewAnchor(settled, "a", "a")).toBe(null);
+  });
+});
+
+describe("crewSeen", () => {
+  const items = [item("a", null), item("b", "a"), item("c", "a")];
+
+  // The regression. `announce` used to read a set filtered by `asking`, which
+  // the very event being announced is what sets — so a child raising a card was
+  // judged off screen, given a notice, and then drew the card a render later
+  // anyway.
+  it("names every row, whatever it is doing", () => {
+    expect(crewSeen(crewRows(items, "a", quiet), true)).toEqual(["b", "c"]);
+    const live = { statusBySession: {}, askingSessions: new Set(["b"]) };
+    expect(crewSeen(crewRows(items, "a", live), true)).toEqual(["b", "c"]);
+  });
+
+  // Put away with the chord, behind another view tab, or anchored outside the
+  // active space: a child that cannot be seen must still announce.
+  it("names nobody where the column is not drawn", () => {
+    expect(crewSeen(crewRows(items, "a", quiet), false)).toEqual([]);
   });
 });

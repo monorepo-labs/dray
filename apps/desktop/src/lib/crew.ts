@@ -118,3 +118,25 @@ export function crewAnchor(
   }
   return items.some((i) => i.parentSessionId === selectedId && !i.archived) ? selectedId : null;
 }
+
+/// The sessions a crew column is *showing*, which is every row of it.
+///
+/// Not the question `crewShown` in `App` asks, which is narrower on purpose:
+/// that set is what gets loaded and read-marked, and a strip is on screen
+/// without its transcript being read. This one answers whether a card raised
+/// for a session would land in front of the reader — and a crew row opens
+/// itself for one, so membership alone is the whole answer.
+///
+/// **Never filtered by `asking`.** That flag is set by the very event being
+/// announced, so a set filtered by it is always one render behind the question:
+/// `announce`, asked at the instant the request landed, found the child not yet
+/// on screen and raised a notice — and the row drew its card a render later
+/// anyway, leaving a card and a notice for one event, with the notice's click
+/// dragging the main column onto a child the reader was already looking at.
+///
+/// Empty where the column is not drawn — put away with the chord, behind
+/// another view tab, or anchored outside the active space — since a child that
+/// genuinely cannot be seen must still announce.
+export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
+  return drawn ? rows.map((r) => r.item.sessionId) : [];
+}

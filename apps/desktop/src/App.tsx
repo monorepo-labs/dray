@@ -110,7 +110,7 @@ import { basename } from "@/lib/format";
 import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -197,6 +197,7 @@ function App() {
     removeWorktree,
     ensureLoaded,
     setOnScreen,
+    setCrewSeen,
     paneState,
     indexSide,
   } = useSessions();
@@ -770,6 +771,16 @@ function App() {
     // Both are rebuilt every render; the key is what changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onScreenKey]);
+
+  // Every row of a drawn crew, for `announce` alone — see `crewSeen`. Wider
+  // than `crewShown` above on purpose: that one loads and read-marks, where
+  // this one only answers whether a card would land in front of the reader,
+  // which every strip does without being opened first.
+  const crewSeenKey = crewSeen(crew, crewDrawn).join("\n");
+  useEffect(() => {
+    setCrewSeen(crewSeenKey.split("\n").filter(Boolean));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crewSeenKey]);
 
   // Focusing a transcript is what points the composer at it, and it is separate
   // from opening one: reaching into a transcript to scroll or copy is not

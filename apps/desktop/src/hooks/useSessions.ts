@@ -12,6 +12,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
+import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
@@ -554,64 +555,17 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 // Dedupes against the queued array, not the render snapshot: two fast clicks
 // both miss an `existing` check made before their `await`, and would otherwise
 // each append the same session.
-// Events that arrived before the session they belong to was here.
-//
-// A new session reaches `sessions` only when its first `send_msg` resolves, and
-// its child is already streaming by then: pi answers a `prompt` only after its
-// extension `input` and `before_agent_start` handlers have run, and either can
-// raise a *blocking* question. That question is the one event nothing can
-// replace, because permission requests are never written to the log — so it does
-// not come back in the snapshot, and dropping it left a card that was never
-// drawn over an agent waiting for its answer until the prompt timed out.
-//
-// Module-level for `useDraft`'s reason: the write site is an event listener
-// registered once, and the read site is a fetch that resolves after it.
-// Keyed by event id within each session, and that is not tidiness. The hold
-// happens inside a `setSessions` updater — the only place with a true reading of
-// which sessions are here — and StrictMode invokes every updater twice in
-// development, so an array would take each event twice and draw two cards with
-// one React key. A map makes the second call a no-op.
-const earlyEvents = new Map<string, Map<string, AgentEvent>>();
-
-// A session whose snapshot never arrives keeps whatever it held, so both
-// dimensions are capped rather than trusted. Per session, well past any real
-// burst before one lands; and across sessions, because a failed send leaves an
-// entry under an id nothing will ever claim and every retry mints a fresh one.
-const MAX_EARLY_EVENTS = 200;
-const MAX_EARLY_SESSIONS = 32;
-
-const holdEarlyEvent = (event: AgentEvent) => {
-  const held = earlyEvents.get(event.sessionId) ?? new Map<string, AgentEvent>();
-  held.set(event.id, event);
-
-  // Insertion-ordered, so the oldest is the first key either way.
-  while (held.size > MAX_EARLY_EVENTS) {
-    held.delete(held.keys().next().value!);
-  }
-
-  earlyEvents.set(event.sessionId, held);
-  while (earlyEvents.size > MAX_EARLY_SESSIONS) {
-    earlyEvents.delete(earlyEvents.keys().next().value!);
-  }
-};
-
-// Merged by event id, which is exact: an event that *was* persisted carries the
-// same id in the snapshot as it did on the wire, so this can hold everything and
-// still duplicate nothing. Choosing by payload type instead would be a second
-// copy of which events the log carries, free to disagree with the one in Rust.
-const withEarlyEvents = (snapshot: SessionSnapshot): SessionSnapshot => {
-  const held = earlyEvents.get(snapshot.sessionId);
-  earlyEvents.delete(snapshot.sessionId);
-  if (!held?.size) return snapshot;
-
-  return mergeEvents(snapshot, [...held.values()]);
-};
-
 // Merged by event id against whatever is already on screen, never a plain
 // replace. A snapshot's events come from the log, and the log does not carry a
 // permission request — so replacing a row that has been taking live events would
-// drop exactly the card the reader is being asked to answer. The same id rule as
-// `withEarlyEvents`, and for the same reason it is exact.
+// drop exactly the card the reader is being asked to answer.
+//
+// Exact by id, and deliberately: an event that *was* persisted carries the same
+// id in the snapshot as it did on the wire, so this can be handed everything
+// and still duplicate nothing. Choosing by payload type instead would be a
+// second copy of which events the log carries, free to disagree with the one in
+// Rust — and it is what lets the early-event drain below run as often as it
+// likes.
 const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
   const seen = new Set(into.events.map((e) => e.id));
   // A snapshot is read back from the log after the prompt landed, so it always
@@ -675,6 +629,39 @@ const upsertSession = (snapshot: SessionSnapshot) =>
         )
       : [...prev, snapshot],
   );
+
+/// Anything held for a session that has now reached state, merged and dropped.
+///
+/// **Keyed on the commit, not on the load.** The hold used to be taken at each
+/// of the five load sites, which is a frame too early: between reading it and
+/// that load landing in `sessions` there is a window the listener spends unable
+/// to see the session, so an event arriving in it was held — and nothing was
+/// coming back for it, `ensureLoaded` returning early for a session already
+/// here. A permission request is never written to the log, so that hold is the
+/// only copy there will ever be: the crew row went yellow, the strip expanded,
+/// and the card it expanded for was gone. Said once here instead of at every
+/// site that loads a transcript.
+///
+/// The drop is taken *outside* the updater. React may invoke one twice —
+/// StrictMode does in development — and a hold consumed from inside it leaves
+/// the second invocation building a state with nothing merged into it.
+/// `mergeEvents` is exact by id, so running this more often than needed costs a
+/// render and changes nothing.
+useEffect(() => {
+  const held = new Map<string, AgentEvent[]>();
+  for (const s of sessions) {
+    const events = heldFor(s.sessionId);
+    if (events.length) held.set(s.sessionId, events);
+  }
+  if (!held.size) return;
+  for (const sessionId of held.keys()) dropHeld(sessionId);
+  setSessions((prev) =>
+    prev.map((s) => {
+      const events = held.get(s.sessionId);
+      return events ? mergeEvents(s, events) : s;
+    }),
+  );
+}, [sessions]);
 
 const handleSendMsg = async (
   message: string,
@@ -858,7 +845,7 @@ const handleSendMsg = async (
     // Only a new session yields a snapshot. Built by the backend, so the resolved
     // worktree name and truncated title come from disk rather than a guess here.
     if (snapshot) {
-      upsertSession(withEarlyEvents(snapshot));
+      upsertSession(snapshot);
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       if (!showArchived) {
@@ -893,7 +880,7 @@ const handleSendMsg = async (
     // text under the new-task key.
     if (isNewSession) {
       setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
-      earlyEvents.delete(sessionId);
+      dropHeld(sessionId);
       if (selectionRequestRef.current === sessionId) {
         setSelectedSessionId(null);
       }
@@ -1158,7 +1145,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
       // request and moved the reader somewhere this read did not put them, so
       // saying it landed would let a caller tear down for a move that is no
       // longer theirs. The rollback below takes the same reading.
-      upsertSession(withEarlyEvents(snapshot));
+      upsertSession(snapshot);
       return selectionRequestRef.current === sessionId;
     }
 
@@ -1484,7 +1471,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   }
 
   setError(null);
-  upsertSession(withEarlyEvents(snapshot));
+  upsertSession(snapshot);
   // A fork is never archived, so it belongs to the active list alone — pushed
   // unconditionally it would show up under the archived filter too.
   if (!showArchived) {
@@ -2048,8 +2035,23 @@ const setOnScreen = (ids: string[]) => {
   }
   onScreenRef.current = next;
 };
+
 const onScreen = (sessionId: string) =>
   sessionId === selectedSessionIdRef.current || onScreenRef.current.has(sessionId);
+
+/// Every session the crew column is drawing a strip for, written by `App`.
+///
+/// Deliberately not folded into `onScreenRef`, and the two answer different
+/// questions. That one is "is this transcript being read", which is what
+/// read-marking promises and what eviction is safe against — and a crew strip
+/// is on screen with its transcript unloaded, so a session joining this set has
+/// not been read and its green mark must stay. This one is narrower: a crew row
+/// opens itself for a card, so an *ask* raised for one of these is already in
+/// front of the reader. See `announce`, its only reader.
+const crewSeenRef = useRef<ReadonlySet<string>>(new Set());
+const setCrewSeen = (ids: string[]) => {
+  crewSeenRef.current = new Set(ids);
+};
 
 /// Loads a transcript without selecting it, for a split pane. Guarded so the
 /// panes re-rendering mid-read don't issue a second one.
@@ -2060,7 +2062,7 @@ const ensureLoaded = async (sessionId: string) => {
   loadingRef.current.add(sessionId);
   try {
     const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
-    if (snapshot) upsertSession(withEarlyEvents(snapshot));
+    if (snapshot) upsertSession(snapshot);
   } catch (e) {
     console.error("failed to load a split pane", e);
   } finally {
@@ -2208,6 +2210,18 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     return false;
   }
   if (onScreen(sessionId)) return true;
+
+  // A crew strip draws its own card, so an ask raised for a session the crew is
+  // showing is already in front of the reader — and asked separately because
+  // `onScreen` cannot answer it yet: a crew child joins that set through
+  // `row.asking`, which this very event is what sets, so the reading there is
+  // one render behind the question and the notice went up beside the card it
+  // duplicates, with its click dragging the main column onto a child already on
+  // screen.
+  //
+  // The kind is load-bearing. A *completion* opens no row — the strip's title
+  // turns green and the turn itself stays unread — so that one still announces.
+  if (kind === "asking" && crewSeenRef.current.has(sessionId)) return true;
 
   // The sound is the signal; the card is a thing to click. Fired side by side
   // rather than one from the other, so dropping either leaves the other
@@ -2502,6 +2516,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide};
 
 }
