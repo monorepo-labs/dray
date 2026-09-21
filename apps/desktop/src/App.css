@@ -896,10 +896,16 @@
      token and a colour token share one utility name, and the colour wins it —
      `--color-input` is shadcn's and `--color-composer` is the composer card's
      own fill, so `text-composer` painted the prose in the card's colour and
-     applied no size at all. The box then inherited 16px where this says 14,
-     which is also why its caret stood a line taller than the text beside it.
-     Nothing here may be named after a surface that has a fill. */
-  --text-prompt: var(--fs-prompt, 0.875rem);
+     applied no size at all. The box then inherited 16px where the token said
+     14, which is also why its caret stood a line taller than the text beside
+     it. Nothing here may be named after a surface that has a fill.
+
+     The default matches `--text-chat`: what the reader types and what comes
+     back are one conversation, so a composer a step down read as small rather
+     than as chrome. Its own `--fs-prompt` slot rather than following
+     `--fs-chat`, since a reader who sizes the transcript for reading has not
+     asked for the same size in the box they type in. */
+  --text-prompt: var(--fs-prompt, 0.9375rem);
   --text-prompt--line-height: 1.5;
 
   --color-surface-raised: var(--surface-raised);

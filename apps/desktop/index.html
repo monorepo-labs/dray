@@ -37,7 +37,7 @@
       // default here and jumps to the clamped size once React takes over.
       try {
         var sizes = JSON.parse(localStorage.getItem("ade.fontSizes") || "{}");
-        ["chat", "code", "ui"].forEach(function (slot) {
+        ["chat", "code", "prompt", "ui"].forEach(function (slot) {
           var px = sizes[slot];
           if (typeof px === "number" && isFinite(px)) {
             px = Math.min(24, Math.max(10, Math.round(px)));

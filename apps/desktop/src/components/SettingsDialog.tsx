@@ -234,7 +234,7 @@ export default function SettingsDialog({
   );
 }
 
-/// One row per text class, and nothing derived: the three sit at different
+/// One row per text class, and nothing derived: the four sit at different
 /// sizes by default and a single slider would hide which one the reader moved.
 /// In px rather than an abstract Small/Large because px is what the reader can
 /// compare against their editor.

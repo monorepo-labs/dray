@@ -2,9 +2,8 @@
 ///
 /// Each slot is one of the semantic `text-*` utilities in App.css, which read
 /// their size off an overridable `--fs-<slot>` on `<html>`; this is the only
-/// thing that writes one. Composer and tool output are deliberately absent —
-/// both keep the size App.css gives them, and `--fs-prompt`/`--fs-tool` stay
-/// as hooks nothing writes.
+/// thing that writes one. Tool output is deliberately absent — it keeps the
+/// size App.css gives it, and `--fs-tool` stays a hook nothing writes.
 ///
 /// Defaults are the rem values in App.css at a 16px root, stated here in px
 /// because px is the unit the reader sees. Stored as `ade.fontSizes`, and the
@@ -12,6 +11,9 @@
 export const FONT_SLOTS = [
   { id: "ui", label: "Interface", px: 13 },
   { id: "chat", label: "Chat messages", px: 15 },
+  // Beside chat rather than at the end: what the reader types and what comes
+  // back are one conversation, so the two sizes are read against each other.
+  { id: "prompt", label: "Chat input", px: 15 },
   { id: "code", label: "Code", px: 14 },
 ] as const;
 
