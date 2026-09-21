@@ -2211,22 +2211,29 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   }
   if (onScreen(sessionId)) return true;
 
+  // The sound is the signal; the card is a thing to click. Fired side by side
+  // rather than one from the other, so dropping either leaves the other
+  // working.
+  playNotification();
+
   // A crew strip draws its own card, so an ask raised for a session the crew is
-  // showing is already in front of the reader — and asked separately because
-  // `onScreen` cannot answer it yet: a crew child joins that set through
-  // `row.asking`, which this very event is what sets, so the reading there is
-  // one render behind the question and the notice went up beside the card it
-  // duplicates, with its click dragging the main column onto a child already on
-  // screen.
+  // showing is already in front of the reader and gets the sound alone — and
+  // this is asked separately because `onScreen` cannot answer it yet: a crew
+  // child joins that set through `row.asking`, which this very event is what
+  // sets, so the reading there is one render behind the question and the
+  // notice went up beside the card it duplicates, with its click dragging the
+  // main column onto a child already on screen.
+  //
+  // The sound still plays, and that is not the table's "on screen" case: the
+  // crew is watched out of the corner of the eye, and a card that opens itself
+  // in a column the reader is not reading is a change with nothing to say it
+  // happened. The card is what is withheld — there is nothing for a click to
+  // go to that is not already there.
   //
   // The kind is load-bearing. A *completion* opens no row — the strip's title
   // turns green and the turn itself stays unread — so that one still announces.
   if (kind === "asking" && crewSeenRef.current.has(sessionId)) return true;
 
-  // The sound is the signal; the card is a thing to click. Fired side by side
-  // rather than one from the other, so dropping either leaves the other
-  // working.
-  playNotification();
   pushNotice({ sessionId, kind, label });
   return false;
 };
