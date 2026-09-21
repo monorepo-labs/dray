@@ -776,11 +776,16 @@ function App() {
   // than `crewShown` above on purpose: that one loads and read-marks, where
   // this one only answers whether a card would land in front of the reader,
   // which every strip does without being opened first.
-  const crewSeenKey = crewSeen(crew, crewDrawn).join("\n");
-  useEffect(() => {
-    setCrewSeen(crewSeenKey.split("\n").filter(Boolean));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crewSeenKey]);
+  //
+  // **Written during render, never from an effect**, which is the one place
+  // this differs from `setOnScreen` above — and the difference is which way
+  // being wrong costs. That set only widens what is kept in memory, where a
+  // stale reading here *suppresses* a notice: an effect lands after paint, so
+  // a crew put away with the chord or flipped behind another view tab would go
+  // on naming its rows for a frame, and an ask arriving in that frame would be
+  // silenced with nothing on screen to silence it for. Derived and idempotent,
+  // so it is the same render-time write `crewRef` above takes.
+  setCrewSeen(crewSeen(crew, crewDrawn));
 
   // Focusing a transcript is what points the composer at it, and it is separate
   // from opening one: reaching into a transcript to scroll or copy is not

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Blobatar } from "@blobatar/react";
 import { idle, surprised } from "blobatar/expression";
 import { CircleDashed, MousePointerClick } from "lucide-react";
@@ -266,13 +266,30 @@ function PendingCard({
   // that a `questions_asked` rides the same channel. A second reading here
   // would answer differently on exactly the lines nobody tested.
   const ask = useMemo(() => buildTranscript(events ?? [], true).pendingAsks[0], [events]);
+
+  // The column scrolls, and this card opened its own row — so on a fan-out of
+  // any size it can arrive below the fold, which is the one thing it must not
+  // do: `announce` takes a drawn crew as the reader having seen the question
+  // and raises nothing, and a card nobody scrolled to holds the agent's turn
+  // until somebody goes looking for it. Answered by making that reading true
+  // rather than by weakening it back into a second notice.
+  //
+  // `nearest` and not `center`: a card already in view moves nothing, so the
+  // rows somebody is reading stay where they are. Keyed on the request, so a
+  // second question in the same row scrolls again and a re-render does not.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const requestId = ask?.requestId;
+  useEffect(() => {
+    if (requestId) cardRef.current?.scrollIntoView({ block: "nearest" });
+  }, [requestId]);
+
   // Ordinary while the log is still loading: the row is open because the index
   // says the session is asking, which arrives before its transcript does.
   if (!ask) return null;
 
   const id = row.item.sessionId;
   return (
-    <div className="px-3 pb-3">
+    <div ref={cardRef} className="px-3 pb-3">
       {ask.type === "questions_asked" ? (
         // `autoFocus` off, unlike the main column's: there the card is in the
         // transcript the reader is already in, where this one arrives in a
