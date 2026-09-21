@@ -53,11 +53,14 @@ const CHIP_ACCENT: Partial<Record<Placed["segment"]["kind"], string>> = {
 /// for the same reason: the fill already separates the run, and 500 against the
 /// prose's 400 was a second way to say it.
 /// **`inline`, never `inline-block`, and that is about the caret.** An
-/// inline-block's height joins the line box, so a chip 18.8px tall on a 21px
-/// line pushed it to 24px — which made the caret taller than the text beside it
-/// and left lines holding a tag further apart than lines without one. An inline
-/// box's padding paints without taking part in that calculation, so the line
-/// stays the composer's own and the fill still draws round the face.
+/// inline-block's height joins the line box, and a chip's padding makes it
+/// taller than the line it sits on — so the line grew to fit, which made the
+/// caret taller than the text beside it and left lines holding a tag further
+/// apart than lines without one. An inline box's padding paints without taking
+/// part in that calculation, so the line stays the composer's own and the fill
+/// still draws round the face. Stated as a relationship rather than in px: the
+/// composer's size is the reader's (`--fs-prompt`), so every figure here would
+/// be right for one setting and wrong for the rest.
 /// `whitespace-nowrap` is what keeps the fill in one piece, since an inline box
 /// breaking across two lines would be drawn as two.
 const CHIP_SHAPE =
