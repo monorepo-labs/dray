@@ -18,8 +18,12 @@ const event = (id: string, sessionId: string, seq = 0): AgentEvent =>
     raw: null,
   }) as AgentEvent;
 
-// Module state, so every test starts by clearing what the last one left.
-beforeEach(() => ["s", "other"].forEach(dropHeld));
+// Module state, so every test starts by clearing what the last one left —
+// including the forty the session-cap test fills it with, or the order of the
+// tests below is what keeps them passing.
+beforeEach(() => {
+  ["s", "other", ...Array.from({ length: 40 }, (_, i) => `s${i}`)].forEach(dropHeld);
+});
 
 describe("earlyEvents", () => {
   it("holds what arrives for a session that is not here yet", () => {
