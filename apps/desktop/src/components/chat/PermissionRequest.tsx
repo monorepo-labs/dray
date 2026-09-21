@@ -75,16 +75,13 @@ export default function PermissionRequest({
 
       {/* One row, wrapping. It was a column under `@max-sm` for a while, and
           what actually made the narrow card ragged was the label rather than
-          the width: `Always allow {the whole command}` could not share a
-          line with anything, so `Deny` fell under it alone and read as one
-          answer singled out. Cut to `Always allow`, the three fit a 320px
-          rail with room to spare, and stacking them spent ~70px saying what
-          one line already said.
-
-          A rule that keeps its subject — `Always allow in {dir}`, which is
-          shown nowhere else — still wraps here rather than overflowing, and
-          lands on its own line, which is the honest place for the longest
-          answer in the card. */}
+          the width: a rule carries its own subject — `Always allow mkdir -p
+          /tmp/x`, `Always allow in {dir}` — which is shown nowhere else, so
+          it cannot share a line with anything and `Deny` fell under it alone
+          and read as one answer singled out. It wraps inside its own button
+          and lands on its own line instead, which is the honest place for the
+          longest answer in the card; stacking them all spent ~70px saying
+          what one line already said. */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {[...options]
           .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
@@ -92,6 +89,13 @@ export default function PermissionRequest({
             <Button
               key={option.id}
               size="sm"
+              // The base button is `whitespace-nowrap shrink-0`, so a rule that
+              // carries its own subject — `Always allow mkdir -p /long/path` —
+              // ran straight out of the card rather than wrapping as the
+              // comment above promises. Wrapping inside the button is what
+              // keeps the subject readable; truncating would hide the half of
+              // the label that says what is being granted.
+              className="h-auto min-h-7 max-w-full py-1 text-left break-words whitespace-normal"
               variant={optionVariant(option.kind)}
               disabled={sent !== null}
               onClick={() => {
