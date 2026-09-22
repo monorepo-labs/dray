@@ -1,0 +1,58 @@
+/* One 12s clock. Same bargain as Orchestration.module.css: explicit
+   percentages per element, base styles are the end state, reduced motion
+   shows the finished picture.
+
+   Script:
+     0   the last check is running, the PR is not ready, merge is dimmed
+     25  it passes: "3 passed", "Ready to merge", the button lights
+     45  the reader says merge it
+     55  one tool call
+     70  merged: the glyph turns purple, the readiness row goes, the agent
+         says so
+     90  everything animated fades; 100 the loop restarts */
+
+.running { opacity: 0; animation: running 12s steps(1) infinite; }
+.passed { opacity: 1; animation: passed 12s steps(1) infinite; }
+.ready { opacity: 1; animation: passed 12s steps(1) infinite; }
+.notReady { opacity: 0; animation: running 12s steps(1) infinite; }
+.merge { animation: merge 12s ease-out infinite; }
+
+/* The whole readiness section: on screen until the merge, gone after. */
+.readiness { max-height: 0; opacity: 0; overflow: hidden; animation: readiness 12s ease-out infinite; }
+
+.open { opacity: 0; animation: open 12s steps(1) infinite; }
+.merged { opacity: 1; animation: mergedGlyph 12s steps(1) infinite; }
+
+.bubble { animation: in45 12s ease-out infinite; }
+.call { animation: in55 12s ease-out infinite; }
+.said { animation: in70 12s ease-out infinite; }
+
+@keyframes running { 0%, 25% { opacity: 1; } 25.01%, 100% { opacity: 0; } }
+@keyframes passed { 0%, 25% { opacity: 0; } 25.01%, 100% { opacity: 1; } }
+@keyframes merge { 0%, 25% { opacity: 0.6; } 28%, 100% { opacity: 1; } }
+@keyframes readiness {
+  0%, 70% { max-height: 4rem; opacity: 1; }
+  74%, 100% { max-height: 0; opacity: 0; }
+}
+@keyframes open { 0%, 70% { opacity: 1; } 70.01%, 100% { opacity: 0; } }
+@keyframes mergedGlyph { 0%, 70% { opacity: 0; } 70.01%, 100% { opacity: 1; } }
+
+@keyframes in45 {
+  0%, 45% { opacity: 0; transform: translateY(4px); }
+  48%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@keyframes in55 {
+  0%, 55% { opacity: 0; transform: translateY(4px); }
+  58%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@keyframes in70 {
+  0%, 70% { opacity: 0; transform: translateY(4px); }
+  73%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene * { animation: none; }
+}

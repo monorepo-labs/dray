@@ -6,12 +6,6 @@ export const REPO = "https://github.com/monorepo-labs/dray";
 /// channel is the updater's, not the download page's.
 export const DOWNLOAD = `${REPO}/releases/latest`;
 
-/// The universal `.dmg`'s size, decimal MB rounded to match Finder's own
-/// "Get Info" — hand-updated per release since the link above deliberately
-/// carries no build-time lookup to compute it from. Check the latest release's
-/// asset list when bumping.
-export const DOWNLOAD_SIZE = "32 MB";
-
 /// The person who builds it, on X — the nav's "Feedback" link and the
 /// footer's mark both. Most visitors arrive from a tweet, so this is the
 /// channel they are already on.
@@ -23,6 +17,9 @@ export const DOWNLOAD_SIZE = "32 MB";
 export const FEEDBACK = "https://x.com/yogesharc";
 
 export const COMPANY = "Monorepo Labs";
+
+/// Where the next sponsor signs up.
+export const SPONSOR = "https://www.patreon.com/c/yogesharc/membership";
 
 /// What the nav shows when GitHub cannot be asked. Bump it now and then so a
 /// rate-limited render does not undercount by much.

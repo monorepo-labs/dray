@@ -9,11 +9,80 @@
   --color-background: oklch(0.145 0 0);
   --color-foreground: oklch(0.985 0 0);
   --color-card: oklch(0.205 0 0);
+  --color-raised: oklch(0.19 0 0);
   --color-muted-foreground: oklch(0.708 0 0);
   --color-border: oklch(1 0 0 / 10%);
+  --color-hairline: oklch(1 0 0 / 6%);
   --color-command: oklch(0.82 0.13 90);
   --color-mention: oklch(0.82 0.13 230);
+  --color-add: oklch(0.7 0.15 163);
+  /* The page itself, and only the page: a grey the drawn windows sit on, a
+     few steps up from the app's own near-black so a frame reads as the app
+     on the page rather than as a hole in it. Site-only. */
+  --color-page: oklch(0.24 0 0);
 
+  /* The rest of the app's dark ramp, copied the same way — these are what the
+     components under `components/app/` need to draw the real thing's classes
+     unchanged. Names match the app's utilities, so a class copied over is a
+     class that resolves. */
+  --color-card-foreground: oklch(0.985 0 0);
+  --color-muted: oklch(0.269 0 0);
+  --color-secondary: oklch(0.269 0 0);
+  --color-primary: oklch(0.922 0 0);
+  --color-primary-foreground: oklch(0.205 0 0);
+  --color-destructive: oklch(0.704 0.191 22.216);
+  /* `--card` under another name in the app: aliases are what keep a theme from
+     setting one and forgetting the other. */
+  --color-composer: oklch(0.205 0 0);
+  --color-edge-surface: oklch(1 0 0 / 6%);
+  --color-accent-add: oklch(0.7 0.15 163);
+  --color-accent-command: oklch(0.82 0.13 90);
+  --color-accent-mention: oklch(0.82 0.13 230);
+  /* GitHub's own merge green and merged purple, which the app keeps out of
+     every theme's hands for the same reason. */
+  --color-accent-merge: oklch(0.546 0.139 149);
+  --color-accent-merge-hover: oklch(0.617 0.152 149);
+  --color-accent-merge-foreground: oklch(0.985 0 0);
+  --color-accent-merged: oklch(0.63 0.23 304);
+  /* The sidebar has no fill of its own; it reads through to the page. */
+  --color-sidebar: transparent;
+  --color-sidebar-foreground: oklch(0.985 0 0);
+  --color-sidebar-accent: color-mix(in oklab, oklch(0.985 0 0) 15%, oklch(0.145 0 0));
+  --color-sidebar-accent-foreground: oklch(0.985 0 0);
+  --color-sidebar-border: oklch(1 0 0 / 8%);
+  --color-hairline-strong: oklch(1 0 0 / 8%);
+  --color-popover: oklch(0.205 0 0);
+  --color-ring: oklch(0.556 0 0);
+  --color-accent: oklch(0.269 0 0);
+  --color-accent-issue: oklch(0.82 0.13 310);
+  --color-surface-raised: oklch(0.19 0 0);
+  /* The picker's arrow-key highlight, a white veil rather than a fill. */
+  --color-veil-strong: oklch(1 0 0 / 11.5%);
+
+  /* Everything in the transcript is one size; weight and colour carry
+     hierarchy. Only code and tool output scale separately. */
+  --text-ui: 0.8125rem;
+  --text-ui--line-height: 1.4;
+  --text-chat: 0.9375rem;
+  --text-chat--line-height: 1.65;
+  --text-prompt: 0.9375rem;
+  --text-prompt--line-height: 1.5;
+  --text-tool: 0.8125rem;
+  --text-tool--line-height: 1.55;
+  --text-code: 0.875rem;
+  --text-code--line-height: 1.6;
+
+  /* What every drawn window and card sits on. One shadow for all of them,
+     so a window and a card read as the same kind of object on the page: a
+     hairline highlight along the top edge, a soft drop under it. */
+  --shadow-window:
+    inset 0 1px 0 0 oklch(1 0 0 / 5%), 0 30px 60px -24px rgba(0, 0, 0, 0.7),
+    0 10px 24px -12px rgba(0, 0, 0, 0.6);
+
+  --radius-sm: calc(0.625rem * 0.6);
+  --radius-md: calc(0.625rem * 0.8);
+  --radius-lg: 0.625rem;
+  --radius-xl: calc(0.625rem * 1.4);
   --radius: 0.625rem;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -23,10 +92,12 @@
 html {
   color-scheme: dark;
   scroll-behavior: smooth;
+  /* The app's titlebar row, which spans every column of the window frame. */
+  --titlebar-h: 40px;
 }
 
 body {
-  background: var(--color-background);
+  background: var(--color-page);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -36,4 +107,109 @@ body {
   html {
     scroll-behavior: auto;
   }
+}
+
+/* The hero window crossfades between palettes rather than snapping: the
+   picker walks themes on its own, and a hard cut every few seconds reads as
+   a glitch. Fills, text and edges only — layout properties are left alone so
+   the scene's own keyframes stay crisp. */
+.proto-window *,
+.proto-window {
+  transition-property: background-color, color, border-color, fill, stroke;
+  transition-duration: 400ms;
+}
+
+/* The picker's palettes. Each block is the app's own dark palette for that
+   theme, copied value for value from App.css, written onto the site's
+   `--color-*` names so every class under `components/app/` repaints with no
+   change of its own. Scoped to the wrapper the picker sets, so the page
+   around the window stays the page. Default is the `@theme` set above and
+   needs no block. */
+[data-proto-theme="catppuccin"] {
+  --color-background: #181825;
+  --color-surface-raised: #1e1e2e;
+  --color-card: #313244;
+  --color-composer: #313244;
+  --color-popover: #313244;
+  --color-primary-foreground: #181825;
+  --color-muted: #45475a;
+  --color-secondary: #45475a;
+  --color-accent: #45475a;
+  --color-muted-foreground: #a6adc8;
+  --color-foreground: #cdd6f4;
+  --color-card-foreground: #cdd6f4;
+  --color-sidebar-foreground: #cdd6f4;
+  --color-sidebar-accent-foreground: #cdd6f4;
+  --color-primary: #cdd6f4;
+  --color-sidebar-accent: color-mix(in oklab, #cdd6f4 15%, #181825);
+  --color-ring: #7f849c;
+  --color-destructive: #f38ba8;
+  --color-accent-command: #f9e2af;
+  --color-accent-mention: #89b4fa;
+}
+[data-proto-theme="gruvbox"] {
+  --color-background: #1d2021;
+  --color-surface-raised: #282828;
+  --color-card: #32302f;
+  --color-composer: #32302f;
+  --color-popover: #32302f;
+  --color-primary-foreground: #1d2021;
+  --color-muted: #3c3836;
+  --color-secondary: #3c3836;
+  --color-accent: #3c3836;
+  --color-muted-foreground: #a89984;
+  --color-foreground: #ebdbb2;
+  --color-card-foreground: #ebdbb2;
+  --color-sidebar-foreground: #ebdbb2;
+  --color-sidebar-accent-foreground: #ebdbb2;
+  --color-primary: #ebdbb2;
+  --color-sidebar-accent: color-mix(in oklab, #ebdbb2 15%, #1d2021);
+  --color-ring: #7c6f64;
+  --color-destructive: #fb4934;
+  --color-accent-command: #fabd2f;
+  --color-accent-mention: #83a598;
+}
+[data-proto-theme="one-dark-pro"] {
+  --color-background: #1e2227;
+  --color-surface-raised: #23272e;
+  --color-card: #323842;
+  --color-composer: #323842;
+  --color-popover: #323842;
+  --color-primary-foreground: #1e2227;
+  --color-muted: #3e4452;
+  --color-secondary: #3e4452;
+  --color-accent: #3e4452;
+  --color-muted-foreground: #9da5b4;
+  --color-foreground: #d7dae0;
+  --color-card-foreground: #d7dae0;
+  --color-sidebar-foreground: #d7dae0;
+  --color-sidebar-accent-foreground: #d7dae0;
+  --color-primary: #d7dae0;
+  --color-sidebar-accent: color-mix(in oklab, #d7dae0 15%, #1e2227);
+  --color-ring: #4d78cc;
+  --color-destructive: #e06c75;
+  --color-accent-command: #e5c07b;
+  --color-accent-mention: #61afef;
+}
+[data-proto-theme="cobalt2"] {
+  --color-background: #193549;
+  --color-surface-raised: #243e51;
+  --color-card: #1f4662;
+  --color-composer: #1f4662;
+  --color-popover: #1f4662;
+  --color-primary-foreground: #193549;
+  --color-muted: #355166;
+  --color-secondary: #355166;
+  --color-accent: #355166;
+  --color-muted-foreground: #aaa;
+  --color-foreground: #fff;
+  --color-card-foreground: #fff;
+  --color-sidebar-foreground: #fff;
+  --color-sidebar-accent-foreground: #fff;
+  --color-primary: #fff;
+  --color-sidebar-accent: color-mix(in oklab, #fff 15%, #193549);
+  --color-ring: #437da3;
+  --color-destructive: #ff628c;
+  --color-accent-command: #ffc600;
+  --color-accent-mention: #9effff;
 }

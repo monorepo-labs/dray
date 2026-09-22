@@ -1,0 +1,127 @@
+/* The four card scenes, one 10s clock each. Same bargain as the big scenes:
+   explicit percentages per element, base styles are the end state, reduced
+   motion shows the finished picture. Each scene's script sits above its
+   rules. */
+
+@media (prefers-reduced-motion: reduce) {
+  .scene * { animation: none; }
+}
+
+/* Shared: a thing that arrives at N% and leaves at 92%. */
+@keyframes in15 { 0%, 15% { opacity: 0; transform: translateY(4px); } 18%, 92% { opacity: 1; transform: none; } 96%, 100% { opacity: 0; transform: none; } }
+@keyframes in50 { 0%, 50% { opacity: 0; transform: translateY(4px); } 53%, 92% { opacity: 1; transform: none; } 96%, 100% { opacity: 0; transform: none; } }
+@keyframes in62 { 0%, 62% { opacity: 0; transform: translateY(4px); } 65%, 92% { opacity: 1; transform: none; } 96%, 100% { opacity: 0; transform: none; } }
+
+/* Cuts: on from A to B, off elsewhere. */
+@keyframes cut0_30 { 0%, 30% { opacity: 1; } 30.01%, 100% { opacity: 0; } }
+@keyframes cut30_92 { 0%, 30% { opacity: 0; } 30.01%, 92% { opacity: 1; } 92.01%, 100% { opacity: 0; } }
+@keyframes cut12_48 { 0%, 12% { opacity: 0; } 12.01%, 48% { opacity: 1; } 48.01%, 100% { opacity: 0; } }
+@keyframes cut12_30 { 0%, 12% { opacity: 0; } 12.01%, 30% { opacity: 1; } 30.01%, 100% { opacity: 0; } }
+@keyframes cut30_48 { 0%, 30% { opacity: 0; } 30.01%, 48% { opacity: 1; } 48.01%, 100% { opacity: 0; } }
+@keyframes cut48_92 { 0%, 48% { opacity: 0; } 48.01%, 92% { opacity: 1; } 92.01%, 100% { opacity: 0; } }
+@keyframes cut10_55 { 0%, 10% { opacity: 0; } 10.01%, 55% { opacity: 1; } 55.01%, 100% { opacity: 0; } }
+@keyframes cut55_62 { 0%, 55% { opacity: 0; } 55.01%, 62% { opacity: 1; } 62.01%, 100% { opacity: 0; } }
+@keyframes cutMic { 0%, 10% { opacity: 1; } 10.01%, 62% { opacity: 0; } 62.01%, 100% { opacity: 1; } }
+@keyframes cut10_92 { 0%, 10% { opacity: 0; } 10.01%, 92% { opacity: 1; } 92.01%, 100% { opacity: 0; } }
+@keyframes cut18_30 { 0%, 18% { opacity: 0; } 18.01%, 30% { opacity: 1; } 30.01%, 100% { opacity: 0; } }
+
+/* ---- Pull request ----
+     0   the review check is running; not ready; merge dimmed
+     30  it passes: ready to merge, the button lights
+     50  the reviewer's threads land in the comments
+     92  fade */
+/* Text that is one of two states: the other is cut to no width, so the
+   words after it sit where they would with one label alone. */
+.running, .passed { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: top; }
+.running { max-width: 0; opacity: 0; animation: runningW 10s steps(1) infinite; }
+.passed { max-width: 24rem; animation: passedW 10s steps(1) infinite; }
+.whileRunning { opacity: 0; animation: cut0_30 10s steps(1) infinite; }
+.whilePassed { animation: cut30_92 10s steps(1) infinite; }
+.reviewed { animation: in50 10s ease-out infinite; }
+@keyframes runningW { 0%, 30% { max-width: 24rem; opacity: 1; } 30.01%, 100% { max-width: 0; opacity: 0; } }
+@keyframes passedW { 0%, 30% { max-width: 0; opacity: 0; } 30.01%, 92% { max-width: 24rem; opacity: 1; } 92.01%, 100% { max-width: 0; opacity: 0; } }
+
+/* ---- Issues ----
+     0   half a sentence in the composer
+     12  `#` is typed; the picker opens on the reader's assigned issues
+     30  ↓ moves the highlight one row
+     48  ⏎: the picker closes and the issue lands as a chip
+     62  the sentence carries on after it
+     92  fade */
+.hash { opacity: 0; animation: cut12_48 10s steps(1) infinite; }
+.picker { opacity: 0; animation: picker 10s ease-out infinite; }
+.row1 { opacity: 0; animation: cut12_30 10s steps(1) infinite; }
+.row2 { opacity: 0; animation: cut30_48 10s steps(1) infinite; }
+.chip { opacity: 0; animation: cut48_92 10s steps(1) infinite; }
+.tail { animation: in62 10s ease-out infinite; }
+@keyframes picker {
+  0%, 12% { opacity: 0; transform: translateY(4px); }
+  15%, 48% { opacity: 1; transform: none; }
+  48.01%, 100% { opacity: 0; transform: none; }
+}
+
+/* ---- Dictation ----
+     0   the mic at rest
+     10  pressed: the bars, discard and stop take its place; the bars move
+     55  stop: a spinner while the model listens back
+     62  the words land in the composer
+     92  fade */
+.mic { animation: cutMic 10s steps(1) infinite; }
+.rec { opacity: 0; animation: cut10_55 10s steps(1) infinite; }
+.spin { opacity: 0; animation: cut55_62 10s steps(1) infinite; }
+.words { animation: in62 10s ease-out infinite; }
+/* Two rhythms over the fixed shape, odd bars on one and even on the other,
+   so the row moves without every bar moving together. `--w` is the bar's
+   share of the peak. */
+.barA { animation: barA 10s linear infinite; }
+.barB { animation: barB 10s linear infinite; }
+@keyframes barA {
+  0%, 10% { height: 18%; }
+  12% { height: calc(18% + var(--w) * 70%); }
+  15% { height: calc(18% + var(--w) * 30%); }
+  19% { height: calc(18% + var(--w) * 82%); }
+  23% { height: calc(18% + var(--w) * 40%); }
+  27% { height: calc(18% + var(--w) * 65%); }
+  31% { height: calc(18% + var(--w) * 25%); }
+  35% { height: calc(18% + var(--w) * 78%); }
+  40% { height: calc(18% + var(--w) * 45%); }
+  44% { height: calc(18% + var(--w) * 72%); }
+  49% { height: calc(18% + var(--w) * 30%); }
+  53% { height: calc(18% + var(--w) * 60%); }
+  55%, 100% { height: 18%; }
+}
+@keyframes barB {
+  0%, 10% { height: 18%; }
+  13% { height: calc(18% + var(--w) * 40%); }
+  17% { height: calc(18% + var(--w) * 78%); }
+  21% { height: calc(18% + var(--w) * 30%); }
+  25% { height: calc(18% + var(--w) * 68%); }
+  29% { height: calc(18% + var(--w) * 45%); }
+  33% { height: calc(18% + var(--w) * 80%); }
+  38% { height: calc(18% + var(--w) * 35%); }
+  42% { height: calc(18% + var(--w) * 62%); }
+  47% { height: calc(18% + var(--w) * 26%); }
+  51% { height: calc(18% + var(--w) * 74%); }
+  55%, 100% { height: 18%; }
+}
+
+/* ---- Browser ----
+     0   a new tab, the address bar empty
+     10  the agent opens the dev server: the address lands
+     18  the page loads: skeleton
+     30  the page
+     50  the element picker outlines the button the agent asked about
+     92  fade */
+.newTab { animation: cut0_30 10s steps(1) infinite; }
+.pageTab { opacity: 0; animation: cut30_92 10s steps(1) infinite; }
+.blank { animation: cutBlank 10s steps(1) infinite; }
+.url { opacity: 0; animation: cut10_92 10s steps(1) infinite; }
+.skeleton { opacity: 0; animation: cut18_30 10s steps(1) infinite; }
+.page { animation: page 10s ease-out infinite; }
+.pick { animation: in50 10s ease-out infinite; }
+@keyframes cutBlank { 0%, 10% { opacity: 1; } 10.01%, 92% { opacity: 0; } 92.01%, 100% { opacity: 1; } }
+@keyframes page {
+  0%, 30% { opacity: 0; }
+  33%, 92% { opacity: 1; }
+  96%, 100% { opacity: 0; }
+}

@@ -1,0 +1,76 @@
+/* One 12s clock. Same bargain as the other scenes: explicit percentages per
+   element, base styles are the end state, reduced motion shows the finished
+   grid.
+
+   Script:
+     0   one pane
+     15  a sidebar row is picked up and carried onto the pane's right half
+     25  the drop zone says where it lands;  30  the view splits in two
+     45  a second row travels to the lower half of the new pane
+     53  its zone;  60  that pane splits in two, three panes on screen
+     each pane streams a line or two after it lands
+     90  the new panes fade, then the grid folds back to one — folded with
+         the text still in it, every line reflows on the way down;  100 restart */
+
+.colA { flex: 0 0 50%; animation: colA 12s ease-in-out infinite; }
+.colB { flex: 0 0 50%; animation: colB 12s ease-in-out infinite; }
+.paneB { flex: 0 0 50%; animation: paneB 12s ease-in-out infinite; }
+.paneC { flex: 0 0 50%; animation: paneC 12s ease-in-out infinite; }
+
+.ghost1 { opacity: 0; animation: ghost1 12s ease-in-out infinite; }
+.ghost2 { opacity: 0; animation: ghost2 12s ease-in-out infinite; }
+.zone1 { opacity: 0; animation: zone1 12s steps(1) infinite; }
+.zone2 { opacity: 0; animation: zone2 12s steps(1) infinite; }
+
+.lb1 { animation: in38 12s ease-out infinite; }
+.lb2 { animation: in44 12s ease-out infinite; }
+.lc1 { animation: in68 12s ease-out infinite; }
+.lc2 { animation: in74 12s ease-out infinite; }
+
+@keyframes colA { 0%, 30% { flex-basis: 100%; } 33%, 90% { flex-basis: 50%; } 94%, 100% { flex-basis: 100%; } }
+@keyframes colB { 0%, 30% { flex-basis: 0%; opacity: 0; } 33%, 90% { flex-basis: 50%; opacity: 1; } 92% { opacity: 0; } 94%, 100% { flex-basis: 0%; opacity: 0; } }
+@keyframes paneB { 0%, 60% { flex-basis: 100%; } 63%, 90% { flex-basis: 50%; } 94%, 100% { flex-basis: 100%; } }
+@keyframes paneC { 0%, 60% { flex-basis: 0%; opacity: 0; } 63%, 90% { flex-basis: 50%; opacity: 1; } 92% { opacity: 0; } 94%, 100% { flex-basis: 0%; opacity: 0; } }
+
+/* Ghosts travel from the sidebar row they were picked off to the region they
+   drop into. Positions are the pane grid's own pixels, at its real size; the
+   start sits left of it, over the sidebar row the ghost was picked off. */
+@keyframes ghost1 {
+  0%, 15% { opacity: 0; transform: translate(-224px, 188px); }
+  18% { opacity: 1; transform: translate(-224px, 188px); }
+  27%, 30% { opacity: 1; transform: translate(570px, 330px); }
+  30.01%, 100% { opacity: 0; transform: translate(570px, 330px); }
+}
+@keyframes ghost2 {
+  0%, 45% { opacity: 0; transform: translate(-224px, 217px); }
+  48% { opacity: 1; transform: translate(-224px, 217px); }
+  57%, 60% { opacity: 1; transform: translate(600px, 500px); }
+  60.01%, 100% { opacity: 0; transform: translate(600px, 500px); }
+}
+@keyframes zone1 { 0%, 24% { opacity: 0; } 24.01%, 30% { opacity: 1; } 30.01%, 100% { opacity: 0; } }
+@keyframes zone2 { 0%, 53% { opacity: 0; } 53.01%, 60% { opacity: 1; } 60.01%, 100% { opacity: 0; } }
+
+@keyframes in38 {
+  0%, 38% { opacity: 0; transform: translateY(4px); }
+  41%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@keyframes in44 {
+  0%, 44% { opacity: 0; transform: translateY(4px); }
+  47%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@keyframes in68 {
+  0%, 68% { opacity: 0; transform: translateY(4px); }
+  71%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@keyframes in74 {
+  0%, 74% { opacity: 0; transform: translateY(4px); }
+  77%, 90% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene * { animation: none; }
+}
