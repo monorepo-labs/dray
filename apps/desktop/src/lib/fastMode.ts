@@ -23,6 +23,9 @@ export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   codex: "on-spawn",
   fx: "at-creation",
   pi: "none",
+  // grok's fast tier is a **model** (`grok-4.7-build-fast`), listed beside its
+  // ordinary twin, so there is no switch to honour and nothing to send.
+  grok: "none",
 };
 
 /// Whether a harness's fast mode stands even with no model picked.

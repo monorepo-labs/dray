@@ -31,6 +31,10 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   codex: ["bypassPermissions", "manual", "auto"],
   pi: [],
   fx: ["manual", "auto"],
+  // Three, and `plan` is the one missing: grok has a plan *mode* of its own
+  // that it enters by asking (`_x.ai/exit_plan_mode` raises the card), which is
+  // the model's decision rather than a stance the composer can set it to.
+  grok: ["manual", "auto", "bypassPermissions"],
 };
 
 /// The stance a harness actually runs when handed one it does not honour.
@@ -41,6 +45,11 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
 /// freer than its parent.
 const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy>> = {
   fx: (mode) => (mode === "plan" ? "manual" : "auto"),
+  // `plan` is the only stance grok does not honour, and it must fall to the
+  // *narrowest* thing grok has rather than to the default below it: a spawned
+  // session inherits its parent's stance, so a `plan` parent landing on
+  // `bypassPermissions` would come out ungated by inheriting a narrower one.
+  grok: (mode) => (mode === "plan" ? "manual" : "bypassPermissions"),
 };
 
 /// Whether this harness honours this stance.

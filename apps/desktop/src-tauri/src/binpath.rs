@@ -197,6 +197,16 @@ pub async fn fx() -> PathBuf {
     cached(&FX_PATH, or_bare("fx")).await
 }
 
+static GROK_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where `grok` is, or the bare name as a last resort — [`claude`]'s shape.
+/// xAI's installer puts it in `~/.local/bin` and symlinks `~/.grok/bin/grok`
+/// onto the same binary, so the known-dirs pass finds it before the login
+/// shell is ever asked.
+pub async fn grok() -> PathBuf {
+    cached(&GROK_PATH, or_bare("grok")).await
+}
+
 #[cfg(test)]
 mod pi_resolution_tests {
     /// Prints what the resolver found rather than asserting about this machine,
@@ -257,6 +267,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Codex => codex().await,
         Harness::Pi => pi().await,
         Harness::Fx => fx().await,
+        Harness::Grok => grok().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the

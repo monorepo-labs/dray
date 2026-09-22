@@ -127,6 +127,11 @@ export default function AgentIcon({
       return <PiIcon className={className} />;
     case "fx":
       return <FxIcon className={className} />;
+    case "grok":
+      // The same mark fx's `grok` provider draws, and deliberately one
+      // component rather than two: it names xAI's model either way, and a
+      // second copy is a second thing to redraw when the logo moves.
+      return <GrokIcon className={className} />;
     default:
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }

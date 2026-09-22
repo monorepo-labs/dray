@@ -53,6 +53,10 @@ const AGENT_LABELS: Record<Harness, string> = {
   codex: "Codex",
   pi: "pi",
   fx: "fx",
+  // xAI's own name for the CLI. Not "grok", which is the chat assistant every
+  // one of these models is also served by — the installer calls this one Grok
+  // Build and the picker is naming an agent, not a model.
+  grok: "Grok",
 };
 const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 

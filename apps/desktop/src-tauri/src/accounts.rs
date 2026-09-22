@@ -20,6 +20,7 @@ use crate::binpath;
 use crate::harness::{agent_path, Harness};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -319,7 +320,7 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
             .map(|entry| choice(entry.id, entry.label))
             .collect(),
         // One credential, so there is nothing to pick between.
-        Harness::ClaudeCode | Harness::Codex | Harness::Other(_) => Vec::new(),
+        Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => Vec::new(),
     }
 }
 
@@ -419,6 +420,20 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
             }),
             None,
         )],
+        // Two browser flows against `auth.x.ai` and no key form at all: the
+        // `XAI_API_KEY` route is an environment variable the reader exports for
+        // themselves, which is not a credential Dray could save anywhere. Listed
+        // as two because the device flow is the only way in on a machine with no
+        // browser, and a reader on one has no other route to find.
+        Harness::Grok => vec![
+            option("oauth", "Grok account", Some("grok login"), None),
+            option(
+                "device",
+                "Device code",
+                Some("grok login --device-auth"),
+                Some("For a machine with no browser. Finish the sign-in elsewhere."),
+            ),
+        ],
         Harness::Other(_) => Vec::new(),
     }
 }
@@ -429,6 +444,7 @@ async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
         Harness::Codex => codex(cwd).await,
         Harness::Pi => pi(cwd).await,
         Harness::Fx => fx(cwd).await,
+        Harness::Grok => grok().await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -1065,6 +1081,109 @@ async fn codex_set_key(key: &str) -> Result<(), String> {
     })
 }
 
+/// One entry of `~/.grok/auth.json`, keyed by its issuer.
+///
+/// Every other field is deliberately unread, and two of them are why: the record
+/// holds `key` and `refresh_token`, which are the credential itself. Naming only
+/// what the row draws is what keeps them out of this process.
+#[derive(Deserialize)]
+struct GrokCredential {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    first_name: Option<String>,
+    /// `oidc` for the browser and device flows alike.
+    #[serde(default)]
+    auth_mode: Option<String>,
+    #[serde(default)]
+    team_id: Option<String>,
+}
+
+/// grok, read off its own credential file rather than asked.
+///
+/// **There is no `grok auth status`**, and the two routes that could answer both
+/// end at this file: `grok models` prints "You are logged in with grok.com" and
+/// nothing else, and the ACP handshake's `authMethods` carries a `cached_token`
+/// entry whose own description reads "Cached token from ~/.grok/auth.json". Both
+/// cost a child for a subset of what the file holds — and only the file names
+/// *who* is signed in, which is the question this tab exists to answer.
+///
+/// `GROK_HOME` is honoured for the same reason the probes next door run in the
+/// session's own directory: a CLI resolves its config against the environment it
+/// is started in, and a read that ignores it answers for a different install.
+///
+/// No file means signed out, and that is exact here rather than cautious:
+/// `session/new` refuses with `-32000 Authentication required` and **writes
+/// nothing to stderr**, so a Dray session simply could not start.
+async fn grok() -> anyhow::Result<Vec<Account>> {
+    let home = match std::env::var_os("GROK_HOME") {
+        Some(home) => std::path::PathBuf::from(home),
+        None => std::env::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("no home directory to look for ~/.grok in"))?
+            .join(".grok"),
+    };
+
+    let raw = tokio::fs::read_to_string(home.join("auth.json")).await;
+    // An unreadable file is **not** signed out: it may be perfectly good and
+    // merely unreachable for a moment, and telling a reader to sign in again
+    // over a permissions blip sends them to replace a credential that works.
+    let credential: Option<GrokCredential> = match raw {
+        Ok(raw) => serde_json::from_str::<HashMap<String, GrokCredential>>(&raw)
+            .map_err(|err| anyhow::anyhow!("couldn't read grok's credential file: {err}"))?
+            .into_values()
+            .next(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+
+    // An API key is grok's other route and it lives in the reader's own
+    // environment, so there is nothing on disk to read and nothing for Dray to
+    // save. Reported because a machine running on one is signed in and a row
+    // saying otherwise would send the reader to fix nothing.
+    let api_key = std::env::var_os("XAI_API_KEY").is_some_and(|key| !key.is_empty());
+
+    let Some(credential) = credential else {
+        return Ok(vec![Account {
+            provider: None,
+            label: "xAI".to_string(),
+            state: if api_key {
+                AccountState::LoggedIn
+            } else {
+                AccountState::LoggedOut
+            },
+            detail: api_key.then(|| "XAI_API_KEY in this environment".to_string()),
+            auth_type: api_key.then(|| "API key".to_string()),
+            // `grok logout` has nothing to drop, and unsetting somebody's
+            // environment variable is not Dray's to do.
+            can_sign_out: false,
+            can_change_method: auth_options(Harness::Grok, None).len() > 1,
+        }]);
+    };
+
+    // Email first, then the name, then the team — the reader asking this is
+    // nearly always checking they are not on the other account.
+    let detail = [credential.email, credential.first_name, credential.team_id]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+
+    Ok(vec![Account {
+        provider: None,
+        label: "xAI".to_string(),
+        state: AccountState::LoggedIn,
+        detail: (!detail.is_empty()).then_some(detail),
+        auth_type: Some(match credential.auth_mode.as_deref() {
+            // grok's own spelling for both of its browser flows.
+            Some("oidc") | Some("Oidc") => "Grok account".to_string(),
+            Some(other) => other.to_string(),
+            None => "Grok account".to_string(),
+        }),
+        can_sign_out: true,
+        can_change_method: auth_options(Harness::Grok, None).len() > 1,
+    }])
+}
+
 /// Signs one credential out, where the CLI can do it without a terminal.
 ///
 /// Three of the four can: `claude auth logout` and `codex logout` drop the one
@@ -1078,6 +1197,7 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
     let args: Vec<&str> = match harness {
         Harness::ClaudeCode => vec!["auth", "logout"],
         Harness::Codex => vec!["logout"],
+        Harness::Grok => vec!["logout"],
         Harness::Fx => {
             let provider = provider.as_deref().ok_or("Which provider?")?;
             if !login_provider(harness, provider) {

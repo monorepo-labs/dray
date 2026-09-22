@@ -266,6 +266,7 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
         harness::Harness::Fx => harness::fx::models::list().await,
+        harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
         other => models::models_for(other),
     }
@@ -282,6 +283,9 @@ async fn refresh_models() {
     // tables, so dropping the cache alone would still answer from a table. A
     // manual Refresh means "ask fx again", so probe the active provider now.
     harness::fx::models::refresh().await;
+    // grok's is one `initialize` on a throwaway child, so the next read simply
+    // asks again.
+    harness::grok::models::forget();
     harness::codex::models::forget();
 }
 
@@ -405,6 +409,15 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         Harness::Pi => harness::pi::commands::list_commands(cwd).await,
         Harness::Codex => harness::codex::commands::list_commands(cwd).await,
         Harness::Fx => harness::fx::commands::list_commands(cwd).await,
+        // grok's list is the *wire's* — its own built-ins plus every skill it
+        // found, published once a session opens — so it is read out of what a
+        // live session last said rather than probed for. A directory no grok
+        // session has run in answers an error, which the picker reads as a
+        // probe that has not landed: the menu stays shut rather than claiming
+        // grok has no commands. See `harness/grok/commands.rs`.
+        Harness::Grok => harness::grok::commands::list_commands(cwd)
+            .await
+            .map_err(|e| e.to_string())?,
         Harness::Other(_) => Vec::new(),
     })
 }

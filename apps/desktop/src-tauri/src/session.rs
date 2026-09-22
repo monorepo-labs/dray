@@ -465,6 +465,9 @@ impl SessionManager {
         let model_spec = match harness {
             Harness::Pi => crate::harness::pi::models::find(&model).await,
             Harness::Fx => crate::harness::fx::models::find(&model).await,
+            // grok's too: its list rides the handshake, so a model xAI shipped
+            // after this build still spawns.
+            Harness::Grok => crate::harness::grok::models::find(&model).await,
             // Codex's list is the machine's answer too now, with the table
             // behind it — so a model shipped after this build still spawns.
             Harness::Codex => crate::harness::codex::models::find(&model).await,
@@ -920,9 +923,9 @@ impl SessionManager {
                 // completion cannot slip between the check and the enqueue.
                 // `None` means the turn ended under this read: fall through and
                 // start a new one.
-                if matches!(s.stdin, Transport::Fx(_)) {
+                if s.stdin.one_prompt_per_turn() {
                     if let Some(queued) = s
-                        .fx_queue_if_in_flight(prompt, attachment_paths, issues, from.clone())
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone())
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1534,9 +1537,46 @@ pub enum Transport {
     /// fx's connection: JSON-RPC like Codex's, addressed to the session fx
     /// minted. See [`FxSession`](crate::harness::fx::FxSession).
     Fx(crate::harness::fx::FxSession),
+    /// grok's connection: ACP like fx's, addressed to the session id **Dray**
+    /// chose — grok honours `_meta.sessionId`, so there is no minted id to
+    /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
+    Grok(crate::harness::grok::GrokSession),
 }
 
 impl Transport {
+    /// Whether this child takes **one prompt per turn**, with no way to inject
+    /// a second into the one already running.
+    ///
+    /// Both ACP harnesses do, and it is the protocol's own doing rather than a
+    /// choice either made: `session/prompt` is a request that blocks for the
+    /// whole turn, and a second written meanwhile takes over the single id the
+    /// read loop settles the turn on — so the first would never be closed. (fx
+    /// refuses it outright with `-32600 Prompt already in progress`; grok's
+    /// queue is its own and Dray does not drive it.)
+    ///
+    /// So a prompt typed mid-turn is *held* rather than written through, and
+    /// released at the turn's end as one joined prompt — see
+    /// [`flush_one_per_turn`]. Every other transport has a tool boundary to hand
+    /// a batch over at, seconds away, which is why this is a question about the
+    /// transport rather than a flag on the session.
+    pub fn one_prompt_per_turn(&self) -> bool {
+        matches!(self, Transport::Fx(_) | Transport::Grok(_))
+    }
+
+    /// Opens a turn with one prompt, for the transports that take it as a
+    /// request. `None` where this transport writes prompts some other way.
+    ///
+    /// Stated once because the queue path and the ordinary send path both need
+    /// it, and a harness added to one and not the other reads as correct in
+    /// both — the same trap `title_command`'s one match exists to close.
+    pub async fn open_turn(&self, text: &str) -> Option<Result<()>> {
+        match self {
+            Transport::Fx(session) => Some(crate::harness::fx::start_turn(session, text).await),
+            Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
+            _ => None,
+        }
+    }
+
     /// The line-writing pipe, for the paths that only Claude Code has.
     ///
     /// An error rather than a silent no-op: reaching one of those with a
@@ -1546,7 +1586,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -1708,6 +1748,31 @@ impl Session {
                 )
                 .await
             }
+            Harness::Grok => {
+                // The same two refusals fx and pi take, for the same reasons:
+                // grok's `-w` makes a Grove copy under `~/.grok/worktrees` on a
+                // layout of its own, so Dray makes the tree here as it does for
+                // them; and grok's fork is real but eager and needs a child to
+                // make the call on, which no fork path here arranges.
+                if worktree_name.is_some() {
+                    bail!("grok cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("grok sessions cannot be forked yet");
+                }
+
+                crate::harness::grok::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
             // A session some newer build wrote into the shared index. Its
             // transcript still reads and its row still draws — that is what the
             // tolerant read bought — but there is no CLI here to carry it on,
@@ -1800,7 +1865,7 @@ impl Session {
     ///
     /// fx has no injection point, so a prompt for a live turn only ever waits
     /// here for its end; there is no write-through path to take.
-    async fn fx_queue_if_in_flight(
+    async fn queue_if_in_flight(
         &self,
         prompt: &str,
         attachment_paths: &[String],
@@ -1926,6 +1991,14 @@ impl Session {
             return Ok(());
         }
 
+        // grok's is the same request without fx's provider half — one vendor,
+        // so there is nothing for a model to belong to but grok.
+        if let Transport::Grok(session) = &self.stdin {
+            crate::harness::grok::set_model(session, model).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetModel { model: &model.arg }),
@@ -1964,6 +2037,18 @@ impl Session {
     /// `None` is fx's own `auto`, which nothing here can spell back onto the
     /// wire, so it is recorded and left to the next respawn.
     pub async fn set_effort(&mut self, effort: Option<Effort>, app: &AppHandle) -> Result<()> {
+        // grok takes the same config option and needs no `AppHandle`: its
+        // ladder rides the handshake, per model, so the picker learns nothing
+        // from a reply the list has not already told it.
+        if let Transport::Grok(session) = &self.stdin {
+            if let Some(effort) = effort {
+                let model = crate::harness::grok::models::find(&self.model).await;
+                crate::harness::grok::set_effort(session, model.as_ref(), effort).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         let Transport::Fx(session) = &self.stdin else {
             bail!("this harness has no in-place effort switch");
         };
@@ -1997,6 +2082,13 @@ impl Session {
         // the reader reports the stop off that.
         if let Transport::Fx(session) = &self.stdin {
             return crate::harness::fx::cancel(session);
+        }
+
+        // grok's is the same notification. It kills the running *foreground*
+        // tool and answers the prompt `cancelled`; a backgrounded task survives
+        // it, which is settle's problem rather than Stop's.
+        if let Transport::Grok(session) = &self.stdin {
+            return crate::harness::grok::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -2117,6 +2209,17 @@ impl Session {
                     .context("this option carries no outcome to send")?;
                 session.client.respond(*rpc_id, outcome)?;
             }
+            // grok's is the same envelope for a consent, and the **whole**
+            // result for a plan approval — `{"outcome":"approved"}` rather than
+            // a `selected` wrapper — so the button's payload goes back as it was
+            // built and nothing here composes one.
+            (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
             _ => {
                 write_line(
                     self.stdin.lines()?,
@@ -2192,11 +2295,24 @@ impl Session {
                 .with_context(|| format!("no pending permission request {request_id}"))?
         };
 
-        write_line(
-            self.stdin.lines()?,
-            &answer_response(request_id, &pending, &answers),
-        )
-        .await?;
+        // grok asks as a JSON-RPC peer, so the answer names the id it asked
+        // with — and its result is an **internally tagged enum** rather than
+        // Claude Code's "allow with the answers folded into the tool's own
+        // input". Every shape without that `outcome` tag is refused outright,
+        // which fails the tool; see `grok::permissions::question_answer`.
+        match (&self.stdin, &pending.reply) {
+            (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
+                let result = crate::harness::grok::permissions::question_answer(&answers);
+                session.client.respond(*rpc_id, result)?;
+            }
+            _ => {
+                write_line(
+                    self.stdin.lines()?,
+                    &answer_response(request_id, &pending, &answers),
+                )
+                .await?;
+            }
+        }
 
         let decision = dialog_decided(
             &self.id,
@@ -2236,6 +2352,13 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // grok keeps its own session store under `~/.grok/sessions` and writes
+        // its summary on close, so it is asked to leave rather than killed.
+        if let Transport::Grok(session) = &self.stdin {
+            crate::harness::grok::shutdown(&mut self.child, session).await;
             return Ok(());
         }
 
@@ -2446,8 +2569,8 @@ async fn deliver_prompt(
     // fx takes a prompt as a request that blocks for the turn, so the write
     // is the send and the reader settles the answer. Images not wired: the
     // Codex provider answered `refused` to one on capture.
-    if let Transport::Fx(session) = transport {
-        crate::harness::fx::start_turn(session, &text).await?;
+    if let Some(sent) = transport.open_turn(&text).await {
+        sent?;
         return Ok(text);
     }
     let stdin = transport.lines()?;
@@ -2545,7 +2668,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
         // A tool boundary is a place to hand over only where the child has a
         // buffer to absorb the prompt into; fx's next prompt is its next turn.
         AgentEventPayload::ToolCallStarted { .. } | AgentEventPayload::ToolCallCompleted { .. } => {
-            !matches!(ctx.flush_transport, Transport::Fx(_))
+            !ctx.flush_transport.one_prompt_per_turn()
         }
         _ => false,
     };
@@ -2584,7 +2707,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
-        let reserve = matches!(ctx.flush_transport, Transport::Fx(_))
+        let reserve = ctx.flush_transport.one_prompt_per_turn()
             && matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
             && !ctx.queued.lock().await.is_empty();
         if reserve {
@@ -2731,8 +2854,8 @@ pub async fn flush_queued(
     // fx drains one prompt per turn and reserves the next in `ingest`, so its
     // release is a two-lock affair the batch model has no answer to. Its own
     // path.
-    if matches!(transport, Transport::Fx(_)) {
-        flush_fx(session_id, harness, queued, seq, events, transport, status, app).await;
+    if transport.one_prompt_per_turn() {
+        flush_one_per_turn(session_id, harness, queued, seq, events, transport, status, app).await;
         return;
     }
 
@@ -2792,7 +2915,7 @@ pub async fn flush_queued(
 ///
 /// Order is status -> queued, as everywhere; nothing holds queued while
 /// awaiting status, so no deadlock.
-async fn flush_fx(
+async fn flush_one_per_turn(
     session_id: &str,
     harness: Harness,
     queued: &QueuedMessages,
@@ -2863,8 +2986,11 @@ async fn flush_fx(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        if let (false, Transport::Fx(session)) = (texts.is_empty(), transport) {
-            match crate::harness::fx::start_turn(session, &texts.join("\n\n")).await {
+        if let (false, Some(sent)) = (
+            texts.is_empty(),
+            transport.open_turn(&texts.join("\n\n")).await,
+        ) {
+            match sent {
                 Ok(()) => return,
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");

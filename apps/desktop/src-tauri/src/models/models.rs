@@ -150,6 +150,12 @@ pub fn default_model_for(harness: Harness) -> Option<ModelId> {
         // Multi-provider, both of them, so any constant here might name a model
         // the reader has no key for. Their own settings already say.
         Harness::Pi | Harness::Fx => None,
+        // Single-vendor, unlike the two above, so a constant here names a model
+        // every signed-in reader has. The list is still a probe — xAI ships
+        // models faster than Dray does — and `grok::models::default_model`
+        // checks this against what the installed CLI reports, the same guard
+        // Codex's default takes.
+        Harness::Grok => Some(ModelId::new("grok-4.7")),
         // No list to default out of, and nothing will spawn for it anyway, so
         // there is no model to name — the same `None` pi takes, for a different
         // reason.
@@ -383,7 +389,7 @@ pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => codex_models(),
-        Harness::Pi | Harness::Fx => Vec::new(),
+        Harness::Pi | Harness::Fx | Harness::Grok => Vec::new(),
         // Empty rather than a guess: this build cannot say what that harness
         // runs, and offering Claude's list would let a picker set a model the
         // session's own agent has never heard of.
@@ -411,7 +417,7 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_models().iter().any(|m| &m.id == id),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
-        Harness::Pi | Harness::Fx => find_model(id).is_none(),
+        Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
         // Nothing runs on a harness this build cannot spawn, and `false` is
         // the safe direction: it refuses a model rather than recording one
         // against a session that could never use it.
@@ -452,7 +458,7 @@ pub fn id_for_arg(alias: &str, harness: Harness) -> Option<ModelId> {
     }
 
     let id = match harness {
-        Harness::Pi | Harness::Fx => ModelId::new(alias),
+        Harness::Pi | Harness::Fx | Harness::Grok => ModelId::new(alias),
         _ => claude_models()
             .into_iter()
             .chain(every_codex_model())
@@ -742,13 +748,21 @@ mod tests {
         assert_eq!(id_for_arg("", Harness::Pi), None);
     }
 
-    /// pi names no default, and the other two must not lose theirs to the
-    /// `Option` that makes room for it.
+    /// The multi-provider pair name no default, and the rest must not lose
+    /// theirs to the `Option` that makes room for it.
     #[test]
-    fn only_pi_has_no_default_model() {
+    fn only_the_multi_provider_harnesses_have_no_default_model() {
         assert_eq!(default_model_for(Harness::ClaudeCode), Some(id("opus")));
         assert_eq!(default_model_for(Harness::Codex), Some(id("gpt56_sol")));
+        assert_eq!(default_model_for(Harness::Grok), Some(id("grok-4.7")));
         assert_eq!(default_model_for(Harness::Pi), None);
+        assert_eq!(default_model_for(Harness::Fx), None);
+
+        // grok's default is in no table `find_model` holds — its list is a
+        // probe — so it is checked on the one thing that still has to hold,
+        // which is that grok can run it.
+        let grok = default_model_for(Harness::Grok).unwrap();
+        assert!(runs_on(&grok, Harness::Grok));
 
         for harness in [Harness::ClaudeCode, Harness::Codex] {
             let default = default_model_for(harness).unwrap();

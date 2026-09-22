@@ -282,6 +282,14 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // the probe that discovers the list lands. `models.rs` says why there
         // is no constant to reach for here.
         Harness::Pi => bail!("pi has no cheap model to title with yet"),
+        // **grok titles itself, for free, and this is not a gap.** Its own
+        // title is written by the model out of band and arrives as
+        // `session_info_update` mid-turn — measured at 0.22–0.24s from the last
+        // token to the prompt's reply, so nothing waits on it the way fx's six
+        // seconds did. `grok::note_title` is what records it, and spending a
+        // second child to write a title grok has already written would be one
+        // model call for an answer that is on the wire.
+        Harness::Grok => bail!("grok titles its own sessions on the wire"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
             let mut cmd = Command::new(&bin);

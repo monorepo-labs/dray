@@ -15,6 +15,9 @@ pub mod pi;
 #[path = "fx/fx.rs"]
 pub mod fx;
 
+#[path = "grok/grok.rs"]
+pub mod grok;
+
 pub mod rpc;
 
 use serde::{Deserialize, Serialize};
@@ -324,22 +327,32 @@ mod capability_tests {
         }
     }
 
-    /// fx is the one CLI with an in-place effort switch —
-    /// `session/set_config_option {configId: "effort"}`, verified live — so
-    /// every other effort change replaces the child. Stated because `true`
-    /// here silently drops the change on a harness whose wire cannot carry it.
+    /// The two ACP harnesses are the ones with an in-place effort switch —
+    /// `session/set_config_option`, verified live against each — so every other
+    /// effort change replaces the child. Stated because `true` here silently
+    /// drops the change on a harness whose wire cannot carry it.
     #[test]
-    fn only_fx_applies_effort_in_place() {
-        assert!(Harness::Fx.caps().applies_effort_in_place);
+    fn only_the_acp_harnesses_apply_effort_in_place() {
+        const IN_PLACE: [Harness; 2] = [Harness::Fx, Harness::Grok];
 
         for harness in Harness::ALL {
-            if harness != Harness::Fx {
-                assert!(
-                    !harness.caps().applies_effort_in_place,
-                    "{harness:?} claims an effort route its CLI does not have"
-                );
-            }
+            assert_eq!(
+                harness.caps().applies_effort_in_place,
+                IN_PLACE.contains(&harness),
+                "{harness:?} disagrees with its CLI about the effort route"
+            );
         }
+    }
+
+    /// grok speaks the same protocol as fx and answers the stance question the
+    /// other way, which is the pair worth pinning: `session/set_mode` is inert
+    /// on grok — `{}` for every mode id, legal or invented, with a card still
+    /// raised afterwards — so a stance change there has to replace the child.
+    #[test]
+    fn grok_moves_its_model_in_place_and_its_stance_by_respawn() {
+        let caps = Harness::Grok.caps();
+        assert!(caps.applies_model_in_place);
+        assert!(!caps.applies_permission_in_place);
     }
 
     /// Each answer was captured, not chosen, and each is a different shape —
@@ -352,6 +365,9 @@ mod capability_tests {
         assert_eq!(Harness::Codex.caps().fast_mode, FastMode::OnSpawn);
         assert_eq!(Harness::Fx.caps().fast_mode, FastMode::AtCreation);
         assert_eq!(Harness::Pi.caps().fast_mode, FastMode::Unsupported);
+        // grok's fast tier is a model of its own (`grok-4.7-build-fast`), so
+        // the picker draws it as a row rather than as a switch.
+        assert_eq!(Harness::Grok.caps().fast_mode, FastMode::Unsupported);
         assert!(!Harness::Pi.caps().fast_mode.offered());
         assert!(Harness::Fx.caps().fast_mode.offered());
     }
@@ -451,6 +467,7 @@ pub enum Harness {
     Codex,
     Pi,
     Fx,
+    Grok,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -505,7 +522,13 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 4] = [Harness::ClaudeCode, Harness::Codex, Harness::Pi, Harness::Fx];
+    pub const ALL: [Harness; 5] = [
+        Harness::ClaudeCode,
+        Harness::Codex,
+        Harness::Pi,
+        Harness::Fx,
+        Harness::Grok,
+    ];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
     /// index entry holds.
@@ -524,6 +547,7 @@ impl Harness {
             Harness::Codex => "codex".to_string(),
             Harness::Pi => "pi".to_string(),
             Harness::Fx => "fx".to_string(),
+            Harness::Grok => "grok".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -726,6 +750,38 @@ impl Harness {
                 forkable: false,
                 fork_needs_cli: false,
             },
+            // ACP again, and the split from fx one row up is the whole of what
+            // grok's own wire says. `session/set_config_option` moves model and
+            // effort on a running child, both verified live — the reply
+            // restates the session's whole option list and a `session/resume`
+            // in a fresh process comes back on the level that was set.
+            //
+            // The stance is the opposite answer, and it is measured rather than
+            // cautious: `session/set_mode` answers `{}` for `bypassPermissions`,
+            // for grok's own `always-approve` and for `nonsense-mode` alike and
+            // changes nothing — a shell command still raised a card after it.
+            // `_meta.permissionMode` carrying Claude's enum is swallowed the
+            // same way. What does move it is `/always-approve on` sent as
+            // *prompt text*, which costs a bubble in the transcript for a
+            // setting change, so a stance change is a respawn here.
+            //
+            // Not forkable in v1. `_x.ai/session/fork` exists and is eager —
+            // one call copies the conversation, Dray's own new id honoured —
+            // but it needs a child to make the call on, which no other fork
+            // path here has to arrange.
+            Harness::Grok => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
+                applies_permission_in_place: false,
+                // `grok-4.7-build-fast` is a *model*, listed beside its
+                // ordinary twin and picked like one, so there is no switch to
+                // draw — the Vercel gateway's `-fast` ids make the same bargain.
+                fast_mode: FastMode::Unsupported,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -750,6 +806,9 @@ impl Harness {
             Harness::Codex => "Codex",
             Harness::Pi => "pi",
             Harness::Fx => "fx",
+            // xAI's own name for the product, which is what its docs and its
+            // installer call it — `grok` alone is the chat assistant.
+            Harness::Grok => "Grok Build",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -779,6 +838,7 @@ impl Harness {
             Harness::Pi => "curl -fsSL https://pi.dev/install.sh | sh",
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
+            Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | sh",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -796,6 +856,7 @@ impl Harness {
             Harness::Codex => "https://learn.chatgpt.com/docs/codex/cli",
             Harness::Pi => "https://pi.dev/docs/latest",
             Harness::Fx => "https://fx.sh/docs/getting-started/installation",
+            Harness::Grok => "https://docs.x.ai/build/quickstart",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -823,6 +884,9 @@ impl Harness {
             // `fx login [vercel|codex|grok]` — bare, it asks which. Verified
             // against `fx --help`.
             Harness::Fx => "fx login",
+            // A browser flow against `auth.x.ai`, or `--device-auth` where
+            // there is no browser to open. The plain form is the one to name.
+            Harness::Grok => "grok login",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -842,6 +906,7 @@ impl Harness {
             Harness::Codex => &["login"],
             Harness::Pi => &[],
             Harness::Fx => &["login"],
+            Harness::Grok => &["login"],
             Harness::Other(_) => &[],
         }
     }
@@ -865,7 +930,7 @@ impl Harness {
             // Per provider too, and the command asks which. A working Codex
             // login says nothing about fx: it keeps its own store.
             Harness::Fx => Some("and pick the provider it asks for"),
-            Harness::ClaudeCode | Harness::Codex | Harness::Other(_) => None,
+            Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => None,
         }
     }
 }

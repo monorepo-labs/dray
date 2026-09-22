@@ -33,6 +33,9 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   pi: UNSET_MODEL,
   // Multi-provider like pi, and its settings file already names a model.
   fx: UNSET_MODEL,
+  // One vendor and a list this build can name, so the bare alias does what it
+  // does for Claude Code: follow whatever xAI ship under it.
+  grok: "grok-4.7",
 };
 
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
@@ -198,7 +201,7 @@ export function usableEffort(
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx"];
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx", "grok"];
 
 /// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
 /// first, the same place the picker parks its thumb.

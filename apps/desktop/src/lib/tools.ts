@@ -151,6 +151,24 @@ const TOOL_VERBS: Record<string, Verbs> = {
   // fx truncates a long tool result and hands the model a handle to query for
   // the rest, so this is the agent going back for what it was not shown.
   read_tool_result: ["Reading output", "Read output", "result"],
+
+  // grok's own, snake_cased too. `read_file`, `write`, `grep` and
+  // `spawn_subagent`'s neighbour `subagent` are already above and shared
+  // deliberately — one act, one label, whichever agent is running.
+  //
+  // Read off the captures rather than grok's docs: these are the names its
+  // `_meta["x.ai/tool"].name` actually carries, which is what the mapper keys
+  // the row on. A name absent here falls through to itself verbatim, so a tool
+  // this list has not met reads as its wire spelling rather than as nothing.
+  run_terminal_command: ["Bash", "Bash", "command"],
+  search_replace: ["Editing", "Edited", "file"],
+  list_dir: ["Listing", "Listed", "directory"],
+  todo_write: ["Planning", "Planned", "task list"],
+  ask_user_question: ["Asking", "Asked", "question"],
+  // Both halves of one tool: it fetches whatever a backgrounded command or a
+  // delegated child has written since it was last read.
+  get_command_or_subagent_output: ["Reading output", "Read output", "output"],
+  spawn_subagent: ["Delegating", "Delegated", "task"],
 };
 
 /// What a delegated run was asked to do, and what it was asked to do it with.
