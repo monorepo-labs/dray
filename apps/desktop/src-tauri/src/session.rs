@@ -139,24 +139,6 @@ pub struct SendOutcome {
 ///
 /// A **turn in flight** refuses both. There is nothing to recover into while
 /// the child is mid-call, and a prompt arriving then is queued below instead.
-/// Whether the harness holding this session's conversation can still be told
-/// where to find it — the question [`SessionManager::fork`] asks before it
-/// writes anything.
-///
-/// grok is the one that can answer no. It addresses a conversation by session
-/// id **and directory**, filing it under
-/// `<GROK_HOME>/sessions/<cwd-encoded>/<id>/`, and removing a worktree rewrites
-/// the entry's `cwd` to the project root — which is not where grok put it.
-/// Claude Code scans `~/.claude/projects` for `<id>.jsonl` and pi's resume
-/// handle is a file copied by id, so neither is addressed by directory and a
-/// relocated session forks on both.
-///
-/// Split out so the rule is testable with no index to write into, the reading
-/// `repoint_events` takes next door.
-fn fork_source_is_addressable(item: &SessionIndexItem) -> bool {
-    !(item.harness == Harness::Grok && item.worktree_removed)
-}
-
 fn respawn_needed(
     auth_failed: bool,
     turn_in_flight: bool,
@@ -1245,35 +1227,38 @@ impl SessionManager {
             }
         }
 
-        // **grok addresses a conversation by session id *and directory*, and a
-        // relocated session no longer knows the directory it ran in.** grok
-        // files a session under `<GROK_HOME>/sessions/<cwd-encoded>/<id>/`, so
-        // `_x.ai/session/fork` takes both — and removing a worktree rewrites
-        // `cwd` to the project root, which is not where grok put it. The call
-        // then answers `No such file or directory`, naming neither.
+        // **grok addresses a conversation by session id *and directory*, so
+        // "can this be forked" is a question only grok's own store answers.**
+        // Dray's index stops naming the right directory the moment a worktree
+        // is removed — `cwd` is rewritten to the project root, where grok never
+        // put anything — and `worktree_removed` cannot stand in for the
+        // question either, being set from a *shape* whose own false positive is
+        // a project-root session that never moved. So the store is asked, which
+        // both refuses the sessions grok has genuinely lost and keeps the ones
+        // a flag would have refused wrongly.
         //
-        // Refused *here*, with everything else that has to be known before a
-        // row exists. Left to the first send it is the exact failure the
-        // `forkable` check above is placed early to avoid: log copied, entry
-        // appended, and a sidebar row holding a whole conversation that can
-        // never be carried on, failing identically on every retry.
+        // Asked *here*, with everything else that has to be known before a row
+        // exists. Left to the first send it is the exact failure the `forkable`
+        // check above is placed early to avoid: log copied, entry appended, and
+        // a sidebar row holding a whole conversation that can never be carried
+        // on, failing identically on every retry.
+        //
+        // **A store this build cannot read is not a refusal.** `Err` means no
+        // store or a layout that moved, and refusing on it would take fork away
+        // from every grok session at once the day grok rearranges its files —
+        // where letting it through costs, at worst, the late failure this is
+        // here to avoid. `fork_conversation` reads the same answer again for
+        // the address itself.
         //
         // grok's alone. Claude Code finds its transcript by scanning
         // `~/.claude/projects` for `<id>.jsonl` and pi's resume handle is a
-        // file copied by id, so neither is addressed by directory and both
-        // fork a relocated session fine.
-        //
-        // The cost is stated rather than worked around: the old address is
-        // *probably* reconstructible, since `branch` survives removal as
-        // `worktree-<name>` and the pre-removal `cwd` was that name's worktree
-        // path. Probably is the problem — that field is kept for the PR tab, a
-        // branch renamed by hand makes it a wrong address rather than an
-        // absent one, and a wrong address fails exactly like a right one until
-        // the send.
-        if !fork_source_is_addressable(&parent) {
+        // file copied by id, so neither is addressed by directory.
+        if parent.harness == Harness::Grok
+            && matches!(crate::harness::grok::stored_cwd(session_id).await, Ok(None))
+        {
             bail!(
-                "grok files a conversation under the directory it ran in, and this session's \
-                 worktree is gone — there is nothing left for grok to fork"
+                "grok has no record of this conversation — it files one under the directory it \
+                 ran in, and that directory is gone"
             );
         }
 
@@ -3628,55 +3613,6 @@ mod tests {
         );
     }
 
-    /// A settled worktree session is the one grok fork that cannot work, and
-    /// this is what keeps it refused at the press.
-    ///
-    /// Removing a worktree rewrites `cwd` to the project root, and grok files a
-    /// conversation under the directory it ran in — so the address the fork
-    /// call would carry names a session grok has no record of. Left to the
-    /// first send it is the failure `SessionManager::fork`'s early `forkable`
-    /// check exists to prevent: log copied, row appended, and a whole
-    /// conversation in the sidebar that can never be carried on, failing the
-    /// same way on every retry.
-    ///
-    /// The other two are addressed by id and must **not** be caught by it.
-    #[test]
-    fn a_relocated_session_is_forkable_unless_grok_holds_it() {
-        let settled = |harness| {
-            let mut item = SessionIndexItem::new(
-                "s",
-                harness,
-                "/p",
-                "/p",
-                None,
-                None,
-                "add the PR panel",
-                ModelId::new("grok-4.7"),
-                None,
-                ApprovalPolicy::Auto,
-                false,
-                None,
-            );
-            item.worktree_removed = true;
-            item
-        };
-
-        assert!(
-            !fork_source_is_addressable(&settled(Harness::Grok)),
-            "grok would be handed the project root as the address of a conversation filed elsewhere"
-        );
-        for harness in [Harness::ClaudeCode, Harness::Pi] {
-            assert!(
-                fork_source_is_addressable(&settled(harness)),
-                "{harness:?} finds its conversation by id, so relocation costs it nothing"
-            );
-        }
-
-        // The flag is the whole question — an ordinary grok session forks.
-        let mut live = settled(Harness::Grok);
-        live.worktree_removed = false;
-        assert!(fork_source_is_addressable(&live));
-    }
 
     /// Only a finished-and-unread session clears on read; selecting a running
     /// one must not stop it reading as busy. Unread is the same rule mirrored:

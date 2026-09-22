@@ -379,6 +379,110 @@ async fn open_session(
     Ok(answer)
 }
 
+/// The directory grok filed `session_id` under, read out of grok's own store.
+///
+/// **Asked rather than inferred, and that is the whole point of it.** grok
+/// addresses a conversation by session id *and* directory, and Dray's index
+/// stops naming the right directory the moment a worktree is removed — `cwd`
+/// is rewritten to the project root, where grok never put anything. Guessing
+/// from `branch` was the first shape and it is a guess: that field is kept for
+/// the PR tab, and a renamed branch makes it a **wrong** address rather than an
+/// absent one, which fails exactly like a right one until the send. Refusing on
+/// `worktree_removed` was the second, and over-refused — `mark_relocated` sets
+/// that flag from a *shape* and its own doc names the false positive, an
+/// ordinary project-root session sitting on a `worktree-` branch, whose `cwd`
+/// never moved and whose conversation grok can still find.
+///
+/// The store answers both exactly. `<GROK_HOME>/sessions/<cwd-encoded>/<id>/`
+/// is the layout, so the directory holding `<id>` **is** the address, and
+/// reading it back needs only percent-*decoding*, which is unambiguous —
+/// encoding is the direction with a character set to get wrong.
+///
+/// Three answers, and the third is what keeps this safe: `Ok(Some)` is the
+/// address, `Ok(None)` is grok looked at and has no record, and `Err` is "could
+/// not look" — no store, or a layout this build does not recognise. A caller
+/// must not refuse on `Err`, or a grok that moved its store would take fork
+/// away from every session at once.
+pub async fn stored_cwd(session_id: &str) -> Result<Option<String>> {
+    let home = match std::env::var("GROK_HOME") {
+        Ok(home) if !home.is_empty() => std::path::PathBuf::from(home),
+        _ => dirs_home().context("no home directory")?.join(".grok"),
+    };
+
+    stored_cwd_under(&home.join("sessions"), session_id).await
+}
+
+/// The scan itself, taking the store root so a test can build one — the same
+/// split `mark_relocated` makes to be testable without a real `index.json`.
+async fn stored_cwd_under(
+    sessions: &std::path::Path,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let mut entries = tokio::fs::read_dir(sessions)
+        .await
+        .context("couldn't read grok's session store")?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        // `session_search.sqlite` sits beside the directories, so the check is
+        // on the child rather than on this entry being a directory — one probe
+        // instead of two, and a file cannot hold a session id anyway.
+        if !tokio::fs::try_exists(entry.path().join(session_id))
+            .await
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        return Ok(Some(decode_store_dir(&entry.file_name().to_string_lossy())));
+    }
+
+    Ok(None)
+}
+
+/// The reader's home directory, by the one route that does not need a crate.
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+/// Percent-decodes one of grok's session-store directory names back into the
+/// path it stands for.
+///
+/// Hand-rolled for the reason `is_upload`'s host check next door is: the whole
+/// job is a dozen lines and the decode direction has no character set to
+/// disagree about — `%XX` or a literal byte, nothing else. grok leaves `.`,
+/// `-` and `_` unescaped and escapes `/` as `%2F`, but nothing here depends on
+/// which set it chose, which is exactly why this reads rather than reproduces
+/// it.
+///
+/// A stray `%` not followed by two hex digits is kept verbatim rather than
+/// dropped: this names a directory that already exists, so the only useful
+/// failure is one that still round-trips.
+fn decode_store_dir(name: &str) -> String {
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let pair = (i + 2 < bytes.len())
+            .then(|| std::str::from_utf8(&bytes[i + 1..i + 3]).ok())
+            .flatten()
+            .filter(|_| bytes[i] == b'%')
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+
+        match pair {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// What `_x.ai/session/fork` takes. Its own function because every one of the
 /// four names is measured off the wire and a wrong one fails *at the fork*,
 /// with `-32602 missing field`, on a send the reader has already made.
@@ -436,10 +540,16 @@ async fn fork_conversation(
     session_id: &str,
     session_cwd: &str,
 ) -> Result<()> {
-    let source_cwd = crate::store::get_session_index_item(parent)
-        .await?
-        .map(|item| item.cwd)
-        .with_context(|| format!("can't fork {parent} — Dray has no record of it"))?;
+    // grok's own answer first, the index second. They agree for every session
+    // that still has the tree it ran in, and where they differ grok is right by
+    // construction — the store is what the address addresses.
+    let source_cwd = match stored_cwd(parent).await {
+        Ok(Some(cwd)) => cwd,
+        _ => crate::store::get_session_index_item(parent)
+            .await?
+            .map(|item| item.cwd)
+            .with_context(|| format!("can't fork {parent} — Dray has no record of it"))?,
+    };
 
     let answer = client
         .request(
@@ -1148,6 +1258,68 @@ mod tests {
         // `sourceWorkspaceDir` were all accepted with no error and no effect,
         // so an extra key here would read as doing something.
         assert_eq!(tree.as_object().expect("an object").len(), 4);
+    }
+
+    /// The decode is what turns grok's store into an answer about addresses,
+    /// so it is held against names read off a real one.
+    ///
+    /// grok escapes `/` and leaves `.`, `-` and `_` alone, and **nothing here
+    /// may come to depend on that set** — the whole reason this reads the
+    /// directory rather than reproducing the encoder is that the encoder's
+    /// character set is grok's to change and the decode's is not.
+    #[test]
+    fn a_store_directory_decodes_to_the_path_it_stands_for() {
+        assert_eq!(
+            decode_store_dir(
+                "%2FUsers%2Fyogesh%2FDocuments%2Fade%2F.claude%2Fworktrees%2Fgentle-emerald-harbor"
+            ),
+            "/Users/yogesh/Documents/ade/.claude/worktrees/gentle-emerald-harbor"
+        );
+        assert_eq!(decode_store_dir("%2Ftmp%2Fgrok-probe%2Fws5"), "/tmp/grok-probe/ws5");
+        // Lower-case hex and a space, neither seen in a capture and both legal.
+        assert_eq!(decode_store_dir("%2fa%20b"), "/a b");
+
+        // A `%` that opens nothing is kept, since this names a directory that
+        // exists: the only useful failure is one that still round-trips.
+        for stray in ["100%", "%zz", "%2", "%"] {
+            assert_eq!(decode_store_dir(stray), stray);
+        }
+    }
+
+    /// The three answers, against a store built to look like grok's.
+    ///
+    /// `Err` is the one worth pinning: a store that is not there reads as
+    /// "could not look", never as "no record", because `SessionManager::fork`
+    /// refuses on the second and a grok that rearranged its files would
+    /// otherwise take Fork away from every session at once.
+    #[tokio::test]
+    async fn the_store_answers_where_a_session_was_filed() {
+        let root = std::env::temp_dir().join(format!("dray-grokstore-{}", uuid::Uuid::now_v7()));
+        let sessions = root.join("sessions");
+        let filed = "/Users/x/Documents/ade/.claude/worktrees/gentle-emerald-harbor";
+        let encoded = "%2FUsers%2Fx%2FDocuments%2Fade%2F.claude%2Fworktrees%2Fgentle-emerald-harbor";
+
+        assert!(
+            stored_cwd_under(&sessions, "any").await.is_err(),
+            "a store that cannot be read is not a store with no record in it"
+        );
+
+        std::fs::create_dir_all(sessions.join(encoded).join("the-id")).expect("a store");
+        // The sqlite file grok keeps beside the directories, which the scan
+        // walks straight past.
+        std::fs::write(sessions.join("session_search.sqlite"), b"").expect("a file");
+
+        assert_eq!(
+            stored_cwd_under(&sessions, "the-id").await.expect("readable"),
+            Some(filed.to_string())
+        );
+        assert_eq!(
+            stored_cwd_under(&sessions, "another-id").await.expect("readable"),
+            None,
+            "looked, and grok holds nothing under that id"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// grok's fork is the eager one and still rides the first send, which is
