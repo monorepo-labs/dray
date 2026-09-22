@@ -4,7 +4,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Working practices
 
-**Product work = Linear issue, before first edit.** Feature, bug fix, UX change, refactor. Plan freely without one; create through Linear MCP before code land. Existing issue = use that one.
+**Product work = GitHub issue, before first edit.** Feature, bug fix, UX change, refactor. Plan freely without one; `gh issue create` before code land. Existing issue = use that one.
 
 **Housekeeping take no issue.** CLAUDE.md, plan note, tooling config — thing changing how we work, not what ship. Issue there = noise.
 
@@ -12,17 +12,17 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Description over ~1000 character open with `## TLDR for human`, closed by `---`.** One line per thing worked on, even when only one. Shorter description need none.
 
-**Status:** start → `In Progress`. After that, leave it — GitHub integration move issue to `In Review` on PR open and `Done` on merge. **Exception: work pushed straight to `main`.** No PR = nothing for integration to read, so set `Done` yourself.
-
-**PR carry issue id so Linear link itself.** Body (`Fixes DRA-123`) or branch name — integration read both. Worktree branch = `worktree-<name>` minted by CLI, so body = reliable slot. Id = what arm the whole status rule above; PR without one leave issue sitting `In Progress` forever.
+**Status = open or closed, and the PR is what close it.** `Fixes #123` in the PR body, which GitHub read on merge. Body = the only slot: worktree branch is `worktree-<name>` minted by the CLI and carry no id, unlike the tracker this replaced. **Exception: work pushed straight to `main`.** No PR = nothing to read, so `gh issue close` yourself.
 
 **PR nobody need review carry `no-review` label.** Copy tweak, doc, prompt wording, config. Add at open (`gh pr create --label no-review`), since review fire on open. Anything touching behaviour = no label.
 
 **Default road = work → PR → stop.** Greptile review every PR on open, so spawn no reviewer session. Open ready, not draft — Greptile skip draft, so a draft sit unreviewed till somebody ping `@greptile review` by hand.
 
-**One team, `Dray`. Prefix `DRA-`. Assign every issue to `yogesh`.**
+**One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
-Linear MCP not connected → say so, then carry on with the work. Tell reader at the end which issue still want creating.
+**A session working an issue link it**: `dray issue link monorepo-labs/dray#255 --title "<title>" --url "<url>"`. Identifier is always `owner/repo#123` — a bare `#123` is refused on purpose, a number alone naming no repository. That is the app's own rule about its GitHub tracker and it applies to this repo's own work too.
+
+`gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
 **Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history.
 
@@ -715,6 +715,8 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 **`session/resume` after it, never `session/load`, and the difference is the transcript.** `load` replays the copied conversation back as `session/update`s — `user_message_chunk`, `agent_thought_chunk`, `agent_message_chunk`, measured — where `resume` sends nothing but `available_commands_update`. Dray's own copied log is what the fork's transcript draws and grok's copy is what the model remembers, so the two halves are wanted and a `load` would draw the parent's turns a second time on top of the log. Which is why the log copy stays for grok rather than being left to the CLI, the same division Claude Code makes.
 
 **`sourceCwd` is required and `newCwd` is what the two menu items differ by.** grok files a session under `<GROK_HOME>/sessions/<cwd-encoded>/<id>/`, so the directory is half the address — and pointing `newCwd` at the tree `send_msg` made is the whole of forking into a worktree, since the call carries **no worktree flag**: `worktree`, `useWorktree`, `sessionKind` and `sourceWorkspaceDir` are every one of them swallowed with no error. The tree is Dray's by the Codex/pi route, grok having no usable `-w`. Nothing in the reply tells a key it understood from one it swallowed, so `fork_params` is pinned by test — a wrong name fails as `-32602 missing field` at the fork, on a send the reader has already made.
+
+**A settled grok session cannot be forked, and the refusal is at the press.** grok addresses a conversation by session id **and directory**, and removing a worktree rewrites the entry's `cwd` to the project root — which is not where grok filed it, so the call would answer `No such file or directory` naming neither. `fork_source_is_addressable` turns that into a refusal before the log is copied, since left to the first send it is exactly what the early `forkable` check exists to prevent: a row holding a whole conversation it can never carry on, failing identically on every retry. grok's alone — Claude Code scans `~/.claude/projects` for `<id>.jsonl` and pi's handle is a file copied by id, so both fork a relocated session fine. The old address is *probably* reconstructible, `branch` surviving removal as `worktree-<name>` and the pre-removal `cwd` being that name's tree, and probably is the problem: that field is kept for the PR tab, a branch renamed by hand makes it a **wrong** address rather than an absent one, and a wrong one fails exactly like a right one until the send.
 
 **A lazy fork copies what the parent holds *then*, not what it held when the reader asked**, and Claude Code's has the same window. The app's half is taken at the press and the CLI's at the first send, so a parent prompted again in between is forked with that turn in it while the fork's transcript, copied earlier, does not show it. Named rather than fixed: closing it means forking eagerly, which is the child-per-fork this shape exists to avoid.
 
