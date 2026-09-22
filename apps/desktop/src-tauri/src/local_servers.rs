@@ -96,6 +96,27 @@ pub(crate) fn descendants(root: u32) -> HashSet<u32> {
     set
 }
 
+/// SIGKILLs everything under `root`, leaving `root` itself to its owner.
+///
+/// Read off the walk and signalled while the parent is still alive: a dead
+/// parent's children are reparented and the walk loses them. The one statement
+/// of that, so the two callers cannot drift — [`Session::kill_tree`] has a
+/// `Session` to consume where a spawn that failed before one existed has only
+/// a `Child`, and an agent left half-started is exactly when its MCP servers
+/// are already running.
+///
+/// [`Session::kill_tree`]: crate::session::Session::kill_tree
+pub(crate) async fn kill_descendants(root: u32) {
+    let tree = tokio::task::spawn_blocking(move || descendants(root))
+        .await
+        .unwrap_or_default();
+    for pid in tree.into_iter().filter(|&p| p != root) {
+        // ponytail: a process group set at spawn would make this one signal
+        // with no walk; four spawn sites to change if this bites.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
 /// `(pid, process name, port)` for every TCP listener, via lsof's machine
 /// format: one field per line, `p` opening a process and `n` naming a socket.
 fn listening() -> Vec<(u32, String, u16)> {

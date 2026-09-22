@@ -225,6 +225,18 @@ pub async fn init(
         Err(error) => {
             // Post-spawn, so the child is running with nobody left to talk to
             // it. A `Child` is not reaped on drop.
+            //
+            // The whole tree, not the child alone: `initialize` has already
+            // returned by here, and grok starts every MCP server the reader has
+            // configured off its own `~/.grok`, `.claude` and `.cursor` config —
+            // six of them on the machine this was measured on. Killing the
+            // parent alone reparents those to launchd, and a failure that
+            // repeats per send (an expired login is the ordinary one) leaks the
+            // set again every time. No `Session` exists yet, which is why this
+            // cannot go through `Session::kill_tree`.
+            if let Some(root) = child.id() {
+                crate::local_servers::kill_descendants(root).await;
+            }
             let _ = child.kill().await;
             return Err(error);
         }

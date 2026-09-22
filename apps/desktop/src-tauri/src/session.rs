@@ -2397,14 +2397,7 @@ impl Session {
     /// anything spawned during a pi or fx graceful exit is missed.
     pub async fn kill_tree(self) -> Result<()> {
         if let Some(root) = self.child.id() {
-            let tree = tokio::task::spawn_blocking(move || crate::local_servers::descendants(root))
-                .await
-                .unwrap_or_default();
-            for pid in tree.into_iter().filter(|&p| p != root) {
-                // ponytail: a process group set at spawn would make this one
-                // signal with no walk; four spawn sites to change if this bites.
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-            }
+            crate::local_servers::kill_descendants(root).await;
         }
         self.kill().await
     }

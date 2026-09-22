@@ -14,7 +14,7 @@ use crate::events::{
 };
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
@@ -76,6 +76,9 @@ pub struct Mapper {
     /// The spawning call id each live child was filed under, so `subagent_*`
     /// events after the first can be enveloped on the same run.
     runs: HashMap<String, String>,
+    /// Background task ids with a run already open, so the whole-set update
+    /// grok sends can be read as the additions and removals it implies.
+    tasks: HashSet<String>,
 }
 
 impl Mapper {
@@ -92,6 +95,7 @@ impl Mapper {
             names: HashMap::new(),
             pending_spawns: Vec::new(),
             runs: HashMap::new(),
+            tasks: HashSet::new(),
         }
     }
 
@@ -247,19 +251,71 @@ impl Mapper {
             }
 
             GrokUpdate::BackgroundTasks { tasks } => {
-                vec![self.event(AgentEventPayload::BackgroundTasksChanged {
-                    tasks: tasks
-                        .into_iter()
-                        .map(|task| BackgroundTask {
-                            description: task
-                                .description
-                                .or(task.command)
-                                .unwrap_or_else(|| "background task".to_string()),
-                            task_type: task.kind.unwrap_or_else(|| "bash".to_string()),
-                            task_id: task.task_id,
-                        })
-                        .collect(),
-                })]
+                let live: Vec<BackgroundTask> = tasks
+                    .into_iter()
+                    .map(|task| BackgroundTask {
+                        description: task
+                            .description
+                            .or(task.command)
+                            .unwrap_or_else(|| "background task".to_string()),
+                        task_type: task.kind.unwrap_or_else(|| "bash".to_string()),
+                        task_id: task.task_id,
+                    })
+                    .collect();
+
+                // The count lights `BackgroundTasksIndicator`, whose click opens
+                // the subagent panel — and that panel draws *runs*, so
+                // publishing the list alone sent the reader to an empty pane.
+                // Claude Code's backgrounded shells are rows there (DRA-264's
+                // "Wait for…" list), so this is the same panel answering the
+                // same question rather than a shape invented for grok.
+                let mut out = Vec::new();
+                for task in &live {
+                    if self.tasks.insert(task.task_id.clone()) {
+                        out.push(self.subagent_event(
+                            &task.task_id,
+                            task.task_type.clone(),
+                            AgentEventPayload::SubagentStarted {
+                                // Empty for the subagent rule's reason: grok
+                                // publishes no per-task cancel, and a `taskId`
+                                // here draws a Stop whose `stop_task` is a
+                                // Claude Code control line this transport has
+                                // not got. Settle still reaps the tree.
+                                agent_id: String::new(),
+                                label: task.task_type.clone(),
+                                description: Some(task.description.clone()),
+                                prompt: None,
+                            },
+                        ));
+                    }
+                }
+
+                // grok reports the whole set each time, so a task missing from
+                // one is a task that ended — there is no closing event of its
+                // own to wait for.
+                let ids: HashSet<&str> = live.iter().map(|t| t.task_id.as_str()).collect();
+                let ended: Vec<String> = self
+                    .tasks
+                    .iter()
+                    .filter(|id| !ids.contains(id.as_str()))
+                    .cloned()
+                    .collect();
+                for id in ended {
+                    self.tasks.remove(&id);
+                    out.push(self.subagent_event(
+                        &id,
+                        SUBAGENT_LABEL.to_string(),
+                        AgentEventPayload::SubagentCompleted {
+                            agent_id: String::new(),
+                            status: "completed".to_string(),
+                            summary: None,
+                            usage: None,
+                        },
+                    ));
+                }
+
+                out.push(self.event(AgentEventPayload::BackgroundTasksChanged { tasks: live }));
+                out
             }
 
             GrokUpdate::SubagentSpawned(spawned) => vec![self.subagent_started(*spawned)],
@@ -908,6 +964,53 @@ mod tests {
             .into_iter()
             .find(|(name, _)| *name == "ask_user_question");
         assert_eq!(asked, Some(("ask_user_question", ToolType::Other)));
+    }
+
+    /// A backgrounded shell opens a run and closes it when grok stops listing
+    /// it, because the count alone sent the reader to an empty panel: the
+    /// indicator's click opens the subagent pane, which draws runs and knows
+    /// nothing of `BackgroundTasksChanged`.
+    ///
+    /// Hand-written, since no capture here backgrounds anything — grok
+    /// republishes the whole set on every change, which is the half worth
+    /// pinning: the close is inferred from an id going missing.
+    #[test]
+    fn a_background_task_is_a_run_the_panel_can_draw() {
+        const TASKS: &str = concat!(
+            "<< {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"sessionId\":\"s\"}}\n",
+            "<< {\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\",\"params\":",
+            "{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"background_tasks\",\"tasks\":",
+            "[{\"task_id\":\"t1\",\"command\":\"pnpm dev\",\"kind\":\"bash\"}]}}}\n",
+            "<< {\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\",\"params\":",
+            "{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"background_tasks\",\"tasks\":[]}}}\n",
+        );
+        let events = replay(TASKS);
+
+        let lifecycle: Vec<(&str, &str)> = events
+            .iter()
+            .filter_map(|e| {
+                let id = e.subagent.as_ref()?.id.as_str();
+                match &e.payload {
+                    P::SubagentStarted { agent_id, .. } => Some((id, agent_id.as_str())),
+                    P::SubagentCompleted { agent_id, .. } => Some((id, agent_id.as_str())),
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            lifecycle,
+            vec![("t1", ""), ("t1", "")],
+            "the task opens a run and the set losing it closes that same run, and \
+             neither end names a handle — grok publishes no per-task cancel, so a \
+             Stop drawn here would reach Claude Code's control line"
+        );
+
+        // The list itself still goes out: it is what the indicator counts and
+        // what `has_outstanding_work` reads.
+        let published = events.iter().filter(|e| {
+            matches!(&e.payload, P::BackgroundTasksChanged { .. })
+        });
+        assert_eq!(published.count(), 2);
     }
 
     /// Both ends of a run are enveloped on the **spawning call's** id, which is
