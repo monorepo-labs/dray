@@ -78,6 +78,7 @@ import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
+import { offersFast } from "@/lib/fastMode";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
@@ -1890,6 +1891,22 @@ function App() {
     const next = nextEffort(models.find((m) => m.id === modelId), effort);
     if (next) handleModelChange(modelId, next);
   });
+  // Shares ⌘⇧F with `issues.search`, which is the one documented pair in
+  // `SHARED_CHORDS`: that binding is enabled only while the issues page is up
+  // and this one only while it is not, so the chord belongs to whichever is on
+  // screen. Gated on `offersFast` rather than on the harness, the same question
+  // the switch in the picker asks — a chord that toggled a setting no control
+  // shows, on a model that would ignore it, is a key that silently changes the
+  // index and nothing else.
+  useHotkey(
+    "composer.fast",
+    () => setFast(!fast),
+    {
+      enabled:
+        !issuesOpen &&
+        offersFast(harness, models.find((m) => m.id === modelId), composingNewSession),
+    },
+  );
   // Opens, and does nothing where the page is already up — the same answer the
   // sidebar row gives, since that is the only other route in. Not a toggle:
   // nothing on that page opens the pane either (⌘E closes only there), and a

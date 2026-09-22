@@ -1766,6 +1766,10 @@ impl Session {
                     model,
                     effort,
                     permission_mode,
+                    // Rides every spawn, resume included: the fast tier is a
+                    // model id here, so a respawn that dropped it would put the
+                    // session back on standard speed with the switch still lit.
+                    fast,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1994,7 +1998,7 @@ impl Session {
         // grok's is the same request without fx's provider half — one vendor,
         // so there is nothing for a model to belong to but grok.
         if let Transport::Grok(session) = &self.stdin {
-            crate::harness::grok::set_model(session, model).await?;
+            crate::harness::grok::set_model(session, model, self.fast).await?;
             self.model = model.id.clone();
             return Ok(());
         }
@@ -2018,6 +2022,20 @@ impl Session {
     /// pi has none. The recorded value moves only once the write has, so a
     /// failed control leaves the session describing what the child is still on.
     pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
+        // grok's fast tier is a model id, so its switch is a model switch and
+        // there is no flag to send. `fast_arg` is what pairs the two, and the
+        // recorded model stays the *base* id either way: what the reader picked
+        // and what the switch does to it are two settings, and collapsing them
+        // onto the index would make the picker read as having moved itself.
+        if let Transport::Grok(session) = &self.stdin {
+            let model = crate::harness::grok::models::find(&self.model)
+                .await
+                .context("this session's model is not one grok lists")?;
+            crate::harness::grok::set_model(session, &model, fast).await?;
+            self.fast = fast;
+            return Ok(());
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::ApplyFlagSettings {

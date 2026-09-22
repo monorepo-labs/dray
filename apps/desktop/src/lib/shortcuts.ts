@@ -15,6 +15,29 @@ export type Chord = {
 
 export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Composer" | "Notifications";
 
+/// The one pair allowed to ship the same default chord, and why.
+///
+/// `issues.search` lives on the issues page and `composer.fast` on the composer,
+/// and the two are never on screen together — the page replaces the main column
+/// and every composer control with it. Both bindings are gated accordingly, and
+/// `useHotkey` claims a chord only while its binding is enabled, which is the
+/// whole reason [`IssuesView`] releases ⌘⇧F when the page is closed rather than
+/// leaving it bound and eating the key from whatever *is* on screen.
+///
+/// It is a list of pairs rather than a flag on the entry so that adding one is
+/// a deliberate act naming both sides: a `sharesChord: true` on a single row
+/// would let the next collision in silently.
+///
+/// [`IssuesView`]: ../components/IssuesView.tsx
+export const SHARED_CHORDS: [string, string][] = [["issues.search", "composer.fast"]];
+
+/// Whether these two ids are the documented exception above.
+export function mayShareChord(a: string, b: string): boolean {
+  return SHARED_CHORDS.some(
+    ([one, two]) => (one === a && two === b) || (one === b && two === a),
+  );
+}
+
 /// Every chord the app binds, in one place.
 ///
 /// The id is what a `useHotkey` call names and what an override is stored
@@ -25,7 +48,9 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// Two ids sharing a default is refused by test: overlapping chords fire both
 /// handlers where both are enabled, which is the collision the settings tab
 /// exists to prevent. One shortcut bound from two components under different
-/// `enabled` gates is one *id* (`subtab.prev`), not two.
+/// `enabled` gates is one *id* (`subtab.prev`), not two — and where two genuinely
+/// different actions can never be on screen together, [`SHARED_CHORDS`] is where
+/// that is written down and the test reads it.
 export const SHORTCUTS = [
   { id: "session.new", label: "New task", group: "Sessions", chord: k("n") },
   { id: "session.prev", label: "Previous session", group: "Sessions", chord: k("ArrowUp", { shift: true }) },
@@ -71,6 +96,7 @@ export const SHORTCUTS = [
   { id: "attach", label: "Attach files", group: "Composer", chord: k("o", { alt: true }) },
   { id: "model.next", label: "Next model", group: "Composer", chord: k("Tab", { meta: false, shift: true }) },
   { id: "effort.next", label: "Next effort level", group: "Composer", chord: k("e", { shift: true }) },
+  { id: "composer.fast", label: "Toggle fast mode", group: "Composer", chord: k("f", { shift: true }) },
   { id: "harness.next", label: "Next agent", group: "Composer", chord: k("a", { shift: true }) },
   { id: "worktree.toggle", label: "Toggle worktree", group: "Composer", chord: k("t", { shift: true }) },
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },

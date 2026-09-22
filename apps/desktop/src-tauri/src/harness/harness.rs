@@ -365,9 +365,9 @@ mod capability_tests {
         assert_eq!(Harness::Codex.caps().fast_mode, FastMode::OnSpawn);
         assert_eq!(Harness::Fx.caps().fast_mode, FastMode::AtCreation);
         assert_eq!(Harness::Pi.caps().fast_mode, FastMode::Unsupported);
-        // grok's fast tier is a model of its own (`grok-4.7-build-fast`), so
-        // the picker draws it as a row rather than as a switch.
-        assert_eq!(Harness::Grok.caps().fast_mode, FastMode::Unsupported);
+        // grok's fast tier is a model id (`grok-4.7-build-fast`) rather than a
+        // flag, so its switch is a model switch — which reaches a running child.
+        assert_eq!(Harness::Grok.caps().fast_mode, FastMode::InPlace);
         assert!(!Harness::Pi.caps().fast_mode.offered());
         assert!(Harness::Fx.caps().fast_mode.offered());
     }
@@ -774,10 +774,13 @@ impl Harness {
                 applies_model_in_place: true,
                 applies_effort_in_place: true,
                 applies_permission_in_place: false,
-                // `grok-4.7-build-fast` is a *model*, listed beside its
-                // ordinary twin and picked like one, so there is no switch to
-                // draw — the Vercel gateway's `-fast` ids make the same bargain.
-                fast_mode: FastMode::Unsupported,
+                // **The twin id is the mechanism.** grok has no fast flag and no
+                // settings key: `grok-4.7-build-fast` is the fast tier of
+                // `grok-4.7`, a row in the same list. So the switch is a model
+                // switch, which grok takes on a running child — the gateway's
+                // `-fast` ids name a tier the same way, and are hidden from the
+                // picker for the same reason.
+                fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,

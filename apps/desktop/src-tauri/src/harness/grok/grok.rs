@@ -96,6 +96,7 @@ pub async fn init(
     model: Option<&Model>,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
+    fast: bool,
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
@@ -127,8 +128,16 @@ pub async fn init(
     // defaults off: turned on, every Dray session would be multiplexed through
     // one shared grok process.
     command.args(["agent", "--no-leader"]);
-    if let Some(model) = model.filter(|m| !m.arg.is_empty()) {
-        command.args(["--model", &model.arg]);
+    // The fast tier is a model id rather than a flag, so the switch is resolved
+    // here and `--model` carries whichever of the pair was asked for. It has to
+    // ride the resume too: dropped on a respawn the session would come back at
+    // standard speed with the composer's switch still on.
+    let model_arg = match model.filter(|m| !m.arg.is_empty()) {
+        Some(model) => Some(models::fast_arg(&model.arg, fast).await),
+        None => None,
+    };
+    if let Some(arg) = &model_arg {
+        command.args(["--model", arg]);
     }
     // Withheld for a model with no ladder, so grok uses its own default rather
     // than being handed a level it would refuse. The ladder is closed at four
@@ -353,8 +362,20 @@ fn stance_meta(mode: ApprovalPolicy) -> Option<(&'static str, bool)> {
 /// mirrors it as a `config_option_update`, verified live. The value is a **bare
 /// string**: the `{value: …}` wrapper the docs print is refused (`did not match
 /// any variant of untagged enum SessionConfigOptionValue`).
-pub async fn set_model(session: &GrokSession, model: &Model) -> Result<()> {
-    set_config(session, "model", &model.arg).await?;
+/// Moves a live session onto another model — **and onto its fast tier or off
+/// it**, which here is the same request.
+///
+/// grok publishes no fast-mode flag and no settings key: `grok-4.7-build-fast`
+/// is a row in the model list, so asking for fast speed *is* asking for another
+/// model. That is why this takes the switch rather than leaving it to a second
+/// setter, and why `Session::set_fast` comes back through here.
+pub async fn set_model(session: &GrokSession, model: &Model, fast: bool) -> Result<()> {
+    set_config(
+        session,
+        "model",
+        &models::fast_arg(&model.arg, fast).await,
+    )
+    .await?;
     Ok(())
 }
 

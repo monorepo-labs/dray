@@ -24,7 +24,11 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 
 /// How many rows sit at the picker's top level, the rest folding into "More
 /// models". Also exactly what Shift+Tab cycles, so it is a budget rather than a
-/// taste — grok's newest and its fast twin, with the older generations below.
+/// taste — grok's two newest models, with the older generations below.
+///
+/// Counted over the rows the picker *draws*: a fast twin is hidden, so it takes
+/// no slot here. Spending one on it made the cycle a flip between a model and
+/// its own fast tier rather than between two models.
 const TOP_LEVEL: usize = 2;
 
 /// The window every current grok model reports, and the denominator the context
@@ -37,6 +41,17 @@ pub const DEFAULT_CONTEXT_WINDOW: u64 = 500_000;
 /// Keyed on the empty string: which models an account can run is not a property
 /// of any directory, unlike the command list next door.
 pub async fn list() -> Vec<Model> {
+    all().await.into_iter().filter(in_picker).collect()
+}
+
+/// Every model including the fast twins the picker hides.
+///
+/// **Hidden is never unrunnable** — the gateway's own rule next door. A session
+/// recorded on `grok-4.7-build-fast`, whether by `dray new --model` or by a
+/// build that listed it, has to resolve to a real row: filtered here it would
+/// answer `None`, spawn with no model at all and record its own model as unset,
+/// which is silent on screen and in the log.
+async fn all() -> Vec<Model> {
     CACHE
         .get_or_probe("", || probe())
         .await
@@ -48,7 +63,47 @@ pub async fn list() -> Vec<Model> {
 
 /// The model with this id, from whatever grok last reported.
 pub async fn find(id: &ModelId) -> Option<Model> {
-    resolve(id, &list().await)
+    resolve(id, &all().await)
+}
+
+/// grok's own spelling of a fast tier. Not `-fast`: the id is
+/// `grok-4.7-build-fast`, and matching the shorter suffix would be a rule that
+/// happens to work rather than the one grok writes.
+const FAST_SUFFIX: &str = "-build-fast";
+
+/// Whether this id *is* a fast tier rather than a model with one.
+pub fn is_fast_twin(id: &str) -> bool {
+    id.ends_with(FAST_SUFFIX)
+}
+
+/// Every row but the fast twins, which are a **mode** rather than a model.
+///
+/// Listing both is the same model twice — once as a row and once as a switch —
+/// and picking the twin directly gives fast speed with an inert toggle beside
+/// it. It also spent one of Shift+Tab's two cycle slots on a duplicate of the
+/// other.
+fn in_picker(model: &Model) -> bool {
+    !is_fast_twin(&model.arg)
+}
+
+/// The id to actually send, given the reader's pick and their fast-mode switch.
+///
+/// This is grok's whole fast-mode mechanism: there is no flag and no settings
+/// key, so the twin id *is* the fast tier. The base id comes back wherever the
+/// switch is off or the model has no twin, so a pick this list cannot pair is
+/// sent exactly as the reader made it.
+pub async fn fast_arg(arg: &str, fast: bool) -> String {
+    if !fast || is_fast_twin(arg) {
+        return arg.to_string();
+    }
+
+    let twin = format!("{arg}{FAST_SUFFIX}");
+    all()
+        .await
+        .iter()
+        .any(|m| m.arg == twin)
+        .then_some(twin)
+        .unwrap_or_else(|| arg.to_string())
 }
 
 /// Three answers, in order, and the last is why this is a function rather than
@@ -162,9 +217,21 @@ pub fn read_models(reply: &Value) -> Vec<Model> {
 /// between. Everything below folds into "More models" and out of Shift+Tab's
 /// cycle, which is what keeps the chord worth pressing.
 fn fold(rows: Vec<Row>) -> Vec<Model> {
+    // Mapped over the whole set rather than one row at a time, because
+    // `supports_fast` is a lookup *in* that set: a model's fast tier is another
+    // row beside it.
+    let ids: Vec<String> = rows.iter().map(|row| row.model_id.clone()).collect();
+    // Counted over the rows the picker will actually draw, or hiding a twin
+    // leaves a hole in the top level and the cycle is one row long.
+    let mut visible = 0usize;
+
     rows.into_iter()
-        .enumerate()
-        .map(|(position, row)| {
+        .map(|row| {
+            let twin = is_fast_twin(&row.model_id);
+            let position = visible;
+            if !twin {
+                visible += 1;
+            }
             let efforts: Vec<Effort> = row
                 .meta
                 .reasoning_efforts
@@ -203,11 +270,15 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
                 // handshake, so the tray must not offer to attach a screenshot
                 // to any of these.
                 accepts_images: false,
-                secondary: position >= TOP_LEVEL,
-                // grok's faster tier is `grok-4.7-build-fast`, a model in this
-                // same list rather than a switch beside one — so no row here
-                // has a fast mode to ask for.
-                supports_fast: false,
+                // A twin is never top level because it is never drawn at
+                // all — `list` filters it out. Said here too so the flag can
+                // never contradict that from the unfiltered list.
+                secondary: twin || position >= TOP_LEVEL,
+                // A twin exists beside this row, so the switch has something to
+                // ask for. **A twin itself takes none** — it *is* the fast
+                // tier, which is its own answer rather than the lookup happening
+                // to miss for want of a `…-build-fast-build-fast`.
+                supports_fast: !twin && ids.iter().any(|id| id == &format!("{}{FAST_SUFFIX}", row.model_id)),
             }
         })
         .collect()
@@ -248,7 +319,11 @@ pub fn window_of(reply: &Value) -> u64 {
 pub fn fallback() -> Vec<Model> {
     use Effort::{High, Low, Medium, Xhigh};
 
-    let row = |id: &str, label: &str, efforts: Vec<Effort>, secondary: bool| Model {
+    let row = |id: &str,
+               label: &str,
+               efforts: Vec<Effort>,
+               secondary: bool,
+               supports_fast: bool| Model {
         id: ModelId::new(id),
         label: label.to_string(),
         efforts,
@@ -257,19 +332,34 @@ pub fn fallback() -> Vec<Model> {
         provider: String::new(),
         accepts_images: false,
         secondary,
-        supports_fast: false,
+        supports_fast,
     };
 
     vec![
-        row("grok-4.7", "Grok 4.7", vec![Low, Medium, High, Xhigh], false),
+        row(
+            "grok-4.7",
+            "Grok 4.7",
+            vec![Low, Medium, High, Xhigh],
+            false,
+            true,
+        ),
+        // Kept in the table and out of the picker, the same bargain the live
+        // list makes: a session already recorded on it still has to resolve.
         row(
             "grok-4.7-build-fast",
             "Grok 4.7 Fast",
             vec![Low, Medium, High, Xhigh],
+            true,
             false,
         ),
-        row("grok-4.6", "Grok 4.6", vec![Low, Medium, High, Xhigh], true),
-        row("grok-4.5", "Grok 4.5", vec![Low, Medium, High], true),
+        row(
+            "grok-4.6",
+            "Grok 4.6",
+            vec![Low, Medium, High, Xhigh],
+            true,
+            false,
+        ),
+        row("grok-4.5", "Grok 4.5", vec![Low, Medium, High], true, false),
     ]
 }
 
@@ -333,14 +423,32 @@ mod tests {
             ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
         );
 
-        // Position is the ranking: grok lists newest first, so the flagship and
-        // its fast twin are what Shift+Tab cycles.
+        // Position is the ranking and it is counted over the rows the picker
+        // *draws*: the fast twin is hidden, so the top level is the two newest
+        // real models rather than one model and its own fast tier.
         let top: Vec<&str> = models
             .iter()
             .filter(|m| !m.secondary)
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(top, ["grok-4.7", "grok-4.7-build-fast"]);
+        assert_eq!(top, ["grok-4.7", "grok-4.6"]);
+
+        // The twin is what gives 4.7 its switch, and the twin itself takes none
+        // — it *is* the fast tier. 4.6 and 4.5 have no twin on this wire, so
+        // they draw no switch at all rather than one that would do nothing.
+        let fast: Vec<(&str, bool)> = models
+            .iter()
+            .map(|m| (m.id.as_str(), m.supports_fast))
+            .collect();
+        assert_eq!(
+            fast,
+            [
+                ("grok-4.7", true),
+                ("grok-4.7-build-fast", false),
+                ("grok-4.6", false),
+                ("grok-4.5", false),
+            ]
+        );
 
         // Quietest rung first, which is every other picker's order and the
         // reverse of grok's own.
@@ -359,8 +467,44 @@ mod tests {
         // No image prompts on any grok model — `promptCapabilities.image` is
         // false on every handshake, so the tray must never offer one.
         assert!(models.iter().all(|m| !m.accepts_images));
-        // And no fast switch: the faster tier is a row in this same list.
-        assert!(models.iter().all(|m| !m.supports_fast));
+    }
+
+    /// The twin is a **mode**, so it is hidden from the picker — and hiding is
+    /// never unrunnable: `find` reads the unfiltered list, or a session already
+    /// recorded on it would resolve to nothing, spawn with no `--model` at all
+    /// and record its own model as unset.
+    #[tokio::test]
+    async fn the_fast_twin_is_hidden_and_still_runnable() {
+        let table = fallback();
+        let drawn: Vec<&str> = table
+            .iter()
+            .filter(|m| in_picker(m))
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(drawn, ["grok-4.7", "grok-4.6", "grok-4.5"]);
+
+        assert!(find(&ModelId::new("grok-4.7-build-fast")).await.is_some());
+    }
+
+    /// The switch *is* the model id here, so this is grok's whole fast-mode
+    /// mechanism — and the pairing has to hold in both directions, or the
+    /// composer's switch would send a model nobody picked.
+    #[tokio::test]
+    async fn the_switch_resolves_to_the_twin_and_back() {
+        assert_eq!(fast_arg("grok-4.7", true).await, "grok-4.7-build-fast");
+        assert_eq!(fast_arg("grok-4.7", false).await, "grok-4.7");
+
+        // Already the fast tier: asking again must not reach for a
+        // `…-build-fast-build-fast` that does not exist.
+        assert_eq!(
+            fast_arg("grok-4.7-build-fast", true).await,
+            "grok-4.7-build-fast"
+        );
+
+        // No twin on this wire, so the pick is sent exactly as it was made
+        // rather than mangled into an id grok would refuse.
+        assert_eq!(fast_arg("grok-4.6", true).await, "grok-4.6");
+        assert_eq!(fast_arg("grok-9.9", true).await, "grok-9.9");
     }
 
     /// A shape this build cannot read costs the list, never the app — the

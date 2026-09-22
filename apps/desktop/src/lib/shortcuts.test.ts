@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { IS_MAC } from "./platform";
-import { chordFromKey, formatChords, isReserved, sameChord, SHORTCUTS } from "./shortcuts";
+import {
+  chordFromKey,
+  formatChords,
+  isReserved,
+  mayShareChord,
+  sameChord,
+  SHARED_CHORDS,
+  SHORTCUTS,
+} from "./shortcuts";
 
 const META = IS_MAC ? "⌘" : "Ctrl";
 
@@ -17,11 +25,24 @@ const press = (over: Partial<Parameters<typeof chordFromKey>[0]>) =>
   });
 
 describe("SHORTCUTS", () => {
-  it("gives no two ids one default chord", () => {
+  it("gives no two ids one default chord, bar the documented pair", () => {
     for (const a of SHORTCUTS)
       for (const b of SHORTCUTS)
-        if (a.id !== b.id && sameChord(a.chord, b.chord))
+        if (a.id !== b.id && sameChord(a.chord, b.chord) && !mayShareChord(a.id, b.id))
           throw new Error(`${a.id} and ${b.id} share a chord`);
+  });
+
+  // An entry that stops existing, or stops sharing, leaves the exception
+  // standing over nothing — and the next real collision between those two ids
+  // would then be waved through by a rule nobody meant to still apply.
+  it("shares a chord only where the exception says so", () => {
+    for (const [a, b] of SHARED_CHORDS) {
+      const one = SHORTCUTS.find((s) => s.id === a);
+      const two = SHORTCUTS.find((s) => s.id === b);
+      if (!one || !two) throw new Error(`${a}/${b} names an id that is gone`);
+      if (!sameChord(one.chord, two.chord))
+        throw new Error(`${a} and ${b} no longer share a chord`);
+    }
   });
 
   // A reserved default fires but cannot be rebound, since the settings tab
