@@ -21,9 +21,9 @@ const aeonik = localFont({
   display: "swap",
 });
 
-const title = "Dray: run Claude Code, Codex, pi and fx in one app";
+const title = "Dray - Run every coding agent in one app.";
 const description =
-  "Fast, feels right, runs agents in parallel — on your existing subscriptions.";
+  "Supports Claude Code, Codex, Grok, pi and fx. Free and open source, runs on the subscriptions you already have.";
 
 // Without a base, Next emits relative og:image URLs and most crawlers drop
 // them. The domain is not known at build time, so Vercel's own is the fallback

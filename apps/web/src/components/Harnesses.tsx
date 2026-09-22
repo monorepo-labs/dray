@@ -5,7 +5,7 @@ import { HARNESSES } from "@/lib/harnesses";
 /// thing they use is here. No heading, since the sentence above already
 /// says "every agent" and the row is what that means.
 ///
-/// Mark and name together, since only one of the four has a mark anybody
+/// Mark and name together, since most of these have no mark anybody
 /// recognises on its own. Not links: a logo row is read, and a click here
 /// would leave the page for a vendor's site a screen above the download.
 export function Harnesses({ className }: { className?: string }) {
