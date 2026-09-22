@@ -2383,6 +2383,17 @@ impl Session {
     /// Ends the child process. Takes `self` by value — a stopped session can't
     /// be reused.
     ///
+    /// grok is killed, and that is measured rather than assumed. It was asked
+    /// to leave for its own session store's sake, which cost ~4s on every
+    /// settle and delete: `session/close` is honoured — the session's process
+    /// scope is reclaimed within milliseconds — and **never answered**, so the
+    /// whole grace went on a reply that was not coming, and the child then
+    /// takes ~3s to exit whatever is sent, so the second grace timed out and
+    /// killed it anyway. Nothing is lost: `~/.grok/sessions/<cwd>/<id>/` is
+    /// written per turn rather than at exit, a killed session keeps a complete
+    /// history and summary, and the `.lock` files beside them are flocks the
+    /// kernel drops with the process.
+    ///
     /// pi is asked to exit rather than killed, and that is not politeness: it
     /// holds `~/.pi/agent/auth.json.lock` while it runs and a `SIGKILL`ed one
     /// leaves it behind, so the cost of killing lands on the **next** pi, which
@@ -2404,13 +2415,6 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
-            return Ok(());
-        }
-
-        // grok keeps its own session store under `~/.grok/sessions` and writes
-        // its summary on close, so it is asked to leave rather than killed.
-        if let Transport::Grok(session) = &self.stdin {
-            crate::harness::grok::shutdown(&mut self.child, session).await;
             return Ok(());
         }
 

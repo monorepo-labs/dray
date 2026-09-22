@@ -52,9 +52,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdout, Command},
+    process::{ChildStdout, Command},
     sync::Mutex,
-    time::Duration,
 };
 
 /// Dray's rules, which grok takes as a real field rather than as prompt text.
@@ -67,10 +66,6 @@ use tokio::{
 /// Its own file rather than fx's or pi's, because each has to name the tools its
 /// own agent actually has — grok's are `ask_user_question` and `spawn_subagent`.
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
-
-/// How long a child is given to leave after `session/close` and EOF before it
-/// is killed.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// The connection every write is addressed to.
 ///
@@ -695,26 +690,6 @@ pub fn cancel(session: &GrokSession) -> Result<()> {
     session
         .client
         .notify("session/cancel", json!({"sessionId": session.id}))
-}
-
-/// Ends the child cleanly: `session/close`, EOF, then a kill if it lingers.
-pub async fn shutdown(child: &mut Child, session: &GrokSession) {
-    let _ = session
-        .client
-        .request_within(
-            "session/close",
-            json!({"sessionId": session.id}),
-            SHUTDOWN_GRACE,
-        )
-        .await;
-    session.client.close();
-
-    if tokio::time::timeout(SHUTDOWN_GRACE, child.wait())
-        .await
-        .is_err()
-    {
-        let _ = child.kill().await;
-    }
 }
 
 /// The handles the read loop needs that are not per-event state.
