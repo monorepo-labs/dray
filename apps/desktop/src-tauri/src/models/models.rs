@@ -282,7 +282,7 @@ pub fn claude_models() -> Vec<Model> {
         // it gates fast mode on the resolved model naming `opus-5` or
         // `opus-4-8`, and reports `fast_mode_state: "off"` beside a reason for
         // anything else. Verified against v2.1.270.
-        Model::new("opus", "opus", "Opus 5", all.clone(), Some(High)).with_fast(),
+        Model::new("opus", "opus", "Opus 5.5", all.clone(), Some(High)).with_fast(),
         Model::new(
             "claude-fable-5",
             "claude-fable-5",
@@ -290,6 +290,15 @@ pub fn claude_models() -> Vec<Model> {
             all.clone(),
             Some(High),
         )
+        .under_more(),
+        Model::new(
+            "claude-opus-5",
+            "claude-opus-5",
+            "Opus 5",
+            all.clone(),
+            Some(High),
+        )
+        .with_fast()
         .under_more(),
         Model::new("sonnet", "sonnet", "Sonnet 5", all, Some(High)).under_more(),
         Model::new("haiku", "haiku", "Haiku 4.5", Vec::new(), None).under_more(),
@@ -617,7 +626,7 @@ mod tests {
             .map(|m| m.label)
             .collect();
 
-        assert_eq!(cycled, ["Fable 5.1", "Opus 5"]);
+        assert_eq!(cycled, ["Fable 5.1", "Opus 5.5"]);
     }
 
     /// The submenu is drawn in list order, so the order is the list's.
@@ -629,7 +638,7 @@ mod tests {
             .map(|m| m.label)
             .collect();
 
-        assert_eq!(more, ["Fable 5", "Sonnet 5", "Haiku 4.5"]);
+        assert_eq!(more, ["Fable 5", "Opus 5", "Sonnet 5", "Haiku 4.5"]);
     }
 
     /// The flag decides where a row is drawn and nothing else. A model reached
@@ -839,6 +848,7 @@ mod wire_tests {
                 ("fable".to_string(), false),
                 ("opus".to_string(), true),
                 ("claude-fable-5".to_string(), false),
+                ("claude-opus-5".to_string(), true),
                 ("sonnet".to_string(), false),
                 ("haiku".to_string(), false),
             ]

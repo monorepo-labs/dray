@@ -93,7 +93,7 @@ the answer.
 
 Changing harness carries nothing across, because the ladders are not one scale.
 A Codex session spawned from a Claude one takes Codex's own default, and the
-reverse likewise: Claude Code is Opus 5 on High, Codex is Sol on Medium. Pass
+reverse likewise: Claude Code is Opus 5.5 on High, Codex is Sol on Medium. Pass
 `--model` and `--effort` there only when the user named them.
 
 **pi names no default at all**, and that is deliberate rather than a gap: it is
