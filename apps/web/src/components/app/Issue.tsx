@@ -100,7 +100,7 @@ export function IssueRow({
 /// own, so a closed picker leaves nothing empty behind it.
 export function IssuePicker({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cx("absolute inset-x-6 bottom-full z-50 mb-1.5 flex flex-col", className)}>
+    <div className={cx("absolute inset-x-4 bottom-full z-50 mb-1.5 flex flex-col", className)}>
       {children}
     </div>
   );

@@ -17,7 +17,7 @@ const WIDTH = 556;
 const SCENES: Record<string, { Scene: React.ComponentType; height: number }> = {
   "pull-requests": { Scene: PrCard, height: 300 },
   browser: { Scene: BrowserCard, height: 300 },
-  linear: { Scene: IssueCard, height: 80 },
+  linear: { Scene: IssueCard, height: 208 },
   dictation: { Scene: DictateCard, height: 80 },
 };
 

@@ -35,7 +35,7 @@ const HEIGHT = 760;
 /// the only thing this file adds; the timing lives in the module CSS.
 export function Orchestration({ className }: { className?: string }) {
   return (
-    <ScaledWindow width={WIDTH} height={HEIGHT} className={`${s.scene} ${className ?? ""}`}>
+    <ScaledWindow width={WIDTH} height={HEIGHT} minScale={0.7} className={`${s.scene} ${className ?? ""}`}>
       <Window
         className="h-full w-full"
         sidebar={

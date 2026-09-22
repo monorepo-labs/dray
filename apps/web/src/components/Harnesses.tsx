@@ -10,9 +10,9 @@ import { HARNESSES } from "@/lib/harnesses";
 /// would leave the page for a vendor's site a screen above the download.
 export function Harnesses({ className }: { className?: string }) {
   return (
-    <ul className={`flex flex-wrap items-center gap-x-7 gap-y-3 ${className ?? ""}`}>
+    <ul className={`flex flex-wrap items-center gap-x-5 gap-y-3 sm:gap-x-7 ${className ?? ""}`}>
       {HARNESSES.map(({ name, Glyph }) => (
-        <li key={name} className="flex items-center gap-2 text-base font-medium text-muted-foreground">
+        <li key={name} className="flex items-center gap-2 text-sm font-medium text-muted-foreground sm:text-base">
           <Glyph className="size-5 shrink-0" />
           {name}
         </li>

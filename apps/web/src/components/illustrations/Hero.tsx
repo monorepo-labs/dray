@@ -43,7 +43,7 @@ const HEIGHT = 720;
 /// follows — the one loop that shows where a Dray session ends up.
 export function Hero({ className }: { className?: string }) {
   return (
-    <ScaledWindow width={WIDTH} height={HEIGHT} className={`${s.scene} ${className ?? ""}`}>
+    <ScaledWindow width={WIDTH} height={HEIGHT} minScale={0.7} startX={240} className={`${s.scene} ${className ?? ""}`}>
       <Window
         className="h-full w-full"
         sidebar={

@@ -31,7 +31,7 @@ const HEIGHT = 720;
 /// the app's own (`components/app/`); the timing lives in the module CSS.
 export function SplitView({ className }: { className?: string }) {
   return (
-    <ScaledWindow width={WIDTH} height={HEIGHT} className={`${s.scene} ${className ?? ""}`}>
+    <ScaledWindow width={WIDTH} height={HEIGHT} minScale={0.7} className={`${s.scene} ${className ?? ""}`}>
       <Window
         className="relative h-full w-full"
         sidebar={
