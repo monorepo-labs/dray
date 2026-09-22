@@ -2353,6 +2353,7 @@ function App() {
           onConnect={integrations.connect}
           connecting={integrations.busy}
           connectError={integrations.error}
+          onRecheckGithub={integrations.recheckGithub}
         />
       </TabBody>
 

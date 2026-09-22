@@ -196,7 +196,8 @@ pub async fn list_issues(
     // GitHub's to resolve however it likes, and losing the order somebody asked
     // for outright is worse than the default order they can see.
     let text = query.text.as_deref().map(str::trim).unwrap_or_default();
-    let search = if text.contains("sort:") {
+
+    let search = if names_own_sort(text) {
         text.to_string()
     } else {
         format!("{text} sort:created-desc").trim().to_string()
@@ -542,6 +543,18 @@ fn pull_requests(node: &Value) -> Vec<u32> {
     numbers
 }
 
+/// Whether the reader's own query already names a sort order.
+///
+/// **A whole word, not the letters anywhere in the string.** A `contains` check
+/// read `resort:x` as a sort qualifier and read a quoted `"sort: by size"` as
+/// one too — both of which are ordinary prose to the search API — and each of
+/// those silently took the created-order guarantee away. A token *opening* with
+/// `sort:` is the only thing GitHub itself reads as the qualifier, and a quoted
+/// one keeps its quote, so it fails this test exactly as it should.
+fn names_own_sort(text: &str) -> bool {
+    text.split_whitespace().any(|word| word.starts_with("sort:"))
+}
+
 /// A label's colour with the `#` `gh` leaves off.
 ///
 /// Six hex digits and no hash is what both the issue and the label endpoints
@@ -599,6 +612,21 @@ fn map_comments(node: &Value) -> Vec<IssueComment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard standing between the reader's own words and the created-order
+    /// the list promises, and it reads text somebody typed — so what is *not* a
+    /// qualifier matters as much as what is.
+    #[test]
+    fn only_a_real_sort_qualifier_holds_the_default_back() {
+        assert!(names_own_sort("sort:created-asc"));
+        assert!(names_own_sort("crash on launch sort:comments"));
+
+        // Prose. Neither of these is a qualifier to GitHub either.
+        assert!(!names_own_sort(""));
+        assert!(!names_own_sort("resort:foo"));
+        assert!(!names_own_sort("how do I resort: the list"));
+        assert!(!names_own_sort("\"sort: by size\" in the picker"));
+    }
 
     /// A real `gh issue list -R monorepo-labs/dray --state all --json …`
     /// capture, **with one row added by hand**: that repository has no

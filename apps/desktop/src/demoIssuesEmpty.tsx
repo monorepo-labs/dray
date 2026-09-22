@@ -120,6 +120,11 @@ const FILTERS: IssueFilters = {
     }
     if (cmd === "list_issue_filters") return FILTERS;
     if (cmd === "github_repo") return "monorepo-labs/dray";
+    // The GitHub pane's own button. `false` is the answer worth seeing: it is
+    // what a reader who has not actually installed or signed in gets, and the
+    // pane staying put is the whole of what it says.
+    if (cmd === "recheck_gh") return false;
+    if (cmd === "get_integrations") return { linear: null, github: null };
     throw new Error(`demo: nothing stubbed for ${cmd}`);
   },
 };
@@ -209,6 +214,11 @@ function Demo() {
               setConnecting(false);
               setError("Linear rejected that key.");
               return false;
+            }}
+            onRecheckGithub={async () => {
+              setConnecting(true);
+              await new Promise((done) => setTimeout(done, 600));
+              setConnecting(false);
             }}
             picked={null}
             onPick={() => {}}

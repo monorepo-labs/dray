@@ -619,7 +619,17 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
   const settledQuery = useMemo(() => ({ ...query, settled: true }), [query]);
 
   const open = useIssueList(openQuery, active, generation);
-  const settled = useIssueList(settledQuery, active && wantSettled, generation);
+  // **Linear's alone.** `wantSettled` is sticky for the life of the page, so
+  // without the harness check a reader who had ever opened a Done group went on
+  // paying a second `gh` spawn behind every GitHub query — for a list GitHub
+  // never draws, its finished work being the state switch's other half. One
+  // wasted `gh` per query is not nothing: that budget is per user and every
+  // agent in every session spends it too.
+  const settled = useIssueList(
+    settledQuery,
+    active && wantSettled && tracker === "linear",
+    generation,
+  );
 
   /// Which repository the options on hand describe.
   ///

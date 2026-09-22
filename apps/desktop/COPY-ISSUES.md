@@ -119,9 +119,14 @@ this the pane reads as a form that failed to load.
 
 **Then the two commands, in this order**
 
-> Run `gh auth login` in a terminal, then refresh this page.
+> Run `gh auth login` in a terminal, then check again.
 
 > No `gh` yet? `brew install gh`
+
+**And the button that sentence names**, idle then while it re-asks
+
+> Check again
+> Checking…
 
 Login first because a logged-out `gh` is far commoner than an absent one, so the
 pane opens on the likelier cure. The install line is **not** optional: without it
@@ -137,9 +142,19 @@ It points at the switch rather than repeating the form: the form is one press
 away and it is a credential field, which is not a thing to draw twice on one
 screen.
 
-**No refusals here**, and nothing to refresh with: Dray runs no `gh` command
-from this pane and holds no answer to invalidate. The reader signs in in their
-own terminal and comes back.
+It says "check again" rather than "refresh" because the control is right
+there and naming it is the difference between an instruction and a promise: an
+earlier draft said refresh, and there was nothing on the pane that did. Two
+process-lifetime caches sit between a successful `gh auth login` and this screen
+— the resolved path to `gh`, and who it answered as — and the button throws both
+away, which is the only way off this pane short of relaunching the app.
+
+**It claims nothing about what it found.** A missing `gh` and a logged-out one
+are one state here, so a button saying which one it had just fixed would be
+guessing; where the answer has not moved the pane simply stays.
+
+**No refusals here.** Dray runs no `gh` command from this pane — the reader
+signs in in their own terminal and comes back.
 
 ---
 

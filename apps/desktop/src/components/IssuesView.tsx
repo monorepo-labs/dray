@@ -148,6 +148,7 @@ export default function IssuesView({
   onConnect,
   connecting,
   connectError,
+  onRecheckGithub,
   picked,
   onPick,
   onWorkOn,
@@ -164,6 +165,9 @@ export default function IssuesView({
   onConnect: (key: string) => Promise<boolean>;
   connecting: boolean;
   connectError: string | null;
+  /// Re-asks whether `gh` is there and signed in. The GitHub connect pane's one
+  /// control, and the only way off that pane short of relaunching the app.
+  onRecheckGithub: () => Promise<void>;
   /// The issue whose detail the pane beside this is showing, so the row can
   /// say which one it is. Owned by `App`, because the pane is.
   picked: string | null;
@@ -257,6 +261,7 @@ export default function IssuesView({
           tracker={tracker}
           connected={connected}
           onConnect={onConnect}
+          onRecheckGithub={onRecheckGithub}
           busy={connecting}
           error={connectError}
         />
@@ -592,12 +597,14 @@ function Connect({
   tracker,
   connected,
   onConnect,
+  onRecheckGithub,
   busy,
   error,
 }: {
   tracker: IssueTracker;
   connected: Connected;
   onConnect: (key: string) => Promise<boolean>;
+  onRecheckGithub: () => Promise<void>;
   busy: boolean;
   error: string | null;
 }) {
@@ -696,12 +703,30 @@ function Connect({
               >
                 <code>{LOGIN_COMMAND}</code>
               </button>{" "}
-              in a terminal, then refresh this page.
+              in a terminal, then check again.
             </p>
 
             <p className="text-ui text-muted-foreground">
               No <code>gh</code> yet? <code className="text-foreground">{INSTALL_COMMAND}</code>
             </p>
+
+            {/* **The only way off this pane short of relaunching the app**, and
+                the sentence above names it rather than saying "refresh", which
+                promised a control that was not here. Two process-lifetime caches
+                stand between a successful `gh auth login` and this screen and
+                the button throws both away — see `recheckGithub`.
+
+                It claims nothing about what it found: a missing `gh` and a
+                logged-out one are one state here, so the pane simply stays where
+                the answer has not moved. */}
+            <Button
+              variant="outline"
+              className="h-9 self-start"
+              disabled={busy}
+              onClick={() => void onRecheckGithub()}
+            >
+              {busy ? "Checking…" : "Check again"}
+            </Button>
           </>
         )}
 

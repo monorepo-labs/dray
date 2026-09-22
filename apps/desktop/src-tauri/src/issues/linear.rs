@@ -657,8 +657,11 @@ fn pull_requests(node: &Value) -> Vec<u32> {
 fn pull_request_number(url: &str) -> Option<u32> {
     let mut parts = url.strip_prefix("https://github.com/")?.split('/');
 
-    let (_owner, _repo, kind) = (parts.next()?, parts.next()?, parts.next()?);
-    if kind != "pull" {
+    // Both names have to be *there*: `github.com///pull/7` splits into the right
+    // number of segments and is no pull request, and a chip drawn off one would
+    // name a number nothing on GitHub answers to.
+    let (owner, repo, kind) = (parts.next()?, parts.next()?, parts.next()?);
+    if owner.is_empty() || repo.is_empty() || kind != "pull" {
         return None;
     }
 
@@ -843,6 +846,9 @@ mod tests {
 
         // An issue, a commit and a repository are all attachments too.
         assert_eq!(pull_request_number("https://github.com/o/r/issues/7"), None);
+        // The right number of segments and no repository in them.
+        assert_eq!(pull_request_number("https://github.com///pull/7"), None);
+        assert_eq!(pull_request_number("https://github.com/o//pull/7"), None);
         assert_eq!(pull_request_number("https://github.com/o/r"), None);
         // Not GitHub at all, and the prefix test is what says so.
         assert_eq!(pull_request_number("https://github.com.evil.test/o/r/pull/7"), None);
