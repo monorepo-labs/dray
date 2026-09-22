@@ -60,6 +60,7 @@ type CrewProps = {
     | "onOpenSubagent"
     | "onOpenSession"
     | "onOpenSubagentPanel"
+    | "onOpenPlan"
     | "onRespondPermission"
     | "onAnswerQuestions"
     | "onSendNow"

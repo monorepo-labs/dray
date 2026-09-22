@@ -34,6 +34,7 @@ type SplitViewProps = {
     | "onOpenSubagent"
     | "onOpenSession"
     | "onOpenSubagentPanel"
+    | "onOpenPlan"
     | "onRespondPermission"
     | "onAnswerQuestions"
     // Interrupts the selected session, which is the focused pane — `Chat` gates

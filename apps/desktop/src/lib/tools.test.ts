@@ -94,7 +94,8 @@ describe("mcpCall", () => {
   // said the wire id twice — once as its label, again as its summary.
   it("reads Claude's mcp__server__tool", () => {
     expect(mcpCall("mcp__linear-server__save_issue", null)).toEqual({
-      label: "Save issue",
+      server: "Linear Server",
+      label: "Save Issue",
       detail: "linear-server · save_issue",
     });
   });
@@ -103,7 +104,8 @@ describe("mcpCall", () => {
     expect(
       mcpCall("list_document_sessions", "codex_apps · codex_document_control.list_document_sessions"),
     ).toEqual({
-      label: "List document sessions",
+      server: "Codex Apps",
+      label: "List Document Sessions",
       detail: "codex_apps · codex_document_control.list_document_sessions",
     });
   });
@@ -116,7 +118,21 @@ describe("mcpCall", () => {
   // Nothing to split on is an ordinary state, not a malformed one: the row
   // still needs something to draw.
   it("falls back to the bare name", () => {
-    expect(mcpCall("query", null)).toEqual({ label: "Query", detail: "query" });
+    expect(mcpCall("query", null)).toEqual({
+      server: null,
+      label: "Query",
+      detail: "query",
+    });
+  });
+
+  // grok wraps an MCP call in `use_tool` and hands the qualified name over with
+  // no `mcp__` in front of it, so the bare form has to split too.
+  it("reads a bare server__tool name", () => {
+    expect(mcpCall("supermemory-ai__search_memory", null)).toEqual({
+      server: "Supermemory Ai",
+      label: "Search Memory",
+      detail: "supermemory-ai · search_memory",
+    });
   });
 });
 

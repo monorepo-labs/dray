@@ -17,6 +17,22 @@ function nested(input: JsonValue, key: string): JsonValue | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
+/// The path field a call carries, whatever its harness calls it.
+///
+/// Stated once because three readers need the same answer, and drifting apart
+/// is how one of them stops drawing a link another still draws. `target_file`
+/// and `target_directory` are grok's spellings, and their absence is why every
+/// `read_file` and `list_dir` row drew its tool name and nothing else.
+function pathField(input: JsonValue): string | null {
+  return (
+    field(input, "file_path") ??
+    field(input, "path") ??
+    field(input, "notebook_path") ??
+    field(input, "target_file") ??
+    field(input, "target_directory")
+  );
+}
+
 /// The interesting argument, shown next to the tool name. Claude Code leaves
 /// `title` null on every call, so the row has to derive its own summary and each
 /// tool keeps whichever field actually identifies the work.
@@ -33,6 +49,13 @@ export function toolSummary(
   // same reason: `location` names a skill on this tool and nothing else.
   if (name === "skill") return field(input, "location")?.split("/").pop() ?? null;
 
+  // grok's MCP dispatcher: every server's tool arrives as one `use_tool` call
+  // whose own name says nothing, with the real one under `tool_name` and that
+  // tool's arguments nested under `tool_input`. Tool-keyed, since those two
+  // fields mean this and nothing else — and without it the row read `use_tool`
+  // with the name only visible by expanding it into raw JSON.
+  if (name === "use_tool") return field(input, "tool_name");
+
   // Ahead of the path, and that ordering is the rule: a search scopes itself
   // with a directory and its subject is the pattern, so `grep_files` under `.`
   // read as "Searched ." — the one field that says nothing. No tool whose
@@ -41,7 +64,7 @@ export function toolSummary(
   const pattern = field(input, "pattern");
   if (pattern) return pattern;
 
-  const path = field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
+  const path = pathField(input);
   if (path) return shortenPath(path);
 
   // fx nests a call's real argument under `request` where every other harness
@@ -163,12 +186,33 @@ const TOOL_VERBS: Record<string, Verbs> = {
   run_terminal_command: ["Bash", "Bash", "command"],
   search_replace: ["Editing", "Edited", "file"],
   list_dir: ["Listing", "Listed", "directory"],
-  todo_write: ["Planning", "Planned", "task list"],
+  // "Todo", not "Planned": the checklist under the row is the thing, and the
+  // row is its heading. Claude Code's spelling takes the same word for the
+  // reason every shared row here does — one act, one label.
+  todo_write: ["Todo", "Todo", "todo list"],
+  TodoWrite: ["Todo", "Todo", "todo list"],
   ask_user_question: ["Asking", "Asked", "question"],
   // Both halves of one tool: it fetches whatever a backgrounded command or a
   // delegated child has written since it was last read.
   get_command_or_subagent_output: ["Reading output", "Read output", "output"],
   spawn_subagent: ["Delegating", "Delegated", "task"],
+  kill_command_or_subagent: ["Stopping", "Stopped", "task"],
+  monitor: ["Watching", "Watched", "command"],
+  search: ["Searching web", "Searched web", "query"],
+  // Two tools about tools, and the split is worth keeping: one asks an MCP
+  // server what it offers, the other calls it. `use_tool`'s summary is the
+  // dispatched tool's own name, so the row reads "Ran <server>__<tool>".
+  search_tool: ["Finding tool", "Found tool", "tool"],
+  use_tool: ["Running", "Ran", "tool"],
+  workflow: ["Running workflow", "Ran workflow", "workflow"],
+  scheduler_create: ["Scheduling", "Scheduled", "task"],
+  scheduler_list: ["Reading schedule", "Read schedule", "schedule"],
+  scheduler_delete: ["Unscheduling", "Unscheduled", "task"],
+  // Plan mode is a state the model enters and leaves, so these read as the
+  // state rather than as a call: the pair brackets the planning, and the plan
+  // itself arrives on `_x.ai/exit_plan_mode` for the card to draw.
+  enter_plan_mode: ["Entering plan mode", "Entered plan mode", "plan"],
+  exit_plan_mode: ["Presenting plan", "Presented plan", "plan"],
 };
 
 /// What a delegated run was asked to do, and what it was asked to do it with.
@@ -285,7 +329,7 @@ export function streamingLabel(name: string): string {
 export function mcpCall(
   name: string,
   title: string | null,
-): { label: string; detail: string } {
+): { server: string | null; label: string; detail: string } {
   let server: string | null = null;
   let tool = name;
 
@@ -300,6 +344,9 @@ export function mcpCall(
     const [head, ...rest] = title.split(" · ");
     server = head;
     tool = rest.join(" · ");
+  } else {
+    const bare = qualifiedName(name);
+    if (bare) ({ server, method: tool } = bare);
   }
 
   // Codex qualifies the method with its own namespace — `codex_document_control
@@ -307,19 +354,41 @@ export function mcpCall(
   const method = tool.includes(".") ? tool.slice(tool.lastIndexOf(".") + 1) : tool;
 
   return {
+    server: server ? humanize(server) : null,
     label: humanize(method),
     detail: server ? `${server} · ${tool}` : tool,
   };
 }
 
-/// `list_document_sessions` → `List document sessions`.
+/// An identifier written `<server>__<method>` with no `mcp__` in front of it —
+/// what grok's `use_tool` carries as its `tool_name`, and what any harness that
+/// namespaces a tool without the prefix will send.
+///
+/// Deliberately strict: the **whole** string must be two identifier runs joined
+/// by `__`. A loose match would split a path or a command holding a double
+/// underscore and colour half of it as a server that does not exist.
+function qualifiedName(raw: string): { server: string; method: string } | null {
+  const match = /^([A-Za-z0-9][\w.-]*)__([\w.-]+)$/.exec(raw.trim());
+  return match ? { server: match[1], method: match[2] } : null;
+}
+
+/// The same split, readable — what the row draws as its two coloured halves.
+export function namedParts(raw: string): { server: string; method: string } | null {
+  const parts = qualifiedName(raw);
+  return parts && { server: humanize(parts.server), method: humanize(parts.method) };
+}
+
+/// `list_document_sessions` → `List Document Sessions`.
 ///
 /// Only for an identifier already known to be one. A tool id is written for a
 /// machine and read by a person, and the row is the one place that gap shows.
-function humanize(id: string): string {
+/// Title case rather than sentence case, since the two halves of a qualified
+/// name are drawn side by side and a sentence-cased method reads as prose that
+/// has run on from the server's name.
+export function humanize(id: string): string {
   const words = id.replace(/[_-]+/g, " ").trim();
   if (!words) return id;
-  return words[0].toUpperCase() + words.slice(1);
+  return words.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 /// The file a row acted on, where it names one.
@@ -330,8 +399,7 @@ function humanize(id: string): string {
 /// since that is what has to be opened; the caller decides how much to draw.
 export function fileTarget(toolType: ToolType, input: JsonValue): string | null {
   if (toolType !== "file_edit" && toolType !== "file_read") return null;
-  const path =
-    field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
+  const path = pathField(input);
   // A relative path has no anchor here — the row does not know the session's
   // cwd — so it is drawn as text rather than offered as something to open.
   return path?.startsWith("/") ? path : null;
@@ -371,7 +439,7 @@ export function formatToolInput(input: JsonValue, omit: string[]): string | null
 /// permission card sees raw wire input and no `ToolType`. Same field precedence
 /// as `toolSummary`, minus the per-type branch it can't make.
 export function toolArgument(input: JsonValue): string | null {
-  const path = field(input, "file_path") ?? field(input, "path") ?? field(input, "notebook_path");
+  const path = pathField(input);
   if (path) return shortenPath(path);
 
   return (

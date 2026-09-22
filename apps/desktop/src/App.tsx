@@ -21,6 +21,8 @@ import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
+import MorePanel from "@/components/MorePanel";
+import PlanPanel from "@/components/PlanPanel";
 import PrPanel from "@/components/PrPanel";
 import BrowserPane from "@/components/browser/BrowserPane";
 import {
@@ -59,7 +61,6 @@ import Sidebar, {
 } from "@/components/Sidebar";
 import Crew, { CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone } from "@/components/SplitView";
-import SubagentPanel from "@/components/SubagentPanel";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -110,6 +111,8 @@ import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
+import { usePlan } from "@/lib/plan";
+import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
 import { sidebarMove } from "@/lib/sidebarAuto";
@@ -1044,6 +1047,43 @@ function App() {
   // tab row has to exist in the panel before the panel is drawn.
   const { opened: filesOpened, active: activeFile } = useOpenFiles(selectedSessionId);
   const hasDocsTab = docs.length > 0;
+  // Read here for the PR tab's reason too: the row has to know the tab exists
+  // before the panel draws it, and the card's "View plan" button opens it.
+  const sessionPlan = usePlan(selectedSessionId);
+  const hasPlanTab = sessionPlan !== null;
+
+  // Read off the session's own log rather than tracked as it arrives, the
+  // context ring's bargain: a reopened session shows the list it showed live.
+  // Memoized because it walks every event and this renders on each delta.
+  const sessionTodos = useMemo(
+    () => currentTodos(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
+
+  // The panel opens itself on a task list the reader has not been shown, and on
+  // nothing else.
+  //
+  // Two rules make that safe, and both are borrowed. **Signal is transition,
+  // not state** — `readyTransitions`' rule: the first reading of a session is
+  // recorded silently, so arriving at a session that already has a list does
+  // not drag the pane open over a transcript the reader came to read. And the
+  // transition has to be a *different list* rather than any change at all, or
+  // `todo_write` firing on every tick would yank the pane several times a turn
+  // — see `startsNewList`. Held rather than derived, since only the previous
+  // reading can say which this is; per session, since each has its own.
+  const seenTodosRef = useRef(new Map<string, Todo[] | null>());
+  useEffect(() => {
+    // Waiting on the transcript, not just the id: `sessionTodos` reads an empty
+    // event list as `null` while one loads, so seeding before it lands would
+    // record "no list" and then read the real one as news.
+    if (!selectedSession) return;
+    const seen = seenTodosRef.current;
+    const previous = seen.get(selectedSession.sessionId);
+    seen.set(selectedSession.sessionId, sessionTodos);
+    if (previous === undefined) return;
+    if (sessionTodos && startsNewList(previous, sessionTodos)) openMorePanel();
+  }, [selectedSession, sessionTodos]);
+
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
   const browserTabs = useBrowserTabs(selectedSessionId);
@@ -1110,15 +1150,18 @@ function App() {
     setPanelOpen(true);
   };
 
-  // A live background task counts even where no run is built for it yet, or the
-  // chat's background-tasks indicator offers a tab that isn't in the row.
-  const hasSubagentsTab = subagents.length > 0 || backgroundTasks.length > 0;
+  // A live background task counts even where no run is built for it yet, and a
+  // task list counts on its own — the tab is a catch-all, so any one of its
+  // sections having something is enough to draw it.
+  const hasMoreTab =
+    subagents.length > 0 || backgroundTasks.length > 0 || sessionTodos !== null;
 
   const tabs = tabOrder({
     pr: hasPrTab,
     docs: hasDocsTab,
     issue: hasIssueTab,
-    subagents: hasSubagentsTab,
+    more: hasMoreTab,
+    plan: hasPlanTab,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -1140,14 +1183,19 @@ function App() {
 
   // Opens the tab without touching the selection, so a run the reader already
   // had expanded is still expanded when they come back to it.
-  const openSubagentPanel = () => {
-    setPanelTab("subagents");
+  const openMorePanel = () => {
+    setPanelTab("more");
+    setPanelOpen(true);
+  };
+
+  const openPlanPanel = () => {
+    setPanelTab("plan");
     setPanelOpen(true);
   };
 
   const openSubagent = (id: string) => {
     setSelectedSubagentId(id);
-    openSubagentPanel();
+    openMorePanel();
   };
 
   // An open session's own directory, since project- and local-scoped commands
@@ -2036,7 +2084,8 @@ function App() {
             chat={{
               onOpenSubagent: openSubagent,
               onOpenSession: (id) => void handleSelectSessionIndexItem(id),
-              onOpenSubagentPanel: openSubagentPanel,
+              onOpenSubagentPanel: openMorePanel,
+              onOpenPlan: openPlanPanel,
               onRespondPermission: handleRespondPermission,
               onAnswerQuestions: handleAnswerQuestions,
               onSendNow: handleInterrupt,
@@ -2234,7 +2283,8 @@ function App() {
             pr={hasPrTab}
             docs={hasDocsTab}
             issue={hasIssueTab}
-            subagents={hasSubagentsTab}
+            more={hasMoreTab}
+            plan={hasPlanTab}
             refresh={panelRefresh}
             cwd={shownSession.cwd}
           >
@@ -2256,14 +2306,17 @@ function App() {
                 onCollapse={collapseBrowser}
               />
             </TabBody>
-            <TabBody active={activeTab === "subagents"}>
-              <SubagentPanel
-                runs={subagents}
-                selectedId={selectedSubagentId}
-                resultByCallId={resultByCallId}
-                live={busy || backgroundTasks.length > 0}
-                onSelect={setSelectedSubagentId}
-                onStopTask={handleStopTask}
+            <TabBody active={activeTab === "more"}>
+              <MorePanel
+                todos={sessionTodos}
+                subagents={{
+                  runs: subagents,
+                  selectedId: selectedSubagentId,
+                  resultByCallId,
+                  live: busy || backgroundTasks.length > 0,
+                  onSelect: setSelectedSubagentId,
+                  onStopTask: handleStopTask,
+                }}
               />
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>
@@ -2278,6 +2331,9 @@ function App() {
                 sessionId={selectedSessionId}
                 active={panelShown && activeTab === "docs" && viewTab === "chat"}
               />
+            </TabBody>
+            <TabBody active={hasPlanTab && activeTab === "plan"}>
+              <PlanPanel sessionId={selectedSessionId} />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
               <IssuePanel
@@ -2452,7 +2508,8 @@ function App() {
           chat={{
             onOpenSubagent: openSubagent,
             onOpenSession: (id) => void handleSelectSessionIndexItem(id),
-            onOpenSubagentPanel: openSubagentPanel,
+            onOpenSubagentPanel: openMorePanel,
+            onOpenPlan: openPlanPanel,
             onRespondPermission: handleRespondPermission,
             onAnswerQuestions: handleAnswerQuestions,
             onSendNow: handleInterrupt,
@@ -2493,7 +2550,8 @@ function App() {
           {...paneState(mainSessionId ?? "")}
           onOpenSubagent={openSubagent}
           onOpenSession={(id) => void handleSelectSessionIndexItem(id)}
-          onOpenSubagentPanel={openSubagentPanel}
+          onOpenSubagentPanel={openMorePanel}
+          onOpenPlan={openPlanPanel}
           onRespondPermission={handleRespondPermission}
           onAnswerQuestions={handleAnswerQuestions}
           onSendNow={handleInterrupt}

@@ -548,7 +548,11 @@ fn is_quiet(method: &str) -> bool {
         "_x.ai/settings/update",
         "_x.ai/announcements/update",
         "_x.ai/task_backgrounded",
+        // Both spellings: grok punctuates its MCP methods two ways, and
+        // `_x.ai/mcp_initialized` — a tool count and an elapsed time, once per
+        // session — landed in the failure log for want of the underscore.
         "_x.ai/mcp/",
+        "_x.ai/mcp_",
     ];
 
     QUIET.iter().any(|quiet| method.starts_with(quiet))

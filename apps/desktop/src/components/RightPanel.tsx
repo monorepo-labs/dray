@@ -117,7 +117,15 @@ export function PanelToggle({
 
 /// Which body the right panel is showing. This is the set, not the order —
 /// see `tabOrder`.
-export const PANEL_TABS = ["changes", "browser", "subagents", "pr", "issue", "docs"] as const;
+export const PANEL_TABS = [
+  "changes",
+  "browser",
+  "more",
+  "pr",
+  "issue",
+  "docs",
+  "plan",
+] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
@@ -127,7 +135,12 @@ const LABELS: Record<PanelTab, string> = {
   // empty state is a URL bar, which is a place to start rather than a
   // sentence saying there is nothing.
   browser: "Browser",
-  subagents: "Subagents",
+  // A catch-all, and named as one on purpose. What is in it — the task list,
+  // the runs this session spawned — is what the reader checks rather than
+  // works in, and the row cannot grow a tab per answer of that kind. A name
+  // describing today's contents ("Activity") would stop being true the first
+  // time something static lands here.
+  more: "More",
   // Singular, and not "Linear": the panel is about the work's issue whoever
   // tracks it, and a session usually carries one.
   issue: "Issue",
@@ -137,6 +150,9 @@ const LABELS: Record<PanelTab, string> = {
   // Not "Pull Request": the short form is what anyone working on one calls it,
   // and the long one is the widest label in a row of three.
   pr: "PR",
+  // Singular: a session is working to one plan, and putting up a second
+  // replaces the first.
+  plan: "Plan",
 };
 
 /// Which tabs exist, and in what order.
@@ -159,24 +175,35 @@ export function tabOrder({
   pr,
   docs,
   issue,
-  subagents,
+  more,
+  plan,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
   /// [useDocs](../hooks/useDocs.ts). Absent otherwise, for the PR tab's reason.
   docs: boolean;
   issue: boolean;
-  /// This session has spawned at least one subagent or background task. Absent
-  /// otherwise, for the PR tab's reason — most sessions never spawn one.
-  subagents: boolean;
+  /// This session has something for the catch-all tab: a task list, a subagent
+  /// or a background task. Absent otherwise, for the PR tab's reason — a tab
+  /// holding only empty sections is one the eye skips past.
+  more: boolean;
+  /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
+  /// Absent otherwise, for the PR tab's reason: most sessions never plan.
+  plan?: boolean;
 }): readonly PanelTab[] {
   const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
-  // After Changes, which is what keeps Issue immediately before Subagents.
+  // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
-  // Immediately before Subagents wherever it is drawn, so the row's order is
-  // the same one ⌘⇧[ steps whether or not a session has an issue on it.
+  // Immediately before More wherever it is drawn, so the row's order is the
+  // same one ⌘⇧[ steps whether or not a session has an issue on it.
   if (issue) tabs.push("issue");
-  if (subagents) tabs.push("subagents");
+  // Before More: a plan is what the session agreed to do, which belongs with
+  // the work rather than with the catch-all.
+  if (plan) tabs.push("plan");
+  // Last, always. A catch-all has no business ahead of a tab that names what
+  // is in it, and keeping it at the end means a section arriving later moves
+  // nothing in the row.
+  if (more) tabs.push("more");
 
   return tabs;
 }
@@ -199,9 +226,12 @@ type RightPanelProps = {
   /// PR tab's reason: a tab whose only content is "there is nothing here" is one
   /// the eye skips past on every session that will never have one.
   issue?: boolean;
-  /// This session has spawned at least one subagent or background task. Absent
-  /// otherwise, for the same reason.
-  subagents?: boolean;
+  /// This session has something for the catch-all tab — a task list, a
+  /// subagent, a background task. Absent otherwise, for the same reason.
+  more?: boolean;
+  /// The agent has put a plan up in this session. Absent otherwise, for the
+  /// same reason.
+  plan?: boolean;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
@@ -267,14 +297,15 @@ export default function RightPanel({
   pr = false,
   docs = false,
   issue = false,
-  subagents = false,
+  more = false,
+  plan = false,
   refresh,
   cwd,
   actions,
   heading,
   children,
 }: RightPanelProps) {
-  const tabs = tabOrder({ pr, docs, issue, subagents });
+  const tabs = tabOrder({ pr, docs, issue, more, plan });
   // 32rem, the width this pane opened at before it could be dragged.
   const { style, handle } = useResizable({
     storageKey: "ade.rightPanelWidth",

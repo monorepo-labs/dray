@@ -129,7 +129,11 @@ pub fn plan_pending(request: &ExitPlanMode, rpc_id: i64) -> (PendingRequest, Vec
     let pending = PendingRequest {
         tool_use_id: request.tool_call_id.clone(),
         tool_name: "exit_plan_mode".to_string(),
-        input: Value::Null,
+        // The plan itself, which was `Null` here and therefore nowhere: this
+        // request is the **only** place the text appears — the `exit_plan_mode`
+        // tool call beside it carries an empty input — so dropping it left a
+        // card asking the reader to approve something they could not read.
+        input: json!({ "plan": request.plan_content }),
         options: resolved
             .into_iter()
             .map(|r| (r.option.id.clone(), r))

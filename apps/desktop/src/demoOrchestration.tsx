@@ -686,6 +686,7 @@ const chatProps = {
   onOpenSubagent: () => {},
   onOpenSession: () => {},
   onOpenSubagentPanel: () => {},
+  onOpenPlan: () => {},
   onAnswerQuestions: () => {},
   backgroundTaskCount: 0,
   liveTaskIds: NO_TASKS,

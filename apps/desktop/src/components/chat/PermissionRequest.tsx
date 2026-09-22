@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import type { PermissionOption, PermissionOptionKind } from "@/types/events";
 
@@ -35,6 +36,7 @@ export default function PermissionRequest({
   argument,
   options,
   onRespond,
+  onViewPlan,
 }: {
   /// The agent's own summary of the call. Filled in upstream when the harness
   /// sends none, so it is never empty.
@@ -44,6 +46,14 @@ export default function PermissionRequest({
   argument: string | null;
   options: PermissionOption[];
   onRespond: (optionId: string) => void;
+  /// Opens the panel's Plan tab. Present on a plan approval alone, where the
+  /// argument is pages of markdown rather than a command: a `<pre>` of it is
+  /// the one shape this card cannot draw, so it points at the reader instead.
+  ///
+  /// Its presence is also what makes the description render as markdown, which
+  /// is one question rather than two — a card carrying a plan is exactly the
+  /// card whose description was written as one.
+  onViewPlan?: () => void;
 }) {
   // Never cleared: the reply is one-shot in the backend, so a second click has
   // nothing to answer. This keeps the buttons from inviting one during the round
@@ -57,7 +67,13 @@ export default function PermissionRequest({
     // disabled region — the one thing a card holding a live question must not
     // look like. `--card` is what every other raised thing here is drawn on, so
     // the question now sits on the same surface as the rest of the app.
-    <div className="rounded-2xl border border-border bg-card p-4">
+    // `--shadow-card`, the token a surface resting on the page takes — the
+    // user bubble's own, not the composer's `--shadow-surface`. The border
+    // alone drew the box and said nothing about height, which on a card
+    // holding the one question in the transcript that blocks the agent is the
+    // wrong way round: it has to read as sitting above the conversation rather
+    // than as another row in it.
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-(--shadow-card)">
       {/* Outlined rather than filled: the card already sits on a raised
           surface, and a second fill inside it reads as a third. */}
       {argument && (
@@ -66,12 +82,25 @@ export default function PermissionRequest({
         </pre>
       )}
 
-      {/* `text-chat` at its own 1.65 leading, which is set for reading
-          paragraphs of an agent's prose. This is one sentence in a card,
-          and in a narrow one it wraps to two or three lines that then sit
-          further apart than the card's own gaps — the card reads as loose
-          before it reads as a question. `leading-snug` for a label. */}
-      <p className="text-chat leading-snug">{description}</p>
+      {/* A plan's description *is* the plan — headings, lists, fenced code,
+          pages of it — where every other card's is one sentence. Drawn as a
+          `<p>` it arrived as one run-on paragraph with the `#` and `-` still
+          in it, which is the agent's proposal made harder to read than the
+          raw text it was written as. So the one card that carries markdown
+          renders it, at `text-chat`'s own reading leading; the Plan tab is
+          still where a long one is read, and `View plan` above points there.
+
+          Everything else keeps `leading-snug`. `text-chat` is set at 1.65 for
+          paragraphs of prose, and one sentence wrapping to three lines in a
+          narrow card then sits further apart than the card's own gaps — it
+          reads as loose before it reads as a question. */}
+      {onViewPlan ? (
+        <div className="text-chat">
+          <Markdown>{description}</Markdown>
+        </div>
+      ) : (
+        <p className="text-chat leading-snug">{description}</p>
+      )}
 
       {/* One row, wrapping. It was a column under `@max-sm` for a while, and
           what actually made the narrow card ragged was the label rather than
@@ -83,6 +112,14 @@ export default function PermissionRequest({
           longest answer in the card; stacking them all spent ~70px saying
           what one line already said. */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {/* Ahead of the answers, and outline rather than filled: reading the
+            plan comes before agreeing to it, and it is the one button here
+            that decides nothing. */}
+        {onViewPlan && (
+          <Button size="sm" variant="outline" className="h-7" onClick={onViewPlan}>
+            View plan
+          </Button>
+        )}
         {[...options]
           .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
           .map((option) => (

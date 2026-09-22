@@ -6,7 +6,9 @@ import Orb from "@/components/Orb";
 import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
+import TodoList from "@/components/chat/TodoList";
 import { truncate } from "@/lib/format";
+import { isTodoCall, todoList } from "@/lib/todos";
 import { cn } from "@/lib/utils";
 import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
 import {
@@ -14,6 +16,7 @@ import {
   fileTarget,
   formatToolInput,
   mcpCall,
+  namedParts,
   isRoutineError,
   skillBrief,
   subagentBrief,
@@ -40,6 +43,10 @@ const SUMMARY_FIELDS = [
   "url",
   "description",
   "timeout",
+  // Same reading as `timeout`: a dispatch flag the model sets on its own call,
+  // not a fact about the call. grok's `web_search` carries it alone, so the row
+  // expanded onto `{"backend": true}` and said nothing at all.
+  "backend",
   // fx's two spellings of the same thing: a skill's `location` is the header,
   // and `request` is the object it nests a subagent's task or a stored result's
   // query inside — the dispatch fields left in there name no work.
@@ -71,6 +78,10 @@ const READ_FIELDS = [...SUMMARY_FIELDS, "offset", "limit"];
 // the header, the brief as prose beneath it — so its argument body would be the
 // same call written out twice. Anything the tool grows later still shows.
 const SKILL_FIELDS = [...SUMMARY_FIELDS, "skill", "args"];
+
+// The checklist above the body is the whole call, and `merge` is grok's own
+// bookkeeping about how it wrote the list rather than anything in it.
+const TODO_FIELDS = [...SUMMARY_FIELDS, "todos", "merge"];
 
 // Long results are the norm — reads come back in the thousands of characters —
 // so expanding shows a head and the rest scrolls rather than pushing the
@@ -217,6 +228,26 @@ export default function ToolCall({
   const delegated = toolType === "subagent_spawn" && !rawInput ? subagentBrief(input) : null;
   const brief = skill;
 
+  // The agent's task list, drawn as a checklist rather than as its arguments —
+  // it is the one tool body that is a progress report, so it reads the way the
+  // agent means it and not as JSON.
+  // Two questions, not one. Whether this is a task list write decides what the
+  // row *drops* — grok's merge update names ids and statuses and no text, so a
+  // row asking only "does this draw a checklist" expanded onto its own JSON.
+  // Whether it draws one is the second, answered below.
+  const todoCall = isTodoCall(name);
+  const todos = rawInput ? null : todoList(name, input);
+
+  // A namespaced tool id, drawn as two coloured halves rather than as one wire
+  // string. The MCP reading wins where the row is already typed as one; grok
+  // wraps its MCP calls in `use_tool` and puts the qualified name in the
+  // *summary* instead, which is the other half of this.
+  const qualified = mcp?.server
+    ? { server: mcp.server, method: mcp.label }
+    : !target && summary
+      ? namedParts(summary)
+      : null;
+
   // Drawn on the row rather than behind the caret: a child put on a different
   // model or a different effort is a fact about the run, and the reader should
   // not have to open a row to find out the work went somewhere else.
@@ -235,7 +266,9 @@ export default function ToolCall({
       ? READ_FIELDS
       : name === "Skill"
         ? SKILL_FIELDS
-        : SUMMARY_FIELDS;
+        : todoCall
+          ? TODO_FIELDS
+          : SUMMARY_FIELDS;
   const body = inert || asked ? null : rawInput ?? formatToolInput(input, omit);
 
   // A successful edit's result is boilerplate ("The file ... has been updated
@@ -265,7 +298,21 @@ export default function ToolCall({
   // A failure still shows: the agent may carry on without mentioning it, and
   // then this is the only place the reason lives.
   const reported = delegated !== null && !failed;
-  const shownOutput = echoesViewer || echoesHeader || fetched || reported ? "" : output;
+
+  // A task list answers with the list read back, which is drawn above it.
+  const echoesChecklist = todoCall && !failed;
+
+  // grok answers both plan-mode tools with `Plan file: <path>` — the copy it
+  // wrote into its own session store, percent-encoded, inside a directory the
+  // reader has no business in. Bookkeeping rather than the plan, which is on
+  // the card and in the panel's Plan tab.
+  const echoesPlanFile =
+    (name === "exit_plan_mode" || name === "enter_plan_mode") && !failed;
+
+  const shownOutput =
+    echoesViewer || echoesHeader || fetched || reported || echoesChecklist || echoesPlanFile
+      ? ""
+      : output;
   const shown = truncate(shownOutput, PREVIEW_CHARS);
 
   // Output stays behind the expander regardless of length. Auto-showing short
@@ -387,7 +434,20 @@ export default function ToolCall({
                   invalid markup and the click would toggle the row instead of
                   opening anything. `stopPropagation` is what keeps the two
                   apart. */}
-              {target ? <FileLink path={target}>{fileName(target)}</FileLink> : summary}
+              {target ? (
+                <FileLink path={target}>{fileName(target)}</FileLink>
+              ) : qualified ? (
+                <>
+                  {/* Dimmer than the method beside it: the server is *where*
+                      the tool lives and the method is what was done, so the
+                      half the reader is scanning for keeps the row's own
+                      colour and the address steps back out of it. */}
+                  <span className="text-muted-foreground/60">{qualified.server}</span>{" "}
+                  {qualified.method}
+                </>
+              ) : (
+                summary
+              )}
             </span>
           )}
         </span>
@@ -433,6 +493,8 @@ export default function ToolCall({
       </button>
 
       <ImageRow images={images} />
+
+      {todos && <TodoList todos={todos} />}
 
       {open && sides && <DiffView sides={sides} />}
 

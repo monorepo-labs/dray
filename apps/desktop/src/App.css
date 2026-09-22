@@ -354,13 +354,21 @@
   /* Lightened from 0.53/0.114, which sat exactly on the 4.5:1 floor and read as a
      forest green rather than as the app's own. The chroma rises with the
      lightness on purpose: green loses its colour fast as it lightens, and 0.575
-     at the old chroma is a grey-green. 0.12 rather than 0.125 because anything
-     above it leaves sRGB at this lightness and clips — the clipped colour is
-     within a hair of this one, so the honest thing is to name the value that
-     survives. Cost, stated: 3.72:1 against the page, under AA for normal text.
+     at the old chroma is a grey-green.
+
+     **0.174 is the display-P3 ceiling at this lightness and hue, not an sRGB
+     one, and that is a deliberate reversal.** The value here was 0.12, picked
+     as the most chroma that survives *sRGB* (0.1265, measured) so that what is
+     written is what is drawn. But every Mac this ships on has a P3 panel, and
+     against one the sRGB ceiling is visibly the duller green — the gamut was
+     costing the colour on the only display anybody sees it on. So the ceiling
+     named is P3's, measured the same way by bisection, and an sRGB display
+     clips it back to ~0.127, which is the value that used to be written here.
+     Cost, stated twice over: the swatch is no longer literally what an sRGB
+     screen draws, and 3.72:1 against the page is under AA for normal text.
      Every use is a mark beside a word — a check, a `+2535`, a state label whose
      meaning is also in its text — rather than the only carrier of anything. */
-  --accent-add: oklch(0.575 0.12 163);
+  --accent-add: oklch(0.585 0.174 163);
   --accent-merged: oklch(0.56 0.2 304);
   --border: oklch(0 0 0 / 10%);
   --input: oklch(0 0 0 / 14%);

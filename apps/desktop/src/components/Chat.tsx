@@ -23,6 +23,7 @@ import {
 import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, QueuedPrompt, StreamingBlock, Working } from "@/hooks/useSessions";
+import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
@@ -39,6 +40,8 @@ type ChatProps = {
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
+  /// Opens the panel's Plan tab, for the button on a plan approval card.
+  onOpenPlan: () => void;
   /// Answers a permission request. The agent is blocked until this fires, so it
   /// is the one callback here whose absence stalls a session rather than
   /// degrading a view.
@@ -156,6 +159,7 @@ export default function Chat({
   onOpenSubagent,
   onOpenSession,
   onOpenSubagentPanel,
+  onOpenPlan,
   onRespondPermission,
   onAnswerQuestions,
   busy = false,
@@ -201,6 +205,19 @@ export default function Chat({
   );
 
   const cards = useLingeringCards(pendingAsks);
+
+  // The plan is copied out of the ask because the ask is the only place it
+  // exists: a permission request is never persisted, and the `exit_plan_mode`
+  // call beside it carries an empty input. Safe in an effect that re-runs on
+  // every session event, since `setPlan` ignores a text it already holds.
+  const sessionId = session?.sessionId ?? null;
+  useEffect(() => {
+    for (const ask of cards) {
+      if (ask.type !== "permission_requested") continue;
+      const plan = planAsked(ask.toolName, ask.input);
+      if (plan) setPlan(sessionId, plan);
+    }
+  }, [cards, sessionId]);
 
   // One tick per prompt. A turn with no prompt — a resumed log truncated
   // mid-conversation, or the promptless `init` a background subagent's
@@ -675,10 +692,18 @@ export default function Chat({
                   description={
                     ask.description ?? ask.title ?? ask.displayName ?? ask.toolName
                   }
-                  argument={toolArgument(ask.input)}
+                  // A plan's argument is the plan itself — pages of markdown,
+                  // where this slot draws a command in a `<pre>`. The tab is
+                  // where it reads, so the card points there instead.
+                  argument={
+                    planAsked(ask.toolName, ask.input) ? null : toolArgument(ask.input)
+                  }
                   options={ask.options}
                   onRespond={(optionId) =>
                     onRespondPermission(session.sessionId, ask.requestId, optionId)
+                  }
+                  onViewPlan={
+                    planAsked(ask.toolName, ask.input) ? onOpenPlan : undefined
                   }
                 />
               ),
