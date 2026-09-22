@@ -76,6 +76,10 @@ export const subscribeIssueTracker = bumped.subscribe;
 /// page with a chip row that has nothing to flip to. With neither connected the
 /// pick stands, since the page then draws its empty state and the pick is what
 /// decides which half of it is offered.
+/// Not used by the issues page any more, which honours the pick outright and
+/// draws a connect pane for a tracker with nothing behind it — a switch whose
+/// press is silently undone reads as broken. This is the composer's rule, where
+/// there is no such pane and an unreadable list is the only other answer.
 export function effectiveTracker(pick: IssueTracker, connected: Connected): IssueTracker {
   if (connected[pick]) return pick;
   if (connected.linear) return "linear";
@@ -84,8 +88,14 @@ export function effectiveTracker(pick: IssueTracker, connected: Connected): Issu
   return pick;
 }
 
-/// Whether the chips are worth drawing. One tracker is not a choice, and a
-/// control that can only say what it already says is chrome.
+/// Whether the chips are worth drawing **in the composer's `#` menu**, which is
+/// the only caller left. There, a chip for a tracker with nothing behind it can
+/// only produce a list that will not load — there is nowhere to put a connect
+/// pane inside a sentence somebody is typing.
+///
+/// The issues page asks nothing and draws the switch always: it *has* somewhere
+/// to send the press, and it is the one surface where somebody finds out the
+/// second tracker exists at all.
 export function canSwitchTracker(connected: Connected): boolean {
   return connected.linear && connected.github;
 }

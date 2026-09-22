@@ -1,12 +1,20 @@
 import GitHubIcon from "@/components/GitHubIcon";
 import LinearIcon from "@/components/LinearIcon";
+import Segmented from "@/components/Segmented";
 import { setIssueTracker } from "@/lib/issueTracker";
-import { cn } from "@/lib/utils";
 
 import type { IssueTracker } from "@/types/events";
 
-/// Which tracker the issue surfaces are reading — two chips, and the only
-/// control that moves the pick.
+/// The marks are the point here. This is one of the few places the app names a
+/// tracker at all, and a segment saying "GitHub" in words would be the widest
+/// thing in a row of glyphs — so the name lives in `aria-label` alone.
+const OPTIONS = [
+  { value: "linear", label: "Linear", content: <LinearIcon className="size-3.5" /> },
+  { value: "github", label: "GitHub", content: <GitHubIcon className="size-3.5" /> },
+] as const;
+
+/// Which tracker the issue surfaces are reading — a two-way switch, and the
+/// only control that moves the pick.
 ///
 /// One component for both places it is drawn, the issues page's filter row and
 /// the header of the composer's `#` menu, since flipping either has to move
@@ -14,14 +22,19 @@ import type { IssueTracker } from "@/types/events";
 /// module store directly rather than taking a callback: there is no state
 /// behind it, and every surface reading the pick is already subscribed.
 ///
-/// **Drawn only where both trackers are connected.** With one, there is nothing
-/// to flip to and a control that can only say what it already says is chrome —
-/// which is why the caller asks `canSwitchTracker` rather than this rendering
-/// nothing on its own: the row around it usually has its own spacing to drop.
+/// **The issues page draws it whether or not both are connected**, since it is
+/// the only place in the app that says a second tracker exists — hiding it put
+/// the pitch for one on a screen you reach by having neither. Pressing the
+/// disconnected half there lands on that tracker's connect pane, which is where
+/// the press was going. The composer's `#` menu still asks `canSwitchTracker`:
+/// inside a sentence being typed there is nowhere for that pane to go, so the
+/// chip could only produce a list that cannot load. Neither gate lives here —
+/// the row around this has its own spacing to drop.
 ///
-/// The marks are the point here. This is one of the few places the app names a
-/// tracker at all, and a chip saying "GitHub" in words would be the widest
-/// thing in a row of glyphs.
+/// **A switch, not two chips.** Drawn as two independent pills it said "GitHub
+/// is on" and left Linear as a bare glyph floating beside it, which reads as
+/// one control lit and one piece of decoration rather than as a pick out of a
+/// pair.
 export default function IssueTrackerChips({
   tracker,
   className,
@@ -30,33 +43,12 @@ export default function IssueTrackerChips({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-1", className)} role="group" aria-label="Tracker">
-      {(["linear", "github"] as const).map((value) => (
-        <button
-          key={value}
-          type="button"
-          aria-pressed={tracker === value}
-          aria-label={value === "linear" ? "Linear" : "GitHub"}
-          // The composer keeps focus in its editor while this menu is open, so
-          // a press that moved focus would close the picker before the click
-          // landed. Harmless on the page, where nothing is listening for a
-          // blur — one rule beats two behaviours.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setIssueTracker(value)}
-          className={cn(
-            "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-ui transition-colors",
-            tracker === value
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {value === "linear" ? (
-            <LinearIcon className="size-3.5" />
-          ) : (
-            <GitHubIcon className="size-3.5" />
-          )}
-        </button>
-      ))}
-    </div>
+    <Segmented
+      value={tracker}
+      options={OPTIONS}
+      onPick={setIssueTracker}
+      label="Tracker"
+      className={className}
+    />
   );
 }

@@ -32,10 +32,11 @@ use crate::{git, github, projects, store::get_home_app_dir};
 /// The fields a list row is read from. One string, since it is what `gh` takes
 /// and what the two callers below must not disagree about.
 const LIST_FIELDS: &str =
-    "number,title,url,state,stateReason,assignees,labels,updatedAt,id";
+    "number,title,url,state,stateReason,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id";
 
 /// The list's fields plus what only an opened issue needs.
-const VIEW_FIELDS: &str = "number,title,body,url,state,stateReason,assignees,labels,updatedAt,id,comments";
+const VIEW_FIELDS: &str =
+    "number,title,body,url,state,stateReason,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,comments";
 
 /// Whose `gh` this is, cached for the process.
 ///
@@ -172,12 +173,17 @@ pub async fn repos_of_projects() -> Vec<String> {
     repos
 }
 
-/// Issues in one repository, newest touched first.
+/// Issues in one repository, newest **filed** first.
 ///
-/// `gh` orders by `updatedAt` descending and that order is kept, where Linear's
-/// answers are re-sorted by priority. GitHub issues carry no priority at all,
-/// so there is nothing to sort by and "what changed last" is the only ranking
-/// on offer.
+/// `gh issue list` has no sort flag, so the order is asked for as a search
+/// qualifier — which quietly moves the read onto the search API, still
+/// honouring `--assignee`, `--label` and `--state` and still carrying every
+/// field above (measured, not assumed). Its own default is `updatedAt`, which
+/// is a fact about the conversation rather than about the work and is the wrong
+/// ranking beside a column drawing the filed date.
+///
+/// Nothing is re-sorted afterwards, where Linear's answers are grouped by
+/// priority: GitHub issues carry no priority at all.
 pub async fn list_issues(
     repo: &str,
     query: &IssueQuery,
@@ -185,6 +191,16 @@ pub async fn list_issues(
 ) -> Result<Vec<Issue>, IssueUnavailable> {
     let dir = neutral_dir().await?;
     let limit = limit.clamp(1, 250).to_string();
+
+    // A reader who wrote their own `sort:` keeps it. Two of them in one query is
+    // GitHub's to resolve however it likes, and losing the order somebody asked
+    // for outright is worse than the default order they can see.
+    let text = query.text.as_deref().map(str::trim).unwrap_or_default();
+    let search = if text.contains("sort:") {
+        text.to_string()
+    } else {
+        format!("{text} sort:created-desc").trim().to_string()
+    };
 
     let mut args = vec![
         "issue",
@@ -207,10 +223,11 @@ pub async fn list_issues(
         IssueScope::All => {}
     }
 
-    let text = query.text.as_deref().map(str::trim).unwrap_or_default();
-    if !text.is_empty() {
-        args.extend(["--search", text]);
+    if let Some(label) = query.label.as_deref().filter(|label| !label.is_empty()) {
+        args.extend(["--label", label]);
     }
+
+    args.extend(["--search", &search]);
 
     let out = run(&dir, &args).await?;
     let rows = parse(&out)?;
@@ -266,31 +283,27 @@ pub async fn get_issue(identifier: &str) -> Result<IssueDetail, IssueUnavailable
 
 /// Moves an issue's status.
 ///
-/// The only write, and there are exactly three places to move to: GitHub's
-/// `state` is open or closed, and a closed issue carries a reason saying which
-/// kind of closed it is. `gh` spells each as its own subcommand.
+/// The only write, and there are two places to move to — see [`states`] for why
+/// a closed issue's *reason* is not a third. `gh` spells each as its own
+/// subcommand.
 ///
-/// **The current state is read first, always, and that is what makes all three
-/// moves honest.** Two things sit behind it, and asking once covers both:
-///
-/// - **`gh issue close` refuses an issue that is already closed and says so at
-///   exit 0** (measured, v2.86.0: "! Issue owner/repo#12 … is already closed"),
-///   so the move between the two *closed* reasons — Closed to Not planned,
-///   which the status menu offers like any other — would report success and
-///   change nothing. It is reopened first, which is what actually moves it.
-/// - **A pick that changes nothing must not be written.** Every row in that
-///   menu is pickable, the one the issue is already on included — deliberately,
-///   since a greyed row mid-list reads as a state that cannot be reached — so
-///   picking Open on an open issue has to be a no-op here rather than a `gh
-///   issue reopen` whose refusal the panel would draw as a failed update.
+/// **The current state is read first, always.** Every row in the status menu is
+/// pickable, the one the issue is already on included — deliberately, since a
+/// greyed row mid-list reads as a state that cannot be reached — so picking
+/// Open on an open issue has to be a no-op here rather than a `gh issue reopen`
+/// whose refusal the panel would draw as a failed update. **`gh` reports that
+/// refusal at exit 0** (measured, v2.86.0: "! Issue owner/repo#12 … is already
+/// closed"), so a no-op cannot be told from a write by its result either.
 ///
 /// Read before written rather than acting blind, since reopening notifies
 /// everybody watching the issue and the ordinary case needs no such thing.
+/// `--reason completed` is named rather than left to the default, so the field
+/// is always written and never carries whatever a previous close left there.
 pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueUnavailable> {
     let (repo, number) = split_identifier(identifier)
         .ok_or_else(|| IssueUnavailable::Other(format!("{identifier} is not an issue identifier")))?;
 
-    if !matches!(state_id, OPEN_ID | COMPLETED_ID | NOT_PLANNED_ID) {
+    if !matches!(state_id, OPEN_ID | COMPLETED_ID) {
         return Err(IssueUnavailable::Other(format!("No status {state_id}")));
     }
 
@@ -310,38 +323,24 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
         return Ok(());
     }
 
-    let reopen = ["issue", "reopen", number.as_str(), "-R", repo.as_str()];
-
     if state_id == OPEN_ID {
-        return run(&dir, &reopen).await.map(|_| ());
+        return run(&dir, &["issue", "reopen", &number, "-R", &repo]).await.map(|_| ());
     }
 
-    // Closed under the other reason, so the close below would be refused.
-    if text(&now, "state").eq_ignore_ascii_case("CLOSED") {
-        run(&dir, &reopen).await?;
-    }
-
-    let mut args = vec!["issue", "close", number.as_str(), "-R", repo.as_str()];
-    if state_id == NOT_PLANNED_ID {
-        args.extend(["--reason", "not planned"]);
-    } else {
-        // Named rather than left to the default, so a reason is written every
-        // time and the two closed states are always told apart on GitHub's side.
-        args.extend(["--reason", "completed"]);
-    }
-
-    run(&dir, &args).await.map(|_| ())
+    run(&dir, &["issue", "close", &number, "-R", &repo, "--reason", "completed"])
+        .await
+        .map(|_| ())
 }
 
-/// The filter row's options: the repositories, and the three statuses each of
-/// them offers.
+/// The filter row's options: the repositories, the statuses each offers, and
+/// the labels of the one being read.
 ///
 /// `teams` carries the repositories because a repository is what an issue here
 /// belongs to, and [`Issue::team`](super::Issue::team) is the field the page's
 /// `statesFor` lookup joins a row to its workflow on. Projects are empty:
 /// GitHub Projects are a workspace-wide board rather than a field on an issue,
 /// and reading them is a different query against a different object.
-pub async fn list_filters() -> Result<IssueFilters, IssueUnavailable> {
+pub async fn list_filters(repo: Option<&str>) -> Result<IssueFilters, IssueUnavailable> {
     let repos = repos_of_projects().await;
 
     Ok(IssueFilters {
@@ -354,22 +353,64 @@ pub async fn list_filters() -> Result<IssueFilters, IssueUnavailable> {
             })
             .collect(),
         projects: Vec::new(),
+        labels: match repo.filter(|repo| !repo.is_empty()) {
+            Some(repo) => labels_of(repo).await,
+            None => Vec::new(),
+        },
     })
 }
 
-// ── the three states ─────────────────────────────────────────────────────────
+/// A repository's own labels, in GitHub's own order.
+///
+/// Best effort: a repository this account cannot list labels for still lists
+/// issues, so a failure here costs one section of a menu rather than the page.
+/// The cap is GitHub's own maximum for one page — a repository with more labels
+/// than that has a filter menu nobody could scan anyway.
+async fn labels_of(repo: &str) -> Vec<IssueLabel> {
+    let Ok(dir) = neutral_dir().await else {
+        return Vec::new();
+    };
+
+    let out = run(
+        &dir,
+        &["label", "list", "-R", repo, "--json", "name,color", "--limit", "100"],
+    )
+    .await;
+
+    let rows = match out.and_then(|out| parse(&out)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("[github labels {repo}] {e:?}");
+            return Vec::new();
+        }
+    };
+
+    rows.as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|label| {
+            let name = optional(label, "name")?;
+            Some(IssueLabel {
+                name,
+                color: map_label_color(label),
+            })
+        })
+        .collect()
+}
+
+// ── the two states ───────────────────────────────────────────────────────────
 
 /// What a status menu writes. Stable strings rather than GitHub ids, since
-/// these are the *arguments* to three `gh` subcommands rather than anything the
-/// API addresses.
+/// these are the *arguments* to `gh` subcommands rather than anything the API
+/// addresses.
 const OPEN_ID: &str = "open";
 const COMPLETED_ID: &str = "completed";
-const NOT_PLANNED_ID: &str = "not_planned";
 
-/// Colours are GitHub's own, read off the glyphs it draws beside an issue:
-/// open green, completed purple, not-planned grey. Named here rather than taken
-/// from the wire because GitHub sends none — a state is two enum words, where
-/// Linear's is a row somebody coloured.
+/// Colours are GitHub's own, read off the glyphs it draws beside an issue: open
+/// green, closed purple. Named here rather than taken from the wire because
+/// GitHub sends none — a state is two enum words, where Linear's is a row
+/// somebody coloured.
 fn state(kind: IssueStateKind, id: &str, name: &str, color: &str) -> IssueState {
     IssueState {
         id: id.to_string(),
@@ -379,38 +420,35 @@ fn state(kind: IssueStateKind, id: &str, name: &str, color: &str) -> IssueState 
     }
 }
 
-/// Every status a GitHub issue can be in, in the order work moves through.
+/// Every status a GitHub issue can be in here, in the order work moves through.
 /// Fixed, unlike a Linear team's workflow, so this is a constant rather than a
 /// read — which is what lets a status menu open on a row the list never asked a
 /// second question about.
+///
+/// **Open and Closed, and `NOT_PLANNED` is deliberately not a third.** GitHub
+/// files it as a *reason* under the one closed state rather than as a state of
+/// its own, and drawing it as one bought a permanent third heading on the page
+/// — almost always empty — plus a menu row for a distinction nothing else here
+/// reads. A not-planned issue is closed, and that is what the page says.
 fn states() -> Vec<IssueState> {
     vec![
         state(IssueStateKind::Unstarted, OPEN_ID, "Open", "#1a7f37"),
         state(IssueStateKind::Completed, COMPLETED_ID, "Closed", "#8250df"),
-        state(IssueStateKind::Canceled, NOT_PLANNED_ID, "Not planned", "#59636e"),
     ]
 }
 
-/// The state a row is in, from the two fields that say it.
-///
-/// `stateReason` is `""` on an open issue and on a closed one GitHub has no
-/// reason for, so the reason is only read on the closed half — and an
-/// unrecognised one reads as plain closed rather than as a fourth state.
+/// The state a row is in, from the one field that says it. `stateReason` is
+/// read no longer — see [`states`] for why every closed issue reads as Closed.
 fn map_state(node: &Value) -> IssueState {
     let closed = node
         .get("state")
         .and_then(Value::as_str)
         .is_some_and(|state| state.eq_ignore_ascii_case("CLOSED"));
 
-    if !closed {
-        return state(IssueStateKind::Unstarted, OPEN_ID, "Open", "#1a7f37");
-    }
-
-    let reason = node.get("stateReason").and_then(Value::as_str).unwrap_or_default();
-    if reason.eq_ignore_ascii_case("NOT_PLANNED") {
-        state(IssueStateKind::Canceled, NOT_PLANNED_ID, "Not planned", "#59636e")
-    } else {
+    if closed {
         state(IssueStateKind::Completed, COMPLETED_ID, "Closed", "#8250df")
+    } else {
+        state(IssueStateKind::Unstarted, OPEN_ID, "Open", "#1a7f37")
     }
 }
 
@@ -468,16 +506,12 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         // First only: GitHub allows several and the row draws one face, which
         // is the same reading the PR panel takes of a review.
         assignee: array(node, "assignees").first().and_then(map_person),
+        author: node.get("author").and_then(map_person),
         labels: array(node, "labels")
             .iter()
             .map(|label| IssueLabel {
                 name: text(label, "name"),
-                // `gh` sends six hex digits with no `#`, where every other
-                // colour that reaches the frontend carries one — so a label
-                // would draw in the inherited colour, silently.
-                color: optional(label, "color")
-                    .map(|hex| format!("#{hex}"))
-                    .unwrap_or_default(),
+                color: map_label_color(label),
             })
             .collect(),
         // The repository, which is what the identifier is built from and what
@@ -485,7 +519,38 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         team: Some(repo.to_string()),
         project: None,
         updated_at: text(node, "updatedAt"),
+        created_at: text(node, "createdAt"),
+        pull_requests: pull_requests(node),
     })
+}
+
+/// Linked pull requests, by number.
+///
+/// `closedByPullRequestsReferences` is GitHub's own answer to what the issue
+/// sidebar calls Development — the PRs that would close this issue — which is
+/// narrower than every PR that happens to mention it, and is the set worth a
+/// chip. Sorted and deduplicated, so the row reads the same twice running.
+fn pull_requests(node: &Value) -> Vec<u32> {
+    let mut numbers: Vec<u32> = array(node, "closedByPullRequestsReferences")
+        .iter()
+        .filter_map(|pr| pr.get("number").and_then(Value::as_u64))
+        .map(|number| number as u32)
+        .collect();
+
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
+/// A label's colour with the `#` `gh` leaves off.
+///
+/// Six hex digits and no hash is what both the issue and the label endpoints
+/// send, where every other colour reaching the frontend carries one — so
+/// without this a label draws in the inherited colour and nothing says why.
+fn map_label_color(label: &Value) -> String {
+    optional(label, "color")
+        .map(|hex| format!("#{hex}"))
+        .unwrap_or_default()
 }
 
 fn map_person(value: &Value) -> Option<IssuePerson> {
@@ -584,8 +649,8 @@ mod tests {
         assert_eq!(done.state.name, "Closed");
 
         let dropped = issues.iter().find(|i| i.identifier.ends_with("#99")).unwrap();
-        assert_eq!(dropped.state.kind, IssueStateKind::Canceled);
-        assert_eq!(dropped.state.name, "Not planned");
+        assert_eq!(dropped.state.kind, IssueStateKind::Completed);
+        assert_eq!(dropped.state.name, "Closed");
     }
 
     /// `gh` sends a label colour as six hex digits with no `#`, where every
@@ -664,28 +729,21 @@ mod tests {
     fn every_status_names_a_command_update_can_run() {
         let ids: Vec<String> = states().into_iter().map(|state| state.id).collect();
 
-        assert_eq!(ids, vec![OPEN_ID, COMPLETED_ID, NOT_PLANNED_ID]);
+        assert_eq!(ids, vec![OPEN_ID, COMPLETED_ID]);
     }
 
-    /// What `update_issue` branches on before it writes, and the whole of why
-    /// it reads first: the two *closed* states are one `gh issue close` apart
-    /// and that command refuses an issue already closed — at exit 0 — so the
-    /// move between them has to reopen. `map_state` is what tells them apart,
-    /// and it has to answer off the same two fields the write reads back.
+    /// What `update_issue` reads before it writes, so picking the state an
+    /// issue is already on spawns nothing — `gh issue close` reports that
+    /// refusal at exit 0, so a no-op cannot be told from a write by its result.
+    /// Every closed reason reads as Closed; see `states` for why.
     #[test]
-    fn the_two_closed_states_are_told_apart_by_reason_alone() {
-        let done = serde_json::json!({ "state": "CLOSED", "stateReason": "COMPLETED" });
-        let dropped = serde_json::json!({ "state": "CLOSED", "stateReason": "NOT_PLANNED" });
+    fn state_is_read_off_the_one_field_that_says_it() {
+        for reason in ["COMPLETED", "NOT_PLANNED", "DUPLICATE", ""] {
+            let closed = serde_json::json!({ "state": "CLOSED", "stateReason": reason });
+            assert_eq!(map_state(&closed).id, COMPLETED_ID, "{reason}");
+        }
 
-        assert_eq!(map_state(&done).id, COMPLETED_ID);
-        assert_eq!(map_state(&dropped).id, NOT_PLANNED_ID);
-
-        // An open issue reports an empty reason, so the reason is read on the
-        // closed half alone — and a closed one with a reason nothing here
-        // models reads as plain Closed rather than as a fourth state.
         let open = serde_json::json!({ "state": "OPEN", "stateReason": "" });
         assert_eq!(map_state(&open).id, OPEN_ID);
-        let duplicate = serde_json::json!({ "state": "CLOSED", "stateReason": "DUPLICATE" });
-        assert_eq!(map_state(&duplicate).id, COMPLETED_ID);
     }
 }

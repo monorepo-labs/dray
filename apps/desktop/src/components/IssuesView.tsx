@@ -8,11 +8,22 @@ import {
 } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  GitPullRequest,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Tag,
+} from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
+import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon from "@/components/IssueStateIcon";
+import Segmented from "@/components/Segmented";
 import LinearIcon from "@/components/LinearIcon";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -33,8 +44,6 @@ import { useHotkey } from "@/hooks/useHotkey";
 import { issueErrorText, useIssues } from "@/hooks/useIssues";
 import { groupIssues, groupLabel, shortIdentifier } from "@/lib/issue";
 import {
-  canSwitchTracker,
-  effectiveTracker,
   readIssueTracker,
   subscribeIssueTracker,
   type Connected,
@@ -44,6 +53,7 @@ import { cn } from "@/lib/utils";
 import type {
   Issue,
   IssueGroup,
+  IssueLabel,
   IssueQuery,
   IssueScope,
   IssueState,
@@ -75,6 +85,13 @@ const LINEAR_MCP_URL = "https://linear.app/docs/mcp";
 /// change.
 const GH_AUTH_URL = "https://cli.github.com/manual/gh_auth_login";
 
+/// Said in the CLI's own words, and Homebrew because this app is macOS only and
+/// that is how `gh` arrives here. Spelled exactly as the PR panel's setup pane
+/// spells it — the two are one machine's answer to one question, and a reader
+/// meeting both should not find two vocabularies for it.
+const LOGIN_COMMAND = "gh auth login";
+const INSTALL_COMMAND = "brew install gh";
+
 /// The two questions worth one press, and the second one differs by tracker.
 ///
 /// Linear's list is workspace-wide, so "what did I file" is a real second
@@ -93,6 +110,20 @@ const SCOPES: Record<IssueTracker, { value: IssueScope; label: string }[]> = {
     { value: "all", label: "All" },
   ],
 };
+
+/// GitHub's two states, as a switch rather than as two headings.
+///
+/// **It has exactly two, which is what makes a heading per state the wrong
+/// shape there.** Linear's five are a workflow and a page grouped by them says
+/// what is moving; GitHub's are open and closed, so the same grouping drew one
+/// list under a heading and a permanently-collapsed second heading under it,
+/// which is a switch wearing a costume. This is the switch. Closed work is a
+/// different question rather than the tail of this one, so asking it swaps the
+/// list instead of growing it.
+const STATES = [
+  { value: "open", label: "Open" },
+  { value: "closed", label: "Closed" },
+] as const;
 
 /// The two buckets that are read on demand. Drawn in the same order [groupIssues]
 /// would put them in, so opening one does not reshuffle the page.
@@ -145,15 +176,22 @@ export default function IssuesView({
   /// knows which one the reader is looking at.
   refreshRef?: MutableRefObject<(() => void) | null>;
 }) {
-  // The pick, resolved against what is actually connected: a reader who
-  // disconnects the tracker they last picked should land on the one they still
-  // have rather than on an empty page.
-  const pick = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
-  const tracker = effectiveTracker(pick, connected);
-  const anyConnected = connected.linear || connected.github;
+  // **The pick is honoured, connected or not**, where this used to be resolved
+  // against what was actually behind it. The switch below is drawn either way
+  // now — it is the only thing in the app that says a second tracker exists, so
+  // hiding it left the pitch for one on a screen reachable only by having
+  // neither — and a switch whose press is silently undone is worse than none.
+  // What a disconnected pick draws is that tracker's own connect pane, which is
+  // where the press was going anyway.
+  const tracker = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
+
+  /// Whether the tracker on screen has nothing behind it. Asked of the *picked*
+  /// one alone: what the other half has says nothing about what this list can
+  /// read, and with one connected this is the ordinary state of the other.
+  const needsConnecting = !connected[tracker];
 
   const { issues, settled, filters, query, setQuery, loading, loaded, unavailable, refresh } =
-    useIssues(active && anyConnected, tracker);
+    useIssues(active && !needsConnecting, tracker);
 
   // Kept current rather than set once: `refresh` is re-made whenever the hook
   // re-runs, and a handle captured at mount would close over a stale one.
@@ -175,7 +213,7 @@ export default function IssuesView({
   useHotkey(
     "issues.search",
     () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
-    { enabled: active && anyConnected },
+    { enabled: active && !needsConnecting },
   );
 
   /// The workflow a row's status menu offers, which belongs to the issue's own
@@ -196,33 +234,52 @@ export default function IssuesView({
   /// a list of GitHub issues.
   const settledKinds = useMemo(
     () =>
-      SETTLED_KINDS.map(({ key }) => ({
-        key,
-        label: groupLabel(key, tracker),
-      })),
-    [tracker],
+      SETTLED_KINDS.map(({ key }) => ({ key, label: groupLabel(key) })),
+    [],
   );
 
-  const groups = useMemo(() => groupIssues(issues, tracker), [issues, tracker]);
-  const settledGroups = useMemo(
-    () => groupIssues(settled.issues, tracker),
-    [settled.issues, tracker],
-  );
+  // Linear's alone: GitHub draws its rows flat under the state switch.
+  const groups = useMemo(() => groupIssues(issues), [issues]);
+  const settledGroups = useMemo(() => groupIssues(settled.issues), [settled.issues]);
 
-  if (!anyConnected) {
-    return <Connect onConnect={onConnect} busy={connecting} error={connectError} />;
+  if (needsConnecting) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* The list's own row, cut to the one control that still means
+            anything: everything else there narrows a list nothing is reading.
+            Its place is what keeps the two states one page rather than two —
+            the switch does not move when a press lands on it. */}
+        <div className="flex shrink-0 items-center px-3 pt-3">
+          <IssueTrackerChips tracker={tracker} />
+        </div>
+
+        <Connect
+          tracker={tracker}
+          connected={connected}
+          onConnect={onConnect}
+          busy={connecting}
+          error={connectError}
+        />
+      </div>
+    );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1.5 px-3 pt-3">
+      {/* **Wraps, and nothing in it shrinks.** Every control here is a pill
+          whose width is its own text, so a row that will not wrap has only one
+          way to fit them — squeeze them — which broke "Assigned to me" over two
+          lines and pushed the repository and label controls off the pane where
+          the panel was open. `ml-auto` still holds the narrowing group to the
+          right edge of the first line, and starts at the left of the second
+          — see the spacer below. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pt-3">
         {/* First in the row, because it changes what every other control in it
             means: the scopes and the filter menu narrow *within* a tracker.
-            Drawn only where both are connected — with one there is nothing to
-            flip to. */}
-        {canSwitchTracker(connected) && (
-          <IssueTrackerChips tracker={tracker} className="mr-1" />
-        )}
+            **Always drawn**, the disconnected half included — it is the only
+            place the app says a second tracker exists, and pressing it is how
+            somebody finds that out. */}
+        <IssueTrackerChips tracker={tracker} className="mr-1" />
 
         {SCOPES[tracker].map((scope) => (
           // Chips rather than a menu, because these are the two questions worth
@@ -233,7 +290,7 @@ export default function IssuesView({
             type="button"
             onClick={() => set({ scope: scope.value })}
             className={cn(
-              "rounded-full px-2.5 py-1 text-ui transition-colors",
+              "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
               query.scope === scope.value
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-muted-foreground hover:text-foreground",
@@ -243,43 +300,84 @@ export default function IssuesView({
           </button>
         ))}
 
-        {/* **The repository is a control on the row, not a row in a menu.** It
-            is not a filter narrowing a list the page can already draw — under
-            GitHub it *is* the list, so with none picked there is nothing on
-            screen at all. Buried behind the sliders icon it was both invisible
-            when set and unfindable when not. */}
         {tracker === "github" && (
-          <RepoMenu
-            repo={query.teamId}
-            repos={filters?.teams ?? []}
-            onPick={(teamId) => set({ teamId })}
+          <Segmented
+            value={query.settled ? "closed" : "open"}
+            options={STATES}
+            onPick={(state) => set({ settled: state === "closed" })}
+            label="Issue state"
+            className="ml-1"
           />
         )}
 
-        <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
+        {/* **What the page *is* stays left; what narrows it goes right.** The
+            chips answer "whose issues" and are a pick out of a fixed pair; the
+            controls over here each carry a value of their own and grow as wide
+            as it is, so interleaved they pushed the chips a different distance
+            from the edge on every repository. Refresh closes the group and is
+            *inside* it: left as a sibling it was the one thing narrow enough to
+            fit on its own, so a row an icon's width too long wrapped a lone
+            spinner onto a second line under a first that still looked full.
 
-        {/* Far right, away from the chips. It acts on the whole page rather
-            than narrowing it, so sitting in the row of things that narrow read
-            as a third chip. Same corner and same chord as the right panel's,
-            which is the point: the chord means "re-read what I am looking at",
-            and never a specific thing. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Refresh"
-              className="ml-auto text-muted-foreground/60 hover:text-muted-foreground"
-              onClick={refresh}
-            >
-              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="left">
-            Refresh
-            <ShortcutKeys ids={["panel.refresh"]} />
-          </TooltipContent>
-        </Tooltip>
+            **The repository is a control on the row, not a row in a menu.** It
+            is not a filter narrowing a list the page can already draw — under
+            GitHub it *is* the list, so with none picked there is nothing on
+            screen at all. Buried behind the sliders icon it was both invisible
+            when set and unfindable when not, and the label filter beside it was
+            the same story one menu deeper. */}
+        {/* A growing spacer rather than `ml-auto` on the group, and the
+            difference is what happens on the *second* line. `ml-auto` is the
+            group's own margin, so it right-aligns it wherever it lands and a
+            wrapped group hung off the right edge with the whole line empty
+            beside it. This is a flex item of its own at `flex-basis: 0`, so it
+            counts for nothing when the browser decides where to break and then
+            eats whatever the first line has left — which puts the group at the
+            right while it fits and at the left once it does not. */}
+        <div className="flex-1" aria-hidden />
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          {tracker === "github" && (
+            <>
+              <RepoMenu
+                repo={query.teamId}
+                repos={filters?.teams ?? []}
+                // The label goes with it: labels belong to the repository, so a
+                // pick carried across would narrow the new list by a name it
+                // has never heard of and draw nothing, with a lit control as
+                // the only clue why.
+                onPick={(teamId) => set({ teamId, label: null })}
+              />
+              <LabelMenu
+                label={query.label}
+                labels={filters?.labels ?? []}
+                onPick={(label) => set({ label })}
+              />
+            </>
+          )}
+
+          <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
+
+          {/* Last, and it narrows nothing — same corner and same chord as the
+              right panel's, which is the point: the chord means "re-read what I
+              am looking at", and never a specific thing. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh"
+                className="text-muted-foreground/60 hover:text-muted-foreground"
+                onClick={refresh}
+              >
+                <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              Refresh
+              <ShortcutKeys ids={["panel.refresh"]} />
+            </TooltipContent>
+          </Tooltip>
+        </div>
       </div>
 
       {/* No fill and no border. A search box is the one control here that is
@@ -383,34 +481,56 @@ export default function IssuesView({
               <p className="px-3 py-4 text-ui text-muted-foreground">
                 {query.text
                   ? "No issue matches that."
-                  : query.scope === "created"
-                    ? "Nothing you filed is open."
-                    : query.scope === "all"
-                      ? "No open issues in this repository."
-                      : "Nothing assigned to you."}
+                  : query.settled
+                    ? query.scope === "all"
+                      ? "No closed issues in this repository."
+                      : "Nothing closed is assigned to you."
+                    : query.scope === "created"
+                      ? "Nothing you filed is open."
+                      : query.scope === "all"
+                        ? "No open issues in this repository."
+                        : "Nothing assigned to you."}
               </p>
             )}
 
-            {loaded &&
-              groups.map((group) => (
-                <Group
-                  key={group.key}
-                  kind={group.key}
-                  label={group.label}
-                  count={group.issues.length}
-                >
-                  {group.issues.map((issue) => (
-                    <IssueRow
-                      key={issue.id}
-                      issue={issue}
-                      picked={issue.identifier === picked}
-                      states={statesFor(issue)}
-                      onPick={onPick}
-                      onWorkOn={onWorkOn}
-                    />
-                  ))}
-                </Group>
-              ))}
+            {/* **No headings under GitHub**, since the switch above already
+                says which of its two states is on screen and a lone "Open" over
+                every row is that sentence a second time. Linear keeps them: its
+                five are a workflow, and the split between what is moving and
+                what is waiting is most of what the page is for. */}
+            {loaded && tracker === "github"
+              ? issues.map((issue) => (
+                  <IssueRow
+                    key={issue.id}
+                    issue={issue}
+                    picked={issue.identifier === picked}
+                    scopedToMe={query.scope === "assigned"}
+                    states={statesFor(issue)}
+                    onPick={onPick}
+                    onWorkOn={onWorkOn}
+                  />
+                ))
+              : loaded &&
+                groups.map((group) => (
+                  <Group
+                    key={group.key}
+                    kind={group.key}
+                    label={group.label}
+                    count={group.issues.length}
+                  >
+                    {group.issues.map((issue) => (
+                      <IssueRow
+                        key={issue.id}
+                        issue={issue}
+                        picked={issue.identifier === picked}
+                        scopedToMe={query.scope === "assigned"}
+                        states={statesFor(issue)}
+                        onPick={onPick}
+                        onWorkOn={onWorkOn}
+                      />
+                    ))}
+                  </Group>
+                ))}
 
             {/* Done and Cancelled are always here and always start closed.
                 Finished work is most of a workspace and almost never what the
@@ -420,6 +540,7 @@ export default function IssuesView({
                 the headings cost a round trip only when somebody asks a
                 question of them. */}
             {loaded &&
+              tracker !== "github" &&
               settledKinds.map(({ key, label }) => {
                 const group = settledGroups.find((g) => g.key === key);
 
@@ -440,6 +561,7 @@ export default function IssuesView({
                           key={issue.id}
                           issue={issue}
                           picked={issue.identifier === picked}
+                          scopedToMe={query.scope === "assigned"}
                           states={statesFor(issue)}
                           onPick={onPick}
                           onWorkOn={onWorkOn}
@@ -458,14 +580,23 @@ export default function IssuesView({
   );
 }
 
-/// The page with nothing connected, and the key field is *here* rather than a
-/// trip to settings — this is the surface that has nothing to show without one,
-/// so this is where the thing that fixes it belongs.
+/// The pane for a tracker with nothing behind it, and the thing that fixes it
+/// lives *here* rather than a trip to settings — this is the surface that has
+/// nothing to show without one, so this is where the cure belongs.
+///
+/// **It answers for one tracker at a time**, the one the switch above is on,
+/// since pressing that switch is what asked the question. The other is offered
+/// under a rule and only while it is *also* unconnected: pitching a tracker
+/// somebody already has can only read as the app being confused about it.
 function Connect({
+  tracker,
+  connected,
   onConnect,
   busy,
   error,
 }: {
+  tracker: IssueTracker;
+  connected: Connected;
   onConnect: (key: string) => Promise<boolean>;
   busy: boolean;
   error: string | null;
@@ -475,101 +606,158 @@ function Connect({
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6">
       <div className="flex w-full max-w-sm flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          {/* The mark, because it is what makes this recognisable before the
-              sentence under it is read — and this is one of the two places in
-              the app where naming the tracker is the point rather than a leak
-              of the implementation. */}
-          <p className="flex items-center gap-2 text-ui font-medium">
-            <LinearIcon />
-            Connect Linear
+        {tracker === "linear" ? (
+          <>
+            <div className="flex flex-col gap-1">
+              {/* The mark, because it is what makes this recognisable before
+                  the sentence under it is read — and this is one of the two
+                  places in the app where naming the tracker is the point
+                  rather than a leak of the implementation. */}
+              <p className="flex items-center gap-2 text-ui font-medium">
+                <LinearIcon />
+                Connect Linear
+              </p>
+              {/* The smaller ask is still offered, and second: read alone is
+                  what somebody wary of pasting a credential into a desktop app
+                  can give, and naming it is what keeps that a small decision.
+                  Write is named first because it is what the app now does, and
+                  leaving it out would have the reader find out from a status
+                  menu that fails. */}
+              <p className="text-ui text-muted-foreground">
+                Paste a personal API key with read and write access. A read-only key works too —
+                you just cannot change a status or priority.
+              </p>
+            </div>
+
+            <form
+              className="flex gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (await onConnect(key)) setKey("");
+              }}
+            >
+              <Input
+                value={key}
+                // A personal API key is a credential, and this page is open in
+                // front of other people often enough.
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="lin_api_…"
+                onChange={(e) => setKey(e.currentTarget.value)}
+              />
+              {/* Height matched to the field beside it rather than left at the
+                  small default — two controls on one line that disagree about
+                  how tall they are read as a mistake before they read as a
+                  form. */}
+              <Button type="submit" className="h-9 shrink-0" disabled={busy || !key.trim()}>
+                {busy ? "Connecting…" : "Connect"}
+              </Button>
+            </form>
+
+            {error && <p className="text-ui text-destructive">{error}</p>}
+
+            <button
+              type="button"
+              className="self-start text-ui text-muted-foreground hover:text-foreground"
+              onClick={() => void openUrl(LINEAR_KEYS_URL)}
+            >
+              Create a key in Linear
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1">
+              <p className="flex items-center gap-2 text-ui font-medium">
+                <GitHubIcon className="size-3.5" />
+                Sign in to GitHub
+              </p>
+              {/* No form, and saying why is the whole of this sentence: the
+                  reader is looking at a pane that asks nothing of them, and a
+                  screen with no field on it should say what is filling in for
+                  one rather than leave them hunting for it. */}
+              <p className="text-ui text-muted-foreground">
+                Dray reads GitHub issues through the <code>gh</code> CLI and holds no credential of
+                its own, so there is nothing to paste here.
+              </p>
+            </div>
+
+            {/* The command, then the install under it — **that order**, because
+                a logged-out `gh` is far commoner than an absent one and the
+                pane should open on the likelier cure. The install line is not
+                optional: without it the only instruction on screen is a command
+                that does not exist on a machine that never had the CLI. */}
+            <p className="text-ui text-muted-foreground">
+              Run{" "}
+              <button
+                type="button"
+                className="text-foreground underline underline-offset-2 hover:text-foreground/80"
+                onClick={() => void openUrl(GH_AUTH_URL)}
+              >
+                <code>{LOGIN_COMMAND}</code>
+              </button>{" "}
+              in a terminal, then refresh this page.
+            </p>
+
+            <p className="text-ui text-muted-foreground">
+              No <code>gh</code> yet? <code className="text-foreground">{INSTALL_COMMAND}</code>
+            </p>
+          </>
+        )}
+
+        {/* The other tracker, and only while it is missing too. Said here
+            because this is the surface with nothing to show, and somebody one
+            command away from a page full of issues should not have to find that
+            out from a switch they have not pressed. Quieter than whatever is
+            above it: only one of the two is being asked for. */}
+        {tracker === "linear" && !connected.github && (
+          <p className="flex items-start gap-2 border-t border-border pt-3 text-ui text-muted-foreground">
+            <GitHubIcon className="mt-0.5 size-3.5" />
+            <span>
+              Or sign in to GitHub with{" "}
+              <button
+                type="button"
+                className="text-foreground underline underline-offset-2 hover:text-foreground/80"
+                onClick={() => void openUrl(GH_AUTH_URL)}
+              >
+                <code>{LOGIN_COMMAND}</code>
+              </button>{" "}
+              — Dray reads GitHub issues through the <code>gh</code> CLI, so there is no key to
+              paste.
+            </span>
           </p>
-          {/* The smaller ask is still offered, and second: read alone is what
-              somebody wary of pasting a credential into a desktop app can give,
-              and naming it is what keeps that a small decision. Write is named
-              first because it is what the app now does, and leaving it out
-              would have the reader find out from a status menu that fails. */}
-          <p className="text-ui text-muted-foreground">
-            Paste a personal API key with read and write access. A read-only key works too — you
-            just cannot change a status or priority.
+        )}
+
+        {tracker === "github" && !connected.linear && (
+          <p className="flex items-start gap-2 border-t border-border pt-3 text-ui text-muted-foreground">
+            <LinearIcon className="mt-0.5 size-3.5" />
+            <span>Or connect Linear with a personal API key — the switch above.</span>
           </p>
-        </div>
+        )}
 
-        <form
-          className="flex gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (await onConnect(key)) setKey("");
-          }}
-        >
-          <Input
-            value={key}
-            // A personal API key is a credential, and this page is open in
-            // front of other people often enough.
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="lin_api_…"
-            onChange={(e) => setKey(e.currentTarget.value)}
-          />
-          {/* Height matched to the field beside it rather than left at the
-              small default — two controls on one line that disagree about how
-              tall they are read as a mistake before they read as a form. */}
-          <Button type="submit" className="h-9 shrink-0" disabled={busy || !key.trim()}>
-            {busy ? "Connecting…" : "Connect"}
-          </Button>
-        </form>
+        {/* The other half of the setup, and this is the place to say it. This
+            key is what fills *these* screens; it gives the agent nothing. An
+            agent that is to read an issue in full, or move one, needs Linear's
+            MCP server — and someone finding that out later, from a model
+            working off a one-line title, finds it out the expensive way. Said
+            here, while they are already setting this up, and said once.
 
-        {error && <p className="text-ui text-destructive">{error}</p>}
-
-        <button
-          type="button"
-          className="self-start text-ui text-muted-foreground hover:text-foreground"
-          onClick={() => void openUrl(LINEAR_KEYS_URL)}
-        >
-          Create a key in Linear
-        </button>
-
-        {/* The other tracker, and it needs no form: GitHub's credential is
-            `gh`'s own, so there is nothing to paste and nothing for Dray to
-            hold. Said here because this is the surface with nothing to show,
-            and a reader who already has `gh` signed in is one relaunch from a
-            page full of issues without knowing it. Second, and quieter than the
-            form above it: only one of the two asks anything of them. */}
-        <p className="flex items-start gap-2 border-t border-border pt-3 text-ui text-muted-foreground">
-          <GitHubIcon className="mt-0.5 size-3.5" />
-          <span>
-            Or sign in to GitHub with{" "}
+            Linear's alone: GitHub's half of it is the `gh` CLI the agent
+            already has, and there is nothing to add. */}
+        {tracker === "linear" && (
+          <p className="border-t border-border pt-3 text-ui text-muted-foreground">
+            Dray reads your issues with this key, and writes only the status or priority you pick.
+            To let the agent read and manage issues in chat, add{" "}
             <button
               type="button"
               className="text-foreground underline underline-offset-2 hover:text-foreground/80"
-              onClick={() => void openUrl(GH_AUTH_URL)}
+              onClick={() => void openUrl(LINEAR_MCP_URL)}
             >
-              <code>gh auth login</code>
+              Linear's MCP server
             </button>{" "}
-            — Dray reads GitHub issues through the <code>gh</code> CLI, so there is no key to
-            paste.
-          </span>
-        </p>
-
-        {/* The other half of the setup, and this is the place to say it.
-            This key is what fills *these* screens; it gives the agent nothing.
-            An agent that is to read an issue in full, or move one, needs
-            Linear's MCP server — and someone finding that out later, from a
-            model working off a one-line title, finds it out the expensive way.
-            Said here, while they are already setting this up, and said once. */}
-        <p className="border-t border-border pt-3 text-ui text-muted-foreground">
-          Dray reads your issues with this key, and writes only the status or priority you pick.
-          To let the agent read and manage issues in chat, add{" "}
-          <button
-            type="button"
-            className="text-foreground underline underline-offset-2 hover:text-foreground/80"
-            onClick={() => void openUrl(LINEAR_MCP_URL)}
-          >
-            Linear's MCP server
-          </button>{" "}
-          to your CLI.
-        </p>
+            to your CLI.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -633,6 +821,14 @@ function Group({
 /// say what they are by being lit, and this one has a hundred possible states.
 /// The rows are the repositories of attached projects with a `github.com`
 /// remote, which is the list this app can name without a network call.
+///
+/// **The repository, not the whole slug.** `monorepo-labs/dray` is most of this
+/// row's width spent on a word that is the same for most of the list, and the
+/// owner is only ever needed to tell two same-named repositories apart — which
+/// is a question asked where the pick is made. So the menu rows carry the slug
+/// whole and the trigger carries the name. No tooltip restoring it: a menu is
+/// one click away and already answers, where a tooltip on something that opens
+/// on hover-and-click is a second thing arriving over the first.
 function RepoMenu({
   repo,
   repos,
@@ -653,17 +849,16 @@ function RepoMenu({
         <button
           type="button"
           className={cn(
-            "flex items-center gap-1 rounded-full px-2.5 py-1 text-ui transition-colors",
+            "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
             repo
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
           <GitHubIcon className="size-3.5" />
-          {/* The slug whole. It is `owner/repo` and the owner is what tells two
-              forks of one name apart, so truncating from the left would drop
-              the half that disambiguates. */}
-          <span className="max-w-48 truncate">{repo ?? "Choose a repository"}</span>
+          <span className="max-w-40 truncate">
+            {repo ? repo.slice(repo.indexOf("/") + 1) : "Choose a repository"}
+          </span>
           <ChevronDown className="size-3 opacity-60" />
         </button>
       </DropdownMenuTrigger>
@@ -681,6 +876,69 @@ function RepoMenu({
             onCheckedChange={() => onPick(option.id)}
           >
             {option.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/// Which label the GitHub half is narrowed to, on its face.
+///
+/// Wears its value like `RepoMenu` above rather than folding into the sliders
+/// menu, and for the same reason: a narrowing set on a previous visit is what
+/// an empty-looking list is usually explained by, and a lit glyph says a filter
+/// is on without saying which. The labels are the repository's own, so this
+/// draws nothing at all where that read has not landed or the repository has
+/// none — a trigger opening onto one row that clears nothing is no control.
+function LabelMenu({
+  label,
+  labels,
+  onPick,
+}: {
+  label: string | null;
+  labels: IssueLabel[];
+  onPick: (label: string | null) => void;
+}) {
+  if (!labels.length) return null;
+
+  const picked = labels.find((option) => option.name === label);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
+            label
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {picked ? <IssueLabelChip label={picked} dot /> : <Tag className="size-3.5" />}
+          <span className="max-w-40 truncate">{label ?? "Label"}</span>
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="end" className="max-h-96 w-56 overflow-y-auto">
+        <DropdownMenuLabel>Label</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem checked={!label} onCheckedChange={() => onPick(null)}>
+          All labels
+        </DropdownMenuCheckboxItem>
+        {labels.map((option) => (
+          <DropdownMenuCheckboxItem
+            key={option.name}
+            checked={label === option.name}
+            // One axis, one value: picking another replaces this, and the row
+            // already on is what clears it — the shape every menu here takes.
+            onCheckedChange={(on) => onPick(on ? option.name : null)}
+          >
+            <span className="flex items-center gap-1.5">
+              <IssueLabelChip label={option} dot />
+              {option.name}
+            </span>
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
@@ -720,7 +978,8 @@ function FilterMenu({
   const narrowed = !!query.teamId || !!query.projectId;
 
   // Nothing left to narrow by. A trigger that opens an empty menu is worse than
-  // no trigger, and a single-team workspace is the ordinary case here.
+  // no trigger, and a single-team workspace is the ordinary case here — as is
+  // GitHub, whose two controls both stand on the row.
   if (!teams.length && !projects.length) return null;
 
   return (
@@ -807,12 +1066,16 @@ function FilterMenu({
 function IssueRow({
   issue,
   picked,
+  scopedToMe,
   states,
   onPick,
   onWorkOn,
 }: {
   issue: Issue;
   picked: boolean;
+  /// Whether the list this row is in was narrowed to the reader's own issues,
+  /// which is what makes the assignee's face a second copy of the chip above.
+  scopedToMe: boolean;
   /// The statuses this issue's team offers. Empty until the filters read lands,
   /// which leaves the glyph a plain one.
   states: IssueState[];
@@ -870,8 +1133,15 @@ function IssueRow({
 
       {/* Every row here is in the one repository the page is reading, so a
           GitHub identifier would spend this column saying the slug over and
-          over. The number is what tells the rows apart. */}
-      <span className="w-16 shrink-0 truncate text-muted-foreground tabular-nums">
+          over. The number is what tells the rows apart — and the column is
+          narrower for it, or the width a `DRA-123` needs sits as a gap beside
+          every `#108` on a page that has already dropped the priority glyph. */}
+      <span
+        className={cn(
+          "shrink-0 truncate text-muted-foreground tabular-nums",
+          issue.tracker === "github" ? "w-10" : "w-16",
+        )}
+      >
         {shortIdentifier(issue.identifier)}
       </span>
 
@@ -880,16 +1150,19 @@ function IssueRow({
           issue to In Progress is the commonest thing anybody does on this page,
           and sending them into the pane to do it made the list a place you only
           read from. Same order as the panel's own header — priority, then the
-          identifier, then status — so the two surfaces read as one. */}
-      <StatusMenu issue={issue} state={issue.state} states={states} />
+          identifier, then status — so the two surfaces read as one.
+
+          **Absent under GitHub**, where that bargain stops paying. Linear's six
+          states make the glyph a reading as well as a control — which of the
+          six this row is on — where GitHub has two and the switch above has
+          already picked one, so every glyph in the list says the same word the
+          control at the top of it does. Closing an issue moves to the Details
+          pane, which carries the same menu. */}
+      {issue.tracker !== "github" && (
+        <StatusMenu issue={issue} state={issue.state} states={states} />
+      )}
 
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
-
-      {issue.project && (
-        <span className="hidden shrink-0 rounded-full border border-border px-1.5 py-px text-muted-foreground lg:inline">
-          {issue.project}
-        </span>
-      )}
 
       {/* A span carrying `buttonVariants` rather than a `Button`. The row is a
           div with `role="button"` and this stays a span with it: the row's
@@ -922,10 +1195,64 @@ function IssueRow({
         <Plus data-icon="inline-end" />
       </span>
 
+      {/* Who filed it, GitHub's rows alone. It is the person field that always
+          has an answer there — an issue is assigned to nobody far more often
+          than not — and the row has the width for it, having given up the
+          priority slot and the status glyph. A Linear row has both of those and
+          an assignee besides, so a fourth thing about people would be the
+          crowded end of a row that is already saying enough. */}
+      {issue.tracker === "github" && issue.author && (
+        <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+          <Avatar src={issue.author.avatar} name={issue.author.name} className="size-3.5" />
+          <span className="max-w-24 truncate">{issue.author.name}</span>
+        </span>
+      )}
+
+      {/* The first few labels, in their own colours. A label is most of what
+          a GitHub issue says about itself before you open it — bug, docs,
+          good first issue — and the panel beside this one already draws them,
+          so a list that does not is the list asking to be clicked through.
+          Capped, and dropped on a narrow pane: past three they stop being
+          information and start being a second title. */}
+      {issue.labels.slice(0, 3).map((label) => (
+        <IssueLabelChip key={label.name} label={label} className="hidden lg:inline" />
+      ))}
+
+      {issue.project && (
+        <span className="hidden shrink-0 rounded-full border border-border px-1.5 py-px text-muted-foreground lg:inline">
+          {issue.project}
+        </span>
+      )}
+
+      {/* Work already under way, both trackers. It is the one thing on the row
+          that is not about the issue at all but about somebody having started
+          on it, which is what the reader scanning a list is looking for — and
+          on Linear it is the only signal there, the status glyph saying In
+          Progress whether a PR exists or not.
+
+          Inert, like the labels and the project chip beside it: a single number
+          could open that PR and a count could not, and a chip that is a link on
+          some rows and text on others is worse than one that is never a link.
+          ⌘-click on the row still leaves for the tracker, where they are
+          listed. */}
+      {issue.pullRequests.length > 0 && (
+        <span className="hidden shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground sm:inline-flex">
+          <GitPullRequest className="size-3" />
+          {issue.pullRequests.length === 1
+            ? `#${issue.pullRequests[0]}`
+            : `${issue.pullRequests.length} PRs`}
+        </span>
+      )}
+
       {/* Who has it. Unassigned draws nothing rather than a placeholder head:
           the question is "whose is this", and a row with no answer should read
-          as quiet, not as somebody with no face. */}
-      {issue.assignee && (
+          as quiet, not as somebody with no face.
+
+          **And nothing at all under "Assigned to me"**, where the answer is the
+          reader on every row — their own face down the edge of a list they
+          asked for by name says only what the lit chip above it already does.
+          The creator beside it is a different person and stays. */}
+      {!scopedToMe && issue.assignee && (
         <Avatar
           src={issue.assignee.avatar}
           name={issue.assignee.name}
@@ -933,10 +1260,16 @@ function IssueRow({
         />
       )}
 
-      {/* The least of what the row says and the first thing to go when it is
+      {/* **When it was filed, not when it last moved.** "Updated" is a fact
+          about the conversation rather than about the work, and on a tracker
+          anything automated touches it says more about the bots than about the
+          issue. The opened issue's own header still reports the last move,
+          which is where that question is actually asked.
+
+          The least of what the row says and the first thing to go when it is
           narrow — the identifier and the title are what it is read for. */}
       <span className="hidden w-16 shrink-0 text-right text-muted-foreground sm:inline">
-        {calendarDay(issue.updatedAt)}
+        {calendarDay(issue.createdAt)}
       </span>
     </div>
   );

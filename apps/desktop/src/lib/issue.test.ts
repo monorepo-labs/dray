@@ -4,6 +4,7 @@ import {
   applyIssue,
   filterIssues,
   groupIssues,
+  groupLabel,
   issueSpan,
   issueTag,
   issueUrl,
@@ -160,9 +161,12 @@ const issue = (identifier: string, kind: IssueStateKind): Issue => ({
   state: { id: `state-${kind}`, name: "Whatever this team calls it", kind, color: "#000" },
   priority: "none",
   assignee: null,
+  author: null,
   labels: [],
   team: "DRA",
   project: null,
+  createdAt: "2026-08-20T00:00:00Z",
+  pullRequests: [],
   updatedAt: "2026-08-27T00:00:00Z",
 });
 
@@ -199,20 +203,15 @@ describe("groupIssues", () => {
   /// where the words are not: a GitHub issue is Open or Closed, never "Todo" or
   /// "Done", and a heading in the wrong vocabulary reads as the app describing
   /// some other tracker's workspace.
-  it("names the buckets in the tracker's own words", () => {
-    const rows = [
-      issue("a/b#1", "unstarted"),
-      issue("a/b#2", "completed"),
-      issue("a/b#3", "canceled"),
-    ];
+  /// Linear's vocabulary and only Linear's — a GitHub list is drawn flat under
+  /// a two-way switch, so nothing there is ever filed under one of these.
+  it("names the buckets in Linear's words", () => {
+    const rows = [issue("DRA-1", "unstarted"), issue("DRA-2", "completed")];
 
-    expect(groupIssues(rows, "github").map((g) => g.label)).toEqual([
-      "Open",
-      "Closed",
-      "Not planned",
-    ]);
-    // And Linear keeps its own, which is what the default answers.
-    expect(groupIssues(rows).map((g) => g.label)).toEqual(["Todo", "Done", "Cancelled"]);
+    expect(groupIssues(rows).map((g) => g.label)).toEqual(["Todo", "Done"]);
+    // Drawn before its rows are read, so the settled headings ask this one
+    // directly rather than going through `groupIssues`.
+    expect(groupLabel("canceled")).toBe("Cancelled");
   });
 });
 

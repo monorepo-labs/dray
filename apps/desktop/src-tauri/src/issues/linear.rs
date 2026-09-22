@@ -108,11 +108,13 @@ query{viewer{id name organization{name}}}
 /// comments, which are [`ISSUE`]'s and cost the better part of the payload.
 const ISSUES: &str = r#"
 query($filter:IssueFilter,$first:Int!){
- issues(filter:$filter,first:$first,orderBy:updatedAt){nodes{
-  id identifier title url priority updatedAt
+ issues(filter:$filter,first:$first,orderBy:createdAt){nodes{
+  id identifier title url priority createdAt updatedAt
   state{id name type color}
   assignee{name avatarUrl}
+  creator{name avatarUrl}
   labels(first:10){nodes{name color}}
+  attachments(first:20){nodes{url}}
   team{key}
   project{name}
  }}}
@@ -127,10 +129,12 @@ query($filter:IssueFilter,$first:Int!){
 const ISSUE_BY_ID: &str = r#"
 query($id:String!){
  issue(id:$id){
-  id identifier title url priority updatedAt description
+  id identifier title url priority createdAt updatedAt description
   state{id name type color}
   assignee{name avatarUrl}
+  creator{name avatarUrl}
   labels(first:10){nodes{name color}}
+  attachments(first:20){nodes{url}}
   team{key states(first:50){nodes{id name type color position}}}
   project{name}
   comments(first:50){nodes{body createdAt url user{name avatarUrl}}}
@@ -146,10 +150,12 @@ query($id:String!){
 const ISSUE: &str = r#"
 query($key:String!,$number:Float!){
  issues(filter:{team:{key:{eq:$key}},number:{eq:$number}},first:1){nodes{
-  id identifier title url priority updatedAt description
+  id identifier title url priority createdAt updatedAt description
   state{id name type color}
   assignee{name avatarUrl}
+  creator{name avatarUrl}
   labels(first:10){nodes{name color}}
+  attachments(first:20){nodes{url}}
   team{key states(first:50){nodes{id name type color position}}}
   project{name}
   comments(first:50){nodes{body createdAt url user{name avatarUrl}}}
@@ -313,7 +319,10 @@ pub async fn list_issues(
         .filter_map(map_issue)
         .collect::<Vec<_>>();
 
-    // Stable, so the API's newest-first order survives inside a level. Only on
+    // Stable, so the API's newest-filed-first order survives inside a level.
+    // Priority still outranks the date here, which is what the headings are for;
+    // the date column is in order *within* a level rather than down the page.
+    // Only on
     // the unfinished half: priority on a closed issue is a fact about a decision
     // already taken, and sorting by it buries the thing that just landed.
     if !filters.settled {
@@ -458,6 +467,10 @@ pub async fn list_filters(key: &str) -> Result<IssueFilters, IssueUnavailable> {
     Ok(IssueFilters {
         teams: map_groups(&data, "teams"),
         projects: map_groups(&data, "projects"),
+        // Linear filters by team and project here; a label list is per team and
+        // would be a fourth section nobody asked for. The section is drawn only
+        // where this is non-empty, so leaving it so is what withholds it.
+        labels: Vec::new(),
         // A team with no key names nothing a row could join on, so it is left
         // out rather than filed under an empty string — where it would answer
         // for every row whose own team came back blank.
@@ -598,6 +611,7 @@ fn map_issue(node: &Value) -> Option<Issue> {
             node.get("priority").and_then(Value::as_f64).unwrap_or(0.0) as i64,
         ),
         assignee: node.get("assignee").and_then(map_person),
+        author: node.get("creator").and_then(map_person),
         labels: nodes(node, "labels")
             .iter()
             .map(|label| IssueLabel {
@@ -608,7 +622,49 @@ fn map_issue(node: &Value) -> Option<Issue> {
         team: node.get("team").map(|team| text(team, "key")),
         project: node.get("project").map(|project| text(project, "name")),
         updated_at: text(node, "updatedAt"),
+        created_at: text(node, "createdAt"),
+        pull_requests: pull_requests(node),
     })
+}
+
+/// Linked pull requests, by number, out of the issue's attachments.
+///
+/// Read off each attachment's **URL** rather than off `sourceType`, which is
+/// Linear's own word for where an attachment came from and is a different
+/// string per integration, undocumented and free to move — where
+/// `github.com/<owner>/<repo>/pull/<n>` is GitHub's own shape and is what the
+/// GitHub half of this feature already reads a PR number out of. An attachment
+/// that is not a PR — a Slack thread, a Sentry issue, a document — simply
+/// answers `None`, which is most of them.
+///
+/// Sorted and deduplicated: attachments arrive in Linear's order and one PR can
+/// be attached twice, and the row should read the same twice running.
+fn pull_requests(node: &Value) -> Vec<u32> {
+    let mut numbers: Vec<u32> = nodes(node, "attachments")
+        .iter()
+        .filter_map(|attachment| pull_request_number(&text(attachment, "url")))
+        .collect();
+
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
+/// The number in `https://github.com/<owner>/<repo>/pull/<n>`, or `None` for a
+/// URL that is not one. Enterprise GitHub is deliberately not matched — the
+/// host would have to be configured from somewhere, and the cost of missing it
+/// is a chip rather than a wrong one.
+fn pull_request_number(url: &str) -> Option<u32> {
+    let mut parts = url.strip_prefix("https://github.com/")?.split('/');
+
+    let (_owner, _repo, kind) = (parts.next()?, parts.next()?, parts.next()?);
+    if kind != "pull" {
+        return None;
+    }
+
+    // A trailing `#discussion_r…` or a query is ordinary on a link somebody
+    // pasted, and neither is part of the number.
+    parts.next()?.split(['?', '#']).next()?.parse().ok()
 }
 
 /// An issue always has a state; a *missing* one is a schema surprise, and
@@ -754,6 +810,11 @@ mod tests {
             "state": { "name": "In Progress", "type": "started", "color": "#f2c94c" },
             "assignee": { "name": "Yogesh Dhakal", "avatarUrl": "https://x/y.png" },
             "labels": { "nodes": [{ "name": "Feature", "color": "#bb87fc" }] },
+            "attachments": { "nodes": [
+                { "url": "https://github.com/monorepo-labs/dray/pull/143" },
+                { "url": "https://linear.app/drayhq/document/whatever" },
+                { "url": "https://github.com/monorepo-labs/dray/pull/12#discussion_r1" }
+            ]},
             "team": { "key": "DRA" },
             "project": { "name": "Integrations" },
             "comments": { "nodes": [
@@ -763,6 +824,30 @@ mod tests {
                   "user": { "name": "B", "avatarUrl": null } }
             ]}
         })
+    }
+
+    /// The one thing standing between an attachment list and a PR chip, and it
+    /// reads a URL somebody else wrote — so the shapes that are *not* a pull
+    /// request matter as much as the one that is.
+    #[test]
+    fn a_pull_request_is_told_from_every_other_attachment() {
+        assert_eq!(
+            pull_request_number("https://github.com/monorepo-labs/dray/pull/143"),
+            Some(143)
+        );
+        assert_eq!(
+            pull_request_number("https://github.com/o/r/pull/7#discussion_r1"),
+            Some(7)
+        );
+        assert_eq!(pull_request_number("https://github.com/o/r/pull/7?w=1"), Some(7));
+
+        // An issue, a commit and a repository are all attachments too.
+        assert_eq!(pull_request_number("https://github.com/o/r/issues/7"), None);
+        assert_eq!(pull_request_number("https://github.com/o/r"), None);
+        // Not GitHub at all, and the prefix test is what says so.
+        assert_eq!(pull_request_number("https://github.com.evil.test/o/r/pull/7"), None);
+        assert_eq!(pull_request_number("http://github.com/o/r/pull/7"), None);
+        assert_eq!(pull_request_number("https://slack.com/archives/C1/p1"), None);
     }
 
     #[test]
@@ -775,6 +860,8 @@ mod tests {
         assert_eq!(issue.state.name, "In Progress");
         assert_eq!(issue.team.as_deref(), Some("DRA"));
         assert_eq!(issue.project.as_deref(), Some("Integrations"));
+        // Sorted, and the document among them is no pull request.
+        assert_eq!(issue.pull_requests, vec![12, 143]);
         assert_eq!(issue.labels.len(), 1);
         assert_eq!(issue.assignee.unwrap().name, "Yogesh Dhakal");
     }

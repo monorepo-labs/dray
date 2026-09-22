@@ -45,6 +45,7 @@ const queryFor = (text: string, tracker: IssueTracker, repo: string | null): Iss
   scope: tracker === "github" ? "all" : "assigned",
   teamId: tracker === "github" ? repo : null,
   projectId: null,
+  label: null,
   settled: false,
 });
 

@@ -277,13 +277,13 @@ export default function PickerMenu<T>({
         )}
       >
         {/* Outside the scroller, so it does not slide away as the list is
-            walked — and separated by a rule rather than a gap, since it is a
-            different question from the rows under it rather than another
-            section of them. The framed state insets it to match the list's own
-            `p-1`; the bare one has no box to be held away from. */}
-        {header && (
-          <div className={cn("border-b border-border/40 pb-1", !bare && "p-1 pb-1")}>{header}</div>
-        )}
+            walked. **No rule under it**: the only header here is a switch on
+            its own track, which already reads as a control rather than as a
+            row — so a line beneath it cut a menu this small into two panels
+            over a distinction the shapes make on their own. The framed state
+            insets it to match the list's own `p-1`; the bare one has no box to
+            be held away from. */}
+        {header && <div className={cn(!bare && "p-1 pb-0")}>{header}</div>}
 
         <div
           ref={listRef}

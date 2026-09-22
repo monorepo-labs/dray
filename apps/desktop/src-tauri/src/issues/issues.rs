@@ -240,12 +240,32 @@ pub struct Issue {
     pub state: IssueState,
     pub priority: IssuePriority,
     pub assignee: Option<IssuePerson>,
+    /// Who filed it. A different question from who is *doing* it, and the one
+    /// that more often has an answer: an issue is always opened by somebody and
+    /// is frequently assigned to nobody — which on GitHub is the ordinary case
+    /// rather than a gap.
+    #[serde(default)]
+    pub author: Option<IssuePerson>,
     pub labels: Vec<IssueLabel>,
     /// Team key (`DRA`) — what the identifier is built from, so a row filtered
     /// across teams still says which one it belongs to.
     pub team: Option<String>,
     pub project: Option<String>,
     pub updated_at: String,
+    /// When it was filed. Beside `updated_at` rather than replacing it: the
+    /// list row says when the work appeared, the opened issue's own header says
+    /// when it last moved, and those are two questions.
+    #[serde(default)]
+    pub created_at: String,
+    /// Pull requests linked to it, by number.
+    ///
+    /// The one fact both trackers hold about work already under way, told two
+    /// ways: GitHub's own `closedByPullRequestsReferences` and the GitHub
+    /// attachments Linear's integration writes onto an issue. Numbers alone,
+    /// since that is what the chip says — a row that has to be opened to learn
+    /// whether anybody has started is the row asking to be clicked through.
+    #[serde(default)]
+    pub pull_requests: Vec<u32>,
 }
 
 impl Issue {
@@ -328,6 +348,10 @@ pub struct IssueQuery {
     /// bucket of the tracker to read.
     pub team_id: Option<String>,
     pub project_id: Option<String>,
+    /// One label's name, or `None` for no label filter. The name rather than an
+    /// id, since that is what `gh issue list --label` takes and what a label is
+    /// addressed by on GitHub.
+    pub label: Option<String>,
     /// Which half of the workspace to read: the unfinished issues, or the done
     /// and cancelled ones.
     ///
@@ -347,6 +371,15 @@ pub struct IssueQuery {
 pub struct IssueFilters {
     pub teams: Vec<IssueGroup>,
     pub projects: Vec<IssueGroup>,
+    /// The labels the filter row offers, with the colours they are drawn in.
+    ///
+    /// **Per repository, not per workspace**, which is why `list_issue_filters`
+    /// takes the repository it is being asked about: a label is one repo's own
+    /// vocabulary, and a list gathered across several would offer rows that
+    /// match nothing in the one on screen. Empty for Linear, where the section
+    /// is simply not drawn.
+    #[serde(default)]
+    pub labels: Vec<IssueLabel>,
     /// Every team's workflow states, keyed by team **key** (`DRA`) — what a
     /// row carries, where `teams` above is keyed by UUID.
     ///
@@ -1149,14 +1182,19 @@ pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailab
 /// The teams and projects the filter row offers — or, under GitHub, the
 /// repositories, which is the same question about a different bucket.
 #[tauri::command]
-pub async fn list_issue_filters(tracker: IssueTracker) -> Result<IssueFilters, IssueUnavailable> {
+pub async fn list_issue_filters(
+    tracker: IssueTracker,
+    repo: Option<String>,
+) -> Result<IssueFilters, IssueUnavailable> {
     match tracker {
         IssueTracker::Linear => {
             let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
             linear::list_filters(&key).await
         }
-        IssueTracker::Github => github::list_filters().await,
+        // The repository decides the labels, so this read moves with the pick
+        // rather than being made once per connection the way Linear's is.
+        IssueTracker::Github => github::list_filters(repo.as_deref()).await,
     }
 }
 

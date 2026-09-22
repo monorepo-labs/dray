@@ -69,6 +69,7 @@ const keyOf = (query: IssueQuery) =>
     scope: query.scope,
     teamId: query.teamId ?? "",
     projectId: query.projectId ?? "",
+    label: query.label ?? "",
     settled: query.settled,
   });
 
@@ -456,6 +457,7 @@ const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
   scope: "assigned",
   teamId: tracker === "github" ? readIssueRepo() : null,
   projectId: null,
+  label: null,
   settled: false,
 });
 
@@ -609,21 +611,37 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
   /// read anyway.
   const [wantSettled, setWantSettled] = useState(false);
 
-  const openQuery = useMemo(() => ({ ...query, settled: false }), [query]);
+  // The query's own `settled`, not a forced `false`: GitHub has two states and
+  // a switch picks between them, so *this* is the list on screen. Linear leaves
+  // the field at its default and reads its finished work through the settled
+  // groups below instead, which is what its five-state workflow wants.
+  const openQuery = query;
   const settledQuery = useMemo(() => ({ ...query, settled: true }), [query]);
 
   const open = useIssueList(openQuery, active, generation);
   const settled = useIssueList(settledQuery, active && wantSettled, generation);
 
-  // Read once per visit rather than with every list: teams and projects change
-  // on the timescale of somebody reorganising a workspace, and this is a second
-  // round trip behind the rows the reader is waiting for.
+  /// Which repository the options on hand describe.
+  ///
+  /// Teams and projects change on the timescale of somebody reorganising a
+  /// workspace, so this is read once per visit — but **labels belong to one
+  /// repository**, so the read has to move when the repository does or the menu
+  /// offers another repo's vocabulary. Held rather than folded into `filters`,
+  /// which is null while the read is out and would re-arm this on itself.
+  const [filtersRepo, setFiltersRepo] = useState<string | null>(query.teamId);
+  const wantedRepo = tracker === "github" ? query.teamId : null;
+  const staleFilters = filters !== null && filtersRepo !== wantedRepo;
+
   useEffect(() => {
-    if (!active || filters) return;
+    if (!active || (filters && !staleFilters)) return;
 
     let live = true;
-    invoke<IssueFilters>("list_issue_filters", { tracker })
-      .then((next) => live && setFilters(next))
+    invoke<IssueFilters>("list_issue_filters", { tracker, repo: wantedRepo })
+      .then((next) => {
+        if (!live) return;
+        setFilters(next);
+        setFiltersRepo(wantedRepo);
+      })
       // Silent: with no filters the row simply offers less, and the list above
       // has already said whatever went wrong.
       .catch(() => {});
@@ -631,7 +649,7 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
     return () => {
       live = false;
     };
-  }, [active, filters, generation, tracker]);
+  }, [active, filters, staleFilters, wantedRepo, generation, tracker]);
 
   return {
     issues: open.issues,

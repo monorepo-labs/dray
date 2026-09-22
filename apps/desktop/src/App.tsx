@@ -103,11 +103,11 @@ import type { IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/ev
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
-import { appendToDraft, useHasDraft } from "@/hooks/useDraft";
-import { issueTag, setIssueOpener } from "@/lib/issue";
+import { appendToDraft, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
-import { focusComposer } from "@/lib/composerFocus";
+import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
@@ -1597,7 +1597,21 @@ function App() {
   /// model and the harness still to be picked.
   const workOnIssue = (issue: { identifier: string; title: string }) => {
     goToSession(handleNewSession);
+    // The same two things the `#` picker's own pick does, and the draft reads
+    // as prose without either. **The title is remembered**, since nothing
+    // closes an issue tag and the chip cannot find its end otherwise — so the
+    // Linear tag chipped as the bare identifier with its title left beside it
+    // in plain text. **And a space follows it**, since a chip only forms once
+    // the caret has left the word: dropped straight in, the caret sat at the
+    // tag's end and the whole run stayed drawn as raw text.
+    rememberIssueTitle(issue.identifier, issue.title);
     appendToDraft(null, issueTag(issue.identifier, issue.title));
+    // A space after it, which `appendToDraft` trims off — its rule is
+    // dictation's, where whatever the model padded its words with is noise. A
+    // tag wants one: a chip only forms once the caret has left the word, so
+    // without it the whole run stayed drawn as raw text.
+    writeDraft(null, `${readDraft(null)} `);
+    focusComposerEnd();
   };
 
   /// Writes a session's settled or pinned flag and takes the sidebar wherever

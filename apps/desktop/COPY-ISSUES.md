@@ -23,7 +23,18 @@ it until connected would hide its own entrance.
 
 ---
 
-## Issues page — nothing connected
+## Issues page — a tracker with nothing behind it
+
+**The switch is above this pane, exactly where the list's own row puts it**, so
+the page does not rearrange itself between the two states. It is what makes this
+pane reachable at all with the *other* tracker connected, and pressing the
+disconnected half is how somebody finds out there is a second one.
+
+**One tracker is asked for at a time** — the one the switch is on. The other is
+offered under a rule below and only while it is *also* missing: a line pitching
+something the reader already has can only read as the app being confused.
+
+### Linear
 
 **Heading** — with Linear's mark beside it
 
@@ -81,7 +92,8 @@ stale sentence here is worse than none.
 The middle one names the two things that actually go wrong — a paste that lost
 its tail, and a key revoked months ago.
 
-**The GitHub half, under a rule below the form** — with GitHub's mark beside it
+**The GitHub half, under a rule below the form** — with GitHub's mark beside
+it, and **only while GitHub is not connected either**
 
 > Or sign in to GitHub with `gh auth login` — Dray reads GitHub issues through the `gh` CLI, so there is no key to paste.
 
@@ -92,12 +104,48 @@ and somebody who already has `gh` signed in is one relaunch from a page full of
 issues without knowing it. `gh auth login` links to GitHub's own manual page for
 the reason the Linear key link does: the flow is theirs to change.
 
+### GitHub
+
+**Heading** — with GitHub's mark beside it
+
+> Sign in to GitHub
+
+**Subtext**
+
+> Dray reads GitHub issues through the `gh` CLI and holds no credential of its own, so there is nothing to paste here.
+
+A screen with no field on it should say what is standing in for one. Without
+this the pane reads as a form that failed to load.
+
+**Then the two commands, in this order**
+
+> Run `gh auth login` in a terminal, then refresh this page.
+
+> No `gh` yet? `brew install gh`
+
+Login first because a logged-out `gh` is far commoner than an absent one, so the
+pane opens on the likelier cure. The install line is **not** optional: without it
+the only instruction on screen is a command that does not exist on a machine that
+never had the CLI, which is exactly the reader this pane is for. Homebrew because
+this app is macOS only, spelled as the PR panel's setup pane spells it.
+
+**The Linear half, under a rule**, and only while Linear is not connected either
+
+> Or connect Linear with a personal API key — the switch above.
+
+It points at the switch rather than repeating the form: the form is one press
+away and it is a credential field, which is not a thing to draw twice on one
+screen.
+
+**No refusals here**, and nothing to refresh with: Dray runs no `gh` command
+from this pane and holds no answer to invalidate. The reader signs in in their
+own terminal and comes back.
+
 ---
 
 ## Issues page — connected
 
-**Tracker chips**, first in the filter row, drawn **only where both trackers are
-connected**
+**Tracker chips**, first in the filter row, **always drawn**
 
 The two marks and no words: Linear's, GitHub's, whichever is on filled like a
 scope chip. A word would be the widest thing in a row of glyphs, and this is one
@@ -148,22 +196,61 @@ left to narrow by — a team or project list with one entry is not offered)
 > Project
 > All projects
 
-**Under GitHub this menu is not drawn at all.** The repository has a control of
-its own on the row (below), since it *is* the list rather than a narrowing of
-one; and GitHub Projects are a board an issue is placed on rather than a field
-it carries, which is a different query against a different object.
+**Under GitHub this menu is not drawn at all.** Both of that tracker's controls
+stand on the row itself (below): the repository *is* the list rather than a
+narrowing of one, and the label filter wears its value the same way. GitHub
+Projects are a board an issue is placed on rather than a field it carries, which
+is a different query against a different object.
 
-**Repository control**, on the filter row beside the chips, wearing GitHub's
-mark and the slug on its face — lit like a scope chip once set
+**Label control**, on the row beside the repository — a tag glyph and the word
+until one is picked, then that label's own colour as a dot beside its name
+
+> Label
+> All labels
+
+Labels belong to the *repository*, so the options are re-read whenever the
+repository pick moves, and a repository pick clears the label with it. Drawn
+only where the repository has labels. Linear has labels too and is deliberately
+not offered them: its narrowings are team and project, and a third axis would be
+a control added to the tracker that needs it least.
+
+**State switch**, on the left beside the scope chips, GitHub only — the same
+track-and-thumb switch the trackers use, with words rather than glyphs
+
+> Open
+> Closed
+
+**Repository control**, on the filter row, wearing GitHub's mark and the
+repository's name on its face — lit like a scope chip once set
 
 > Choose a repository
-> monorepo-labs/dray
+> dray
 
 The value *is* the answer to "what am I looking at", which is why this one wears
 its name where the controls beside it are glyphs. Buried in the filter menu it
-was both invisible when set and unfindable when not. The rows are `owner/repo`,
+was both invisible when set and unfindable when not. **The owner is dropped from
+the trigger**: it is the same word for most of the list and is only ever needed
+to tell two same-named repositories apart, which is a question asked where the
+pick is made, and the menu is one click away. The rows are `owner/repo`,
 one per attached project with a `github.com` remote, and there is no "all
 repositories" to clear to — a number is only addressable within one.
+
+**What the page *is* stays left; what narrows it goes right.** The scope chips
+are a pick out of a fixed pair, where the controls on the right each carry a
+value and grow as wide as it is — interleaved, they pushed the chips a different
+distance from the edge on every repository. Refresh closes the row without
+joining that group, acting on the page rather than narrowing it.
+
+The rows and the panel both draw a label in the colour the repository gave it
+— a label has no meaning apart from that colour, unlike a status, which folds
+onto a fixed vocabulary. A row draws at most three, and drops them on a narrow
+pane: past three they stop being information and start being a second title.
+
+**Only two settled headings under GitHub**, and no Cancelled. GitHub files "not
+planned" as a *reason* on its one closed state rather than as a state of its
+own, so a heading for it was a permanent empty row and a menu row for a
+distinction nothing else here reads. A not-planned issue is closed, and that is
+what the page says.
 
 **Group headers** — the state buckets, in this order, count beside each
 
@@ -179,16 +266,22 @@ Grouped on the state's *kind*, not its name, so a team that calls its in-progres
 column "Shipping" still lands under In Progress. "Other" only ever holds a state
 Linear added that we don't model.
 
-**Under GitHub the same three kinds are named GitHub's way**, since a GitHub
-issue is Open or Closed and never "Todo" or "Done" — a heading in the wrong
-vocabulary reads as the app describing some other tracker's workspace:
+**Under GitHub there are no headings at all.** It has two states where this
+names six, so grouping by them drew one list under an "Open" heading with a
+permanently-collapsed "Closed" beneath it — a switch wearing a costume. The
+switch is on the filter row instead (above), and the rows are drawn flat.
 
 > Open
 > Closed
-> Not planned
 
-**Done and Cancelled are always drawn and always start closed**, and nothing is
-fetched for them until one is opened. Until then they carry no count — a zero
+Closed work is a different question rather than the tail of this one, so asking
+it swaps the list rather than growing it. **And there is no Cancelled**: GitHub
+files "not planned" as a *reason* on its one closed state rather than as a state
+of its own, so it is neither a heading nor a status-menu row. A not-planned
+issue is closed, and that is what the page says.
+
+**Done and Cancelled are always drawn and always start closed** under Linear,
+and nothing is fetched for them until one is opened. Until then they carry no count — a zero
 would be a claim, not a blank. While the read is out:
 
 > Reading…
@@ -197,9 +290,13 @@ And when a group turns out to hold nothing:
 
 > Nothing here.
 
-**Empty list** — three cases
+**Empty list** — one per way of coming up empty, since collapsing them would
+leave the reader unable to tell a filter that matched nothing from a half of the
+workspace that is genuinely clear
 
 > No issue matches that.
+> No closed issues in this repository.
+> Nothing closed is assigned to you.
 > Nothing you filed is open.
 > No open issues in this repository.
 > Nothing assigned to you.
@@ -295,6 +392,57 @@ has no open issues: the first is fixed by switching tracker, the second by
 nothing at all. Withheld while a read is still out, where the placeholder rows
 already say the list is coming.
 
+**The row's date is when the issue was filed**, not when it last moved.
+"Updated" is a fact about the conversation rather than about the work, and
+anything automated touching an issue says more about the bots than about it.
+The opened issue's own header still reports the last move, which is where that
+question is actually asked.
+
+**And the list is ordered by it, newest first**, or the column would be a date
+in no order at all. GitHub's is exactly that, flat. Linear's still groups by
+state and ranks by priority inside a group — that is what the headings are for —
+so there the dates run in order *within* a group rather than down the page.
+
+**A row says whether anybody has started**, both trackers: a pull-request
+glyph and the number, or a count where there are several.
+
+> #143
+> 2 PRs
+
+It is the one thing on the row that is not about the issue but about the work,
+and it is what the reader scanning a list is looking for — on Linear especially,
+where the status glyph says In Progress whether a PR exists or not. Inert, like
+the labels and the project chip beside it: a single number could open that PR
+and a count could not, and a chip that is a link on some rows and text on others
+is worse than one that is never a link. ⌘-click on the row still leaves for the
+tracker, where they are listed.
+
+The two trackers answer it differently and both answers are narrow on purpose.
+GitHub's is `closedByPullRequestsReferences` — what its own sidebar calls
+Development, the PRs that would close the issue — rather than every PR that
+happens to mention it. Linear's is the issue's attachments, filtered to
+`github.com/<owner>/<repo>/pull/<n>` by **URL** and not by `sourceType`, which
+is Linear's own word for where an attachment came from and is a different string
+per integration. Enterprise GitHub is not matched, so the cost there is a chip
+missing rather than a wrong one.
+
+**No assignee avatar under "Assigned to me".** The answer is the reader on every
+row there, so their own face down the edge of a list they asked for by name says
+only what the lit chip above it already does. The creator beside it is a
+different person and stays.
+
+**A GitHub row names who filed it**, avatar and login, after the title. It is
+the person field that always has an answer there — an issue is assigned to
+nobody far more often than not — and the row has the width for it, having given
+up the priority slot and the status glyph. A Linear row keeps both of those and
+an assignee besides, so it says nothing about the creator.
+
+**A GitHub row carries no status glyph.** Linear's six states make it a reading
+as well as a control — which of the six this row is on — where GitHub has two
+and the switch above has already picked one, so every glyph in the list said the
+same word the control at the top of it did. Closing an issue moves to the
+Details pane, which carries the same menu.
+
 **Rows name the number alone under GitHub** — `#121`, not
 `monorepo-labs/dray#121`. Every row is in the one repository, so the slug would
 spend the narrowest column saying the same thing over and over. The *tag* that
@@ -356,6 +504,18 @@ they could not be fetched:
 
 The first names neither tracker, because this row can be either: a session
 carries both kinds of link, and the page is where both are connected.
+
+**A panel row names the number alone too**, `#108` rather than
+`monorepo-labs/dray#108`: the slug is most of a narrow panel's width spent on
+the half that is the same for every issue in the repository, and the panel draws
+one issue at a time.
+
+**Meta line**, under the title and above the labels — who filed it first,
+because it is the one that always has an answer. A GitHub issue is assigned to
+nobody far more often than not, so a line opening with the assignee opens with a
+blank on most rows.
+
+> {yogesh} opened this
 
 **Priority is absent on a GitHub row**, not drawn as "no priority". GitHub has
 no priority field at all, so a glyph there would say the work is unprioritized

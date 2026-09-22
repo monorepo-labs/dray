@@ -258,20 +258,17 @@ type IssueGrouping = {
 /// words are not: a GitHub issue is Open or Closed, never "Todo" or "Done", and
 /// a heading in the wrong vocabulary reads as the app describing some other
 /// tracker's workspace. Only the three that occur; nothing else can arrive.
-const GITHUB_LABELS: Partial<Record<IssueStateKind, string>> = {
-  unstarted: "Open",
-  completed: "Closed",
-  canceled: "Not planned",
-};
-
-/// What a heading calls a state kind, in the tracker's own words.
+/// What a heading calls a state kind.
 ///
 /// Exported because the settled headings are drawn without going through
 /// `groupIssues` — they exist before their rows have been read, which is the
 /// whole of how they cost a round trip only when opened.
-export function groupLabel(kind: IssueStateKind, tracker: IssueTracker = "linear"): string {
-  if (tracker === "github" && GITHUB_LABELS[kind]) return GITHUB_LABELS[kind];
-
+///
+/// **Linear's vocabulary, and only Linear's, because only Linear groups.** A
+/// GitHub list is drawn flat under a two-way switch: it has two states where
+/// this names six, so a heading there was the switch's own answer repeated over
+/// the rows it had already picked.
+export function groupLabel(kind: IssueStateKind): string {
   return GROUPS.find((group) => group.key === kind)?.label ?? "Other";
 }
 
@@ -280,10 +277,9 @@ export function groupLabel(kind: IssueStateKind, tracker: IssueTracker = "linear
 /// Order *within* a bucket is left exactly as it arrived — the backend has
 /// already sorted by priority, and re-sorting here would be a second opinion
 /// about the same question.
-export function groupIssues(issues: Issue[], tracker: IssueTracker = "linear"): IssueGrouping[] {
+export function groupIssues(issues: Issue[]): IssueGrouping[] {
   return GROUPS.map((group) => ({
     ...group,
-    label: groupLabel(group.key, tracker),
     issues: issues.filter((issue) => issue.state.kind === group.key),
   })).filter((group) => group.issues.length > 0);
 }
