@@ -352,11 +352,15 @@ pub fn fallback() -> Vec<Model> {
             true,
             false,
         ),
+        // Top level beside 4.7, because the twin above takes no slot: the
+        // live fold counts position over the rows the picker *draws*, and a
+        // table that folded 4.6 away would put the two lists in different
+        // shapes depending only on whether the probe answered.
         row(
             "grok-4.6",
             "Grok 4.6",
             vec![Low, Medium, High, Xhigh],
-            true,
+            false,
             false,
         ),
         row("grok-4.5", "Grok 4.5", vec![Low, Medium, High], true, false),
@@ -467,6 +471,26 @@ mod tests {
         // No image prompts on any grok model — `promptCapabilities.image` is
         // false on every handshake, so the tray must never offer one.
         assert!(models.iter().all(|m| !m.accepts_images));
+    }
+
+    /// The table stands in for the wire, so it has to *look* like the wire: a
+    /// reader whose probe could not run should get the same menu, stale rather
+    /// than differently shaped. The twin taking no top-level slot is the half
+    /// that is easy to miss, since it is invisible in both.
+    #[test]
+    fn the_table_and_the_wire_agree_about_the_top_level() {
+        let reply: Value = serde_json::from_str(HANDSHAKE).unwrap();
+
+        let top = |models: &[Model]| -> Vec<String> {
+            models
+                .iter()
+                .filter(|m| !m.secondary)
+                .map(|m| m.id.to_string())
+                .collect()
+        };
+
+        assert_eq!(top(&read_models(&reply)), top(&fallback()));
+        assert_eq!(top(&fallback()), ["grok-4.7", "grok-4.6"]);
     }
 
     /// The twin is a **mode**, so it is hidden from the picker — and hiding is
