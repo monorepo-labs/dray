@@ -270,13 +270,22 @@ pub async fn get_issue(identifier: &str) -> Result<IssueDetail, IssueUnavailable
 /// `state` is open or closed, and a closed issue carries a reason saying which
 /// kind of closed it is. `gh` spells each as its own subcommand.
 ///
-/// **`gh issue close` refuses an issue that is already closed, and says so on
-/// stderr at exit 0** (measured, v2.86.0: "! Issue owner/repo#12 … is already
-/// closed"). So the one move between the two *closed* reasons — Closed to Not
-/// planned, which the status menu offers like any other — would report success
-/// and change nothing. It is reopened first, which is what actually moves it.
-/// Read before written rather than reopening blind, since reopening an issue
-/// notifies everybody watching it and the ordinary case needs no such thing.
+/// **The current state is read first, always, and that is what makes all three
+/// moves honest.** Two things sit behind it, and asking once covers both:
+///
+/// - **`gh issue close` refuses an issue that is already closed and says so at
+///   exit 0** (measured, v2.86.0: "! Issue owner/repo#12 … is already closed"),
+///   so the move between the two *closed* reasons — Closed to Not planned,
+///   which the status menu offers like any other — would report success and
+///   change nothing. It is reopened first, which is what actually moves it.
+/// - **A pick that changes nothing must not be written.** Every row in that
+///   menu is pickable, the one the issue is already on included — deliberately,
+///   since a greyed row mid-list reads as a state that cannot be reached — so
+///   picking Open on an open issue has to be a no-op here rather than a `gh
+///   issue reopen` whose refusal the panel would draw as a failed update.
+///
+/// Read before written rather than acting blind, since reopening notifies
+/// everybody watching the issue and the ordinary case needs no such thing.
 pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueUnavailable> {
     let (repo, number) = split_identifier(identifier)
         .ok_or_else(|| IssueUnavailable::Other(format!("{identifier} is not an issue identifier")))?;
@@ -288,14 +297,6 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
     let dir = neutral_dir().await?;
     let number = number.to_string();
 
-    let reopen = ["issue", "reopen", number.as_str(), "-R", repo.as_str()];
-
-    if state_id == OPEN_ID {
-        return run(&dir, &reopen).await.map(|_| ());
-    }
-
-    // Only asked where the write is a close, and only acted on where the issue
-    // is closed already under the other reason.
     let now = run(
         &dir,
         &["issue", "view", &number, "-R", &repo, "--json", "state,stateReason"],
@@ -303,12 +304,19 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
     .await
     .and_then(|out| parse(&out))?;
 
+    // Already there, whichever state that is. Nothing is spawned and nothing is
+    // reported: the reader picked the row their issue is already on.
     if map_state(&now).id == state_id {
-        // Already there. `gh` would say so and do nothing, which is the same
-        // answer without a spawn.
         return Ok(());
     }
 
+    let reopen = ["issue", "reopen", number.as_str(), "-R", repo.as_str()];
+
+    if state_id == OPEN_ID {
+        return run(&dir, &reopen).await.map(|_| ());
+    }
+
+    // Closed under the other reason, so the close below would be refused.
     if text(&now, "state").eq_ignore_ascii_case("CLOSED") {
         run(&dir, &reopen).await?;
     }

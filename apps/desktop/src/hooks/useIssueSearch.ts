@@ -85,28 +85,36 @@ export function useIssueSearch(
   /// The session's own repository under GitHub, once it has been asked for.
   /// `undefined` while it has not been — which is distinct from `null`, the
   /// answer that there is no GitHub remote here, and the two draw differently.
-  const [repo, setRepo] = useState<string | null | undefined>(undefined);
+  /// The answer, **with the directory it was asked about**. Kept together and
+  /// read apart during render, the reading `useSessionIssues` takes: held as a
+  /// bare slug it went on naming the *previous* session's repository for as
+  /// long as the new lookup took, and a `#` typed in that window listed session
+  /// A's issues into session B's prompt — one composer, one module cache, and
+  /// nothing tying the value to the question it answered.
+  const [resolved, setResolved] = useState<{ cwd: string; repo: string | null } | null>(null);
   /// Whether anything is on screen to protect. A first read has nothing to wait
   /// for, so it skips the debounce and the picker never opens blank.
   const showing = useRef(false);
 
+  const github = tracker === "github";
+
+  /// `null` where there is nothing to resolve, `undefined` while this
+  /// directory's answer is still out, and the slug once it lands. The three
+  /// draw differently and the middle one must never be mistaken for either.
+  const repo = !github || !cwd ? null : resolved?.cwd === cwd ? resolved.repo : undefined;
+
   // Asked once per directory and cached across mounts, so the answer is usually
   // already in hand by the time a `#` is typed.
   useEffect(() => {
-    if (tracker !== "github" || !cwd) {
-      setRepo(null);
-      return;
-    }
+    if (!github || !cwd) return;
 
     let live = true;
-    void repoFor(cwd).then((next) => live && setRepo(next));
+    void repoFor(cwd).then((next) => live && setResolved({ cwd, repo: next }));
 
     return () => {
       live = false;
     };
-  }, [tracker, cwd]);
-
-  const github = tracker === "github";
+  }, [github, cwd]);
 
   useEffect(() => {
     if (query === null) {

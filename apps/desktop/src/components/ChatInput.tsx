@@ -365,6 +365,12 @@ export default function ChatInput({
   // directory to probe in — with no project attached the honest answer is
   // "nobody has been asked" rather than "there are none".
   const noCommands = query !== null && cwd !== null && !commandsLoading && commands.length === 0;
+  // The `#` picker's own version of that, and it has to be counted here for the
+  // same reason: with no GitHub repository the hook answers no rows, no
+  // loading and a sentence — so a menu opened on rows alone never opened at
+  // all, taking its tracker-switch header with it. Which is the one control
+  // that gets the reader to the tracker that *does* have issues.
+  const noIssueRepo = issue !== null && issuesNote !== undefined;
   // Rows, or one of the two cases a picker is worth drawing empty: the `#`
   // picker waiting on Linear, where placeholder rows say the list is coming
   // rather than absent, and the `/` picker on a harness with none, where one
@@ -372,7 +378,7 @@ export default function ChatInput({
   // has neither state.
   const menuOpen =
     !dismissed &&
-    (rowCount > 0 || issuesLoading || noCommands || noSessions) &&
+    (rowCount > 0 || issuesLoading || noCommands || noSessions || noIssueRepo) &&
     (query !== null || mention !== null || issue !== null || session !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past

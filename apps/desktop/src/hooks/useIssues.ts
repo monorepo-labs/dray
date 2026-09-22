@@ -481,6 +481,27 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
   /// differently on a group header that has no count to show until it has.
   const [answered, setAnswered] = useState(() => cache.has(key));
 
+  /// Which tracker the rows above came from.
+  ///
+  /// **Rows outlive a key change on purpose** — typing in the search box makes
+  /// a key nothing is cached under on every keystroke, and blanking the list
+  /// under the reader each time is the flicker this cache exists to remove. A
+  /// *tracker* change is the one key change where that is wrong: the rows are
+  /// another workspace's, the headings above them have already changed, and a
+  /// read that then fails leaves Linear's issues sitting under GitHub's error.
+  /// So this is dropped by tracker alone, and every other key change still
+  /// paints through.
+  const [shownTracker, setShownTracker] = useState(query.tracker);
+
+  if (shownTracker !== query.tracker) {
+    // During render rather than in an effect, which lands after paint: the
+    // frame in between is exactly the one that draws the wrong tracker's rows.
+    setShownTracker(query.tracker);
+    setIssues(cache.get(key) ?? []);
+    setAnswered(cache.has(key));
+    setUnavailable(null);
+  }
+
   useEffect(() => {
     if (!enabled) return;
 
