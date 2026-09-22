@@ -86,6 +86,8 @@ export default function SettingsDialog({
   onRenameSpace,
   onRemoveSpace,
   onMoveSpace,
+  autoHideSidebar,
+  onAutoHideSidebarChange,
   integrations,
   updateStatus,
   updateManual,
@@ -115,6 +117,11 @@ export default function SettingsDialog({
   onRenameSpace: (from: string, to: string) => void;
   onRemoveSpace: (name: string) => void;
   onMoveSpace: (name: string, delta: number) => void;
+  /// Owned by `App` for the reason the update channel is: the effect that acts
+  /// on this lives there, and a second `useLocalStorage` copy here would write
+  /// a value that effect never sees.
+  autoHideSidebar: boolean;
+  onAutoHideSidebarChange: (next: boolean) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
@@ -160,6 +167,10 @@ export default function SettingsDialog({
                 <Section>
                   <ThemeRow />
                   <ModeRow />
+                  <AutoHideSidebarRow
+                    checked={autoHideSidebar}
+                    onChange={onAutoHideSidebarChange}
+                  />
                 </Section>
                 <Section title="Font size">
                   <FontSizeRows />
@@ -837,6 +848,31 @@ function AnalyticsRow({
         checked={view?.analyticsEnabled ?? false}
         onCheckedChange={onChange}
       />
+    </SettingRow>
+  );
+}
+
+/// Whether the Browser view takes the sidebar with it. Appearance rather than
+/// Integrations: the setting is about what the window does with its own chrome,
+/// not about the browser.
+function AutoHideSidebarRow({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const id = useId();
+
+  return (
+    <SettingRow
+      id={id}
+      label="Hide sidebar in Browser"
+      // Says both halves, because the giving back is the part that would
+      // otherwise read as the sidebar reappearing on its own.
+      description="Collapse the sidebar when the Browser view opens, and put it back on the way out. A sidebar you closed yourself stays closed."
+    >
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </SettingRow>
   );
 }

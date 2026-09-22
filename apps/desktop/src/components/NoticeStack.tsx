@@ -55,6 +55,10 @@ const ACTION: Record<NoticeKind, string> = {
   // changed it from, and nothing moved — so the only thing this button can
   // honestly offer is taking the card away.
   "issue-failed": "Dismiss",
+  // Nowhere to send anybody either: the card names the tab the setting lives
+  // on, and opening Settings over a browser the reader just asked for the full
+  // width of is the opposite of what the setting is for.
+  "sidebar-auto": "Got it",
 };
 
 /// The kinds that go somewhere when taken. Everything else is read and
@@ -86,6 +90,10 @@ const BAR: Record<NoticeKind, string> = {
   // A refusal, so the destructive colour like the other card that reports one.
   // There is no rail mark to match here at all — no session is involved.
   "issue-failed": "bg-destructive/70",
+  // Neither good news nor bad, and no rail to match: this one only explains
+  // something the reader already saw happen, so the bar stays out of the
+  // palette's two loaded colours.
+  "sidebar-auto": "bg-muted-foreground/40",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to

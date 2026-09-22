@@ -25,13 +25,19 @@ import { useSyncExternalStore } from "react";
 /// have seen it happen. `worktree-failed` fires regardless of focus too, for
 /// the opposite reason: they have already seen the wrong answer. See `announce`
 /// in [useSessions](./useSessions.ts) for the split the first three make.
+/// `sidebar-auto` is the odd one again: it reports the app having done
+/// something to the window rather than anything a session did, and it is raised
+/// exactly once ever — the first time the Browser view takes the sidebar away.
+/// A setting that moves the chrome on its own has to say so the first time, or
+/// it reads as the sidebar having broken.
 export type NoticeKind =
   | "completed"
   | "asking"
   | "worktree"
   | "pr"
   | "worktree-failed"
-  | "issue-failed";
+  | "issue-failed"
+  | "sidebar-auto";
 
 /// How long each kind stays on screen. Read by the card to time its own progress
 /// bar, which is also what dismisses it — see [NoticeStack](../components/NoticeStack.tsx).
@@ -54,6 +60,9 @@ export const NOTICE_TTL_MS: Record<NoticeKind, number> = {
   // the reader clicked expecting it to just work, so it has to survive the
   // moment they spend looking somewhere else.
   "issue-failed": 15_000,
+  // The long window once more: this one names a setting and where to find it,
+  // and it is raised once ever — a reader who misses it never sees it again.
+  "sidebar-auto": 15_000,
 };
 
 /// One in-app notice — something happened in a session the reader was not
@@ -64,7 +73,8 @@ export type Notice = {
   /// kind replaces the first rather than stacking a duplicate row.
   ///
   /// A session for every kind but `issue-failed`, which holds the issue's
-  /// identifier instead. Widened rather than renamed: the field is the notice's
+  /// identifier, and `sidebar-auto`, which is about the window and holds a
+  /// constant. Widened rather than renamed: the field is the notice's
   /// *subject*, and the two vocabularies cannot be confused — a session id is a
   /// UUID and an identifier is `DRA-128`. Only the navigating kinds read it as
   /// a session, and `issue-failed` is deliberately not one of them.
