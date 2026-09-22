@@ -100,6 +100,10 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
+    // The session this one is a fork of, on a fork's first send and never
+    // again. grok's fork is one eager request rather than a spawn flag, so
+    // this child makes it before resuming — see `fork_conversation`.
+    fork_from: Option<&str>,
     app: &AppHandle,
 ) -> Result<Session> {
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
@@ -218,8 +222,15 @@ pub async fn init(
         }
     });
 
-    let answer = match open_session(&client, session_id, session_cwd, permission_mode, is_new_session)
-        .await
+    let answer = match open_session(
+        &client,
+        session_id,
+        session_cwd,
+        permission_mode,
+        is_new_session,
+        fork_from,
+    )
+    .await
     {
         Ok(answer) => answer,
         Err(error) => {
@@ -302,10 +313,18 @@ async fn open_session(
     session_cwd: &str,
     mode: ApprovalPolicy,
     is_new_session: bool,
+    fork_from: Option<&str>,
 ) -> Result<Value> {
     client
         .request("initialize", probe::handshake_params())
         .await?;
+
+    // The CLI's half of a fork, and it falls through into the resume below —
+    // a fork's first send is a resume, of a session that did not exist until
+    // the line above it.
+    if let Some(parent) = fork_from {
+        fork_conversation(client, parent, session_id, session_cwd).await?;
+    }
 
     // The stance rides the resume too, since a stance change replaces the child
     // and a respawn is a *resume* — sent on creation alone it never reaches the
@@ -358,6 +377,89 @@ async fn open_session(
     );
 
     Ok(answer)
+}
+
+/// What `_x.ai/session/fork` takes. Its own function because every one of the
+/// four names is measured off the wire and a wrong one fails *at the fork*,
+/// with `-32602 missing field`, on a send the reader has already made.
+///
+/// `sourceCwd` is required and is not a formality: grok stores a session under
+/// `<GROK_HOME>/sessions/<cwd-encoded>/<id>/`, so the pair is the address. Every
+/// other key tried was swallowed with no error — `worktree`, `useWorktree`,
+/// `sessionKind`, `sourceWorkspaceDir` — so there is no worktree flag to reach
+/// for and none of them is a way to check this call was understood.
+fn fork_params(parent: &str, source_cwd: &str, session_id: &str, session_cwd: &str) -> Value {
+    json!({
+        "sourceSessionId": parent,
+        "sourceCwd": source_cwd,
+        "newCwd": session_cwd,
+        "newSessionId": session_id,
+    })
+}
+
+/// Copies the parent's conversation onto this session, grok-side.
+///
+/// **The copy is made inside the request**, which is what makes this eager
+/// where Claude Code's `--fork-session` is a spawn flag — and it needs no
+/// session open on this child at all: it reads the parent off grok's own store,
+/// in 0.07s, including a parent whose child is alive in another process and
+/// finished a turn a moment before. So the send that was going to spawn a child
+/// anyway is the cheapest place it can happen.
+///
+/// The resume that follows is what this build wants and `session/load` is what
+/// it must not become: **`load` replays the copied conversation as
+/// `session/update`s** and `resume` sends nothing but `available_commands_update`,
+/// so a load would draw the parent's turns a second time under Dray's own
+/// copied log. Measured both ways.
+///
+/// `sourceCwd` comes off the parent's index entry rather than being handed
+/// down: the whole call is one harness's, and the address is a fact about the
+/// parent that only the index holds. **A wrong one is the failure this wraps a
+/// sentence around.** A parent whose recorded `cwd` has moved since — a
+/// worktree removed out from under it — is a session grok cannot find, and a
+/// wrong id and a wrong directory answer *identically*: `-32603` carrying
+/// `No such file or directory (os error 2)`, naming neither the session nor
+/// the path, which in the composer's error slot says nothing a reader could
+/// act on. The context names both and diagnoses neither — `to_string` on an
+/// `anyhow` chain prints the outermost alone, so it is what the reader gets,
+/// and a sentence claiming the session is missing would be a guess on any
+/// other failure. `newCwd` is not the half that can fail — the call takes a directory
+/// that does not exist and does not create one, so the tree `send_msg` makes
+/// is for the spawn's own `chdir` rather than for this.
+async fn fork_conversation(
+    client: &RpcClient,
+    parent: &str,
+    session_id: &str,
+    session_cwd: &str,
+) -> Result<()> {
+    let source_cwd = crate::store::get_session_index_item(parent)
+        .await?
+        .map(|item| item.cwd)
+        .with_context(|| format!("can't fork {parent} — Dray has no record of it"))?;
+
+    let answer = client
+        .request(
+            "_x.ai/session/fork",
+            fork_params(parent, &source_cwd, session_id, session_cwd),
+        )
+        .await
+        .with_context(|| format!("couldn't fork grok session {parent} in {source_cwd}"))?;
+
+    // Same guard `session/new` takes one function down, and for the same
+    // reason: grok honouring Dray's id is what makes the index entry the resume
+    // handle. Unchecked, a grok that stopped honouring it would leave the
+    // resume below failing with "no such session" — about an id this call had
+    // silently declined to use.
+    let minted = answer
+        .get("newSessionId")
+        .and_then(Value::as_str)
+        .context("_x.ai/session/fork answered with no session id")?;
+    anyhow::ensure!(
+        minted == session_id,
+        "grok forked into session {minted} rather than the id Dray chose — this build cannot resume it"
+    );
+
+    Ok(())
 }
 
 /// Dray's stance as the `_meta` key grok reads it from, or `None` for the
@@ -1015,5 +1117,46 @@ mod tests {
         // agent actually has.
         assert!(SYSTEM_PROMPT.contains("spawn_subagent"));
         assert!(SYSTEM_PROMPT.contains("ask_user_question"));
+    }
+
+    /// Four names read off the wire, and a wrong one fails only when a reader
+    /// forks — `-32602 missing field \`sourceCwd\``, on a send already made.
+    /// Nothing in the reply distinguishes a key grok understood from one it
+    /// swallowed, so this is the only place the spelling can be held.
+    ///
+    /// `newCwd` is what the two menu items differ by and the only reason this
+    /// takes both directories: forking in place addresses the fork to the
+    /// parent's own, and forking into a worktree to the tree `send_msg` made a
+    /// moment earlier. Both measured.
+    #[test]
+    fn the_fork_names_both_directories_and_the_id_dray_chose() {
+        let here = fork_params("parent", "/repo", "child", "/repo");
+        assert_eq!(here["sourceSessionId"], "parent");
+        assert_eq!(here["sourceCwd"], "/repo");
+        assert_eq!(here["newSessionId"], "child");
+        assert_eq!(here["newCwd"], "/repo");
+
+        let tree = fork_params("parent", "/repo", "child", "/repo/.claude/worktrees/x");
+        assert_eq!(tree["sourceCwd"], "/repo");
+        assert_eq!(tree["newCwd"], "/repo/.claude/worktrees/x");
+
+        // Nothing else goes over. `worktree`, `useWorktree`, `sessionKind` and
+        // `sourceWorkspaceDir` were all accepted with no error and no effect,
+        // so an extra key here would read as doing something.
+        assert_eq!(tree.as_object().expect("an object").len(), 4);
+    }
+
+    /// grok's fork is the eager one and still rides the first send, which is
+    /// the whole of the shape. The call needs a child; the send was spawning
+    /// one anyway; forking when the reader asks would spawn a second, with its
+    /// MCP servers, for a row that may never be sent to.
+    #[test]
+    fn the_fork_call_rides_the_first_send() {
+        let caps = crate::harness::Harness::Grok.caps();
+        assert!(caps.forkable);
+        assert!(
+            caps.fork_needs_cli,
+            "the copy happens in a request, so a spawn is what carries it"
+        );
     }
 }

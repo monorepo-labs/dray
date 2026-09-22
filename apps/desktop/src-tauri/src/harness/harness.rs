@@ -665,7 +665,10 @@ pub struct Capabilities {
     /// Claude Code's does. What Dray copies is its *own* log; the conversation
     /// the CLI holds is forked lazily on the first send, with
     /// `--resume <parent> --fork-session`, so the fork's index entry carries
-    /// `fork_from` as an instruction until that happens.
+    /// `fork_from` as an instruction until that happens. grok's does too, by
+    /// the same route for a different reason: its fork is one eager request,
+    /// so what the instruction defers is not the copy but the *call*, made on
+    /// the child the first send was going to spawn anyway.
     ///
     /// pi's does not, and that makes pi's fork the simpler of the two. Its
     /// resume handle is a *file*, so copying that file is the entire fork — the
@@ -765,10 +768,21 @@ impl Harness {
             // *prompt text*, which costs a bubble in the transcript for a
             // setting change, so a stance change is a respawn here.
             //
-            // Not forkable in v1. `_x.ai/session/fork` exists and is eager —
-            // one call copies the conversation, Dray's own new id honoured —
-            // but it needs a child to make the call on, which no other fork
-            // path here has to arrange.
+            // Forkable, and by Claude Code's route rather than pi's despite
+            // being the eager call of the two. `_x.ai/session/fork` copies the
+            // conversation inside the request, so it needs a child to make it
+            // on — and the *first send's own spawn* is that child, arriving for
+            // free on exactly the send that needs it. So the CLI's half rides
+            // the spawn as Claude Code's does and this is `fork_needs_cli`,
+            // where forking at the moment the reader asks would cost a child
+            // process and its MCP servers per fork, for a row that may never be
+            // sent to.
+            //
+            // Measured: the call answers in **0.07s** on a child with no
+            // session open at all, since it reads the parent off grok's own
+            // store rather than out of a live session — including a parent
+            // whose child is alive in another process and finished a turn a
+            // moment earlier.
             Harness::Grok => Capabilities {
                 creates_own_worktree: false,
                 applies_model_in_place: true,
@@ -782,8 +796,8 @@ impl Harness {
                 // picker for the same reason.
                 fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
-                forkable: false,
-                fork_needs_cli: false,
+                forkable: true,
+                fork_needs_cli: true,
             },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session

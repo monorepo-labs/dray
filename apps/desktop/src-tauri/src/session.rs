@@ -1749,16 +1749,14 @@ impl Session {
                 .await
             }
             Harness::Grok => {
-                // The same two refusals fx and pi take, for the same reasons:
-                // grok's `-w` makes a Grove copy under `~/.grok/worktrees` on a
-                // layout of its own, so Dray makes the tree here as it does for
-                // them; and grok's fork is real but eager and needs a child to
-                // make the call on, which no fork path here arranges.
+                // The same refusal fx and pi take, for the same reason: grok's
+                // `-w` makes a Grove copy under `~/.grok/worktrees` on a layout
+                // of its own, so Dray makes the tree here as it does for them.
+                // A name arriving anyway is a caller that skipped that, and a
+                // session silently running in the wrong tree is worth refusing
+                // outright.
                 if worktree_name.is_some() {
                     bail!("grok cannot create a worktree — it has to be made first");
-                }
-                if fork_from.is_some() {
-                    bail!("grok sessions cannot be forked yet");
                 }
 
                 crate::harness::grok::init(
@@ -1773,6 +1771,7 @@ impl Session {
                     cwd,
                     session_cwd,
                     is_new_session,
+                    fork_from,
                     app,
                 )
                 .await

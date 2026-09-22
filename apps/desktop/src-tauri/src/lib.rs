@@ -512,8 +512,10 @@ async fn delete_session(
 /// in the parent's directory.
 ///
 /// The id comes from the caller for the same reason a new session's does: this
-/// app chooses session ids and the CLI adopts them, and `--fork-session` honours
-/// `--session-id` like any other spawn.
+/// app chooses session ids and the CLI adopts them. Claude Code's
+/// `--fork-session` honours `--session-id` like any other spawn, and grok's
+/// `_x.ai/session/fork` takes a `newSessionId`; both are checked against the id
+/// asked for rather than taken on trust.
 ///
 /// Returns what the fork replays — the parent's log, already copied — so the
 /// frontend can open it without a second read.
