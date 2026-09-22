@@ -748,7 +748,13 @@ impl SessionManager {
                 // a `Child` is not reaped on drop. Reachable with the child
                 // alive and well on Codex, where the send is a request the
                 // server can refuse or leave unanswered.
-                let _ = session.kill().await;
+                //
+                // The whole tree, unlike the respawn below, which wants the dev
+                // server it started to outlive it: nothing can reach *this*
+                // child again, so an MCP server it got as far as spawning has
+                // no owner left. The same reading `grok::open_session` takes of
+                // an agent left half-started.
+                let _ = session.kill_tree().await;
                 return Err(error);
             }
             // The prompt event is synthesized by `send_msg`, so read the log
