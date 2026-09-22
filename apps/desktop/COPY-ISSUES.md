@@ -125,6 +125,17 @@ The two questions worth one press: what is mine to do, and what did I ask for.
 "Assigned to me" spelled out rather than "Assigned", which on its own leaves the
 reader to guess assigned *to whom*.
 
+**Under GitHub the second one is different**, because the list is already one
+repository:
+
+> Assigned to me
+> All
+
+"Created" narrows a list the reader has already narrowed by hand, down to the
+handful they happened to open themselves — a smaller question than anybody opens
+this page to ask. Where Linear's list is a whole workspace and "everything"
+there is a firehose, one repository's open issues is exactly the useful list.
+
 **Search field placeholder**
 
 > Search issues
@@ -137,17 +148,22 @@ left to narrow by — a team or project list with one entry is not offered)
 > Project
 > All projects
 
-**Under GitHub the same menu holds one section**, and every repository is
-offered where a team list of one is not:
+**Under GitHub this menu is not drawn at all.** The repository has a control of
+its own on the row (below), since it *is* the list rather than a narrowing of
+one; and GitHub Projects are a board an issue is placed on rather than a field
+it carries, which is a different query against a different object.
 
-> Repository
+**Repository control**, on the filter row beside the chips, wearing GitHub's
+mark and the slug on its face — lit like a scope chip once set
 
-No "All repositories": a number is only addressable within one repository, so
-there is no list to widen to — and reading every attached project would be a
-`gh` spawn per repo for rows nobody asked for. No Project section either, since
-GitHub Projects are a board an issue is placed on rather than a field it
-carries. The rows are `owner/repo`, one per attached project with a `github.com`
-remote.
+> Choose a repository
+> monorepo-labs/dray
+
+The value *is* the answer to "what am I looking at", which is why this one wears
+its name where the controls beside it are glyphs. Buried in the filter menu it
+was both invisible when set and unfindable when not. The rows are `owner/repo`,
+one per attached project with a `github.com` remote, and there is no "all
+repositories" to clear to — a number is only addressable within one.
 
 **Group headers** — the state buckets, in this order, count beside each
 
@@ -185,17 +201,21 @@ And when a group turns out to hold nothing:
 
 > No issue matches that.
 > Nothing you filed is open.
+> No open issues in this repository.
 > Nothing assigned to you.
 
 **No repository picked yet**, the GitHub half's own resting state — not a
 failure and not a read that came back empty, so it sits where the reading line
-would and nothing is fetched behind it
+would and nothing is fetched behind it. **The repositories themselves are drawn
+under it, one clickable row each**: a line telling the reader to choose, with
+nothing on screen to choose from, is an instruction they then have to work out
+how to follow.
 
 > Choose a repository to see its issues.
 
 **And where there is none to choose**, because no attached project has a
-`github.com` remote — the cure is attaching one, and it is named rather than
-left to be guessed at
+`github.com` remote — the cure is attaching one, which happens elsewhere, so
+this one stays a sentence and names what makes a project count
 
 > Attach a project with a GitHub remote to see its issues.
 
@@ -253,13 +273,27 @@ the same two marks the page draws, and pressing one moves the page too.
 
 **Under GitHub the picker reads this session's own repository and nothing
 else**, since the composer already knows which one it is in where the page has
-to be told. Where the session is not in a GitHub checkout there is nothing it
-could honestly list:
+to be told — and it reads **every** open issue there rather than only those
+assigned to the reader, since one repository is already a narrow enough list and
+assigning yourself an issue is a habit far fewer repositories have than Linear
+workspaces do.
+
+**An empty answer is a sentence, never a closed menu.** This is the opposite
+reading to the `/` picker's, and the difference is that this menu never opened:
+a tracker with nothing to list was indistinguishable from `#` being broken, and
+it took the tracker chips with it — the one control that reaches the tracker
+that *does* have issues.
 
 > No GitHub repository here.
+> No open issues in this repository.
+> Nothing assigned to you.
+> No issue matches that.
 
-Drawn in place of the rows rather than leaving the menu blank, which reads as
-Dray broken rather than as this session having no repository to read.
+Three different facts and four sentences, because collapsing them would leave
+the reader unable to tell a repository this app cannot find from one that simply
+has no open issues: the first is fixed by switching tracker, the second by
+nothing at all. Withheld while a read is still out, where the placeholder rows
+already say the list is coming.
 
 **Rows name the number alone under GitHub** — `#121`, not
 `monorepo-labs/dray#121`. Every row is in the one repository, so the slug would

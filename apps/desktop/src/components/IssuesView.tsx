@@ -8,7 +8,7 @@ import {
 } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
@@ -75,10 +75,24 @@ const LINEAR_MCP_URL = "https://linear.app/docs/mcp";
 /// change.
 const GH_AUTH_URL = "https://cli.github.com/manual/gh_auth_login";
 
-const SCOPES: { value: IssueScope; label: string }[] = [
-  { value: "assigned", label: "Assigned to me" },
-  { value: "created", label: "Created" },
-];
+/// The two questions worth one press, and the second one differs by tracker.
+///
+/// Linear's list is workspace-wide, so "what did I file" is a real second
+/// question and "everything" would be a firehose. **GitHub's is already one
+/// repository**, so the useful pair there is what is mine and what is *there* —
+/// "Created" narrows a list the reader has already narrowed by hand, to the
+/// handful they happened to open themselves, which is a smaller question than
+/// anybody opens this page to ask.
+const SCOPES: Record<IssueTracker, { value: IssueScope; label: string }[]> = {
+  linear: [
+    { value: "assigned", label: "Assigned to me" },
+    { value: "created", label: "Created" },
+  ],
+  github: [
+    { value: "assigned", label: "Assigned to me" },
+    { value: "all", label: "All" },
+  ],
+};
 
 /// The two buckets that are read on demand. Drawn in the same order [groupIssues]
 /// would put them in, so opening one does not reshuffle the page.
@@ -210,7 +224,7 @@ export default function IssuesView({
           <IssueTrackerChips tracker={tracker} className="mr-1" />
         )}
 
-        {SCOPES.map((scope) => (
+        {SCOPES[tracker].map((scope) => (
           // Chips rather than a menu, because these are the two questions worth
           // one press: what is mine to do, and what did I ask for. Everything
           // that narrows *within* an answer is behind the control beside them.
@@ -228,6 +242,19 @@ export default function IssuesView({
             {scope.label}
           </button>
         ))}
+
+        {/* **The repository is a control on the row, not a row in a menu.** It
+            is not a filter narrowing a list the page can already draw — under
+            GitHub it *is* the list, so with none picked there is nothing on
+            screen at all. Buried behind the sliders icon it was both invisible
+            when set and unfindable when not. */}
+        {tracker === "github" && (
+          <RepoMenu
+            repo={query.teamId}
+            repos={filters?.teams ?? []}
+            onPick={(teamId) => set({ teamId })}
+          />
+        )}
 
         <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
 
@@ -308,11 +335,41 @@ export default function IssuesView({
             would be a `gh` spawn per repo for a list nobody asked for. Above the
             reading line, since there is no read to report on. */}
         {needsRepo ? (
-          <p className="px-3 py-4 text-ui text-muted-foreground">
-            {(filters?.teams.length ?? 0) > 0
-              ? "Choose a repository to see its issues."
-              : "Attach a project with a GitHub remote to see its issues."}
-          </p>
+          // **The repositories are the empty state, not a sentence about
+          // them.** "Choose a repository" with no repositories on screen is an
+          // instruction the reader then has to go and work out how to follow —
+          // and the control that would have answered it was a row inside a menu
+          // behind a glyph. The list this page cannot draw without is the one
+          // thing worth putting in the space where that list goes.
+          <div className="flex flex-col items-start gap-1 px-3 py-4">
+            {filters === null ? (
+              <p className="text-ui text-muted-foreground">Reading…</p>
+            ) : filters.teams.length > 0 ? (
+              <>
+                <p className="pb-1 text-ui text-muted-foreground">
+                  Choose a repository to see its issues.
+                </p>
+                {filters.teams.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => set({ teamId: option.id })}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-ui transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  >
+                    <GitHubIcon className="size-3.5 text-muted-foreground" />
+                    {option.name}
+                  </button>
+                ))}
+              </>
+            ) : (
+              // The cure is attaching a project, which happens elsewhere — so
+              // this one stays a sentence, and names what makes a project
+              // count rather than leaving the reader to guess.
+              <p className="text-ui text-muted-foreground">
+                Attach a project with a GitHub remote to see its issues.
+              </p>
+            )}
+          </div>
         ) : (
           <>
             {/* Nothing else while the first read is out — not even the settled
@@ -328,7 +385,9 @@ export default function IssuesView({
                   ? "No issue matches that."
                   : query.scope === "created"
                     ? "Nothing you filed is open."
-                    : "Nothing assigned to you."}
+                    : query.scope === "all"
+                      ? "No open issues in this repository."
+                      : "Nothing assigned to you."}
               </p>
             )}
 
@@ -567,6 +626,68 @@ function Group({
   );
 }
 
+/// Which repository the GitHub half is reading, on its face.
+///
+/// Wears the name rather than a glyph, because it is the one control here whose
+/// *value* is the answer to "what am I looking at" — the scope chips beside it
+/// say what they are by being lit, and this one has a hundred possible states.
+/// The rows are the repositories of attached projects with a `github.com`
+/// remote, which is the list this app can name without a network call.
+function RepoMenu({
+  repo,
+  repos,
+  onPick,
+}: {
+  repo: string | null;
+  repos: IssueGroup[];
+  onPick: (repo: string) => void;
+}) {
+  // Nothing to choose between, and the empty state below already says what to
+  // do about that — a trigger reading "Choose a repository" that opens onto
+  // nothing is a control that cannot be used.
+  if (!repos.length) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-1 rounded-full px-2.5 py-1 text-ui transition-colors",
+            repo
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <GitHubIcon className="size-3.5" />
+          {/* The slug whole. It is `owner/repo` and the owner is what tells two
+              forks of one name apart, so truncating from the left would drop
+              the half that disambiguates. */}
+          <span className="max-w-48 truncate">{repo ?? "Choose a repository"}</span>
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuLabel>Repository</DropdownMenuLabel>
+        {repos.map((option) => (
+          <DropdownMenuCheckboxItem
+            key={option.id}
+            checked={repo === option.id}
+            // No "all repositories" to clear to: a number is only addressable
+            // within one, so picking is the only move — which is why this is a
+            // radio group spelled with checkmarks and the current row stays
+            // pickable rather than going grey.
+            onCheckedChange={() => onPick(option.id)}
+          >
+            {option.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /// The filters, behind one control.
 ///
 /// A menu rather than more chips: these narrow *within* whichever chip is on,
@@ -589,15 +710,13 @@ function FilterMenu({
 }) {
   const github = tracker === "github";
 
-  // **Every repository is offered, where a team list of one is not.** A Linear
-  // team filter narrows a list the page can already draw, so one option is a
-  // control that does nothing; a repository *is* the list, and with none picked
-  // there is nothing on screen at all — so even one has to be reachable.
-  const teams = github ? (filters?.teams ?? []) : filters && filters.teams.length > 1 ? filters.teams : [];
-  // GitHub Projects are a board an issue is placed on rather than a field it
-  // carries, which is a different query against a different object — so the
-  // section is simply not there.
-  const projects = github ? [] : filters && filters.projects.length > 1 ? filters.projects : [];
+  // **Nothing at all under GitHub**, and both halves are deliberate: the
+  // repository has its own control on the row beside this one, since it is the
+  // list rather than a narrowing of one, and GitHub Projects are a board an
+  // issue is placed on rather than a field it carries — a different query
+  // against a different object. So the trigger does not draw there.
+  const teams = !github && filters && filters.teams.length > 1 ? filters.teams : [];
+  const projects = !github && filters && filters.projects.length > 1 ? filters.projects : [];
   const narrowed = !!query.teamId || !!query.projectId;
 
   // Nothing left to narrow by. A trigger that opens an empty menu is worse than
@@ -624,19 +743,13 @@ function FilterMenu({
       <DropdownMenuContent align="end" className="w-56">
         {teams.length > 0 && (
           <>
-            <DropdownMenuLabel>{github ? "Repository" : "Team"}</DropdownMenuLabel>
-            {/* No "all" under GitHub: a number is only addressable within one
-                repository, so there is no list to widen to — reading every
-                attached project would be a `gh` spawn per repo for rows nobody
-                asked for. Clearing the pick is what the empty state is for. */}
-            {!github && (
-              <DropdownMenuCheckboxItem
-                checked={!query.teamId}
-                onCheckedChange={() => onChange({ teamId: null })}
-              >
-                All teams
-              </DropdownMenuCheckboxItem>
-            )}
+            <DropdownMenuLabel>Team</DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={!query.teamId}
+              onCheckedChange={() => onChange({ teamId: null })}
+            >
+              All teams
+            </DropdownMenuCheckboxItem>
             {teams.map((team) => (
               <DropdownMenuCheckboxItem
                 key={team.id}

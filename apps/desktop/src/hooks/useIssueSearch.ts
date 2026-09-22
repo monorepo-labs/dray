@@ -32,14 +32,34 @@ const DEBOUNCE_MS = 200;
 /// knows which repository it is in — where the issues page has to be told,
 /// being workspace-wide. So the slug is the query's `teamId`, and with none the
 /// picker has nothing it could honestly list.
+/// **The scope differs by tracker, and that is not a quirk.** Linear's list is
+/// workspace-wide, so "assigned to me" is what makes it a list rather than a
+/// firehose. GitHub's is already narrowed to *one repository* by the session's
+/// own checkout, so the same clause narrows a small list to almost nothing:
+/// assigning yourself an issue is a habit far fewer repositories have than
+/// Linear workspaces do, and the picker opened empty on repositories with
+/// plenty of open work in them.
 const queryFor = (text: string, tracker: IssueTracker, repo: string | null): IssueQuery => ({
   tracker,
   text: text || null,
-  scope: "assigned",
+  scope: tracker === "github" ? "all" : "assigned",
   teamId: tracker === "github" ? repo : null,
   projectId: null,
   settled: false,
 });
+
+/// What an empty picker says, in terms of why it is empty.
+///
+/// Three different facts, and collapsing them into one sentence would leave the
+/// reader unable to tell a repository this app cannot find from one that simply
+/// has no open issues — the first is fixed by switching tracker, the second by
+/// nothing at all.
+function emptyNote(github: boolean, repo: string | null | undefined, query: string): string {
+  if (github && repo === null) return "No GitHub repository here.";
+  if (query.trim()) return "No issue matches that.";
+
+  return github ? "No open issues in this repository." : "Nothing assigned to you.";
+}
 
 /// `owner/repo` per directory, for the life of the process.
 ///
@@ -102,6 +122,19 @@ export function useIssueSearch(
   /// directory's answer is still out, and the slug once it lands. The three
   /// draw differently and the middle one must never be mistaken for either.
   const repo = !github || !cwd ? null : resolved?.cwd === cwd ? resolved.repo : undefined;
+
+  /// Which tracker the rows below came from — the issues page's own guard, and
+  /// the same reason for it. Rows outlive a keystroke on purpose, so the list
+  /// does not blank under somebody mid-word; they must not outlive a *tracker*
+  /// switch, where they are another workspace's issues sitting under the chips
+  /// that just moved.
+  const [shownTracker, setShownTracker] = useState(tracker);
+
+  if (shownTracker !== tracker) {
+    setShownTracker(tracker);
+    setIssues([]);
+    showing.current = false;
+  }
 
   // Asked once per directory and cached across mounts, so the answer is usually
   // already in hand by the time a `#` is typed.
@@ -211,10 +244,17 @@ export function useIssueSearch(
   return {
     issues,
     loading,
-    // Drawn only where there is nothing coming — a session outside a GitHub
-    // checkout under the GitHub tracker. Without it the menu opens on a blank
-    // box, which reads as Dray broken rather than as this session having no
-    // repository to read.
-    emptyNote: github && repo === null ? "No GitHub repository here." : undefined,
+    // **An empty answer is a sentence, never a closed menu**, and that is the
+    // opposite reading to the `/` picker's next door. There, a query matching
+    // nothing closes quietly because the list is already on screen and its
+    // emptiness needs no narrating. Here the menu never opened at all — so a
+    // tracker with nothing to list was indistinguishable from `#` being broken,
+    // and it took the tracker chips with it, which are the one control that
+    // reaches the tracker that *does* have issues. Withheld only while a read
+    // is still out, where placeholder rows already say the list is coming.
+    emptyNote:
+      query === null || loading || issues.length > 0
+        ? undefined
+        : emptyNote(github, repo, query),
   };
 }
