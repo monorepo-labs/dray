@@ -1055,6 +1055,11 @@ export type IssueTracker = "linear" | "github";
 export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthorized" } | { "kind": "offline", "detail": string } | { "kind": "other", "detail": string };
 
 /**
+ * The payload of [`ISSUES_CHANGED`].
+ */
+export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
+
+/**
  * Shared with the harness parsers rather than duplicated — the wire shape
  * matches, so they deserialize straight into this.
  */

@@ -21,7 +21,7 @@ import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -2352,6 +2352,21 @@ useEffect(() => {
         ? prev.map((i) => (i.sessionId === item.sessionId ? item : i))
         : [...prev, item],
     );
+  });
+
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// `dray issue link` or `dray issue unlink`, which reach Rust over the
+// orchestration socket without this hook asking for anything — so the Issue tab
+// used to wait on the next send's `SendOutcome.issues`, a reselect or a restart
+// (#256). The whole list rides the event, so `applyIssues` is the same merge
+// those already take, and the tab hides itself once the last link goes.
+useEffect(() => {
+  const listenerPromise = listen<IssuesChangedEvent>("issues_changed", (event) => {
+    applyIssues(event.payload.sessionId, event.payload.issues);
   });
 
   return () => {

@@ -44,6 +44,26 @@ use tokio::{
 /// point.
 pub const SESSION_CREATED: &str = "session_created";
 
+/// Emitted when `dray issue link` or `dray issue unlink` changes what a session
+/// is tagged with, so the panel's Issue tab appears, redraws or goes away
+/// without a reselect.
+///
+/// This socket is the one channel that reaches Rust without the frontend
+/// asking, so a link made over it was invisible until the next send answered
+/// with `SendOutcome.issues` — see #256. The *whole* list rides along rather
+/// than a delta, which is the rule that answer already follows: re-tagging
+/// replaces an entry rather than appending one.
+pub const ISSUES_CHANGED: &str = "issues_changed";
+
+/// The payload of [`ISSUES_CHANGED`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct IssuesChangedEvent {
+    pub session_id: String,
+    pub issues: Vec<IssueRef>,
+}
+
 /// A spawned session may spawn; its children may not. Walked off
 /// `parent_session_id` rather than stored as a number, so there is no depth
 /// field free to disagree with the chain it describes.
@@ -223,7 +243,7 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
         Request::CreateSession(create) => create_session(create, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
         Request::SendMessage(send) => send_message(send, app).await,
-        Request::LinkIssues(link) => link_issues(link).await,
+        Request::LinkIssues(link) => link_issues(link, app).await,
         Request::Browser(browser) => browse(browser).await,
     }
 }
@@ -260,7 +280,7 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
 /// what it believed. One that fails stops the run: a partial tagging reported
 /// as a success is the shape of failure this protocol exists to avoid, and the
 /// ones already applied are on the session the answer names.
-async fn link_issues(link: LinkIssues) -> Result<Response> {
+async fn link_issues(link: LinkIssues, app: &AppHandle) -> Result<Response> {
     if link.issues.is_empty() {
         bail!("name at least one issue, like DRA-53");
     }
@@ -299,6 +319,12 @@ async fn link_issues(link: LinkIssues) -> Result<Response> {
             .await?
         };
     }
+
+    app.emit(
+        ISSUES_CHANGED,
+        &IssuesChangedEvent { session_id: link.session_id, issues: linked.clone() },
+    )
+    .ok();
 
     Ok(Response::Linked {
         issues: linked
