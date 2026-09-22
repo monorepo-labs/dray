@@ -414,10 +414,14 @@ fn fork_params(parent: &str, source_cwd: &str, session_id: &str, session_cwd: &s
 ///
 /// `sourceCwd` comes off the parent's index entry rather than being handed
 /// down: the whole call is one harness's, and the address is a fact about the
-/// parent that only the index holds. **A wrong one is the failure this wraps a
-/// sentence around.** A parent whose recorded `cwd` has moved since — a
-/// worktree removed out from under it — is a session grok cannot find, and a
-/// wrong id and a wrong directory answer *identically*: `-32603` carrying
+/// parent that only the index holds. **The one way that entry is known to be
+/// the wrong address is refused before this is ever reached** — a relocated
+/// session's `cwd` has been rewritten to the project root, which is not where
+/// grok filed it, and `SessionManager::fork` turns that into a refusal at the
+/// press rather than a failure here on the first send.
+///
+/// What is left is a wrong id or an address wrong for a reason nothing here
+/// predicted, and the two answer *identically*: `-32603` carrying
 /// `No such file or directory (os error 2)`, naming neither the session nor
 /// the path, which in the composer's error slot says nothing a reader could
 /// act on. The context names both and diagnoses neither — `to_string` on an
