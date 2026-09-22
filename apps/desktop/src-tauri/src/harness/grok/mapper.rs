@@ -65,6 +65,17 @@ pub struct Mapper {
     /// still be joined to a name — the opening `tool_call` has only the bare
     /// tool name on it.
     names: HashMap<String, String>,
+    /// `spawn_subagent` calls that have opened and not yet been claimed by a
+    /// `subagent_spawned`, with the brief each carried, newest last.
+    ///
+    /// Nothing on the wire joins the two: the notification names the *child*
+    /// and never the call that asked for it. The transcript correlates a run on
+    /// the spawning call's id, so the join has to be made here — see
+    /// [`Self::claim_spawn`] for why it is `description` first and order after.
+    pending_spawns: Vec<(String, Option<String>)>,
+    /// The spawning call id each live child was filed under, so `subagent_*`
+    /// events after the first can be enveloped on the same run.
+    runs: HashMap<String, String>,
 }
 
 impl Mapper {
@@ -79,6 +90,8 @@ impl Mapper {
             window,
             outputs: HashMap::new(),
             names: HashMap::new(),
+            pending_spawns: Vec::new(),
+            runs: HashMap::new(),
         }
     }
 
@@ -142,9 +155,21 @@ impl Mapper {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
                 self.names.insert(tool_call_id.clone(), name.clone());
+                let call_type = tool_type(meta.kind(), &name, kind);
+                if call_type == ToolType::SubagentSpawn {
+                    // The brief is on this line and on the notification behind
+                    // it; nothing else is on both, so it is the only join
+                    // stronger than arrival order.
+                    let brief = raw_input
+                        .as_ref()
+                        .and_then(|input| input.get("description"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    self.pending_spawns.push((tool_call_id.clone(), brief));
+                }
                 out.push(self.event(AgentEventPayload::ToolCallStarted {
                     call_id: tool_call_id,
-                    tool_type: tool_type(meta.kind(), &name, kind),
+                    tool_type: call_type,
                     name,
                     input: tool_input(raw_input),
                     raw_input: None,
@@ -385,6 +410,10 @@ impl Mapper {
         self.turn_open = false;
         self.outputs.clear();
         self.names.clear();
+        // A spawn whose child never reported — a call that failed outright —
+        // would otherwise be claimed by the next turn's first subagent and hang
+        // that run off a row from the turn before.
+        self.pending_spawns.clear();
         event
     }
 
@@ -465,20 +494,54 @@ impl Mapper {
         vec![stop, committed]
     }
 
+    /// The spawning call this child belongs to, by brief where one matches and
+    /// by arrival order otherwise.
+    ///
+    /// Order alone would be enough for the captured sessions, where a spawn is
+    /// answered before the next one opens — but grok can open several calls
+    /// before any child reports, and the brief is carried on both lines, so it
+    /// is worth asking first. A child with no call to claim answers `None` and
+    /// falls back to its own id: a run filed under a handle nothing correlates
+    /// is still a run in the panel, where dropping it would lose the delegation
+    /// entirely.
+    fn claim_spawn(&mut self, description: Option<&str>) -> Option<String> {
+        let by_brief = description.and_then(|brief| {
+            self.pending_spawns
+                .iter()
+                .position(|(_, pending)| pending.as_deref() == Some(brief))
+        });
+        let found = match by_brief {
+            Some(at) => at,
+            None if self.pending_spawns.is_empty() => return None,
+            None => 0,
+        };
+        Some(self.pending_spawns.remove(found).0)
+    }
+
     fn subagent_started(&mut self, spawned: SubagentSpawned) -> AgentEvent {
         let label = spawned
             .subagent_type
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| SUBAGENT_LABEL.to_string());
-        let id = spawned.subagent_id.clone();
+        // The envelope is the spawning call's id, never the child's. That is
+        // what `buildTranscript` correlates a run on — it joins the run to the
+        // `tool_call` row that asked for it — so filing under grok's child
+        // handle left the chat drawing a plain tool row and the panel an
+        // orphaned run with no spawn behind it.
+        let id = self
+            .claim_spawn(spawned.description.as_deref())
+            .unwrap_or_else(|| spawned.subagent_id.clone());
+        self.runs.insert(spawned.subagent_id.clone(), id.clone());
         self.subagent_event(
             &id,
             label.clone(),
             AgentEventPayload::SubagentStarted {
-                // grok's own handle, and the one id that names the child: it is
-                // both `subagent_id` and `child_session_id`, which is also the
-                // session id the child's own updates arrive under.
-                agent_id: spawned.subagent_id,
+                // Empty on purpose, the reading fx already takes: this is the
+                // handle a Stop would name, and `stop_task` is Claude Code's
+                // control line — it writes to a stdin this transport has not
+                // got. grok publishes no subagent cancel, so a run here must
+                // draw no Stop button rather than one that errors.
+                agent_id: String::new(),
                 label,
                 description: spawned.description,
                 // The brief grok handed the child rides `rawInput.prompt` on
@@ -491,12 +554,17 @@ impl Mapper {
     }
 
     fn subagent_finished(&mut self, finished: SubagentFinished) -> AgentEvent {
-        let id = finished.subagent_id.clone();
+        // The same envelope the run opened under, or the close files a second
+        // run beside the one it was meant to end.
+        let id = self
+            .runs
+            .remove(&finished.subagent_id)
+            .unwrap_or_else(|| finished.subagent_id.clone());
         self.subagent_event(
             &id,
             SUBAGENT_LABEL.to_string(),
             AgentEventPayload::SubagentCompleted {
-                agent_id: finished.subagent_id,
+                agent_id: String::new(),
                 status: finished.status.unwrap_or_else(|| "completed".to_string()),
                 // The child's whole report, which is why nothing about its own
                 // stream is kept: those updates arrive under the child's session
@@ -842,6 +910,37 @@ mod tests {
         assert_eq!(asked, Some(("ask_user_question", ToolType::Other)));
     }
 
+    /// Both ends of a run are enveloped on the **spawning call's** id, which is
+    /// what `buildTranscript` correlates on (`callById.get(run.id)`). grok
+    /// names the child on every lifecycle line and nothing anywhere joins it to
+    /// the call, so filing under the child handle — which is what this did
+    /// first — left the panel a run with no spawn behind it and the chat a
+    /// plain tool row. Pinned by the two ids being different in the capture.
+    #[test]
+    fn a_run_is_filed_under_the_call_that_asked_for_it() {
+        let events = replay(SUBAGENT);
+
+        let spawn = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallStarted { call_id, tool_type: ToolType::SubagentSpawn, .. } => {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .expect("the capture opens a spawn_subagent call");
+        assert!(spawn.starts_with("call-"), "the join must be the call id, not the child's");
+
+        let filed: Vec<&str> = events
+            .iter()
+            .filter(|e| {
+                matches!(e.payload, P::SubagentStarted { .. } | P::SubagentCompleted { .. })
+            })
+            .filter_map(|e| Some(e.subagent.as_ref()?.id.as_str()))
+            .collect();
+        assert_eq!(filed, vec![spawn.as_str(), spawn.as_str()], "one run, opened and closed");
+    }
+
     /// A child's whole transcript rides the parent's pipe under its own session
     /// id — 113 updates in the capture — and dropping them is what keeps the
     /// child's thinking out of the parent's chat. What is kept is the
@@ -859,7 +958,10 @@ mod tests {
                 _ => None,
             })
             .expect("the spawn is announced");
-        assert!(!started.0.is_empty(), "grok names the child, so a stop can too");
+        assert!(
+            started.0.is_empty(),
+            "grok publishes no subagent cancel, so a run must name no handle a Stop could send"
+        );
         assert_eq!(started.1, "general-purpose");
 
         let finished = events

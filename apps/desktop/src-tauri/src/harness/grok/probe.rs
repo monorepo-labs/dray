@@ -52,22 +52,27 @@ pub fn child_env(command: &mut Command, bin: &std::path::Path) {
 
 /// Spawns a throwaway agent, reads the `initialize` reply, then takes it down.
 ///
-/// `cwd` is load-bearing wherever the answer is project-scoped. The model list
-/// is not — it is an account-wide answer — but the command list is, so both
-/// callers name a directory and the cache is keyed on it.
+/// `cwd` is `Option` because the one answer read here is account-wide: the
+/// model list rides the handshake and no directory moves it. Passing an empty
+/// string instead is not the same thing and is why this took one — `chdir("")`
+/// is `ENOENT`, so the spawn failed before grok started and `models::list` fell
+/// back to the table *every* time, silently. Codex's probe already took the
+/// `Option`; this one now matches it.
 ///
 /// The timeout is *inside* here, which is the difference between a kill and a
 /// hope: dropping a `Child` with `kill_on_drop` signals but reaps on the
 /// runtime's own schedule, and this child is not a lone process — grok starts
 /// every MCP server the reader has configured.
-pub async fn initialize(cwd: &str) -> Result<Value> {
+pub async fn initialize(cwd: Option<&str>) -> Result<Value> {
     let bin = crate::binpath::grok().await;
     let mut command = Command::new(&bin);
     child_env(&mut command, &bin);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
 
     let mut child = command
         .args(["agent", "--no-leader", "stdio"])
-        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

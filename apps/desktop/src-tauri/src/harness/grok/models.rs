@@ -182,7 +182,7 @@ pub fn forget() {
 }
 
 async fn probe() -> Result<Vec<Model>> {
-    let answer = super::probe::initialize("").await?;
+    let answer = super::probe::initialize(None).await?;
     let models = read_models(&answer);
 
     // An answer this build cannot read is not an empty picker: the caller falls

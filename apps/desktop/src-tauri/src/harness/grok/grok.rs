@@ -246,9 +246,11 @@ pub async fn init(
         model: model.map(|m| m.id.clone()).unwrap_or_default(),
         effort,
         permission_mode,
-        // grok's faster tier is a model of its own, so nothing here is a speed
-        // the child was told about.
-        fast: false,
+        // What the spawn actually resolved, never a flat `false`: `set_fast`
+        // compares against this before it writes, so a session spawned on the
+        // fast twin and recorded as standard ignores the switch being turned
+        // *off* — the child stays on the twin while the composer says it left.
+        fast,
         events,
         seq,
         status,
@@ -293,11 +295,28 @@ async fn open_session(
         .request("initialize", probe::handshake_params())
         .await?;
 
+    // The stance rides the resume too, since a stance change replaces the child
+    // and a respawn is a *resume* — sent on creation alone it never reaches the
+    // session the reader just moved. Both directions measured: resuming with
+    // `_meta.autoMode` stopped the card a manual session raised, and resuming an
+    // auto session under an empty `_meta` raised it again. So an omitted key is
+    // a real manual, not "keep what you have", and `stance_meta`'s `None` needs
+    // no `false` spelled out beside it. The rules do not ride along — grok keeps
+    // those on its own session record.
     if !is_new_session {
+        let mut meta = json!({});
+        if let Some((key, value)) = stance_meta(mode) {
+            meta[key] = json!(value);
+        }
         return client
             .request(
                 "session/resume",
-                json!({"sessionId": session_id, "cwd": session_cwd, "mcpServers": []}),
+                json!({
+                    "sessionId": session_id,
+                    "cwd": session_cwd,
+                    "mcpServers": [],
+                    "_meta": meta,
+                }),
             )
             .await;
     }
