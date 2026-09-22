@@ -11,9 +11,15 @@ import type { Todo } from "@/lib/todos";
 /// needs: a run list is browsed and a checklist is read at a glance.
 export default function MorePanel({
   todos,
+  live,
   subagents,
 }: {
   todos: Todo[] | null;
+  /// Whether the session is mid-turn. The checklist's running item shimmers on
+  /// this alone — a list is **kept** after the turn ends, so an item left at
+  /// `in_progress` by a session that stopped would otherwise animate a claim
+  /// about now over a list that is only history.
+  live: boolean;
   subagents: React.ComponentProps<typeof SubagentPanel>;
 }) {
   return (
@@ -22,7 +28,7 @@ export default function MorePanel({
     // runs a sliver to scroll inside — so the pane scrolls and both lists sit
     // at their natural height.
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      {todos && <TodoSection todos={todos} />}
+      {todos && <TodoSection todos={todos} live={live} />}
 
       {/* A section with no rows is drawn as nothing at all, not as an empty
           state: this tab is a catch-all, so its sections come and go, and a
@@ -52,7 +58,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 /// The list itself, with no caret on it. A section the reader opened the tab to
 /// read is not one to make them open again — and the panel opens itself here on
 /// a new list, which a collapsed section would answer with a heading.
-function TodoSection({ todos }: { todos: Todo[] }) {
+function TodoSection({ todos, live }: { todos: Todo[]; live: boolean }) {
   // const done = todos.filter((todo) => todo.status === "completed").length;
 
   return (
@@ -79,7 +85,7 @@ function TodoSection({ todos }: { todos: Todo[] }) {
           own break above it whether or not it is titled, or dropping the title
           leaves the first item flush against the tab row. */}
       <div className="px-3 pt-3 pb-3">
-        <TodoList todos={todos} live />
+        <TodoList todos={todos} live={live} />
       </div>
     </div>
   );

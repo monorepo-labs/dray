@@ -885,7 +885,14 @@ async fn raise_request(
                 // The plan itself, which is the whole of what is being approved
                 // — the tool row beside it carries no arguments worth reading.
                 description: Some(request.plan_content.clone()),
-                input: json!({}),
+                // And again under `plan`, because the *event* is what the
+                // frontend reads: `planAsked` decides the Plan tab, the View
+                // plan button and whether the card renders markdown, and it
+                // asks the ask's own input. The copy on the held
+                // `PendingRequest` is unreachable from there, so leaving this
+                // `{}` cost all three, silently — the card drew pages of
+                // markdown as one run-on paragraph and the tab stayed empty.
+                input: json!({ "plan": request.plan_content }),
                 blocked_path: None,
                 decision_reason: None,
                 decision_reason_type: None,

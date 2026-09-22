@@ -2309,6 +2309,7 @@ function App() {
             <TabBody active={activeTab === "more"}>
               <MorePanel
                 todos={sessionTodos}
+                live={busy}
                 subagents={{
                   runs: subagents,
                   selectedId: selectedSubagentId,

@@ -129,6 +129,11 @@ export function startsNewList(previous: Todo[] | null, next: Todo[]): boolean {
 export function currentTodos(events: AgentEvent[]): Todo[] | null {
   let list: Todo[] | null = null;
   for (const event of events) {
+    // A child runs its own context and keeps its own list, so folding its
+    // writes in here lets a subagent replace what the conversation is tracking
+    // — and `startsNewList` then reads that as news and drags the pane open on
+    // somebody else's work. `subagent` is `null` for the main thread.
+    if (event.subagent) continue;
     const payload = event.payload;
     if (payload.type !== "tool_call_started") continue;
     if (!isTodoCall(payload.name)) continue;

@@ -316,6 +316,7 @@ function Demo() {
           <TabBody active>
             <MorePanel
               todos={picked.todos}
+              live
               subagents={{
                 runs: picked.runs ?? RUNS,
                 selectedId: null,

@@ -87,6 +87,22 @@ describe("currentTodos", () => {
     ]);
   });
 
+  // A child runs its own context and keeps its own list, so folding its writes
+  // in would let a subagent replace what the conversation is tracking — and
+  // `startsNewList` would then read that as news and open the pane on somebody
+  // else's work.
+  it("ignores a subagent's own list", () => {
+    const child = toolCall("todo_write", { todos: [{ content: "Child step", status: "pending" }] });
+    (child as { subagent: unknown }).subagent = { id: "a1", label: "explore" };
+
+    const events = [
+      toolCall("todo_write", { todos: [{ content: "Parent step", status: "in_progress" }] }),
+      child,
+    ];
+
+    expect(currentTodos(events)?.map((todo) => todo.content)).toEqual(["Parent step"]);
+  });
+
   it("appends an id the list has not met, where it brings words of its own", () => {
     const events = [
       toolCall("todo_write", { todos: [{ id: "1", content: "Read it", status: "pending" }] }),

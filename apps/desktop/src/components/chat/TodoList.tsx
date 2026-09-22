@@ -61,10 +61,12 @@ export default function TodoList({
   live = false,
 }: {
   todos: Todo[];
-  /// Whether this list is the session's *current* one rather than a record of
-  /// one call. Only the panel's is: a transcript row is what the agent wrote at
-  /// that moment, and an animation there claims an item is being worked on now
-  /// when the turn it belongs to may be hours old.
+  /// Whether an `in_progress` item is being worked on *now*, which is the only
+  /// thing that earns the shimmer. Two ways it can be false and both matter: a
+  /// transcript row is what the agent wrote at that moment rather than the
+  /// session's current list, and the panel's list is **kept** after the turn
+  /// ends, so a session that stopped mid-item would otherwise animate a claim
+  /// about now over what is only history.
   live?: boolean;
 }) {
   return (
