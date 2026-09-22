@@ -111,6 +111,7 @@ import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
+import { sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -1058,29 +1059,37 @@ function App() {
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
-    if (viewTab === "browser" && was !== "browser") {
-      setPanelOpen(false);
-      if (autoHideSidebar && !collapsed) {
-        hidForBrowser.current = true;
-        setCollapsed(true);
-        // Said once ever, and only where the sidebar actually moved: chrome
-        // that rearranges itself with nothing to explain it reads as a bug.
-        if (!autoHideNoticed) {
-          setAutoHideNoticed(true);
-          pushNotice({
-            sessionId: "sidebar",
-            kind: "sidebar-auto",
-            label: "Sidebar hidden",
-            detail: "The browser gets the full width. Turn this off in Settings → Appearance.",
-          });
-        }
+    if (viewTab === "browser" && was !== "browser") setPanelOpen(false);
+
+    // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
+    // pure and tested: `collapsed` is a dep this effect only *reads*, so the
+    // rule runs again on the frame it collapses the sidebar, and getting that
+    // re-entry wrong handed the sidebar straight back.
+    const move = sidebarMove({
+      from: was,
+      to: viewTab,
+      enabled: autoHideSidebar,
+      collapsed,
+      claimed: hidForBrowser.current,
+    });
+    if (move === "hide") {
+      hidForBrowser.current = true;
+      setCollapsed(true);
+      // Said once ever, and only where the sidebar actually moved: chrome that
+      // rearranges itself with nothing to explain it reads as a bug.
+      if (!autoHideNoticed) {
+        setAutoHideNoticed(true);
+        pushNotice({
+          sessionId: "sidebar",
+          kind: "sidebar-auto",
+          label: "Sidebar hidden",
+          detail: "The browser gets the full width. Turn this off in Settings → Appearance.",
+        });
       }
-    } else if (was === "browser" && hidForBrowser.current) {
+    } else if (move === "restore") {
       hidForBrowser.current = false;
       setCollapsed(false);
     }
-    // `collapsed` and the two preferences are read at the transition, so they
-    // are deps — a re-run with `viewTab` unchanged takes neither branch.
   }, [
     viewTab,
     setPanelOpen,
