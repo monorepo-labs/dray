@@ -134,6 +134,50 @@ pub async fn has_github_remote(cwd: &str) -> bool {
     })
 }
 
+/// `owner/repo` for the GitHub remote here, or `None` where there is none.
+///
+/// The same scan [`has_github_remote`] makes, kept beside it rather than folded
+/// into it: that one answers a yes/no about the *checkout* and must stay true
+/// for a GitHub remote whose path this cannot read, where this names a repo an
+/// issue list can be asked for. First remote wins, since a fork workflow leaves
+/// `origin` on the fork and either answer is the same repository's issues.
+///
+/// Here rather than in `issues::github`, because the runner that asks git is
+/// this module's own.
+pub async fn github_slug(cwd: &str) -> Option<String> {
+    let out = git(cwd, &["remote", "-v"]).await?;
+
+    out.lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .filter(|url| remote_host(url) == Some("github.com"))
+        .find_map(|url| remote_path(url).map(str::to_string))
+}
+
+/// `owner/repo` out of a remote URL: the path, without its leading slash and
+/// without the `.git` git itself hands back on a clone URL.
+///
+/// Answers `None` for anything that is not two segments — a remote pointing at
+/// the host's root names no repository, and half a slug reaches the wrong one.
+fn remote_path(url: &str) -> Option<&str> {
+    let after_scheme = match url.split_once("://") {
+        Some((_, rest)) => rest,
+        // scp syntax's own separator, and it is a `:` rather than a `/`.
+        None => url,
+    };
+
+    let path = after_scheme
+        .split_once(['/', ':'])
+        .map(|(_, rest)| rest)?
+        .trim_start_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    // A trailing slash is legal and names the same repo; without this it makes
+    // a third segment out of nothing.
+    let path = path.trim_end_matches('/');
+
+    let (owner, repo) = path.split_once('/')?;
+    (!owner.is_empty() && !repo.is_empty() && !repo.contains('/')).then_some(path)
+}
+
 /// The host out of a git remote URL, or `None` for a local path.
 ///
 /// Hand-rolled rather than a URL parser because half of these are not URLs:
@@ -1892,6 +1936,36 @@ mod tests {
             "github.com/mirrors/repo",
         ] {
             assert_ne!(remote_host(url), Some("github.com"), "{url}");
+        }
+    }
+
+    /// The other half of a slug, and the four spellings a clone leaves behind.
+    /// `.git` is on some and not others, and the scp form's separator is a
+    /// colon where every other one is a slash — read wrong, either costs an
+    /// `owner/repo` that names nothing on GitHub's side.
+    #[test]
+    fn a_remote_url_answers_with_its_owner_and_repo() {
+        for url in [
+            "https://github.com/monorepo-labs/dray.git",
+            "https://github.com/monorepo-labs/dray",
+            "git@github.com:monorepo-labs/dray.git",
+            "ssh://git@github.com/monorepo-labs/dray.git",
+            "https://token@github.com/monorepo-labs/dray.git",
+            "https://github.com/monorepo-labs/dray/",
+        ] {
+            assert_eq!(remote_path(url), Some("monorepo-labs/dray"), "{url}");
+        }
+
+        for url in [
+            // The host's root names no repository.
+            "https://github.com/",
+            "https://github.com",
+            "git@github.com:",
+            // Three segments is not a slug, and taking the first two of one
+            // reaches a different repository than the remote points at.
+            "https://github.com/a/b/c.git",
+        ] {
+            assert_eq!(remote_path(url), None, "{url}");
         }
     }
 

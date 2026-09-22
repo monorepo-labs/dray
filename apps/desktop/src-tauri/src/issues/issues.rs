@@ -1,17 +1,28 @@
 //! The issue a session is working on, whoever tracks it.
 //!
-//! Linear is the only tracker wired up, and it is the only word in here that
-//! says so: everything a reader sees is an *issue*, and everything below this
-//! file's vocabulary lives in `linear.rs`. A second tracker is a module and a
-//! variant, not a rename of every surface — which is why [`IssueRef`] carries
-//! its own [`IssueTracker`] even while there is one.
+//! Two trackers now, and neither is a word a reader sees: everything on screen
+//! is an *issue*, and everything below this file's vocabulary lives in
+//! `linear.rs` and `github.rs`. That was the promise this file's header made
+//! while there was one — a second tracker is a module and a variant, not a
+//! rename of every surface — and it is why [`IssueRef`] has always carried its
+//! own [`IssueTracker`].
+//!
+//! **Which tracker an identifier belongs to is read off its shape**, by
+//! [`IssueTracker::of`]: `owner/repo#123` is GitHub's own cross-repo spelling
+//! and a `#` cannot appear in a Linear one, so no caller has to be told. A bare
+//! `#123` is deliberately refused — a number alone means nothing without a
+//! repository beside it, and a prompt is full of them.
 //!
 //! Two halves, and they answer different questions. The **connection** is the
-//! account, and it is workspace-wide: no project is bound to a team, so the
-//! picker and the issues page read whatever the connected user is assigned. The
-//! **link** is per session, recorded on its index entry, and it is what draws
-//! the panel's tab and what a tag resolves to.
+//! account: Linear's is a personal API key in `credentials.json`, GitHub's is
+//! `gh`'s own token and nothing of ours. Both are workspace-wide — no project
+//! is bound to a team — though the GitHub half reads one *repository* at a
+//! time, since a number is only addressable within one. The **link** is per
+//! session, recorded on its index entry, and it is what draws the panel's tab
+//! and what a tag resolves to.
 
+#[path = "github.rs"]
+pub mod github;
 #[path = "linear.rs"]
 pub mod linear;
 
@@ -23,13 +34,39 @@ use ts_rs::TS;
 
 use crate::{settings, store, store::get_home_app_dir};
 
-/// Who tracks the issue. One variant today; it is on the wire and on disk so a
-/// session linked to a Linear issue stays readable once there are two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// Who tracks the issue. On the wire and on disk, which is what kept a session
+/// linked to a Linear issue readable when the second variant landed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum IssueTracker {
+    /// The default, and it has to stay so: an [`IssueQuery`] written before the
+    /// field existed carries no tracker, and every one of those meant Linear.
+    #[default]
     Linear,
+    Github,
+}
+
+impl IssueTracker {
+    /// Which tracker an identifier belongs to, read off its shape alone.
+    ///
+    /// `owner/repo#123` is GitHub's own cross-repo spelling and a Linear
+    /// identifier is a team key and a number, so the `#` tells them apart with
+    /// nothing to look up and nothing for a caller to pass. Stated twice — the
+    /// frontend's `trackerOf` decides what a *tag* opens, this decides what is
+    /// *read* — and pinned on both sides, since neither can call the other.
+    ///
+    /// Anything that is neither reads as Linear: `parse_identifier` has already
+    /// refused what is not an identifier at all, and a spelling this build does
+    /// not know is better tried against the tracker it might belong to than
+    /// refused outright.
+    pub fn of(identifier: &str) -> Self {
+        if identifier.contains('#') {
+            Self::Github
+        } else {
+            Self::Linear
+        }
+    }
 }
 
 /// What a session records about an issue it is working on.
@@ -277,11 +314,18 @@ pub enum IssueScope {
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase", default)]
 pub struct IssueQuery {
+    /// Which tracker is being asked. `#[serde(default)]` on the struct makes an
+    /// absent one Linear, which is what every caller meant before there were
+    /// two.
+    pub tracker: IssueTracker,
     /// Free text. Matched against title and identifier; an empty query is the
     /// resting state and lists rather than searches.
     pub text: Option<String>,
     pub scope: IssueScope,
-    /// Linear team id.
+    /// Linear team id — and under GitHub the **repository slug**, since a
+    /// repository is what an issue there belongs to and what the page reads one
+    /// at a time. One field rather than two, because it is one question: which
+    /// bucket of the tracker to read.
     pub team_id: Option<String>,
     pub project_id: Option<String>,
     /// Which half of the workspace to read: the unfinished issues, or the done
@@ -363,7 +407,8 @@ impl std::fmt::Display for IssueUnavailable {
         match self {
             Self::NotConnected => write!(
                 f,
-                "Dray is not connected to an issue tracker. Connect Linear in Dray's settings."
+                "Dray is not connected to an issue tracker. Connect Linear in Dray's settings, \
+                 or sign in to GitHub with `gh auth login`."
             ),
             Self::Unauthorized => write!(
                 f,
@@ -412,6 +457,10 @@ impl IssueTracker {
     fn credential_key(self) -> &'static str {
         match self {
             Self::Linear => "linear",
+            // Nothing is ever filed under it: GitHub's credential is `gh`'s own
+            // and Dray stores none. The arm keeps the match total, so a third
+            // tracker fails to compile here rather than at a call site.
+            Self::Github => "github",
         }
     }
 }
@@ -592,12 +641,23 @@ pub fn issue_tags(prompt: &str) -> Vec<String> {
     found
 }
 
-/// `DRA-53` out of `DRA-53),` — or `None` when what follows the `#` is not an
-/// identifier at all.
+/// `DRA-53` out of `DRA-53),`, or `owner/repo#12` out of `owner/repo#12).` —
+/// and `None` when what follows the `#` is not an identifier at all.
 ///
-/// Uppercased, because Linear's own identifiers are and a tag typed in lower
-/// case has to reach the same issue as one picked from the menu.
+/// **The GitHub shape is tried first**, because it is the narrower one: it
+/// needs a slash and a `#`, neither of which a Linear identifier holds, so
+/// there is nothing for the two rules to argue over. The other order would
+/// reach the same answer today and would stop doing so the day either rule
+/// widens.
+///
+/// A bare `#123` is refused, deliberately. A number alone is meaningful only
+/// relative to a repository and a prompt is full of them — `#1` in prose would
+/// file a session under whichever repo happened to be nearest.
 pub fn parse_identifier(text: &str) -> Option<String> {
+    if let Some(id) = parse_github_identifier(text) {
+        return Some(id);
+    }
+
     let (key, number) = text.split_once('-')?;
 
     if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -614,6 +674,39 @@ pub fn parse_identifier(text: &str) -> Option<String> {
     }
 
     Some(format!("{}-{}", key.to_uppercase(), digits))
+}
+
+/// Characters GitHub allows in an owner or a repository name. Deliberately
+/// narrow: what this must not do is match a *path* somebody wrote, which is why
+/// two segments and a `#` are all required.
+fn is_slug_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')
+}
+
+/// `owner/repo#12` out of `owner/repo#12).`, or `None` for anything else.
+///
+/// **Case is kept as written.** GitHub is case-insensitive on a slug, so
+/// uppercasing one would reach the same issue and make the tag in the reader's
+/// own sentence disagree with the repository they typed.
+fn parse_github_identifier(text: &str) -> Option<String> {
+    let (repo, number) = text.split_once('#')?;
+    let (owner, name) = repo.split_once('/')?;
+
+    // The owner has to open with something nameable, which is what keeps a
+    // leading `/` or a lone `-` out.
+    if !owner.chars().next()?.is_ascii_alphanumeric() {
+        return None;
+    }
+    if !owner.chars().all(is_slug_char) || name.is_empty() || !name.chars().all(is_slug_char) {
+        return None;
+    }
+
+    let digits: String = number.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+
+    Some(format!("{repo}#{digits}"))
 }
 
 /// What a prompt's tags came to.
@@ -665,7 +758,10 @@ pub struct ExpandedTags {
 /// rather than a button opening nowhere.
 fn bare_ref(identifier: String) -> IssueRef {
     IssueRef {
-        tracker: IssueTracker::Linear,
+        // By shape, like everything else that has to name a tracker without
+        // being told one: a bare link is written down exactly when the tracker
+        // could not be asked, so the spelling is all there is to go on.
+        tracker: IssueTracker::of(&identifier),
         id: identifier.clone(),
         identifier,
         title: String::new(),
@@ -684,23 +780,34 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
         };
     }
 
-    // `None` is ordinary: nobody has connected a tracker. The named issues below
-    // still have to reach the prompt, so this is not a return.
+    // `None` is ordinary: nobody has connected Linear. The named issues below
+    // still have to reach the prompt, so this is not a return — and a GitHub
+    // tag in the same prompt does not need it at all.
     let key = read_key(IssueTracker::Linear).await;
 
     let mut resolved = Vec::with_capacity(wanted.len());
     for WantedTag { id: tag, .. } in &wanted {
-        resolved.push(match &key {
+        // Per tag, by shape: one prompt can name issues on both trackers, and
+        // nothing above here has been told which.
+        let found = match IssueTracker::of(tag) {
             // No id to try: a tag is a spelling, and the whole point of this
             // call is to find out what it names.
-            Some(key) => match linear::get_issue(key, tag, None).await {
-                Ok(detail) => Some(detail.issue.to_ref()),
-                Err(e) => {
-                    eprintln!("[issue tag {tag}] {e:?}");
-                    None
-                }
+            IssueTracker::Linear => match &key {
+                Some(key) => linear::get_issue(key, tag, None).await,
+                None => Err(IssueUnavailable::NotConnected),
             },
-            None => None,
+            IssueTracker::Github => github::get_issue(tag).await,
+        };
+
+        resolved.push(match found {
+            Ok(detail) => Some(detail.issue.to_ref()),
+            // Best effort, always: a send must never fail because a tracker is
+            // unreachable, so the tag stays as text and nothing is said.
+            Err(IssueUnavailable::NotConnected) => None,
+            Err(e) => {
+                eprintln!("[issue tag {tag}] {e:?}");
+                None
+            }
         });
     }
 
@@ -815,22 +922,46 @@ fn apply_tags(
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationsView {
     pub linear: Option<TrackerAccount>,
+    pub github: Option<TrackerAccount>,
 }
 
 /// The connected accounts.
 ///
-/// Read from two files at once, deliberately: `credentials.json` says whether
-/// there is a key, and `settings.json` remembers whose it is. A cached account with
-/// no key behind it reads as disconnected — the key *is* the connection, and
-/// the cache only saves a round trip to draw a name.
+/// **Two connections that mean different things.** Linear's is read from two
+/// files at once: `credentials.json` says whether there is a key and
+/// `settings.json` remembers whose it is, so a cached account with no key
+/// behind it reads as disconnected — the key *is* the connection, and the cache
+/// only saves a round trip to draw a name. GitHub's is `gh`'s own token, which
+/// Dray neither holds nor can invalidate, so the only honest question is
+/// whether the CLI still answers.
+///
+/// Asked only where `gh` resolves, so a machine that has never had the CLI
+/// spawns nothing to find out it has not.
 #[tauri::command]
 pub async fn get_integrations() -> IntegrationsView {
     let cached = settings::read().await.linear_account;
     let connected = read_key(IssueTracker::Linear).await.is_some();
 
+    let github = match crate::binpath::gh().await {
+        Some(_) => github::account().await.ok(),
+        None => None,
+    };
+
     IntegrationsView {
         linear: connected.then_some(cached).flatten(),
+        github,
     }
+}
+
+/// `owner/repo` for the session's own checkout, or `None`.
+///
+/// What the composer's `#` picker asks before it reads: under GitHub the useful
+/// list is *this repository's* issues, and nothing else in the frontend knows
+/// which repository a session sits in. No network — a remote is read out of the
+/// repository's own config — so the frontend caches it per directory.
+#[tauri::command]
+pub async fn github_repo(cwd: String) -> Option<String> {
+    github::repo_of(&cwd).await
 }
 
 /// Validates a personal API key, then saves it.
@@ -892,9 +1023,20 @@ pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
 /// about which issue is most urgent.
 #[tauri::command]
 pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    match query.tracker {
+        IssueTracker::Linear => {
+            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
-    linear::list_issues(&key, &query, limit).await
+            linear::list_issues(&key, &query, limit).await
+        }
+        // A number is only addressable within a repository, so there is no
+        // workspace-wide read to fall back to — and reading every attached
+        // project would be one `gh` spawn per repo for a list nobody asked for.
+        IssueTracker::Github => match query.team_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(repo) => github::list_issues(repo, &query, limit).await,
+            None => Err(IssueUnavailable::Other("Pick a repository".into())),
+        },
+    }
 }
 
 /// One issue, opened — description and comments included.
@@ -908,9 +1050,16 @@ pub async fn get_issue(
     identifier: String,
     id: Option<String>,
 ) -> Result<IssueDetail, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    match IssueTracker::of(&identifier) {
+        IssueTracker::Linear => {
+            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
-    linear::get_issue(&key, &identifier, id.as_deref()).await
+            linear::get_issue(&key, &identifier, id.as_deref()).await
+        }
+        // `id` goes unread: GitHub redirects a transferred issue on its own
+        // side, so the identifier keeps working where a Linear one renumbers.
+        IssueTracker::Github => github::get_issue(&identifier).await,
+    }
 }
 
 /// Moves an issue's status or priority, and answers with the issue as it now
@@ -937,6 +1086,24 @@ pub async fn update_issue(
     state_id: Option<String>,
     priority: Option<IssuePriority>,
 ) -> Result<IssueDetail, IssueUnavailable> {
+    if let IssueTracker::Github = IssueTracker::of(&identifier) {
+        // **GitHub has no priority field at all**, so this is a refusal rather
+        // than a write that quietly does nothing. The menu is not drawn for a
+        // GitHub row either — this is the second statement of that, for a
+        // caller the frontend does not own.
+        if priority.is_some() {
+            return Err(IssueUnavailable::Other(
+                "GitHub issues have no priority".into(),
+            ));
+        }
+
+        if let Some(state_id) = state_id.as_deref() {
+            github::update_issue(&identifier, state_id).await?;
+        }
+
+        return github::get_issue(&identifier).await;
+    }
+
     let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
     linear::update_issue(&key, &id, state_id.as_deref(), priority).await?;
@@ -979,12 +1146,18 @@ pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailab
     linear::fetch_asset(&key, &url, MAX_ASSET).await
 }
 
-/// The teams and projects the filter row offers.
+/// The teams and projects the filter row offers — or, under GitHub, the
+/// repositories, which is the same question about a different bucket.
 #[tauri::command]
-pub async fn list_issue_filters() -> Result<IssueFilters, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+pub async fn list_issue_filters(tracker: IssueTracker) -> Result<IssueFilters, IssueUnavailable> {
+    match tracker {
+        IssueTracker::Linear => {
+            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
 
-    linear::list_filters(&key).await
+            linear::list_filters(&key).await
+        }
+        IssueTracker::Github => github::list_filters().await,
+    }
 }
 
 /// Tags a session with an issue, by identifier.
@@ -1154,6 +1327,51 @@ mod tests {
         assert!(issue_tags("#53").is_empty());
         assert!(issue_tags("#1-2").is_empty());
         assert!(issue_tags("#DRA-").is_empty());
+    }
+
+    /// GitHub's own cross-repo spelling, and the whole of what makes a tag an
+    /// address there. Case is kept: GitHub is case-insensitive on a slug, so
+    /// uppercasing one would reach the same issue and leave the reader's own
+    /// sentence disagreeing with the repository they typed.
+    #[test]
+    fn a_github_tag_is_a_repository_and_a_number() {
+        assert_eq!(
+            issue_tags("see #monorepo-labs/dray#121 please"),
+            vec!["monorepo-labs/dray#121"]
+        );
+        assert_eq!(issue_tags("#Owner/Repo.js#7"), vec!["Owner/Repo.js#7"]);
+        // The same punctuation rules the Linear shape takes.
+        assert_eq!(issue_tags("(#a/b#1),"), vec!["a/b#1"]);
+        // One prompt, both trackers: nothing above `expand_tags` is told which
+        // one a tag belongs to, so this is the case that has to work.
+        assert_eq!(issue_tags("#DRA-53 and #a/b#2"), vec!["DRA-53", "a/b#2"]);
+    }
+
+    /// **A bare `#123` is refused on purpose.** A number alone is meaningful
+    /// only relative to a repository, and prose is full of them — a tag that
+    /// linked one would file a session under whichever repo happened to be
+    /// nearest, which is a wrong link that reads exactly like a right one.
+    #[test]
+    fn a_github_tag_without_a_repository_is_prose() {
+        assert!(issue_tags("closes #123").is_empty());
+        assert!(issue_tags("#/repo#1").is_empty());
+        assert!(issue_tags("#owner/#1").is_empty());
+        assert!(issue_tags("#owner/repo#").is_empty());
+        // A path is not an identifier, whatever it holds.
+        assert!(issue_tags("#src/lib/issue.ts").is_empty());
+    }
+
+    /// The shape is what says which tracker to ask, and it is read in two
+    /// places that cannot call each other — here and the frontend's
+    /// `trackerOf`. Pinned on both sides.
+    #[test]
+    fn the_tracker_is_read_off_the_spelling() {
+        assert_eq!(IssueTracker::of("owner/repo#12"), IssueTracker::Github);
+        assert_eq!(IssueTracker::of("DRA-53"), IssueTracker::Linear);
+        // A bare link records the identifier in both fields, so this is the
+        // path that decides which tracker an unresolved tag is filed under.
+        assert_eq!(bare_ref("a/b#1".into()).tracker, IssueTracker::Github);
+        assert_eq!(bare_ref("DRA-53".into()).tracker, IssueTracker::Linear);
     }
 
     /// A tag is an address and a title, and that is the whole of what the model

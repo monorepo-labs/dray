@@ -117,7 +117,14 @@ dray issue link DRA-53 DRA-54
 dray issue unlink DRA-54
 
 dray issue link <session-id> DRA-53 --title "Add the issue panel"
+
+dray issue link owner/repo#12 --title "Paste images into the composer" --url https://github.com/owner/repo/issues/12
 ```
+
+A GitHub issue is named `owner/repo#12`, GitHub's own cross-repo spelling, and
+**never a bare `#12`** — a number alone means nothing without a repository, so
+it is refused rather than guessed at. That shape is also what tells the trackers
+apart, since nothing here asks one which issue this is.
 
 `link` and `unlink` tag **your own session** when you do not name one, so you
 never have to write `$DRAY_SESSION_ID` — and you must not, because Claude Code
@@ -135,7 +142,8 @@ describe one issue, so name one issue when you use them.
 
 That line is deliberately thin. **Read the issue yourself** through the tracker's
 own MCP server — `linear-server` for Linear — which is where the description,
-the comments, the links and the current status live. The line in the prompt is an
+the comments, the links and the current status live. For GitHub the `gh` CLI is
+the same answer: `gh issue view owner/repo#12`. The line in the prompt is an
 address, not a briefing.
 
 If that MCP server is not connected, say so rather than guessing: you have the

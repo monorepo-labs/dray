@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 
@@ -22,6 +29,13 @@ import { useHotkey } from "@/hooks/useHotkey";
 import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
+import {
+  canSwitchTracker,
+  effectiveTracker,
+  readIssueTracker,
+  subscribeIssueTracker,
+  type Connected,
+} from "@/lib/issueTracker";
 import { registerComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
 import { selectionRange } from "@/lib/richDom";
@@ -66,6 +80,11 @@ type ChatInputProps = {
   /// placeholder and nowhere else — the picker itself simply finds nothing
   /// without one.
   issuesConnected?: boolean;
+  /// *Which* trackers are connected, which is a different question: it decides
+  /// whether the picker's header offers a switch, and which tracker the pick
+  /// resolves to where the stored one has nothing behind it. Only `App`'s own
+  /// read can answer it.
+  issueTrackers?: Connected;
   /// What the `&` picker offers: the sessions the sidebar is currently drawing,
   /// already narrowed by space and project filter there so that one array
   /// answers for the list, the chords and this.
@@ -216,6 +235,7 @@ export default function ChatInput({
   commandsLoading = false,
   cwd = null,
   issuesConnected = false,
+  issueTrackers = { linear: false, github: false },
   sessions = [],
   onStop,
   onCancelQueued,
@@ -289,7 +309,17 @@ export default function ChatInput({
   // the same reason: the caret sits in exactly one token, and a token opening
   // with `#` is neither one opening with `@` nor a command at position zero.
   const issue = issueSpan(message, caret);
-  const { issues, loading: issuesLoading } = useIssueSearch(issue?.query ?? null);
+  // The pick is read here rather than passed down: it is a module store every
+  // issue surface subscribes to, so the chips in this menu's own header move
+  // the page's too without a prop between them. What *is* passed down is which
+  // trackers are connected, which only `App`'s own read can answer.
+  const trackerPick = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
+  const tracker = effectiveTracker(trackerPick, issueTrackers);
+  const {
+    issues,
+    loading: issuesLoading,
+    emptyNote: issuesNote,
+  } = useIssueSearch(issue?.query ?? null, tracker, cwd);
 
   // The fourth, and exclusive with the other three for the same reason again:
   // the caret sits in one token, and a token opening with `&` is none of them.
@@ -803,6 +833,9 @@ export default function ChatInput({
                 placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
                 loading={issuesLoading}
+                emptyNote={issuesNote}
+                tracker={tracker}
+                canSwitch={canSwitchTracker(issueTrackers)}
               />
             ) : session ? (
               <SessionMentionMenu

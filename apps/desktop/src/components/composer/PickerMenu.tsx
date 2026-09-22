@@ -65,6 +65,7 @@ export default function PickerMenu<T>({
   bare = false,
   loading = false,
   emptyNote,
+  header,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -101,6 +102,14 @@ export default function PickerMenu<T>({
   /// like `loading`, and losing to it: a list still being waited on is not one
   /// that came back empty.
   emptyNote?: string;
+  /// A row above the list, and the one thing here that is *not* about the rows
+  /// — today the `#` picker's tracker chips. Outside the scrolling box, so it
+  /// stays put while the list is walked, and drawn whether or not there are
+  /// rows: it is how the reader gets to the tracker that *has* some.
+  ///
+  /// Whatever goes in here must keep focus in the editor — `onMouseDown` with
+  /// `preventDefault` — or pressing it closes the picker it belongs to.
+  header?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -267,6 +276,15 @@ export default function PickerMenu<T>({
             : "rounded-xl border border-hairline-strong bg-picker backdrop-blur-lg text-popover-foreground shadow-md",
         )}
       >
+        {/* Outside the scroller, so it does not slide away as the list is
+            walked — and separated by a rule rather than a gap, since it is a
+            different question from the rows under it rather than another
+            section of them. The framed state insets it to match the list's own
+            `p-1`; the bare one has no box to be held away from. */}
+        {header && (
+          <div className={cn("border-b border-border/40 pb-1", !bare && "p-1 pb-1")}>{header}</div>
+        )}
+
         <div
           ref={listRef}
           // A box holding one sentence and nothing to pick is not a listbox,

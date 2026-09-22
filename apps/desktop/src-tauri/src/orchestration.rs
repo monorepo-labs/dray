@@ -282,7 +282,10 @@ async fn link_issues(link: LinkIssues) -> Result<Response> {
             store::link_session_issue(
                 &link.session_id,
                 IssueRef {
-                    tracker: IssueTracker::Linear,
+                    // By shape: `dray issue link` asks the tracker nothing, so
+                    // the identifier is the only thing that can say which one
+                    // this belongs to — `owner/repo#12` is GitHub's.
+                    tracker: IssueTracker::of(&identifier),
                     // No tracker call, so no stable tracker id to record. The
                     // identifier stands in: `unlink_session_issue` already
                     // matches on either, so a link made here is removable by

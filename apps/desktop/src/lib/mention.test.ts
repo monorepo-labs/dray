@@ -156,6 +156,28 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  /// A GitHub tag holds a `#` of its own and a slash, which is everything the
+  /// scanner uses to tell a tag from a mention — so this is the shape most
+  /// likely to break it. The run has to stop at the number's end like a
+  /// Linear one, or the sentence after a tag is painted as an address.
+  it("marks a github tag, slug and all", () => {
+    expect(highlightSegments("start on #monorepo-labs/dray#121 today")).toEqual([
+      { kind: "text", text: "start on " },
+      { kind: "issue", text: "#monorepo-labs/dray#121" },
+      { kind: "text", text: " today" },
+    ]);
+
+    roundTrips("see (#a/b#1), and @src/lib/issue.ts");
+  });
+
+  /// Whatever else is true of it, a title written after a GitHub tag has to
+  /// come back out with the tag — the composer's chip and the transcript both
+  /// read the joined run, and a segmentation that loses a character shows up as
+  /// ghosting in the overlay.
+  it("round-trips a github tag carrying a title", () => {
+    roundTrips("#monorepo-labs/dray#12 Some title");
+  });
+
   /// All three can share one sentence, which is why the three colours are
   /// chosen far apart in hue — and why this case is pinned.
   it("marks a command, a mention and a tag together", () => {

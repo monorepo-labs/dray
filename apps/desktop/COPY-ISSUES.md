@@ -1,13 +1,14 @@
 # Issue tracker — every string, for review
 
-Every user-facing string the Linear integration adds, with where it is drawn and
+Every user-facing string the issue integrations add, with where it is drawn and
 why it says what it says. Nothing here is settled: mark up anything and I'll
 change it in one pass.
 
 The one rule holding across the whole list: the surface says **issue**, never
-Linear — except where the reader is being asked about Linear specifically (the
-connect form, and a failure Linear itself caused). Trackers are pluggable; the
-vocabulary should not have to change when a second one lands.
+Linear or GitHub — except where the reader is being asked about one of them
+specifically (a connect form, and a failure that tracker itself caused).
+Trackers are pluggable; the vocabulary did not change when the second one
+landed, which is the whole of what that rule bought.
 
 ---
 
@@ -80,9 +81,40 @@ stale sentence here is worse than none.
 The middle one names the two things that actually go wrong — a paste that lost
 its tail, and a key revoked months ago.
 
+**The GitHub half, under a rule below the form** — with GitHub's mark beside it
+
+> Or sign in to GitHub with `gh auth login` — Dray reads GitHub issues through the `gh` CLI, so there is no key to paste.
+
+Second and quieter, because only one of the two asks anything of the reader:
+GitHub's credential is `gh`'s own, so there is no field here and nothing for
+Dray to hold. Said on this surface because this is the one with nothing to show,
+and somebody who already has `gh` signed in is one relaunch from a page full of
+issues without knowing it. `gh auth login` links to GitHub's own manual page for
+the reason the Linear key link does: the flow is theirs to change.
+
 ---
 
 ## Issues page — connected
+
+**Tracker chips**, first in the filter row, drawn **only where both trackers are
+connected**
+
+The two marks and no words: Linear's, GitHub's, whichever is on filled like a
+scope chip. A word would be the widest thing in a row of glyphs, and this is one
+of the few places the app names a tracker at all. Their accessible names:
+
+> Linear
+> GitHub
+
+First in the row because it changes what every other control in it means — the
+scopes and the filter menu narrow *within* a tracker. One tracker connected is
+not a choice, so the chips are absent rather than disabled.
+
+The same two chips head the composer's `#` menu, and flipping either moves both:
+it is one pick for the whole app, never a merged list. Merging them would put
+two unrelated workspaces under one set of headings with no ordering meaning
+anything across them, since a Linear issue carries a priority and a GitHub one
+does not.
 
 **Scope chips**
 
@@ -105,6 +137,18 @@ left to narrow by — a team or project list with one entry is not offered)
 > Project
 > All projects
 
+**Under GitHub the same menu holds one section**, and every repository is
+offered where a team list of one is not:
+
+> Repository
+
+No "All repositories": a number is only addressable within one repository, so
+there is no list to widen to — and reading every attached project would be a
+`gh` spawn per repo for rows nobody asked for. No Project section either, since
+GitHub Projects are a board an issue is placed on rather than a field it
+carries. The rows are `owner/repo`, one per attached project with a `github.com`
+remote.
+
 **Group headers** — the state buckets, in this order, count beside each
 
 > In Progress
@@ -118,6 +162,14 @@ left to narrow by — a team or project list with one entry is not offered)
 Grouped on the state's *kind*, not its name, so a team that calls its in-progress
 column "Shipping" still lands under In Progress. "Other" only ever holds a state
 Linear added that we don't model.
+
+**Under GitHub the same three kinds are named GitHub's way**, since a GitHub
+issue is Open or Closed and never "Todo" or "Done" — a heading in the wrong
+vocabulary reads as the app describing some other tracker's workspace:
+
+> Open
+> Closed
+> Not planned
 
 **Done and Cancelled are always drawn and always start closed**, and nothing is
 fetched for them until one is opened. Until then they carry no count — a zero
@@ -135,11 +187,37 @@ And when a group turns out to hold nothing:
 > Nothing you filed is open.
 > Nothing assigned to you.
 
+**No repository picked yet**, the GitHub half's own resting state — not a
+failure and not a read that came back empty, so it sits where the reading line
+would and nothing is fetched behind it
+
+> Choose a repository to see its issues.
+
+**And where there is none to choose**, because no attached project has a
+`github.com` remote — the cure is attaching one, and it is named rather than
+left to be guessed at
+
+> Attach a project with a GitHub remote to see its issues.
+
 **Failed read, above the list** (what was already read stays on screen)
 
 > Linear rejected the saved key. Disconnect it in Settings, then paste a new one.
 > Could not reach Linear.
 > No issue tracker connected.
+
+**The same three under GitHub**, where naming a stored key would send the reader
+to fix a credential they never pasted — there is nothing in Settings to
+disconnect, and `gh` is where the fix is
+
+> GitHub refused that read. Sign in again with `gh auth login`.
+> Could not reach GitHub.
+> Not signed in to GitHub. Run `gh auth login`.
+
+**And one that is neither tracker's**, answered when the GitHub half is asked
+for issues with no repository named — reachable from the CLI rather than from
+this page, which draws its own sentence above instead
+
+> Pick a repository
 
 **Icon labels** (screen readers and tooltips)
 
@@ -169,6 +247,25 @@ it teaches them the app is broken rather than that they haven't set it up.
 **Picker header, on `#`**
 
 > Issues
+
+**The tracker chips ride that menu's own header**, where both are connected —
+the same two marks the page draws, and pressing one moves the page too.
+
+**Under GitHub the picker reads this session's own repository and nothing
+else**, since the composer already knows which one it is in where the page has
+to be told. Where the session is not in a GitHub checkout there is nothing it
+could honestly list:
+
+> No GitHub repository here.
+
+Drawn in place of the rows rather than leaving the menu blank, which reads as
+Dray broken rather than as this session having no repository to read.
+
+**Rows name the number alone under GitHub** — `#121`, not
+`monorepo-labs/dray#121`. Every row is in the one repository, so the slug would
+spend the narrowest column saying the same thing over and over. The *tag* that
+lands in the text keeps it whole, since a prompt has no such context and the
+identifier there is an address.
 
 ---
 
@@ -219,9 +316,17 @@ they could not be fetched:
 
 **Failed read**
 
-> Connect Linear on the Issues page to see this issue.
+> Connect a tracker on the Issues page to see this issue.
 > Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.
 > Could not reach Linear.
+
+The first names neither tracker, because this row can be either: a session
+carries both kinds of link, and the page is where both are connected.
+
+**Priority is absent on a GitHub row**, not drawn as "no priority". GitHub has
+no priority field at all, so a glyph there would say the work is unprioritized
+where the truth is that the tracker never asks — and the menu behind it could
+only refuse every pick. The status menu stays: it offers the three GitHub has.
 
 **Row buttons** (hover, and their tooltips)
 
@@ -317,6 +422,16 @@ answers with, so the two cannot drift into two ways of saying one thing.
 
 > name at least one issue, like DRA-53
 
+**A GitHub issue is named the same way**, in GitHub's own cross-repo spelling:
+
+> dray issue link owner/repo#12 --title "…" --url "…"
+
+Never a bare `#12`. A number alone is meaningful only relative to a repository,
+and a prompt is full of them — so a tag that linked one would file a session
+under whichever repo happened to be nearest, which is a wrong link that reads
+exactly like a right one. The shape is also what says which tracker a link
+belongs to, since `dray issue link` asks the tracker nothing.
+
 **After a link or unlink**, the session's whole issue list, one per line:
 
 > DRA-53: Add issue tracker integration
@@ -333,7 +448,21 @@ One shape, whoever wrote it — picked from the composer's `#` menu, typed by
 hand, or appended by the CLI's `--issue`:
 
 > #DRA-53 Add issue tracker integration
+> #monorepo-labs/dray#121 Add oh-my-pi as a fourth harness
 
 The title is in the text rather than drawn beside it. That is what lets the
 model read it, the transcript paint it, and the composer's overlay stay in
 register with the textarea underneath.
+
+The identifier is whatever that tracker calls the issue, and its shape is what
+says which tracker it is — a `#` inside it is GitHub's, since a Linear
+identifier is a team key and a number and holds none.
+
+---
+
+## Settings dialog — the GitHub row
+
+Nothing. There is no row, no key and no Disconnect: the credential is `gh`'s
+own, so Dray has nothing to forget and nothing it could take back. Signing out
+is `gh auth logout` in the reader's own terminal, and the Accounts tab beside
+this already says who `gh` is signed in as.

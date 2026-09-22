@@ -15,7 +15,7 @@
 /// [slash.ts]: ./slash.ts
 /// [mention.ts]: ./mention.ts
 import { channel } from "@/lib/channel";
-import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
+import type { Issue, IssueRef, IssueStateKind, IssueTracker } from "@/types/events";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 /// The tag token the caret is sitting in.
@@ -162,10 +162,43 @@ export function applyIssue(
 /// what actually gets linked. A word painted as a tag that links nothing is the
 /// drift worth watching for.
 export function parseIdentifier(text: string): string | null {
+  // The GitHub shape first, because it is the narrower one — it needs a slash
+  // and a `#`, neither of which a Linear identifier holds — and because the
+  // same ordering is written in Rust's `parse_identifier`.
+  //
+  // Case is kept where Linear's is uppercased: GitHub is case-insensitive on a
+  // slug, so uppercasing one would reach the same issue and leave the reader's
+  // own sentence disagreeing with the repository they typed.
+  const repo = /^([A-Za-z0-9][\w.-]*\/[\w.-]+)#(\d+)/.exec(text);
+  if (repo) return `${repo[1]}#${repo[2]}`;
+
   const match = /^([A-Za-z][A-Za-z0-9]*)-(\d+)/.exec(text);
   if (!match) return null;
 
   return `${match[1].toUpperCase()}-${match[2]}`;
+}
+
+/// What a row calls an issue when every row beside it is in the same
+/// repository: `#12` rather than `owner/repo#12`.
+///
+/// Both surfaces that draw rows read one repository at a time — the issues page
+/// by its own picker, the composer's `#` menu by the session's checkout — so
+/// the slug is on every row saying the same thing, in the one column that has
+/// no width to spare. The *tag* keeps it whole, since a prompt has no such
+/// context and the identifier there is an address.
+export function shortIdentifier(identifier: string): string {
+  const hash = identifier.lastIndexOf("#");
+
+  return hash < 0 ? identifier : identifier.slice(hash);
+}
+
+/// Which tracker an identifier belongs to, read off its shape alone.
+///
+/// The frontend's copy of Rust's `IssueTracker::of`, and it decides what a tag
+/// *opens* where that one decides what is *read*. Pinned on both sides, since
+/// neither can call the other.
+export function trackerOf(identifier: string): IssueTracker {
+  return identifier.includes("#") ? "github" : "linear";
 }
 
 /// Where an identifier points, from the links a message carries.
@@ -218,14 +251,39 @@ type IssueGrouping = {
   issues: Issue[];
 };
 
+/// What the three kinds a GitHub issue can be in are called there.
+///
+/// The *kinds* are shared — a GitHub issue folds onto `unstarted`, `completed`
+/// and `canceled`, which is what lets one page group both trackers — but the
+/// words are not: a GitHub issue is Open or Closed, never "Todo" or "Done", and
+/// a heading in the wrong vocabulary reads as the app describing some other
+/// tracker's workspace. Only the three that occur; nothing else can arrive.
+const GITHUB_LABELS: Partial<Record<IssueStateKind, string>> = {
+  unstarted: "Open",
+  completed: "Closed",
+  canceled: "Not planned",
+};
+
+/// What a heading calls a state kind, in the tracker's own words.
+///
+/// Exported because the settled headings are drawn without going through
+/// `groupIssues` — they exist before their rows have been read, which is the
+/// whole of how they cost a round trip only when opened.
+export function groupLabel(kind: IssueStateKind, tracker: IssueTracker = "linear"): string {
+  if (tracker === "github" && GITHUB_LABELS[kind]) return GITHUB_LABELS[kind];
+
+  return GROUPS.find((group) => group.key === kind)?.label ?? "Other";
+}
+
 /// `issues` bucketed by state, with empty buckets dropped.
 ///
 /// Order *within* a bucket is left exactly as it arrived — the backend has
 /// already sorted by priority, and re-sorting here would be a second opinion
 /// about the same question.
-export function groupIssues(issues: Issue[]): IssueGrouping[] {
+export function groupIssues(issues: Issue[], tracker: IssueTracker = "linear"): IssueGrouping[] {
   return GROUPS.map((group) => ({
     ...group,
+    label: groupLabel(group.key, tracker),
     issues: issues.filter((issue) => issue.state.kind === group.key),
   })).filter((group) => group.issues.length > 0);
 }

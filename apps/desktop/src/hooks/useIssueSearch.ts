@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { cachedIssues, ISSUE_LIST_LIMIT, rememberIssues } from "@/hooks/useIssues";
 import { filterIssues, issueGeneration } from "@/lib/issue";
 
-import type { Issue, IssueQuery } from "@/types/events";
+import type { Issue, IssueQuery, IssueTracker } from "@/types/events";
 
 /// How deep the picker's list goes. The backend ranks by priority, so this is
 /// the depth somebody might scroll before typing another character rather than
@@ -27,13 +27,36 @@ const DEBOUNCE_MS = 200;
 ///
 /// Which also makes the empty-text shape the issues page's own default query, so
 /// the two share cache entries rather than each paying for the same read.
-const queryFor = (text: string): IssueQuery => ({
+/// **Under GitHub the picker reads this session's own repository and nothing
+/// else.** A number is only addressable within one, and the composer already
+/// knows which repository it is in — where the issues page has to be told,
+/// being workspace-wide. So the slug is the query's `teamId`, and with none the
+/// picker has nothing it could honestly list.
+const queryFor = (text: string, tracker: IssueTracker, repo: string | null): IssueQuery => ({
+  tracker,
   text: text || null,
   scope: "assigned",
-  teamId: null,
+  teamId: tracker === "github" ? repo : null,
   projectId: null,
   settled: false,
 });
+
+/// `owner/repo` per directory, for the life of the process.
+///
+/// A remote does not move while the app is running — the same bargain
+/// `repo_slug` makes on the PR side — and this is read on the keystroke that
+/// opens the picker, where an IPC hop is a frame the menu does not open in.
+const repos = new Map<string, string | null>();
+
+async function repoFor(cwd: string): Promise<string | null> {
+  const held = repos.get(cwd);
+  if (held !== undefined) return held;
+
+  const repo = await invoke<string | null>("github_repo", { cwd }).catch(() => null);
+  repos.set(cwd, repo);
+
+  return repo;
+}
 
 /// Issues matching `query`, best first, and whether a read is in flight — or an
 /// empty list while the picker is closed.
@@ -52,17 +75,53 @@ const queryFor = (text: string): IssueQuery => ({
 /// `loading` is what the file picker has no use for and this one does: a cold
 /// `#` has nothing cached to paint and no index to ask, so the menu draws
 /// placeholder rows rather than staying shut until Linear answers.
-export function useIssueSearch(query: string | null): { issues: Issue[]; loading: boolean } {
+export function useIssueSearch(
+  query: string | null,
+  tracker: IssueTracker = "linear",
+  cwd: string | null = null,
+): { issues: Issue[]; loading: boolean; emptyNote?: string } {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(false);
+  /// The session's own repository under GitHub, once it has been asked for.
+  /// `undefined` while it has not been — which is distinct from `null`, the
+  /// answer that there is no GitHub remote here, and the two draw differently.
+  const [repo, setRepo] = useState<string | null | undefined>(undefined);
   /// Whether anything is on screen to protect. A first read has nothing to wait
   /// for, so it skips the debounce and the picker never opens blank.
   const showing = useRef(false);
+
+  // Asked once per directory and cached across mounts, so the answer is usually
+  // already in hand by the time a `#` is typed.
+  useEffect(() => {
+    if (tracker !== "github" || !cwd) {
+      setRepo(null);
+      return;
+    }
+
+    let live = true;
+    void repoFor(cwd).then((next) => live && setRepo(next));
+
+    return () => {
+      live = false;
+    };
+  }, [tracker, cwd]);
+
+  const github = tracker === "github";
 
   useEffect(() => {
     if (query === null) {
       setIssues([]);
       setLoading(false);
+      showing.current = false;
+      return;
+    }
+
+    // Nothing to read: this session is not in a GitHub checkout, or the answer
+    // has not landed yet. The menu says so rather than listing another
+    // repository's issues, which is what a null `teamId` would have it do.
+    if (github && !repo) {
+      setIssues([]);
+      setLoading(repo === undefined);
       showing.current = false;
       return;
     }
@@ -82,8 +141,8 @@ export function useIssueSearch(query: string | null): { issues: Issue[]; loading
     // Either is on screen for the frame the keystroke lands in, which is the
     // whole point — the read below then replaces it, since Linear matches
     // descriptions and this cannot.
-    const exact = cachedIssues(queryFor(query));
-    const base = query ? cachedIssues(queryFor("")) : undefined;
+    const exact = cachedIssues(queryFor(query, tracker, repo ?? null));
+    const base = query ? cachedIssues(queryFor("", tracker, repo ?? null)) : undefined;
     const painted = exact?.issues ?? (base && filterIssues(base.issues, query));
     if (painted) {
       setIssues(painted.slice(0, LIMIT));
@@ -105,13 +164,15 @@ export function useIssueSearch(query: string | null): { issues: Issue[]; loading
 
     setLoading(true);
 
+    const asked = queryFor(query, tracker, repo ?? null);
+
     const run = () => {
-      invoke<Issue[]>("list_issues", { query: queryFor(query), limit: ISSUE_LIST_LIMIT })
+      invoke<Issue[]>("list_issues", { query: asked, limit: ISSUE_LIST_LIMIT })
         .then((matches) => {
           // Filed whether or not this read still has a picker to draw into: the
           // answer is as true for the next `#` as for this one, and the reader
           // typing past it is the ordinary way a read gets cancelled.
-          rememberIssues(queryFor(query), matches, reading);
+          rememberIssues(asked, matches, reading);
           if (cancelled) return;
           setIssues(matches.slice(0, LIMIT));
           showing.current = true;
@@ -137,7 +198,15 @@ export function useIssueSearch(query: string | null): { issues: Issue[]; loading
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, tracker, repo, github]);
 
-  return { issues, loading };
+  return {
+    issues,
+    loading,
+    // Drawn only where there is nothing coming — a session outside a GitHub
+    // checkout under the GitHub tracker. Without it the menu opens on a blank
+    // box, which reads as Dray broken rather than as this session having no
+    // repository to read.
+    emptyNote: github && repo === null ? "No GitHub repository here." : undefined,
+  };
 }

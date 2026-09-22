@@ -793,7 +793,7 @@ export type InstallError = { "stage": "install", message: string, } | { "stage":
 /**
  * What the settings dialog draws. `None` is a tracker nobody has connected.
  */
-export type IntegrationsView = { linear: TrackerAccount | null, };
+export type IntegrationsView = { linear: TrackerAccount | null, github: TrackerAccount | null, };
 
 /**
  * One row in a list, and everything a row draws.
@@ -894,12 +894,21 @@ export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
  */
 export type IssueQuery = { 
 /**
+ * Which tracker is being asked. `#[serde(default)]` on the struct makes an
+ * absent one Linear, which is what every caller meant before there were
+ * two.
+ */
+tracker: IssueTracker, 
+/**
  * Free text. Matched against title and identifier; an empty query is the
  * resting state and lists rather than searches.
  */
 text: string | null, scope: IssueScope, 
 /**
- * Linear team id.
+ * Linear team id — and under GitHub the **repository slug**, since a
+ * repository is what an issue there belongs to and what the page reads one
+ * at a time. One field rather than two, because it is one question: which
+ * bucket of the tracker to read.
  */
 teamId: string | null, projectId: string | null, 
 /**
@@ -967,10 +976,10 @@ color: string, };
 export type IssueStateKind = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "other";
 
 /**
- * Who tracks the issue. One variant today; it is on the wire and on disk so a
- * session linked to a Linear issue stays readable once there are two.
+ * Who tracks the issue. On the wire and on disk, which is what kept a session
+ * linked to a Linear issue readable when the second variant landed.
  */
-export type IssueTracker = "linear";
+export type IssueTracker = "linear" | "github";
 
 /**
  * Why there is nothing to show.

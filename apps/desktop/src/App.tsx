@@ -317,7 +317,10 @@ function App() {
   // hook per surface is a second answer to "are we connected" free to disagree
   // with the first.
   const integrations = useIntegrations(true);
-  const issuesConnected = !!integrations.integrations?.linear;
+  // Either one is enough to draw the page and open the picker: the two are
+  // alternatives rather than halves of one connection, and a reader with only
+  // `gh` signed in has issues to read.
+  const issuesConnected = integrations.connected.linear || integrations.connected.github;
 
   // Not persisted: settings are opened to change something and closed again, so
   // reopening the app into them would be the app remembering the wrong half of
@@ -2237,6 +2240,7 @@ function App() {
           isNewTask={!shownSession}
           target={composerTarget}
           issuesConnected={issuesConnected}
+          issueTrackers={integrations.connected}
           sessions={composerSessions}
           modelTakesImages={modelTakesImages}
           error={error}
@@ -2331,7 +2335,7 @@ function App() {
           onPick={setPickedIssue}
           onWorkOn={workOnIssue}
           refreshRef={issuesRefreshRef}
-          connected={issuesConnected}
+          connected={integrations.connected}
           onConnect={integrations.connect}
           connecting={integrations.busy}
           connectError={integrations.error}

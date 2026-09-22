@@ -1,6 +1,8 @@
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
+import IssueTrackerChips from "@/components/IssueTrackerChips";
 import PickerMenu from "@/components/composer/PickerMenu";
-import type { Issue } from "@/types/events";
+import { shortIdentifier } from "@/lib/issue";
+import type { Issue, IssueTracker } from "@/types/events";
 
 /// The `#` picker's rows.
 ///
@@ -21,6 +23,9 @@ export default function IssueMentionMenu({
   placement = "above",
   bare = false,
   loading = false,
+  emptyNote,
+  tracker,
+  canSwitch = false,
 }: {
   issues: Issue[];
   activeIndex: number;
@@ -28,10 +33,18 @@ export default function IssueMentionMenu({
   onHover: (index: number) => void;
   placement?: "above" | "below";
   bare?: boolean;
-  /// Whether Linear is still being waited on. The one picker of the three that
-  /// needs it: the other two read memory, where this reads the network on a
-  /// query nothing has cached yet.
+  /// Whether the tracker is still being waited on. The one picker of the three
+  /// that needs it: the other two read memory, where this reads the network on
+  /// a query nothing has cached yet.
   loading?: boolean;
+  /// One line where there is nothing to list and nothing coming — a session
+  /// outside a GitHub checkout, under the GitHub tracker.
+  emptyNote?: string;
+  tracker: IssueTracker;
+  /// Whether both trackers are connected. The chips are the reader's way to the
+  /// other one's issues without leaving the sentence they are typing; with one
+  /// tracker they are two glyphs that can only say what the list already says.
+  canSwitch?: boolean;
 }) {
   return (
     <PickerMenu
@@ -44,11 +57,18 @@ export default function IssueMentionMenu({
       placement={placement}
       bare={bare}
       loading={loading}
+      emptyNote={emptyNote}
+      header={canSwitch ? <IssueTrackerChips tracker={tracker} /> : undefined}
       renderItem={(issue) => (
         <>
           <IssueStateIcon kind={issue.state.kind} color={issue.state.color} label={issue.state.name} />
 
-          <span className="shrink-0 font-medium tabular-nums">{issue.identifier}</span>
+          {/* Every row here is in the session's own repository, so a GitHub
+              identifier says the slug once per row in the column with the least
+              room for it. The number is what tells the rows apart. */}
+          <span className="shrink-0 font-medium tabular-nums">
+            {shortIdentifier(issue.identifier)}
+          </span>
 
           <span className="min-w-0 truncate text-muted-foreground">{issue.title}</span>
 

@@ -8,6 +8,8 @@ import {
   issueTag,
   issueUrl,
   parseIdentifier,
+  shortIdentifier,
+  trackerOf,
 } from "@/lib/issue";
 import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
 
@@ -92,6 +94,46 @@ describe("parseIdentifier", () => {
     expect(parseIdentifier("1-2")).toBeNull();
     expect(parseIdentifier("DRA-")).toBeNull();
   });
+
+  /// GitHub's own cross-repo spelling, and the case is kept where Linear's is
+  /// uppercased: GitHub is case-insensitive on a slug, so uppercasing one would
+  /// reach the same issue and leave the reader's own sentence disagreeing with
+  /// the repository they typed.
+  it("takes a repository and a number, as written", () => {
+    expect(parseIdentifier("monorepo-labs/dray#121")).toBe("monorepo-labs/dray#121");
+    expect(parseIdentifier("Owner/Repo.js#7")).toBe("Owner/Repo.js#7");
+    expect(parseIdentifier("a/b#1),")).toBe("a/b#1");
+  });
+
+  /// **A bare `#123` is refused on purpose.** A number alone is meaningful only
+  /// relative to a repository, and prose is full of them.
+  it("refuses a number with no repository, and a path with no number", () => {
+    expect(parseIdentifier("123")).toBeNull();
+    expect(parseIdentifier("/repo#1")).toBeNull();
+    expect(parseIdentifier("owner/#1")).toBeNull();
+    expect(parseIdentifier("owner/repo#")).toBeNull();
+    expect(parseIdentifier("src/lib/issue.ts")).toBeNull();
+  });
+});
+
+/// The frontend's copy of Rust's `IssueTracker::of`. Neither can call the
+/// other, so the rule is pinned on both sides — this one decides what a tag
+/// *opens*, that one what is *read*.
+describe("trackerOf", () => {
+  it("reads the tracker off the spelling alone", () => {
+    expect(trackerOf("monorepo-labs/dray#121")).toBe("github");
+    expect(trackerOf("DRA-53")).toBe("linear");
+  });
+});
+
+describe("shortIdentifier", () => {
+  /// Both surfaces that draw rows read one repository at a time, so the slug is
+  /// on every row saying the same thing in the column with the least room.
+  it("drops the repository, which every row beside it shares", () => {
+    expect(shortIdentifier("monorepo-labs/dray#121")).toBe("#121");
+    // A Linear identifier has no slug to drop and is left exactly as it is.
+    expect(shortIdentifier("DRA-53")).toBe("DRA-53");
+  });
 });
 
 describe("issueUrl", () => {
@@ -151,6 +193,26 @@ describe("groupIssues", () => {
 
   it("drops empty buckets", () => {
     expect(groupIssues([])).toEqual([]);
+  });
+
+  /// The *kinds* are shared — which is what lets one page group both trackers —
+  /// where the words are not: a GitHub issue is Open or Closed, never "Todo" or
+  /// "Done", and a heading in the wrong vocabulary reads as the app describing
+  /// some other tracker's workspace.
+  it("names the buckets in the tracker's own words", () => {
+    const rows = [
+      issue("a/b#1", "unstarted"),
+      issue("a/b#2", "completed"),
+      issue("a/b#3", "canceled"),
+    ];
+
+    expect(groupIssues(rows, "github").map((g) => g.label)).toEqual([
+      "Open",
+      "Closed",
+      "Not planned",
+    ]);
+    // And Linear keeps its own, which is what the default answers.
+    expect(groupIssues(rows).map((g) => g.label)).toEqual(["Todo", "Done", "Cancelled"]);
   });
 });
 

@@ -791,13 +791,13 @@ impl PrUnavailable {
 /// The one message that is ours rather than `gh`'s, since a binary that does
 /// not exist writes no stderr. Sentinel as well as text: [`unavailable`] reads
 /// it back to tell "no CLI" from a CLI that answered badly.
-const NO_CLI: &str = "GitHub CLI (gh) not found.";
+pub(crate) const NO_CLI: &str = "GitHub CLI (gh) not found.";
 
 /// Runs `gh` in `cwd`. `Err` is the message to put on screen: `gh` writes a
 /// readable sentence to stderr for every failure that matters here — not
 /// logged in, no remote, no such repo — and rewording them would only make them
 /// less like what the user sees in their own terminal.
-async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     let bin = binpath::gh().await.ok_or(NO_CLI)?;
 
     // A worktree removed outside Dray leaves the session's `cwd` naming a
@@ -899,6 +899,10 @@ pub async fn prs_for_branch(
 #[tauri::command]
 pub async fn recheck_gh() -> bool {
     binpath::forget_gh();
+    // The same absence, cached a second time: the issues side remembers *who*
+    // `gh` answered as, and a reader pressing this has usually just installed
+    // the CLI or signed in — so an answer taken before that must not outlive it.
+    crate::issues::github::forget_account();
     binpath::gh().await.is_some()
 }
 

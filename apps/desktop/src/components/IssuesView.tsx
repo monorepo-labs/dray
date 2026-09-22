@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type MutableRefObject, type SyntheticEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type MutableRefObject,
+  type SyntheticEvent,
+} from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronRight, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
@@ -20,9 +27,18 @@ import { Input } from "@/components/ui/input";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import GitHubIcon from "@/components/GitHubIcon";
+import IssueTrackerChips from "@/components/IssueTrackerChips";
 import { useHotkey } from "@/hooks/useHotkey";
-import { useIssues } from "@/hooks/useIssues";
-import { groupIssues } from "@/lib/issue";
+import { issueErrorText, useIssues } from "@/hooks/useIssues";
+import { groupIssues, groupLabel, shortIdentifier } from "@/lib/issue";
+import {
+  canSwitchTracker,
+  effectiveTracker,
+  readIssueTracker,
+  subscribeIssueTracker,
+  type Connected,
+} from "@/lib/issueTracker";
 import { calendarDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
@@ -32,7 +48,7 @@ import type {
   IssueScope,
   IssueState,
   IssueStateKind,
-  IssueUnavailable,
+  IssueTracker,
 } from "@/types/events";
 
 /// The page's search field. Named so ⌘⇧F can reach it — the same trick the
@@ -54,25 +70,10 @@ const LINEAR_KEYS_URL = "https://linear.app/settings/account/security";
 /// points at it rather than reproducing it.
 const LINEAR_MCP_URL = "https://linear.app/docs/mcp";
 
-/// What a failed read says, in one line.
-///
-/// The cure is named where there is one — a key Linear has stopped accepting is
-/// fixed by disconnecting in Settings and pasting a new one here, and saying so
-/// is the difference between a sentence to act on and one to stare at. Anything
-/// unrecognised falls back to the tracker's own words rather than a shrug of
-/// our own.
-function unavailableText(unavailable: IssueUnavailable): string {
-  switch (unavailable.kind) {
-    case "unauthorized":
-      return "Linear rejected the saved key. Disconnect it in Settings, then paste a new one.";
-    case "offline":
-      return "Could not reach Linear.";
-    case "not_connected":
-      return "No issue tracker connected.";
-    default:
-      return unavailable.detail;
-  }
-}
+/// Where GitHub's own instructions for signing `gh` in live. Linked rather
+/// than described, for the reason the Linear key link is: the flow is theirs to
+/// change.
+const GH_AUTH_URL = "https://cli.github.com/manual/gh_auth_login";
 
 const SCOPES: { value: IssueScope; label: string }[] = [
   { value: "assigned", label: "Assigned to me" },
@@ -110,7 +111,9 @@ export default function IssuesView({
   /// The page is the thing on screen. Hidden pages do not read, for the reason
   /// the right panel's own `active` exists.
   active: boolean;
-  connected: boolean;
+  /// Which trackers have something behind them — not whether *a* tracker does.
+  /// The chips are drawn only where both do, and the pick resolves against it.
+  connected: Connected;
   /// Answers whether the key was accepted, so the field can clear itself only
   /// on success.
   onConnect: (key: string) => Promise<boolean>;
@@ -128,8 +131,15 @@ export default function IssuesView({
   /// knows which one the reader is looking at.
   refreshRef?: MutableRefObject<(() => void) | null>;
 }) {
+  // The pick, resolved against what is actually connected: a reader who
+  // disconnects the tracker they last picked should land on the one they still
+  // have rather than on an empty page.
+  const pick = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
+  const tracker = effectiveTracker(pick, connected);
+  const anyConnected = connected.linear || connected.github;
+
   const { issues, settled, filters, query, setQuery, loading, loaded, unavailable, refresh } =
-    useIssues(active && connected);
+    useIssues(active && anyConnected, tracker);
 
   // Kept current rather than set once: `refresh` is re-made whenever the hook
   // re-runs, and a handle captured at mount would close over a stale one.
@@ -151,7 +161,7 @@ export default function IssuesView({
   useHotkey(
     "issues.search",
     () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
-    { enabled: active && connected },
+    { enabled: active && anyConnected },
   );
 
   /// The workflow a row's status menu offers, which belongs to the issue's own
@@ -161,16 +171,45 @@ export default function IssuesView({
   /// down the wire. Empty until that read lands, which draws a plain glyph.
   const statesFor = (issue: Issue) =>
     (issue.team && filters?.teamStates[issue.team]) || [];
-  const groups = useMemo(() => groupIssues(issues), [issues]);
-  const settledGroups = useMemo(() => groupIssues(settled.issues), [settled.issues]);
+  /// Whether the GitHub half has nothing it could read. Not an error and not a
+  /// failed read — the page simply has no repository named yet, which is the
+  /// state it opens in the first time.
+  const needsRepo = tracker === "github" && !query.teamId;
 
-  if (!connected) {
+  /// The settled headings in the tracker's own words. The *kinds* are shared —
+  /// which is what lets one page group both — where "Done" and "Cancelled" are
+  /// Linear's vocabulary and would read as some other tracker's workspace over
+  /// a list of GitHub issues.
+  const settledKinds = useMemo(
+    () =>
+      SETTLED_KINDS.map(({ key }) => ({
+        key,
+        label: groupLabel(key, tracker),
+      })),
+    [tracker],
+  );
+
+  const groups = useMemo(() => groupIssues(issues, tracker), [issues, tracker]);
+  const settledGroups = useMemo(
+    () => groupIssues(settled.issues, tracker),
+    [settled.issues, tracker],
+  );
+
+  if (!anyConnected) {
     return <Connect onConnect={onConnect} busy={connecting} error={connectError} />;
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 px-3 pt-3">
+        {/* First in the row, because it changes what every other control in it
+            means: the scopes and the filter menu narrow *within* a tracker.
+            Drawn only where both are connected — with one there is nothing to
+            flip to. */}
+        {canSwitchTracker(connected) && (
+          <IssueTrackerChips tracker={tracker} className="mr-1" />
+        )}
+
         {SCOPES.map((scope) => (
           // Chips rather than a menu, because these are the two questions worth
           // one press: what is mine to do, and what did I ask for. Everything
@@ -190,7 +229,7 @@ export default function IssuesView({
           </button>
         ))}
 
-        <FilterMenu query={query} filters={filters} onChange={set} />
+        <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
 
         {/* Far right, away from the chips. It acts on the whole page rather
             than narrowing it, so sitting in the row of things that narrow read
@@ -258,67 +297,50 @@ export default function IssuesView({
           what was already read on screen, and this says the answer is stale. */}
       {unavailable && (
         <p className="border-b border-border px-3 py-2 text-ui text-destructive">
-          {unavailableText(unavailable)}
+          {issueErrorText(unavailable, tracker)}
         </p>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* Nothing else while the first read is out — not even the settled
-            headings, which are the one part of this list that can be drawn
-            without an answer and so were the only thing on screen. A page whose
-            finished work appears first, and whose open work arrives second,
-            reads as a workspace with nothing left to do. */}
-        {!loaded && <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>}
-
-        {loaded && issues.length === 0 && !loading && (
+        {/* **Nothing is read until a repository is picked**, and that is the
+            GitHub half's own resting state rather than a failure: an issue
+            number means nothing without one, and reading every attached project
+            would be a `gh` spawn per repo for a list nobody asked for. Above the
+            reading line, since there is no read to report on. */}
+        {needsRepo ? (
           <p className="px-3 py-4 text-ui text-muted-foreground">
-            {query.text
-              ? "No issue matches that."
-              : query.scope === "created"
-                ? "Nothing you filed is open."
-                : "Nothing assigned to you."}
+            {(filters?.teams.length ?? 0) > 0
+              ? "Choose a repository to see its issues."
+              : "Attach a project with a GitHub remote to see its issues."}
           </p>
-        )}
+        ) : (
+          <>
+            {/* Nothing else while the first read is out — not even the settled
+                headings, which are the one part of this list that can be drawn
+                without an answer and so were the only thing on screen. A page
+                whose finished work appears first, and whose open work arrives
+                second, reads as a workspace with nothing left to do. */}
+            {!loaded && <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>}
 
-        {loaded &&
-          groups.map((group) => (
-            <Group key={group.key} kind={group.key} label={group.label} count={group.issues.length}>
-              {group.issues.map((issue) => (
-                <IssueRow
-                  key={issue.id}
-                  issue={issue}
-                  picked={issue.identifier === picked}
-                  states={statesFor(issue)}
-                  onPick={onPick}
-                  onWorkOn={onWorkOn}
-                />
-              ))}
-            </Group>
-          ))}
+            {loaded && issues.length === 0 && !loading && (
+              <p className="px-3 py-4 text-ui text-muted-foreground">
+                {query.text
+                  ? "No issue matches that."
+                  : query.scope === "created"
+                    ? "Nothing you filed is open."
+                    : "Nothing assigned to you."}
+              </p>
+            )}
 
-        {/* Done and Cancelled are always here and always start closed. Finished
-            work is most of a workspace and almost never what the page was
-            opened for — but it is what the reader wants when they want it, and
-            a filter they have to find first is worse than a heading they can
-            see. Nothing is fetched until one is opened: the headings cost a
-            round trip only when somebody asks a question of them. */}
-        {loaded &&
-          SETTLED_KINDS.map(({ key, label }) => {
-            const group = settledGroups.find((g) => g.key === key);
-
-            return (
-              <Group
-                key={key}
-                kind={key}
-                label={label}
-                count={settled.loaded ? (group?.issues.length ?? 0) : null}
-                collapsedByDefault
-                onFirstOpen={settled.request}
-              >
-                {settled.loading && !settled.loaded ? (
-                  <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>
-                ) : group ? (
-                  group.issues.map((issue) => (
+            {loaded &&
+              groups.map((group) => (
+                <Group
+                  key={group.key}
+                  kind={group.key}
+                  label={group.label}
+                  count={group.issues.length}
+                >
+                  {group.issues.map((issue) => (
                     <IssueRow
                       key={issue.id}
                       issue={issue}
@@ -327,13 +349,51 @@ export default function IssuesView({
                       onPick={onPick}
                       onWorkOn={onWorkOn}
                     />
-                  ))
-                ) : (
-                  <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
-                )}
-              </Group>
-            );
-          })}
+                  ))}
+                </Group>
+              ))}
+
+            {/* Done and Cancelled are always here and always start closed.
+                Finished work is most of a workspace and almost never what the
+                page was opened for — but it is what the reader wants when they
+                want it, and a filter they have to find first is worse than a
+                heading they can see. Nothing is fetched until one is opened:
+                the headings cost a round trip only when somebody asks a
+                question of them. */}
+            {loaded &&
+              settledKinds.map(({ key, label }) => {
+                const group = settledGroups.find((g) => g.key === key);
+
+                return (
+                  <Group
+                    key={key}
+                    kind={key}
+                    label={label}
+                    count={settled.loaded ? (group?.issues.length ?? 0) : null}
+                    collapsedByDefault
+                    onFirstOpen={settled.request}
+                  >
+                    {settled.loading && !settled.loaded ? (
+                      <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>
+                    ) : group ? (
+                      group.issues.map((issue) => (
+                        <IssueRow
+                          key={issue.id}
+                          issue={issue}
+                          picked={issue.identifier === picked}
+                          states={statesFor(issue)}
+                          onPick={onPick}
+                          onWorkOn={onWorkOn}
+                        />
+                      ))
+                    ) : (
+                      <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
+                    )}
+                  </Group>
+                );
+              })}
+          </>
+        )}
       </div>
     </div>
   );
@@ -410,6 +470,28 @@ function Connect({
         >
           Create a key in Linear
         </button>
+
+        {/* The other tracker, and it needs no form: GitHub's credential is
+            `gh`'s own, so there is nothing to paste and nothing for Dray to
+            hold. Said here because this is the surface with nothing to show,
+            and a reader who already has `gh` signed in is one relaunch from a
+            page full of issues without knowing it. Second, and quieter than the
+            form above it: only one of the two asks anything of them. */}
+        <p className="flex items-start gap-2 border-t border-border pt-3 text-ui text-muted-foreground">
+          <GitHubIcon className="mt-0.5 size-3.5" />
+          <span>
+            Or sign in to GitHub with{" "}
+            <button
+              type="button"
+              className="text-foreground underline underline-offset-2 hover:text-foreground/80"
+              onClick={() => void openUrl(GH_AUTH_URL)}
+            >
+              <code>gh auth login</code>
+            </button>{" "}
+            — Dray reads GitHub issues through the <code>gh</code> CLI, so there is no key to
+            paste.
+          </span>
+        </p>
 
         {/* The other half of the setup, and this is the place to say it.
             This key is what fills *these* screens; it gives the agent nothing.
@@ -497,14 +579,25 @@ function Group({
 function FilterMenu({
   query,
   filters,
+  tracker,
   onChange,
 }: {
   query: IssueQuery;
   filters: { teams: IssueGroup[]; projects: IssueGroup[] } | null;
+  tracker: IssueTracker;
   onChange: (patch: Partial<IssueQuery>) => void;
 }) {
-  const teams = filters && filters.teams.length > 1 ? filters.teams : [];
-  const projects = filters && filters.projects.length > 1 ? filters.projects : [];
+  const github = tracker === "github";
+
+  // **Every repository is offered, where a team list of one is not.** A Linear
+  // team filter narrows a list the page can already draw, so one option is a
+  // control that does nothing; a repository *is* the list, and with none picked
+  // there is nothing on screen at all — so even one has to be reachable.
+  const teams = github ? (filters?.teams ?? []) : filters && filters.teams.length > 1 ? filters.teams : [];
+  // GitHub Projects are a board an issue is placed on rather than a field it
+  // carries, which is a different query against a different object — so the
+  // section is simply not there.
+  const projects = github ? [] : filters && filters.projects.length > 1 ? filters.projects : [];
   const narrowed = !!query.teamId || !!query.projectId;
 
   // Nothing left to narrow by. A trigger that opens an empty menu is worse than
@@ -531,13 +624,19 @@ function FilterMenu({
       <DropdownMenuContent align="end" className="w-56">
         {teams.length > 0 && (
           <>
-            <DropdownMenuLabel>Team</DropdownMenuLabel>
-            <DropdownMenuCheckboxItem
-              checked={!query.teamId}
-              onCheckedChange={() => onChange({ teamId: null })}
-            >
-              All teams
-            </DropdownMenuCheckboxItem>
+            <DropdownMenuLabel>{github ? "Repository" : "Team"}</DropdownMenuLabel>
+            {/* No "all" under GitHub: a number is only addressable within one
+                repository, so there is no list to widen to — reading every
+                attached project would be a `gh` spawn per repo for rows nobody
+                asked for. Clearing the pick is what the empty state is for. */}
+            {!github && (
+              <DropdownMenuCheckboxItem
+                checked={!query.teamId}
+                onCheckedChange={() => onChange({ teamId: null })}
+              >
+                All teams
+              </DropdownMenuCheckboxItem>
+            )}
             {teams.map((team) => (
               <DropdownMenuCheckboxItem
                 key={team.id}
@@ -647,11 +746,20 @@ function IssueRow({
     >
       {/* Always drawn, "no priority" included. A glyph that appears on only
           some rows shifts every title beside it, and a ragged left edge reads
-          as disorder rather than as information. */}
-      <PriorityMenu issue={issue} priority={issue.priority} />
+          as disorder rather than as information.
 
+          **Absent entirely on GitHub, where there is no priority field at
+          all.** Not a glyph reading "none" on every row — that says the issues
+          are unprioritized, where the truth is that the tracker has no such
+          question — and not a menu, which could only refuse every pick. The
+          rows are all the same width without it, so nothing goes ragged. */}
+      {issue.tracker === "linear" && <PriorityMenu issue={issue} priority={issue.priority} />}
+
+      {/* Every row here is in the one repository the page is reading, so a
+          GitHub identifier would spend this column saying the slug over and
+          over. The number is what tells the rows apart. */}
       <span className="w-16 shrink-0 truncate text-muted-foreground tabular-nums">
-        {issue.identifier}
+        {shortIdentifier(issue.identifier)}
       </span>
 
       {/* The status glyph repeats the heading the row is already gathered

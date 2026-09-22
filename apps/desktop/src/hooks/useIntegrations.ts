@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { forgetIssues } from "@/hooks/useIssues";
+import { connectedTrackers } from "@/lib/issueTracker";
 import type { IntegrationsView } from "@/types/events";
 
 /// The connected issue tracker, and the two writes that change it.
@@ -68,5 +69,16 @@ export function useIntegrations(enabled: boolean) {
     }
   }, []);
 
-  return { integrations, busy, error, connect, disconnect };
+  return {
+    integrations,
+    /// Which trackers have something behind them. Read by the chips, by the
+    /// page's empty state and by `App`'s own "is anything connected" — one
+    /// answer, since a second reading of `integrations` per surface is a second
+    /// answer free to disagree with the first.
+    connected: connectedTrackers(integrations),
+    busy,
+    error,
+    connect,
+    disconnect,
+  };
 }

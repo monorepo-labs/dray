@@ -22,7 +22,9 @@ import type { IssueDetail, IssueRef, IssueUnavailable } from "@/types/events";
 /// be pasted; a sentence pointing at Settings would send the reader to a row
 /// that only ever disconnects.
 const UNAVAILABLE: Record<IssueUnavailable["kind"], string> = {
-  not_connected: "Connect Linear on the Issues page to see this issue.",
+  // Names neither tracker, because this row can be either: a session carries
+  // both kinds of link, and the page is where both are connected.
+  not_connected: "Connect a tracker on the Issues page to see this issue.",
   unauthorized:
     "Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.",
   offline: "Could not reach Linear.",
@@ -227,13 +229,22 @@ function IssueRow({
             A menu only once the read has landed: before that there is nothing
             to check against and no id to write with, and a menu that opens on
             a guess is worse than a glyph that waits. */}
-        {detail ? (
-          <PriorityMenu issue={target(issue, detail)} priority={detail.priority} />
-        ) : (
-          <IssuePriorityIcon priority="none" />
-        )}
+        {/* GitHub has no priority field at all, so the slot is not reserved
+            either — a glyph reading "none" on every row of a GitHub-linked
+            session would say the work is unprioritized, where the truth is that
+            the tracker never asks. */}
+        {issue.tracker === "linear" &&
+          (detail ? (
+            <PriorityMenu issue={target(issue, detail)} priority={detail.priority} />
+          ) : (
+            <IssuePriorityIcon priority="none" />
+          ))}
 
-        <span className="shrink-0 font-medium tabular-nums">{issue.identifier}</span>
+        {/* Whole, unlike a list row's: a panel row is the only place this issue
+            is named, and there is no repository above it to read the slug off. */}
+        <span className="min-w-0 shrink-0 truncate font-medium tabular-nums">
+          {issue.identifier}
+        </span>
 
         {/* From the read where it has landed, and a resting glyph until then —
             so the row never jumps between two heights as detail arrives. */}
