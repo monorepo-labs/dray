@@ -26,13 +26,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { inputClassName } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppSettings } from "@/hooks/useAppSettings";
-import { resetFontSizes, setFontSize, useFontSizes } from "@/hooks/useFontSizes";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
@@ -40,12 +38,6 @@ import { useFullscreen } from "@/hooks/useFullscreen";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
-import {
-  FONT_MAX,
-  FONT_MIN,
-  FONT_SLOTS,
-  isDefaultFontSizes,
-} from "@/lib/fontSize";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
   cachedApps,
@@ -178,8 +170,8 @@ export default function SettingsPage({
               <ThemeRow />
               <ModeRow />
             </Section>
-            <Section title="Font size">
-              <FontSizeRows />
+            <Section>
+              <ZoomRow />
             </Section>
             <Section>
               <AutoHideSidebarRow
@@ -268,84 +260,33 @@ export default function SettingsPage({
   );
 }
 
-/// One row per text class, and nothing derived: the four sit at different
-/// sizes by default and a single slider would hide which one the reader moved.
-/// In px rather than an abstract Small/Large because px is what the reader can
-/// compare against their editor.
-function FontSizeRows() {
-  const sizes = useFontSizes();
-  return (
-    <>
-      {/* Tighter than the section's own gap: these rows are a word and a
-          box each, with no sentence under them to hold apart. */}
-      <div className="flex flex-col gap-1.5">
-        {FONT_SLOTS.map((slot) => (
-          <FontSizeRow key={slot.id} slot={slot} value={sizes[slot.id]} />
-        ))}
-      </div>
-      {!isDefaultFontSizes(sizes) && (
-        <Button variant="outline" size="sm" className="self-start" onClick={resetFontSizes}>
-          Reset font sizes
-        </Button>
-      )}
-    </>
-  );
-}
-
-/// The field keeps its own text while focused: a value in range is applied on
-/// every keystroke so the page answers as the reader types, one outside it is
-/// left alone until blur, where it is clamped. Clamping on change is the trap —
-/// a controlled field snapping `1` to `10` turns a typed `15` into `105`.
-///
-/// Not `type="number"`: its spinner arrows are the one thing it adds and they
-/// are not wanted, so ↑/↓ step the value by hand. The box is the outer span,
-/// drawn with the input's own classes, and the field inside it is bare — a
-/// unit positioned over a padded input collides with the number the moment
-/// the interface size it is set in grows.
-function FontSizeRow({
-  slot,
-  value,
-}: {
-  slot: (typeof FONT_SLOTS)[number];
-  value: number;
-}) {
+/// The chords only — zoom has no control of its own. It replaced the per-text
+/// font sizes, so a reader who had set one and found it gone learns here
+/// what stands in for it.
+function ZoomRow() {
   const id = useId();
-  const [draft, setDraft] = useState<string | null>(null);
-  const step = (delta: number) => {
-    setFontSize(slot.id, value + delta);
-    setDraft(null);
-  };
+  useShortcutOverrides();
+  const hints = (
+    [
+      ["In", "zoom.in"],
+      ["Out", "zoom.out"],
+      ["Reset", "zoom.reset"],
+    ] as const
+  ).filter(([, chord]) => chordFor(chord));
   return (
-    <SettingRow id={id} label={slot.label}>
-      <label
-        htmlFor={id}
-        className={cn(
-          inputClassName,
-          "flex h-7 w-fit cursor-text items-center gap-1 px-2.5 text-ui focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
-        )}
-      >
-        <input
-          id={id}
-          inputMode="numeric"
-          value={draft ?? value}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            const px = Number(e.target.value);
-            if (px >= FONT_MIN && px <= FONT_MAX) setFontSize(slot.id, px);
-          }}
-          onBlur={(e) => {
-            const px = Number(e.target.value);
-            if (e.target.value.trim() && Number.isFinite(px)) setFontSize(slot.id, px);
-            setDraft(null);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowUp") (e.preventDefault(), step(1));
-            if (e.key === "ArrowDown") (e.preventDefault(), step(-1));
-          }}
-          className="w-[2.5ch] bg-transparent text-right outline-none"
-        />
-        <span className="text-muted-foreground select-none">px</span>
-      </label>
+    <SettingRow
+      id={id}
+      asGroup
+      label="Zoom"
+      description="Makes text and everything else larger or smaller."
+    >
+      <span className="flex items-center gap-3 text-ui text-muted-foreground">
+        {hints.map(([word, chord]) => (
+          <span key={chord} className="flex items-center gap-1.5">
+            {word} <ShortcutKeys ids={[chord]} />
+          </span>
+        ))}
+      </span>
     </SettingRow>
   );
 }

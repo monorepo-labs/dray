@@ -58,9 +58,8 @@ const CHIP_ACCENT: Partial<Record<Placed["segment"]["kind"], string>> = {
 /// caret taller than the text beside it and left lines holding a tag further
 /// apart than lines without one. An inline box's padding paints without taking
 /// part in that calculation, so the line stays the composer's own and the fill
-/// still draws round the face. Stated as a relationship rather than in px: the
-/// composer's size is the reader's (`--fs-prompt`), so every figure here would
-/// be right for one setting and wrong for the rest.
+/// still draws round the face. Stated as a relationship rather than in px, so
+/// the chip follows `--text-prompt` wherever that moves.
 /// `whitespace-nowrap` is what keeps the fill in one piece, since an inline box
 /// breaking across two lines would be drawn as two.
 const CHIP_SHAPE =

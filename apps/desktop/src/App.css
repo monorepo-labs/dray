@@ -871,24 +871,22 @@
   --font-heading: var(--font-sans);
   --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
 
-  /* Semantic sizes, each overridable at runtime by setting its `--fs-*` on
-     `<html>`. Components use `text-chat`/`text-code`/… and never a raw
-     `text-sm`, which is what makes the font-size setting a no-op for them.
+  /* Semantic sizes. Components use `text-chat`/`text-code`/… and never a raw
+     `text-sm`, so each class of text is sized in one place.
 
      Everything in the transcript is one size — headings, prose, tool rows, list
      items alike. Weight and color carry hierarchy instead, so a heading is bold
      rather than bigger. Only code and tool output scale separately. */
-  --text-chat: var(--fs-chat, 0.9375rem);
+  --text-chat: 0.9375rem;
   --text-chat--line-height: 1.65;
-  --text-code: var(--fs-code, 0.875rem);
+  --text-code: 0.875rem;
   --text-code--line-height: 1.6;
   /* Tool output is reference material next to the conversation, so it sits one
      step down from chat text. */
-  --text-tool: var(--fs-tool, 0.8125rem);
+  --text-tool: 0.8125rem;
   --text-tool--line-height: 1.55;
-  /* Chrome outside the transcript — sidebar, headers, panel. Not user-facing
-     in the size setting, which is scoped to the conversation. */
-  --text-ui: var(--fs-ui, 0.8125rem);
+  /* Chrome outside the transcript — sidebar, headers, panel. */
+  --text-ui: 0.8125rem;
   --text-ui--line-height: 1.4;
   /* **Not `--text-composer`, and not `--text-input` before it.** A font-size
      token and a colour token share one utility name, and the colour wins it —
@@ -900,10 +898,8 @@
 
      The default matches `--text-chat`: what the reader types and what comes
      back are one conversation, so a composer a step down read as small rather
-     than as chrome. Its own `--fs-prompt` slot rather than following
-     `--fs-chat`, since a reader who sizes the transcript for reading has not
-     asked for the same size in the box they type in. */
-  --text-prompt: var(--fs-prompt, 0.9375rem);
+     than as chrome. */
+  --text-prompt: 0.9375rem;
   --text-prompt--line-height: 1.5;
 
   --color-surface-raised: var(--surface-raised);
