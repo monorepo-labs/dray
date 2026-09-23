@@ -137,7 +137,11 @@ impl RpcClient {
         let id = self.next_id.fetch_add(1, Relaxed);
         let rx = self.pending.register(id);
 
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        // pi's rule: a line never written must hand its slot back, or it leaks.
+        if let Err(err) = self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})) {
+            self.pending.forget(&id);
+            return Err(err);
+        }
 
         self.pending.wait(&id, rx, timeout, method, "the agent").await
     }
