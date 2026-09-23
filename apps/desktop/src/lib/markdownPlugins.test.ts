@@ -427,7 +427,7 @@ describe("findBareUrls", () => {
   it("leaves file names, paths, emails and versions alone", () => {
     expect(
       hrefs(
-        "README.md main.rs app.py Dray.app libx.so Node.js src/foo.com me@example.com v1.2.3 e.g. example.community",
+        "README.md main.rs app.py Dray.app libx.so Node.js src/foo.com me@example.com v1.2.3 e.g. example.community config.dev.ts",
       ),
     ).toEqual([]);
   });

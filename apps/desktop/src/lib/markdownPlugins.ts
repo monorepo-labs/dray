@@ -70,9 +70,10 @@ export function wrapCells(node: HastNode) {
 /// word; a hit on `README.md` costs a link to a stranger's site. Localhost and
 /// a bare IP need a port, or the word "localhost" in a sentence would link.
 /// Not after `/`, `@`, `.` or a word character, so a path segment or an email
-/// is never cut in half.
+/// is never cut in half — and not before `.` and a word character either, or
+/// `config.dev.ts` links its first half.
 const BARE_URL =
-  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-])(?:\/[^\s<>]*)?/gi;
+  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:\/[^\s<>]*)?/gi;
 
 export type BareUrl = { start: number; end: number; href: string };
 

@@ -75,10 +75,9 @@ export default function FileLink({
       className={cn(
         "cursor-pointer",
         writtenAsLink
-          ? // Streamdown's own anchor classes, copied because there is no way to
-            // reach its link renderer from here — and looking like the links
-            // either side of it is the whole point of this branch.
-            "wrap-anywhere font-medium text-primary underline"
+          ? // `Anchor`'s classes in Markdown.tsx, copied because looking like
+            // the links either side of it is the whole point of this branch.
+            "wrap-anywhere font-medium text-primary underline underline-offset-2"
           : "underline decoration-transparent underline-offset-2 transition-colors hover:decoration-current",
         className,
       )}
