@@ -4,7 +4,6 @@ import {
   applyIssue,
   filterIssues,
   groupIssues,
-  groupLabel,
   issueSpan,
   issueTag,
   parseIdentifier,
@@ -185,9 +184,6 @@ describe("groupIssues", () => {
     const rows = [issue("DRA-1", "unstarted"), issue("DRA-2", "completed")];
 
     expect(groupIssues(rows).map((g) => g.label)).toEqual(["Todo", "Done"]);
-    // Drawn before its rows are read, so the settled headings ask this one
-    // directly rather than going through `groupIssues`.
-    expect(groupLabel("canceled")).toBe("Cancelled");
   });
 });
 

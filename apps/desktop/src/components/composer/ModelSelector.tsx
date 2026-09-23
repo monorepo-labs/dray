@@ -273,9 +273,9 @@ export default function ModelSelector({
   useEffect(() => {
     const provider = models[0]?.provider;
     if (harness !== "fx" || !provider || seeded.includes(provider)) return;
+    setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
     // A reader who already starred something here predates the marker; their
     // list is the answer and ours would arrive as three rows nobody asked for.
-    setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
     if (models.some((m) => starred.includes(m.id))) return;
     const seeds = defaultStars(provider, models);
     if (seeds.length) {
