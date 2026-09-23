@@ -511,8 +511,8 @@ mod tests {
         assert_eq!(models[0].efforts, vec![Effort::High]);
     }
 
-    /// Shift+Tab cycles the top level, so three rows is the budget and everything
-    /// else folds into "More models" — including a generation the hand-written
+    /// Shift+Tab cycles the shortlist, so three rows is the default budget and
+    /// everything else starts off — including a generation the hand-written
     /// list had retired outright.
     #[test]
     fn astra_and_the_two_sols_are_the_cycle() {

@@ -16,10 +16,8 @@ import type { Model, ModelId } from "@/types/events";
 
 /// The whole list, where the composer's picker draws only the shortlist.
 ///
-/// pi's models are discovered rather than named here — every model every
-/// provider the reader has logged into serves — so the list has no bound and a
-/// menu of all of them is a menu nobody reads. This is where the reader decides
-/// which few they work with; the picker draws that decision.
+/// This is where the reader decides which few models they work with, on every
+/// harness; the picker and Shift+Tab draw that decision.
 ///
 /// Starring is the only thing this dialog does. It does not pick a model, and
 /// deliberately: a row that both starred and selected would leave no way to say
@@ -101,7 +99,7 @@ export default function ModelLibraryDialog({
               {loading
                 ? "Reading the model list…"
                 : models.length === 0
-                  ? "pi reported no models. Log a provider in and refresh."
+                  ? "No models reported. Log in and refresh."
                   : `Nothing matches “${query}”.`}
             </p>
           )}

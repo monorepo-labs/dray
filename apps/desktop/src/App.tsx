@@ -131,6 +131,7 @@ import {
   SPACE_LIST_KEY,
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
+import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
@@ -1999,9 +2000,15 @@ function App() {
   const composingNewSession = !selectedSessionId && !issuesOpen;
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
-  useHotkey("harness.next", () => setHarness(nextHarness(harness)), {
+  const enabledAgents = useEnabledAgents();
+  useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
     enabled: composingNewSession,
   });
+  // A new session never starts on an agent the reader switched off. Only the
+  // composer moves: a session already on one keeps it.
+  useEffect(() => {
+    if (composingNewSession && !enabledAgents.includes(harness)) setHarness(enabledAgents[0]);
+  }, [composingNewSession, enabledAgents, harness, setHarness]);
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
@@ -2013,22 +2020,15 @@ function App() {
   //
   // Cycles rather than opening the picker, which is what makes it worth a
   // chord at all: a menu that then wants arrows and Enter is three keys to do
-  // what the trigger does in one click. Sane only because the cycle is short —
-  // two models on Claude Code, three on Codex — so a wrong landing is one more
-  // press away from right. Leaves each model's own remembered effort alone,
-  // same as picking it from the menu.
+  // what the trigger does in one click. Sane only because the cycle is the
+  // reader's own shortlist, so a wrong landing is one more press away from
+  // right. Leaves each model's own remembered effort alone, same as picking it
+  // from the menu.
   //
-  // `cycledModels` is the picker's own top-level list, and sharing it is what
-  // keeps the chord honest: it must never land on a model the menu doesn't
-  // draw. That is bounded by `secondary` on the written lists and by the
-  // reader's stars on pi's discovered one — where cycling the full list
-  // walked every model every logged-in provider serves.
-  //
-  // A session already on a model outside the list enters the cycle at its
-  // start, the same convention `nextEffort` takes for a level it doesn't
-  // cycle.
+  // `cycledModels` is the picker's own list, and sharing it is what keeps the
+  // chord honest: it must never land on a model the menu doesn't draw.
   useHotkey("model.next", () => {
-    const cycle = cycledModels(models, harness, modelId);
+    const cycle = cycledModels(models, modelId);
     if (cycle.length < 2) return;
     const index = cycle.findIndex((m) => m.id === modelId);
     const next = cycle[(index + 1) % cycle.length];

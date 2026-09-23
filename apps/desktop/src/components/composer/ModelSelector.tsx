@@ -7,11 +7,10 @@ import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
   defaultStars,
-  FX_STARS_SEEDED_KEY,
+  seedKey,
+  shortlist,
   STARRED_MODELS_KEY,
-  topLevel,
-  underMore,
-  usesShortlist,
+  STARS_SEEDED_KEY,
 } from "@/lib/starredModels";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +31,8 @@ import {
 } from "@/components/ui/tooltip";
 import { invoke } from "@tauri-apps/api/core";
 import { offersFast } from "@/lib/fastMode";
-import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
+import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
+import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -58,7 +58,6 @@ const AGENT_LABELS: Record<Harness, string> = {
   // Build and the picker is naming an agent, not a model.
   grok: "Grok",
 };
-const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 
 /// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
 /// where the model offers nothing to cycle, so the chord no-ops rather than
@@ -264,40 +263,42 @@ export default function ModelSelector({
   // mounted copies would desync the moment one of them wrote.
   const [starred, setStarred] = useLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
 
-  // fx's shortlist starts empty, and an empty shortlist is a picker that
-  // cannot pick. Seed a provider's defaults the first time its list lands —
-  // once each, marked, so unstarring them all leaves the menu empty as asked
-  // rather than putting ours back on the next visit. Marked even where the
-  // list names none of them, since that is an answer too.
-  const [seeded, setSeeded] = useLocalStorage<string[]>(FX_STARS_SEEDED_KEY, []);
+  // A shortlist starts empty, and an empty shortlist is a picker that cannot
+  // pick. Seed the defaults the first time a harness's list lands (per
+  // provider on fx) — once each, marked, so unstarring them all leaves the
+  // menu empty as asked rather than putting ours back on the next visit.
+  // Marked even where the list names none of them, since that is an answer too.
+  const [seeded, setSeeded] = useLocalStorage<string[]>(STARS_SEEDED_KEY, []);
   useEffect(() => {
-    const provider = models[0]?.provider;
-    if (harness !== "fx" || !provider || seeded.includes(provider)) return;
-    setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
+    if (models.length === 0) return;
+    const provider = models[0].provider;
+    const key = seedKey(harness, provider);
+    if (seeded.includes(key)) return;
+    setSeeded((prev) => (prev.includes(key) ? prev : [...prev, key]));
     // A reader who already starred something here predates the marker; their
-    // list is the answer and ours would arrive as three rows nobody asked for.
+    // list is the answer and ours would arrive as rows nobody asked for.
     if (models.some((m) => starred.includes(m.id))) return;
-    const seeds = defaultStars(provider, models);
+    const seeds = defaultStars(harness, provider, models);
     if (seeds.length) {
       setStarred((prev) => [...prev, ...seeds.filter((id) => !prev.includes(id))]);
     }
   }, [harness, models, seeded, setSeeded, setStarred]);
 
-  const shortlisted = usesShortlist(harness);
   // Shared with Shift+Tab, which cycles exactly what this draws — a chord
   // landing on a model the menu never offered is the bug the sharing prevents.
   const listed = useMemo(
-    () => topLevel(models, starred, harness, modelId),
-    [models, starred, harness, modelId],
+    () => shortlist(models, starred, modelId),
+    [models, starred, modelId],
   );
-  const more = useMemo(() => underMore(models, harness), [models, harness]);
   // Headings earn their place only when two providers share the list — pi's
   // multi-provider answer. fx serves one provider at a time, so its single
   // group's heading names what nothing disputes and is dropped.
   const providerGroups = useMemo(() => byProvider(listed), [listed]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
-  const activeAgent = AGENTS.findIndex((a) => a.id === harness);
+  const enabledAgents = useEnabledAgents();
+  const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] }));
+  const activeAgent = agents.findIndex((a) => a.id === harness);
   // fx lists one provider at a time, so every row shares its provider — the
   // active one, which is what the segmented control marks. A pending switch
   // wins so the thumb moves at once; `undefined` before the first read, or when
@@ -527,7 +528,7 @@ export default function ModelSelector({
                     hover and left Claude — which carries its own rust — sitting
                     at one state forever. Opacity is the one dial both marks
                     answer to. */}
-                {AGENTS.map((agent) => {
+                {agents.map((agent) => {
                   const missing = availability?.some(
                     (a) => a.harness === agent.id && !a.available,
                   );
@@ -595,7 +596,7 @@ export default function ModelSelector({
             models needs to know which is which. A one-provider list — fx, or
             any harness with a single vendor — draws its rows flat, the heading
             naming what the agent mark on the trigger already said. */}
-        {shortlisted && providerGroups.length > 1 && !blanked
+        {providerGroups.length > 1 && !blanked
           ? providerGroups.map((group) => (
               <div key={group.provider}>
                 <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
@@ -622,10 +623,7 @@ export default function ModelSelector({
           </p>
         )}
 
-        {/* Straight under the models it qualifies, and above "More models",
-            which is a *fold of the same list* — putting this between the list
-            and its own continuation would read as the fold belonging to it.
-            Inside this menu rather than beside it in the toolbar, since which
+        {/* Straight under the models it qualifies. Inside this menu rather than beside it in the toolbar, since which
             models have a faster tier is what this menu is already about.
 
             A real switch and not a check: every other row here is a *pick* out
@@ -671,32 +669,16 @@ export default function ModelSelector({
           </>
         )}
 
-        {/* A submenu rather than a second block under a heading, because the
-            rows below are not a category the reader is choosing *between* —
-            they are the ones they will not open this menu for. Folding them
-            away is what keeps Shift+Tab's cycle two presses long, and the
-            cycle skips exactly what lives here. */}
-        {more.length > 0 && (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-ui text-muted-foreground">
-              More models
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>{more.map(modelRow)}</DropdownMenuSubContent>
-          </DropdownMenuSub>
-        )}
-
         {/* No rule above it. The row is already a different shape to the models
             over it — muted, and the one thing in the menu carrying a glyph — so
             a line there drew a box round the difference rather than making it. */}
-        {shortlisted && (
-          <DropdownMenuItem
-            className="cursor-pointer gap-2 text-ui text-muted-foreground"
-            onSelect={() => setLibraryOpen(true)}
-          >
-            <Sliders className="size-3.5" />
-            Choose models…
-          </DropdownMenuItem>
-        )}
+        <DropdownMenuItem
+          className="cursor-pointer gap-2 text-ui text-muted-foreground"
+          onSelect={() => setLibraryOpen(true)}
+        >
+          <Sliders className="size-3.5" />
+          Shortlist models
+        </DropdownMenuItem>
       </DropdownMenuContent>
 
       <ModelLibraryDialog

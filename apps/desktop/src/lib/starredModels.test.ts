@@ -4,11 +4,9 @@ import {
   byProvider,
   defaultStars,
   matchesQuery,
+  seedKey,
   shortlist,
   toggleStar,
-  topLevel,
-  underMore,
-  usesShortlist,
 } from "./starredModels";
 import type { Model, ModelId } from "@/types/events";
 
@@ -31,17 +29,6 @@ function model(id: string, over: Partial<Model> = {}): Model {
 const XAI = model("xai/grok-4.6");
 const SPARK = model("openai-codex/gpt-5.3-codex-spark");
 const SOL = model("openai-codex/gpt-5.6-sol");
-
-describe("usesShortlist", () => {
-  /// pi's list is discovered, so it has no bound. The other two ship a handful
-  /// of models Dray names itself, where a shortlist would be one more thing to
-  /// set up before the picker works at all.
-  it("is pi's alone", () => {
-    expect(usesShortlist("pi")).toBe(true);
-    expect(usesShortlist("claude_code")).toBe(false);
-    expect(usesShortlist("codex")).toBe(false);
-  });
-});
 
 describe("shortlist", () => {
   it("keeps the starred models in the list's own order", () => {
@@ -72,38 +59,6 @@ describe("shortlist", () => {
   });
 });
 
-describe("topLevel", () => {
-  const FABLE = model("fable");
-  const OPUS = model("opus");
-  const HAIKU = model("haiku", { secondary: true });
-  const CLAUDE = [FABLE, OPUS, HAIKU];
-
-  /// Shift+Tab cycles this list, so a row it holds that the menu doesn't draw
-  /// is a press landing somewhere the reader was never offered.
-  it("holds back what the picker folds under More", () => {
-    const drawn = topLevel(CLAUDE, [], "claude_code", FABLE.id);
-
-    expect(drawn.map((m) => m.id)).toEqual([FABLE.id, OPUS.id]);
-    expect(underMore(CLAUDE, "claude_code").map((m) => m.id)).toEqual([HAIKU.id]);
-  });
-
-  /// The bug this pair exists to stop: pi's menu drew the reader's shortlist
-  /// while the chord walked every model every logged-in provider served, so a
-  /// press switched to a model that was nowhere on screen.
-  it("bounds pi by the reader's stars, not by secondary", () => {
-    const drawn = topLevel([XAI, SPARK, SOL], [SOL.id], "pi", XAI.id);
-
-    expect(drawn.map((m) => m.id)).toEqual([XAI.id, SOL.id]);
-    expect(drawn).not.toContain(SPARK);
-  });
-
-  /// pi's overflow is the library dialog, so a submenu there would be a second
-  /// answer to a question the shortlist already answers.
-  it("folds nothing under More for a shortlisted harness", () => {
-    expect(underMore([XAI, SPARK, SOL], "pi")).toEqual([]);
-  });
-});
-
 describe("byProvider", () => {
   it("gathers each provider once, in the order the list arrived in", () => {
     const groups = byProvider([SPARK, XAI, SOL]);
@@ -125,21 +80,42 @@ describe("defaultStars", () => {
   /// its vendor where fx's own providers name it bare.
   it("matches a whole id and a last segment alike", () => {
     const gateway = [model("openai/gpt-5.6-sol"), model("spacexai/grok-4.6")];
-    expect(defaultStars("gateway", gateway)).toEqual([
+    expect(defaultStars("fx", "gateway", gateway)).toEqual([
       "openai/gpt-5.6-sol",
       "spacexai/grok-4.6",
     ]);
-    expect(defaultStars("grok", [model("grok-4.6")])).toEqual(["grok-4.6"]);
+    expect(defaultStars("fx", "grok", [model("grok-4.6")])).toEqual(["grok-4.6"]);
   });
 
   /// A needle naming nothing the provider serves seeds nothing, which is the
   /// state the picker was in before defaults existed.
   it("seeds only what the list holds", () => {
-    expect(defaultStars("codex", [SPARK])).toEqual([]);
-    expect(defaultStars("codex", [model("gpt-5.6-sol"), SPARK])).toEqual([
+    expect(defaultStars("fx", "codex", [SPARK])).toEqual([]);
+    expect(defaultStars("fx", "codex", [model("gpt-5.6-sol"), SPARK])).toEqual([
       "gpt-5.6-sol",
     ]);
-    expect(defaultStars("nobody", [model("gpt-5.6-sol")])).toEqual([]);
+    expect(defaultStars("fx", "nobody", [model("gpt-5.6-sol")])).toEqual([]);
+  });
+
+  /// The written lists seed what used to be their top level; `secondary` is
+  /// what used to fold a row under "More models".
+  it("stars a written list's non-secondary rows", () => {
+    const claude = [model("fable"), model("opus"), model("haiku", { secondary: true })];
+    expect(defaultStars("claude_code", "", claude)).toEqual(["fable", "opus"]);
+    expect(defaultStars("codex", "", claude)).toEqual(["fable", "opus"]);
+  });
+
+  it("seeds nothing for pi", () => {
+    expect(defaultStars("pi", "xai", [XAI])).toEqual([]);
+  });
+});
+
+describe("seedKey", () => {
+  /// fx has providers named after the other harnesses, and a shared marker
+  /// would let seeding one skip the other.
+  it("keeps fx providers and harnesses apart", () => {
+    expect(seedKey("fx", "codex")).toBe("codex");
+    expect(seedKey("codex", "")).toBe("harness:codex");
   });
 });
 

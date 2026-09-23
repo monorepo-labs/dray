@@ -214,8 +214,8 @@ pub fn read_models(reply: &Value) -> Vec<Model> {
 ///
 /// grok lists newest first, so position is the ranking and the top two are its
 /// flagship and that flagship's fast twin — the pair a session is flipped
-/// between. Everything below folds into "More models" and out of Shift+Tab's
-/// cycle, which is what keeps the chord worth pressing.
+/// between. Everything below is left out of the default shortlist, and so out
+/// of Shift+Tab's cycle until the reader turns it on.
 fn fold(rows: Vec<Row>) -> Vec<Model> {
     // Mapped over the whole set rather than one row at a time, because
     // `supports_fast` is a lookup *in* that set: a model's fast tier is another

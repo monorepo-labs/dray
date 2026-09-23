@@ -29,6 +29,8 @@ import SettingsHeaderAction from "@/components/settings/headerAction";
 import { useAgentAccounts, useAuthOptions } from "@/hooks/useAgentAccounts";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useCopied } from "@/hooks/useCopied";
+import { setAgentEnabled, useEnabledAgents } from "@/hooks/useEnabledAgents";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { Account, AccountState, AgentAccounts, Harness } from "@/types/events";
 
@@ -628,14 +630,15 @@ export default function AccountsSettings({
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const agent = agents?.find((a) => a.harness === signingIn?.harness) ?? null;
+  const enabledAgents = useEnabledAgents();
 
   return (
     <div className="flex flex-col gap-5">
-      {/* No preamble. A paragraph here explained *Dray's* constraints — which
-          CLI can be driven headlessly and which cannot — to a reader who came
-          to see which account they are on. Both facts are already said where
-          they are true: the command row shows what to run, and the key field
-          says whose store it lands in. */}
+      {/* No preamble about the logins. A paragraph here explained *Dray's*
+          constraints — which CLI can be driven headlessly and which cannot — to
+          a reader who came to see which account they are on. Both facts are
+          already said where they are true: the command row shows what to run,
+          and the key field says whose store it lands in. */}
       {/* Refresh is not a convenience. Nothing comes back from a terminal, so
           after a sign-in the page's own read is the only way it learns. Nothing
           polls instead: a sign-in can take a browser round trip, and four
@@ -707,6 +710,7 @@ export default function AccountsSettings({
         />
       ) : (
         agents.map((agent) => {
+          const on = enabledAgents.includes(agent.harness);
           // pi's rows are the providers it is *configured* for, and its own
           // list is a seed rather than a catalogue — a name this build never
           // heard of is still one `pi auth check` can answer for, so there is
@@ -720,9 +724,35 @@ export default function AccountsSettings({
               <div className="flex items-center gap-2">
                 <AgentIcon harness={agent.harness} className="size-4 text-muted-foreground" />
                 <span className="text-ui font-medium">{agent.label}</span>
+                {/* Whether the composer's picker offers this harness. Off
+                    folds its accounts away but keeps the title, which is the
+                    only way back on. The last one on stays on: a new session
+                    needs somewhere to start. */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* A span carries the tooltip: a disabled switch fires no
+                        pointer events, and the last one on is exactly the one
+                        whose reason needs saying. */}
+                    <span className="ml-auto flex">
+                      <Switch
+                        aria-label={`Show ${agent.label} in the agent picker`}
+                        checked={on}
+                        disabled={on && enabledAgents.length === 1}
+                        onCheckedChange={(next) => setAgentEnabled(agent.harness, next)}
+                      />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {on && enabledAgents.length === 1
+                      ? "At least one harness has to stay on"
+                      : on
+                        ? "Turn off to hide from the agent picker"
+                        : "Turn on to show in the agent picker"}
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
-              {!agent.installed ? (
+              {!on ? null : !agent.installed ? (
                 <MissingAgent agent={agent} />
               ) : (
                 <>

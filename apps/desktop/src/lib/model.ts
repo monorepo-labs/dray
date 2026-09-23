@@ -203,9 +203,10 @@ export function usableEffort(
 /// skipping one it can, reads as the chord being broken.
 export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx", "grok"];
 
-/// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
-/// first, the same place the picker parks its thumb.
-export function nextHarness(current: Harness): Harness {
-  const i = HARNESS_ORDER.indexOf(current);
-  return HARNESS_ORDER[(i + 1) % HARNESS_ORDER.length];
+/// Where ⌘⇧A lands from `current`, wrapping, over the agents the reader has
+/// left on. An unknown or disabled current steps onto the first, the same place
+/// the picker parks its thumb.
+export function nextHarness(current: Harness, order: Harness[] = HARNESS_ORDER): Harness {
+  const i = order.indexOf(current);
+  return order[(i + 1) % order.length];
 }

@@ -1150,6 +1150,13 @@ const SETTINGS_TABS = [
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
+/// A line under a tab's title saying what the tab is for. Accounts has one
+/// because its harness switches change what the composer's picker offers,
+/// which nothing on the page itself would show.
+const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
+  accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
+};
+
 /// The page's groups as a list down the left, standing where the sidebar
 /// stands, with the picked group filling the rest of the window.
 ///
@@ -1287,9 +1294,16 @@ function SettingsTabs({
                 `contents`, so what lands in it lays out in this row — an action
                 takes `ml-auto` to the far end, a back arrow `-order-1` to lead
                 the title. */}
-            <div className="flex h-7 items-center gap-2">
-              <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
-              <div ref={setSlot} className="contents" />
+            {/* One block with its subtitle, so the line reads as the title's
+                rather than taking the column's gap like a section of its own. */}
+            <div className="flex flex-col gap-1">
+              <div className="flex h-7 items-center gap-2">
+                <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
+                <div ref={setSlot} className="contents" />
+              </div>
+              {TAB_SUBTITLES[tab] && (
+                <p className="text-ui text-muted-foreground">{TAB_SUBTITLES[tab]}</p>
+              )}
             </div>
             <div
               role="tabpanel"

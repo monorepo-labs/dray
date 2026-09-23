@@ -196,13 +196,13 @@ pub struct Model {
     /// sentence the reader cannot act on.
     #[serde(default)]
     pub accepts_images: bool,
-    /// Drawn under the picker's "More models" submenu rather than at the top
-    /// level, and skipped by Shift+Tab.
+    /// Left out of the picker's default shortlist, so off until the reader
+    /// turns it on under "Shortlist models".
     ///
-    /// The chord cycles the list in order, which only works while the list is
-    /// short — so this is what keeps it short as pinned and older models are
-    /// added. A reader who picks one from the submenu keeps it: the flag
-    /// decides where a row is *drawn*, never what may be run.
+    /// Shift+Tab cycles the shortlist in order, which only works while it is
+    /// short — so this is what keeps a fresh install's short as pinned and
+    /// older models are added. The flag decides what is *drawn* by default,
+    /// never what may be run. The frontend reads it once, at seeding.
     #[serde(default)]
     pub secondary: bool,
     /// Whether this model has a fast mode to ask for.
@@ -238,7 +238,7 @@ impl Model {
         }
     }
 
-    /// Moves the row under the picker's "More models" submenu.
+    /// Leaves the row out of the default shortlist.
     fn under_more(self) -> Self {
         Self {
             secondary: true,
@@ -257,9 +257,9 @@ impl Model {
 
 /// The full model list the UI's picker is built from.
 ///
-/// Two at the top level and the rest under "More models", which is what keeps
-/// Shift+Tab worth a chord — it cycles the top level alone, and two presses
-/// covers it. The split is by how often a row is reached for, not by how good
+/// Two in the default shortlist and the rest off until the reader turns them
+/// on, which is what keeps Shift+Tab worth a chord — it cycles the shortlist
+/// alone, and two presses covers it. The split is by how often a row is reached for, not by how good
 /// the model is: Sonnet and Haiku are picked deliberately when they are picked
 /// at all, where the top two are what a session is flipped between mid-thought.
 ///

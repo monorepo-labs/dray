@@ -228,6 +228,14 @@ describe("nextHarness", () => {
   it("parks an unknown harness on the first", () => {
     expect(nextHarness("other" as never)).toBe("claude_code");
   });
+
+  /// A disabled agent is one the picker does not draw, so the chord must not
+  /// land on it either.
+  it("steps only through the agents left on", () => {
+    expect(nextHarness("claude_code", ["claude_code", "fx"])).toBe("fx");
+    expect(nextHarness("fx", ["claude_code", "fx"])).toBe("claude_code");
+    expect(nextHarness("codex", ["claude_code", "fx"])).toBe("claude_code");
+  });
 });
 
 describe("usableEffort", () => {
