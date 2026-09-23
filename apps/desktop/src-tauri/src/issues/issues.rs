@@ -787,8 +787,8 @@ pub struct ExpandedTags {
 /// A link with the identifier and nothing else — what is written down when the
 /// tracker could not be asked, and what `dray issue link` writes when its caller
 /// passes no `--title`. `tag_text` drops the trailing space for one of these and
-/// `issueUrl` reads the empty address as none, so it draws as coloured text
-/// rather than a button opening nowhere.
+/// `openIssue` reads the empty address as none, so a ⌘-click on its tag opens
+/// no page rather than one that is not there.
 fn bare_ref(identifier: String) -> IssueRef {
     IssueRef {
         // By shape, like everything else that has to name a tracker without
