@@ -42,7 +42,7 @@ import GitHubIcon from "@/components/GitHubIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
 import { useHotkey } from "@/hooks/useHotkey";
 import { issueErrorText, useIssues } from "@/hooks/useIssues";
-import { groupIssues, shortIdentifier } from "@/lib/issue";
+import { GROUPS, groupIssues, shortIdentifier } from "@/lib/issue";
 import {
   readIssueTracker,
   subscribeIssueTracker,
@@ -125,12 +125,9 @@ const STATES = [
   { value: "closed", label: "Closed" },
 ] as const;
 
-/// The two buckets that are read on demand. Drawn in the same order [groupIssues]
-/// would put them in, so opening one does not reshuffle the page.
-const SETTLED_KINDS: { key: IssueStateKind; label: string }[] = [
-  { key: "completed", label: "Done" },
-  { key: "canceled", label: "Cancelled" },
-];
+/// The two buckets that are read on demand. Taken from [groupIssues]' own list,
+/// so their headings and order match the rest of the page.
+const SETTLED_KINDS = GROUPS.filter((g) => g.key === "completed" || g.key === "canceled");
 
 /// Every issue the reader could pick up.
 ///

@@ -211,7 +211,7 @@ export function trackerOf(identifier: string): IssueTracker {
 ///
 /// Started first and settled last — the order work moves through, which is also
 /// the order attention should reach it in.
-const GROUPS: { key: IssueStateKind; label: string }[] = [
+export const GROUPS: { key: IssueStateKind; label: string }[] = [
   { key: "started", label: "In Progress" },
   { key: "triage", label: "Triage" },
   { key: "unstarted", label: "Todo" },
