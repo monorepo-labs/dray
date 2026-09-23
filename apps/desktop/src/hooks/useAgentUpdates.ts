@@ -80,6 +80,10 @@ export async function updateAgent(harness: Harness) {
     setTimeout(() => state.done === harness && set({ done: null }), DONE_MS);
   } catch (err) {
     set({ running: null, failed: { harness, message: String(err) } });
+  } finally {
+    // A scheduled check landing mid-update was dropped whole, so every other
+    // agent's answer is owed one now.
+    void check();
   }
 }
 
