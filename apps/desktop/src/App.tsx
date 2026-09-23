@@ -216,13 +216,15 @@ function App() {
   // Held on a new task for every agent, so the session starts on the new
   // version. A live session only for pi and fx, whose update overwrites files
   // its child reads; the other three install beside the running binary.
+  // Keyed on the running update alone, never on the update list, which a
+  // check landing mid-update may already have cleared.
   const agentUpdates = useAgentUpdates();
-  const updatingLabel =
+  const agentLabel = useAgentAvailability()?.find((a) => a.harness === harness)?.label ?? harness;
+  const sendHeld =
     agentUpdates.running === harness &&
     (!selectedSessionId || harness === "pi" || harness === "fx")
-      ? agentUpdates.updates.find((u) => u.harness === harness)?.label
-      : undefined;
-  const sendHeld = updatingLabel ? `Updating ${updatingLabel}. Send once it finishes.` : null;
+      ? `Updating ${agentLabel}. Send once it finishes.`
+      : null;
   // A new CLI version can ship new models, and every list but Claude's table is
   // cached for the life of the process.
   const updatedHarness = agentUpdates.done;
@@ -2436,7 +2438,7 @@ function App() {
               // Straight out as a prompt, exactly as if it had been typed. A
               // turn already running queues it, like any other send.
               onSend={(prompt) => void handleSendMsg(prompt)}
-              disabled={!selectedSessionId}
+              disabled={!selectedSessionId || !!sendHeld}
             />
           }
           // Only on a new task. An agent is fixed at creation, so a live

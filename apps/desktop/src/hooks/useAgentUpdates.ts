@@ -33,7 +33,9 @@ async function check() {
   const asked = generation;
   try {
     const checks = await invoke<AgentCheck[]>("check_agent_updates");
-    if (asked !== generation) return;
+    // Also dropped while an update runs: the binary is mid-replacement, so
+    // any answer about it is about to be wrong.
+    if (asked !== generation || state.running) return;
     // An agent missing from the answer could not be asked, so its last known
     // state stands rather than reading as current.
     const answered = new Set(checks.map((c) => c.harness));
