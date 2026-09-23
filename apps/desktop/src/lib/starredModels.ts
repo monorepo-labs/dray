@@ -7,7 +7,27 @@ import type { Harness, Model, ModelId } from "@/types/events";
 /// the reader and not about any session: it has to be true in the composer
 /// before a session exists, and it must not travel with a session handed to
 /// somebody else.
-export const STARRED_MODELS_KEY = "ade.starredModels";
+///
+/// **Keyed by harness**, because ids repeat across them — the grok harness and
+/// fx's grok provider both serve `grok-4.6` — and one flat list let starring a
+/// model in one picker change the other, and made one's seeding skip the
+/// other's as "already set up".
+export const STARRED_MODELS_KEY = "ade.starredModelsByHarness";
+
+/// The flat list pi and fx shared before stars were keyed. Read as their stars
+/// until each writes its own entry, so nobody's shortlist resets on upgrade.
+const LEGACY_STARS_KEY = "ade.starredModels";
+
+export type StarsByHarness = Partial<Record<Harness, ModelId[]>>;
+
+/// One harness's stars out of the keyed map.
+export function starsFor(map: StarsByHarness, harness: Harness): ModelId[] {
+  const own = map[harness];
+  if (own) return own;
+  return harness === "pi" || harness === "fx"
+    ? readLocalStorage<ModelId[]>(LEGACY_STARS_KEY, [])
+    : [];
+}
 
 /// Which harnesses and fx providers have had their defaults seeded, so it
 /// happens once each. The storage key predates the other harnesses joining.
@@ -80,8 +100,9 @@ export function shortlist(
 /// The stars are read at the moment of the press rather than held: a second
 /// `useLocalStorage` copy in `App` would drift from the picker's the first time
 /// the library dialog wrote one.
-export function cycledModels(models: Model[], current: ModelId): Model[] {
-  return shortlist(models, readLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []), current);
+export function cycledModels(models: Model[], harness: Harness, current: ModelId): Model[] {
+  const map = readLocalStorage<StarsByHarness>(STARRED_MODELS_KEY, {});
+  return shortlist(models, starsFor(map, harness), current);
 }
 
 /// The models grouped under their provider, in the order the list arrived in.

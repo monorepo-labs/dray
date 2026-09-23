@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Sliders } from "lucide-react";
 import AgentIcon, { ProviderIcon } from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
@@ -10,6 +10,8 @@ import {
   seedKey,
   shortlist,
   STARRED_MODELS_KEY,
+  starsFor,
+  type StarsByHarness,
   STARS_SEEDED_KEY,
 } from "@/lib/starredModels";
 import { Button } from "@/components/ui/button";
@@ -261,7 +263,19 @@ export default function ModelSelector({
   // One copy, held here and handed down: the dialog and the menu both read it,
   // and `useLocalStorage` is per-hook state rather than a store, so two
   // mounted copies would desync the moment one of them wrote.
-  const [starred, setStarred] = useLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
+  const [starsByHarness, setStarsByHarness] = useLocalStorage<StarsByHarness>(
+    STARRED_MODELS_KEY,
+    {},
+  );
+  const starred = starsFor(starsByHarness, harness);
+  const setStarred = useCallback(
+    (next: ModelId[] | ((prev: ModelId[]) => ModelId[])) =>
+      setStarsByHarness((map) => {
+        const prev = starsFor(map, harness);
+        return { ...map, [harness]: typeof next === "function" ? next(prev) : next };
+      }),
+    [harness, setStarsByHarness],
+  );
 
   // A shortlist starts empty, and an empty shortlist is a picker that cannot
   // pick. Seed the defaults the first time a harness's list lands (per

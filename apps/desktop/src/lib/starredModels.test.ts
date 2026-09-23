@@ -6,6 +6,7 @@ import {
   matchesQuery,
   seedKey,
   shortlist,
+  starsFor,
   toggleStar,
 } from "./starredModels";
 import type { Model, ModelId } from "@/types/events";
@@ -107,6 +108,17 @@ describe("defaultStars", () => {
 
   it("seeds nothing for pi", () => {
     expect(defaultStars("pi", "xai", [XAI])).toEqual([]);
+  });
+});
+
+describe("starsFor", () => {
+  /// grok and fx's grok provider both serve `grok-4.6`; a flat list made a
+  /// star in one picker a star in the other.
+  it("keeps each harness's stars apart", () => {
+    const map = { grok: ["grok-4.6"], fx: ["grok-4.7"] } as never;
+    expect(starsFor(map, "grok")).toEqual(["grok-4.6"]);
+    expect(starsFor(map, "fx")).toEqual(["grok-4.7"]);
+    expect(starsFor(map, "codex")).toEqual([]);
   });
 });
 

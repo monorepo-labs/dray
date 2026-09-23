@@ -2028,7 +2028,7 @@ function App() {
   // `cycledModels` is the picker's own list, and sharing it is what keeps the
   // chord honest: it must never land on a model the menu doesn't draw.
   useHotkey("model.next", () => {
-    const cycle = cycledModels(models, modelId);
+    const cycle = cycledModels(models, harness, modelId);
     if (cycle.length < 2) return;
     const index = cycle.findIndex((m) => m.id === modelId);
     const next = cycle[(index + 1) % cycle.length];
