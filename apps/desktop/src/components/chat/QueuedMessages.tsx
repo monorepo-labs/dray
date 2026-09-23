@@ -52,7 +52,6 @@ export default function QueuedMessages({
   // key a few pixels away. The registry keeps the character for the Settings
   // tab, where a `Kbd` is a text chip.
   const chord = useChord("queue.send");
-  const mods = modifierLabels(chord).join("");
 
   if (!messages.length) return null;
 
@@ -139,14 +138,19 @@ export default function QueuedMessages({
                           line answers for the whole queue rather than for the
                           one message above it. */}
                       Now
-                      <span className="ml-0.5 flex items-center opacity-70">
-                        {mods}
-                        {chord.key === "Enter" ? (
-                          <CornerDownLeft className="size-3" strokeWidth={2} />
-                        ) : (
-                          keyLabel(chord)
-                        )}
-                      </span>
+                      {/* Silent where the reader has unbound the chord: the
+                          button still sends, and naming a key that no longer
+                          fires is worse than naming none. */}
+                      {chord && (
+                        <span className="ml-0.5 flex items-center opacity-70">
+                          {modifierLabels(chord).join("")}
+                          {chord.key === "Enter" ? (
+                            <CornerDownLeft className="size-3" strokeWidth={2} />
+                          ) : (
+                            keyLabel(chord)
+                          )}
+                        </span>
+                      )}
                     </button>
                     <span aria-hidden>·</span>
                   </>

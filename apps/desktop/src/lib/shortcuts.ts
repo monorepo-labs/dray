@@ -60,15 +60,15 @@ export const SHORTCUTS = [
   { id: "filter.prev", label: "Previous project filter", group: "Sessions", chord: k("ArrowLeft", { alt: true }) },
   { id: "filter.next", label: "Next project filter", group: "Sessions", chord: k("ArrowRight", { alt: true }) },
   { id: "search", label: "Search sessions", group: "Sessions", chord: k("f") },
-  { id: "pane.1", label: "Focus pane 1", group: "Sessions", chord: k("1") },
-  { id: "pane.2", label: "Focus pane 2", group: "Sessions", chord: k("2") },
-  { id: "pane.3", label: "Focus pane 3", group: "Sessions", chord: k("3") },
-  { id: "pane.4", label: "Focus pane 4", group: "Sessions", chord: k("4") },
-  { id: "pane.5", label: "Focus pane 5", group: "Sessions", chord: k("5") },
-  { id: "pane.6", label: "Focus pane 6", group: "Sessions", chord: k("6") },
-  { id: "pane.7", label: "Focus pane 7", group: "Sessions", chord: k("7") },
-  { id: "pane.8", label: "Focus pane 8", group: "Sessions", chord: k("8") },
-  { id: "pane.9", label: "Focus pane 9", group: "Sessions", chord: k("9") },
+  { id: "pane.1", label: "Focus pane 1", group: "Sessions", chord: k("1", { alt: true, code: "Digit1" }) },
+  { id: "pane.2", label: "Focus pane 2", group: "Sessions", chord: k("2", { alt: true, code: "Digit2" }) },
+  { id: "pane.3", label: "Focus pane 3", group: "Sessions", chord: k("3", { alt: true, code: "Digit3" }) },
+  { id: "pane.4", label: "Focus pane 4", group: "Sessions", chord: k("4", { alt: true, code: "Digit4" }) },
+  { id: "pane.5", label: "Focus pane 5", group: "Sessions", chord: k("5", { alt: true, code: "Digit5" }) },
+  { id: "pane.6", label: "Focus pane 6", group: "Sessions", chord: k("6", { alt: true, code: "Digit6" }) },
+  { id: "pane.7", label: "Focus pane 7", group: "Sessions", chord: k("7", { alt: true, code: "Digit7" }) },
+  { id: "pane.8", label: "Focus pane 8", group: "Sessions", chord: k("8", { alt: true, code: "Digit8" }) },
+  { id: "pane.9", label: "Focus pane 9", group: "Sessions", chord: k("9", { alt: true, code: "Digit9" }) },
   { id: "tab.close", label: "Close tab or pane", group: "Sessions", chord: k("w") },
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
@@ -84,10 +84,10 @@ export const SHORTCUTS = [
   { id: "doc.save", label: "Save doc", group: "Panels and views", chord: k("s") },
   { id: "subtab.prev", label: "Previous tab in the view or panel", group: "Panels and views", chord: k("ArrowLeft", { shift: true }) },
   { id: "subtab.next", label: "Next tab in the view or panel", group: "Panels and views", chord: k("ArrowRight", { shift: true }) },
-  { id: "view.chat", label: "Chat view", group: "Panels and views", chord: k("1", { alt: true, code: "Digit1" }) },
-  { id: "view.browser", label: "Browser view", group: "Panels and views", chord: k("2", { alt: true, code: "Digit2" }) },
-  { id: "view.changes", label: "Changes view", group: "Panels and views", chord: k("3", { alt: true, code: "Digit3" }) },
-  { id: "view.files", label: "Files view", group: "Panels and views", chord: k("4", { alt: true, code: "Digit4" }) },
+  { id: "view.chat", label: "Chat view", group: "Panels and views", chord: k("1") },
+  { id: "view.browser", label: "Browser view", group: "Panels and views", chord: k("2") },
+  { id: "view.changes", label: "Changes view", group: "Panels and views", chord: k("3") },
+  { id: "view.files", label: "Files view", group: "Panels and views", chord: k("4") },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
   { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },
@@ -109,6 +109,27 @@ export const SHORTCUTS = [
 ] as const satisfies readonly { id: string; label: string; group: ShortcutGroup; chord: Chord }[];
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
+
+/// Defaults a later build moved, and what they were.
+///
+/// Only a rebinding is stored, so moving a default is invisible to a reader who
+/// never touched the row — and a collision for one who did: a chord they bound
+/// somewhere while it was free can become another row's new default, and both
+/// would fire on one press. The row whose default moved is the one that yields,
+/// back to the chord it had before the update, since the reader chose theirs
+/// and only this build chose the other. See `yieldMovedDefaults`.
+///
+/// The views and the panes traded places: ⌘ digits were the panes' and ⌘⌥
+/// digits the views'.
+export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord>> = {
+  ...Object.fromEntries(
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`pane.${n}`, k(String(n))]),
+  ),
+  "view.chat": k("1", { alt: true, code: "Digit1" }),
+  "view.browser": k("2", { alt: true, code: "Digit2" }),
+  "view.changes": k("3", { alt: true, code: "Digit3" }),
+  "view.files": k("4", { alt: true, code: "Digit4" }),
+};
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   "General",

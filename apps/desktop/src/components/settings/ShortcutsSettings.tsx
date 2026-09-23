@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
 
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  chordFor,
+  clearChord,
   holderOf,
   resetAllChords,
   resetChord,
@@ -33,6 +35,12 @@ import { cn } from "@/lib/utils";
 /// The recorder is a button, and it stops the keystroke at itself: every
 /// `useHotkey` listens on `document`, so without that the chord being recorded
 /// would also fire whatever it currently means.
+///
+/// Remove and Reset are two buttons because they mean opposite things: removing
+/// leaves the action with no chord at all, where resetting puts back what this
+/// build ships. A cross that quietly restored the default would hand the key
+/// back to whatever the reader was clearing it for — the clash is usually with
+/// something outside Dray, and the default is what clashes.
 export default function ShortcutsSettings() {
   const overrides = useShortcutOverrides();
   const [recording, setRecording] = useState<ShortcutId | null>(null);
@@ -49,6 +57,24 @@ export default function ShortcutsSettings() {
               <div className="flex min-h-7 items-center justify-between gap-4">
                 <span className="text-ui">{label}</span>
                 <span className="flex items-center gap-0.5">
+                  {chordFor(id) !== null && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Remove shortcut"
+                          onClick={() => {
+                            clearChord(id);
+                            setRefused(null);
+                          }}
+                        >
+                          <X />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">Remove shortcut</TooltipContent>
+                    </Tooltip>
+                  )}
                   {id in overrides && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -107,6 +133,11 @@ export default function ShortcutsSettings() {
                   >
                     {recording === id ? (
                       <span className="text-ui text-muted-foreground">Press keys…</span>
+                    ) : chordFor(id) === null ? (
+                      // `ShortcutKeys` draws nothing for an unbound id, which
+                      // leaves the recorder an empty box nothing invites a click
+                      // on — and no way back to a binding.
+                      <span className="text-ui text-muted-foreground">Not set</span>
                     ) : (
                       <ShortcutKeys ids={[id]} />
                     )}

@@ -18,7 +18,11 @@ export default function ShortcutKeys({
   className?: string;
 }) {
   useShortcutOverrides();
-  const groups = formatChords(ids.map(chordFor));
+  // An unbound id contributes nothing, and a hint naming only unbound ids draws
+  // nothing at all — an empty `KbdGroup` beside a tooltip's sentence is a
+  // trailing space where a chord used to be.
+  const groups = formatChords(ids.map(chordFor).filter((c) => c !== null));
+  if (!groups.length) return null;
   return (
     <KbdGroup className={className}>
       {groups.map((caps, i) => (

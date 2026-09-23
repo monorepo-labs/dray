@@ -27,8 +27,8 @@ export const EMPTY_VIEW = "";
 /// Grid order: left to right, top to bottom. The sidebar's run reads the same.
 export const members = (group: SplitGroup): string[] => group.columns.flat();
 
-/// What the ⌘ digits walk and the pane headers number: row by row, each left
-/// to right. `members`' column order puts ⌘2 *under* ⌘1 in a 2×2, where the
+/// What the pane chords walk and the pane headers number: row by row, each left
+/// to right. `members`' column order puts pane 2 *under* pane 1 in a 2×2, where the
 /// eye reads across. Rows, not a clockwise walk — that only means something
 /// with two of them, and the grid can hold any number now.
 export const paneOrder = (group: Pick<SplitGroup, "columns">): string[] => {

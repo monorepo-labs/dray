@@ -1843,10 +1843,9 @@ function App() {
   useHotkey("session.next", () => goToSession(() => stepSession(1)));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
-  // The bare ⌘ digits go to the panes, since focus is what moves most inside
-  // a grid; the view tabs take ⌘⌥ below. Not ⌘⇧, which macOS spends on
-  // screenshots for exactly these digits. Bound only while a grid is *on
-  // screen*: with none ⌘1 has nothing to point at and must not eat the key,
+  // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
+  // macOS spends on screenshots for exactly these digits. Bound only while a
+  // grid is *on screen*: with none ⌘⌥1 has nothing to point at and must not eat the key,
   // and under the Diff tab or the issues page ⌘W would close a pane the
   // reader cannot see.
   const gridShown = !!mainGroup && !issuesOpen && viewTab === "chat";
@@ -1954,9 +1953,8 @@ function App() {
   // issues page, where the row is not drawn: switching an invisible tab looks
   // like nothing happening and then shows up as the wrong view on the way back.
   //
-  // Under ⌘⌥, with the bare ⌘ digits given to the panes: inside a grid the
-  // focus moves many times a minute, where a view is a mode changed a few
-  // times a session. `code`, since Option turns a digit's `key` into a symbol.
+  // The bare ⌘ digits, the way every browser and editor numbers its tabs; the
+  // split view's panes take ⌘⌥ above.
   useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
   useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
   useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));

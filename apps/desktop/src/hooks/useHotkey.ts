@@ -29,6 +29,10 @@ type HotkeyOptions = {
   platformOnly?: boolean;
 };
 
+/// Stands in for a row the reader unbound. The empty key matches no keystroke,
+/// and `useHotkey` registers no listener at all for it.
+const UNBOUND = { key: "", meta: false, shift: false, alt: false, code: undefined };
+
 /// Binds a document-level shortcut by id. The chord comes from the registry in
 /// `lib/shortcuts.ts` through the reader's overrides, so a rebinding in
 /// settings re-registers every listener that names the id. The handler is
@@ -45,12 +49,15 @@ export function useHotkey(
   handler: () => void,
   { enabled = true, platformOnly = false, skipInTextField = false }: HotkeyOptions = {},
 ) {
-  const { key, meta, shift, alt, code } = useChord(id);
+  // An unbound row answers no chord, and the listener is left unregistered for
+  // the same reason `enabled: false` does: this claims every chord it matches,
+  // so a binding standing on an empty key would still be a listener to run.
+  const { key, meta, shift, alt, code } = useChord(id) ?? UNBOUND;
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !key) return;
     const onKeyDown = (e: KeyboardEvent) => {
       // `code` is only consulted for an Option chord, and only for a letter.
       // macOS applies the Option layout to `key` — ⌥O can arrive as "ø" — so a

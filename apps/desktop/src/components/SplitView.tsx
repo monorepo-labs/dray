@@ -5,7 +5,6 @@ import Chat from "@/components/Chat";
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHasDraft } from "@/hooks/useDraft";
 import type { PaneState } from "@/hooks/useSessions";
@@ -14,6 +13,7 @@ import { basename } from "@/lib/format";
 import { dropLabel, paneOrder, type Region, type SplitGroup } from "@/lib/groups";
 import { IS_MAC } from "@/lib/platform";
 import { sessionBranch } from "@/lib/pr";
+import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type { SessionIndexItem } from "@/types/events";
 
@@ -43,7 +43,7 @@ type SplitViewProps = {
   >;
 };
 
-/// How many panes ⌘-digit reaches: `pane.1` through `pane.9` in the registry.
+/// How many panes have a chord: `pane.1` through `pane.9` in the registry.
 const PANE_CHORDS = 9;
 
 /// Any number of transcripts in columns. One composer serves the focused pane —
@@ -68,7 +68,7 @@ export default function SplitView({
   // holds every mounted transcript, so subscribing to the string would rerender
   // every pane on every keystroke.
   const composing = useHasDraft(focusedId);
-  // The order ⌘1–9 count in, so the keycap a header draws is the key that
+  // The order `pane.1`–`pane.9` count in, so the keycap a header draws is the key that
   // reaches it.
   const numbers = new Map(
     paneOrder({ columns: columns.map((c) => c.map((i) => i.sessionId)) }).map((id, i) => [id, i + 1]),
@@ -222,7 +222,7 @@ function PaneHeader({
 }: {
   item: SessionIndexItem;
   focused: boolean;
-  /// This pane's place in ⌘1–9.
+  /// This pane's place in `pane.1`–`pane.9`.
   number: number;
   /// The accelerator is held, so the close button gives its slot to the
   /// keycap that reaches this pane — the one moment the number is useful.
@@ -258,8 +258,9 @@ function PaneHeader({
         </span>
       )}
       {showNumber ? (
-        // The digit alone: ⌘ is the key being held to see this.
-        <Kbd className="ml-auto shrink-0">{number}</Kbd>
+        // The whole chord from the store, not a bare digit: the panes sit
+        // under ⌘⌥ by default and any of them may be rebound or unbound.
+        <ShortcutKeys ids={[`pane.${number}` as ShortcutId]} className="ml-auto shrink-0" />
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
