@@ -240,13 +240,33 @@ fn read_pasteboard() -> Pasted {
     Pasted::Text
 }
 
+/// How long a pasted image outlives its paste. The send archives its own copy,
+/// so this only has to cover a draft left unsent.
+const PASTE_RETAIN: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
 /// Writes a pasted image where it can sit until the send copies it into the
 /// session's own directory. A directory per paste, so the tray names every one
 /// "Pasted image.png" and still dedupes nothing that was pasted twice.
+///
+/// Older pastes are swept here, on write, like the dictation recordings: a
+/// send, a removed tile and a deleted session all leave the source behind.
 async fn write_pasted_image(png: &[u8]) -> Result<String> {
-    let dir = std::env::temp_dir()
-        .join("dray-paste")
-        .join(Uuid::new_v4().to_string());
+    let root = std::env::temp_dir().join("dray-paste");
+    if let Ok(mut entries) = fs::read_dir(&root).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let stale = entry
+                .metadata()
+                .await
+                .and_then(|m| m.modified())
+                .map(|t| t.elapsed().unwrap_or_default() > PASTE_RETAIN)
+                .unwrap_or(false);
+            if stale {
+                let _ = fs::remove_dir_all(entry.path()).await;
+            }
+        }
+    }
+
+    let dir = root.join(Uuid::new_v4().to_string());
     fs::create_dir_all(&dir)
         .await
         .context("could not create paste directory")?;

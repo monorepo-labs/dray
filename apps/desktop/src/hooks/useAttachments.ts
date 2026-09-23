@@ -43,18 +43,27 @@ function write(sessionId: string | null, next: Attachment[]) {
 /// Describes each path in the backend and pins the ones that can be attached.
 /// Deduped on path, so dropping the same screenshot twice pins one — the path is
 /// the identity, and a second copy of one file says nothing the first didn't.
-export async function addAttachmentPaths(sessionId: string | null, paths: string[]) {
+///
+/// Answers whether any of `paths` is pinned afterwards, counting one already in
+/// the tray — a folder alone pins nothing, and a paste must then fall back to
+/// its text rather than vanish.
+export async function addAttachmentPaths(
+  sessionId: string | null,
+  paths: string[],
+): Promise<boolean> {
   const current = bySession.get(sessionId) ?? EMPTY;
   const fresh = paths.filter((path) => !current.some((a) => a.path === path));
-  if (!fresh.length) return;
+  const already = fresh.length < paths.length;
+  if (!fresh.length) return already;
 
   const added = await invoke<Attachment[]>("read_attachments", { paths: fresh });
-  if (!added.length) return;
+  if (!added.length) return already;
 
   // Re-read rather than closing over `current`: the dialog and the reads above
   // are both awaited, and a drop landing in between must not be dropped.
   const now = bySession.get(sessionId) ?? EMPTY;
   write(sessionId, [...now, ...added.filter((a) => !now.some((b) => b.path === a.path))]);
+  return true;
 }
 
 /// Pins what the clipboard holds as files — copied files, or an image the
@@ -64,8 +73,7 @@ export async function pasteAttachments(sessionId: string | null): Promise<boolea
   const paths = await invoke<string[]>("paste_attachments").catch(() => []);
   if (!paths.length) return false;
 
-  await addAttachmentPaths(sessionId, paths);
-  return true;
+  return addAttachmentPaths(sessionId, paths).catch(() => false);
 }
 
 /// Opens the system file picker and pins whatever comes back. Resolves to
