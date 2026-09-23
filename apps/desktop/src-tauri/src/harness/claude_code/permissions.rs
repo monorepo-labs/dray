@@ -63,6 +63,15 @@ pub enum Reply {
     PiDialog(String),
 }
 
+/// The id a JSON-RPC peer's request is filed and drawn under, which is never
+/// the RPC id itself. That one counts from 0 in each child process, so after a
+/// respawn the new child's first ask repeated an id the transcript already held
+/// a decision for, and its card never drew (#301). The RPC id rides
+/// [`Reply::Rpc`], which is all the answer needs.
+pub fn rpc_request_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 impl Reply {
     /// The dialog method, for a request that came from a pi dialog.
     pub fn dialog_method(&self) -> Option<&str> {

@@ -4,6 +4,7 @@ import { idle, surprised } from "blobatar/expression";
 import { CircleDashed, MousePointerClick } from "lucide-react";
 
 import Chat from "@/components/Chat";
+import { Button } from "@/components/ui/button";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QuestionRequest from "@/components/chat/QuestionRequest";
 import Orb from "@/components/Orb";
@@ -200,7 +201,12 @@ export default function Crew({
                     active={active && focused}
                   />
                 ) : (
-                  <PendingCard row={row} events={pane.session?.events} chat={chat} />
+                  <PendingCard
+                    row={row}
+                    events={pane.session?.events}
+                    chat={chat}
+                    onOpenInMain={() => onOpenInMain(id)}
+                  />
                 )}
               </div>
             )}
@@ -246,9 +252,11 @@ function PendingCard({
   row,
   events,
   chat,
+  onOpenInMain,
 }: {
   row: CrewRow;
   events: AgentEvent[] | undefined;
+  onOpenInMain: () => void;
   chat: Pick<
     React.ComponentProps<typeof Chat>,
     "onRespondPermission" | "onAnswerQuestions"
@@ -276,9 +284,20 @@ function PendingCard({
     if (requestId) cardRef.current?.scrollIntoView({ block: "nearest" });
   }, [requestId]);
 
-  // Ordinary while the log is still loading: the row is open because the index
-  // says the session is asking, which arrives before its transcript does.
-  if (!ask) return null;
+  // The row is yellow because a request arrived, but the card is read out of the
+  // transcript, which may still be loading or may have failed to. Drawing
+  // nothing there left a yellow row with nothing to press over an agent blocked
+  // on it (#301), so there is always a way to the session's own column.
+  if (!ask) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3 pb-3 text-ui text-muted-foreground">
+        Waiting on your answer
+        <Button variant="outline" size="xs" onClick={onOpenInMain}>
+          Open
+        </Button>
+      </div>
+    );
+  }
 
   const id = row.item.sessionId;
   return (

@@ -15,7 +15,7 @@
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
 use crate::harness::{read_stderr, record_failure, Harness::Codex};
 use crate::models::{Effort, Model};
-use crate::harness::claude_code::permissions::PendingPermissions;
+use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
 use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
@@ -705,9 +705,7 @@ async fn raise_permission(
     let request: parser::ApprovalRequest = serde_json::from_value(params)?;
     let (pending, options) = permissions::pending_for(&request, kind, rpc_id);
 
-    // The id the frontend answers with. Codex's is a number and Dray's whole
-    // permission vocabulary is keyed by string, so it is spelled once here.
-    let request_id = rpc_id.to_string();
+    let request_id = rpc_request_id();
 
     handles
         .pending

@@ -38,7 +38,7 @@ pub mod permissions;
 pub mod probe;
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
-use crate::harness::claude_code::permissions::PendingPermissions;
+use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::Grok};
 use crate::models::{Effort, Model};
@@ -1005,7 +1005,7 @@ async fn raise_request(
     method: &str,
     params: Value,
 ) -> Result<()> {
-    let request_id = rpc_id.to_string();
+    let request_id = rpc_request_id();
 
     let event = match method {
         "session/request_permission" => {

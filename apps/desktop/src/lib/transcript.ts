@@ -622,8 +622,12 @@ export function buildTranscript(
   // verdict.
   const open = new Set<string>();
   const abandoned = new Set<string>();
-  const asks: PendingAsk[] = [];
-  const answered = new Set<string>();
+  // A decision retires only the asks before it, so this is walked in order
+  // rather than filtered by a set of answered ids at the end. An id is not
+  // unique for a session's whole life on every harness — Codex's restarted at 0
+  // in each child — and a set let an answer from before a respawn swallow the
+  // new child's first question, card and all (#301).
+  const asks = new Map<string, PendingAsk>();
   const callById = new Map<string, AgentEvent>();
   for (const event of events) {
     if (event.payload.type === "tool_call_started") {
@@ -657,14 +661,15 @@ export function buildTranscript(
       event.payload.type === "permission_requested" ||
       event.payload.type === "questions_asked"
     ) {
-      asks.push(event.payload);
+      asks.delete(event.payload.requestId);
+      asks.set(event.payload.requestId, event.payload);
     }
     if (event.payload.type === "permission_decided") {
-      answered.add(event.payload.requestId);
+      asks.delete(event.payload.requestId);
     }
   }
 
-  const pendingAsks = asks.filter((ask) => !answered.has(ask.requestId));
+  const pendingAsks = [...asks.values()];
 
   // Whatever is still open at the end of the log is only pending while something
   // could still produce a result. With no child running, nothing can.

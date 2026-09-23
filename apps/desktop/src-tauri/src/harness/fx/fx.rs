@@ -21,7 +21,7 @@ pub mod parser;
 pub mod permissions;
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
-use crate::harness::claude_code::permissions::PendingPermissions;
+use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::Fx};
 use crate::models::{Effort, Model};
@@ -1167,7 +1167,7 @@ async fn raise_permission(
     let request: parser::PermissionRequest = serde_json::from_value(params)?;
     let (pending, options) = permissions::pending_for(&request, rpc_id);
 
-    let request_id = rpc_id.to_string();
+    let request_id = rpc_request_id();
     handles
         .pending
         .lock()

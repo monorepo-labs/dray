@@ -691,3 +691,21 @@ describe("a call whose background task the child still holds", () => {
     });
   });
 });
+
+describe("a pending ask", () => {
+  const ask = (seq: number, requestId: string) =>
+    event(seq, { type: "permission_requested", requestId, toolName: "shell" } as AgentEventPayload);
+  const decided = (seq: number, requestId: string) =>
+    event(seq, { type: "permission_decided", requestId } as AgentEventPayload);
+  const pending = (events: AgentEvent[]) =>
+    buildTranscript(events, true).pendingAsks.map((a) => a.requestId);
+
+  it("is retired by its decision", () => {
+    expect(pending([ask(0, "a"), decided(1, "a"), ask(2, "b")])).toEqual(["b"]);
+  });
+
+  // #301: a respawned Codex child numbered its requests from 0 again.
+  it("is not retired by a decision made before it under the same id", () => {
+    expect(pending([ask(0, "0"), decided(1, "0"), ask(2, "0")])).toEqual(["0"]);
+  });
+});
