@@ -166,6 +166,13 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     attachments::read_attachments(paths).await
 }
 
+/// Paths for whatever the clipboard holds as files, for the composer's paste.
+/// Empty means paste the text.
+#[tauri::command]
+async fn paste_attachments() -> Vec<String> {
+    attachments::paste_attachments().await
+}
+
 /// Which agents can actually be run on this machine, and what to say about
 /// one that can't.
 ///
@@ -718,6 +725,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             send_msg,
             read_attachments,
+            paste_attachments,
             list_models,
             refresh_models,
             set_fx_provider,

@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import {
   addAttachmentPaths,
   clearAttachments,
+  pasteAttachments,
   pickAttachments,
   removeAttachment,
   useAttachments,
@@ -944,6 +945,7 @@ export default function ChatInput({
                     setCaret(at);
                   }}
                   onCaretChange={setCaret}
+                  onPasteFiles={() => pasteAttachments(sessionId)}
                   maxRows={isNewTask ? NEW_TASK_MAX_ROWS : MAX_ROWS}
                   // The two that are always there lead, and the two that come
                   // and go trail — so the line grows and shrinks at its end

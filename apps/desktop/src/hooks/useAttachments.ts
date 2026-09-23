@@ -57,6 +57,17 @@ export async function addAttachmentPaths(sessionId: string | null, paths: string
   write(sessionId, [...now, ...added.filter((a) => !now.some((b) => b.path === a.path))]);
 }
 
+/// Pins what the clipboard holds as files — copied files, or an image the
+/// backend writes out — and answers whether it did, so the composer pastes the
+/// text only where nothing was pinned. A failed read falls back to the text.
+export async function pasteAttachments(sessionId: string | null): Promise<boolean> {
+  const paths = await invoke<string[]>("paste_attachments").catch(() => []);
+  if (!paths.length) return false;
+
+  await addAttachmentPaths(sessionId, paths);
+  return true;
+}
+
 /// Opens the system file picker and pins whatever comes back. Resolves to
 /// nothing when the user cancels.
 export async function pickAttachments(sessionId: string | null) {

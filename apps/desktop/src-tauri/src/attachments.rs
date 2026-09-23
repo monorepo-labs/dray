@@ -139,6 +139,124 @@ pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     out
 }
 
+/// What the clipboard holds, as far as the composer's paste is concerned.
+#[derive(Debug, PartialEq)]
+enum Pasted {
+    Files(Vec<String>),
+    Image(Vec<u8>),
+    /// Text, or nothing at all — both are the webview's own paste to make.
+    Text,
+}
+
+/// Paths for what a paste should pin to the tray: copied files as they are, or
+/// a clipboard image written out as a PNG. Empty means the paste is text.
+///
+/// Read off `NSPasteboard` rather than the webview's `DataTransfer`, which
+/// hands a copied file over as bytes with no path, and a non-image file has to
+/// travel as an `@path` mention naming the real one.
+pub async fn paste_attachments() -> Vec<String> {
+    let pasted = tokio::task::spawn_blocking(read_pasteboard)
+        .await
+        .unwrap_or(Pasted::Text);
+
+    match pasted {
+        Pasted::Files(paths) => paths,
+        Pasted::Image(png) => match write_pasted_image(&png).await {
+            Ok(path) => vec![path],
+            Err(e) => {
+                eprintln!("pasted image not saved: {e:#}");
+                Vec::new()
+            }
+        },
+        Pasted::Text => Vec::new(),
+    }
+}
+
+/// Files first, then text, then an image. Text outranks an image because a
+/// spreadsheet or a Pages selection puts both on the clipboard, and pasting
+/// cells as a picture of them is not what anybody meant.
+#[cfg(target_os = "macos")]
+fn read_pasteboard() -> Pasted {
+    objc2::rc::autoreleasepool(|_| read_from(&objc2_app_kit::NSPasteboard::generalPasteboard()))
+}
+
+/// [`read_pasteboard`] over any pasteboard, so a test can hand it a private one
+/// rather than the reader's clipboard.
+#[cfg(target_os = "macos")]
+fn read_from(pb: &objc2_app_kit::NSPasteboard) -> Pasted {
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
+        NSPasteboardTypeString, NSPasteboardTypeTIFF,
+    };
+    use objc2_foundation::{NSDictionary, NSURL};
+
+    // SAFETY: AppKit's own constants, initialised before any code runs.
+    let (file_url, png, tiff, string) = unsafe {
+        (
+            NSPasteboardTypeFileURL,
+            NSPasteboardTypePNG,
+            NSPasteboardTypeTIFF,
+            NSPasteboardTypeString,
+        )
+    };
+
+    // `filePathURL` because Finder can copy a file *reference* URL
+    // (`file:///.file/id=…`), whose `path` is not the file's.
+    let files: Vec<String> = pb
+        .pasteboardItems()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let text = item.stringForType(file_url)?;
+                    let url = NSURL::URLWithString(&text)?;
+                    Some(url.filePathURL()?.path()?.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !files.is_empty() {
+        return Pasted::Files(files);
+    }
+    if pb.stringForType(string).is_some() {
+        return Pasted::Text;
+    }
+    if let Some(data) = pb.dataForType(png) {
+        return Pasted::Image(data.to_vec());
+    }
+    // Preview and most native apps copy TIFF alone, which the API refuses.
+    let converted = pb.dataForType(tiff).and_then(|data| {
+        let rep = NSBitmapImageRep::imageRepWithData(&data)?;
+        // SAFETY: an empty dictionary satisfies any key and value type.
+        unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+        }
+    });
+    converted.map_or(Pasted::Text, |data| Pasted::Image(data.to_vec()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_pasteboard() -> Pasted {
+    Pasted::Text
+}
+
+/// Writes a pasted image where it can sit until the send copies it into the
+/// session's own directory. A directory per paste, so the tray names every one
+/// "Pasted image.png" and still dedupes nothing that was pasted twice.
+async fn write_pasted_image(png: &[u8]) -> Result<String> {
+    let dir = std::env::temp_dir()
+        .join("dray-paste")
+        .join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&dir)
+        .await
+        .context("could not create paste directory")?;
+    let path = dir.join("Pasted image.png");
+    fs::write(&path, png)
+        .await
+        .context("could not write pasted image")?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// `~/.dray/attachments/<session-id>`.
 async fn attachments_path(session_id: &str) -> Result<PathBuf> {
     Ok(get_home_app_dir()
@@ -361,6 +479,44 @@ pub async fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Files outrank text, text outranks an image, and TIFF comes back as PNG.
+    /// On a private pasteboard, so running it leaves the clipboard alone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_paste_takes_files_then_text_then_an_image() {
+        use objc2_app_kit::{
+            NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString,
+            NSPasteboardTypeTIFF,
+        };
+        use objc2_foundation::{NSData, NSString};
+
+        const PNG_1PX: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        let png = NSData::with_bytes(&STANDARD.decode(PNG_1PX).unwrap());
+        let tiff = NSBitmapImageRep::imageRepWithData(&png)
+            .and_then(|rep| rep.TIFFRepresentation())
+            .expect("tiff");
+
+        let pb = NSPasteboard::pasteboardWithUniqueName();
+        pb.clearContents();
+        unsafe {
+            pb.setData_forType(Some(&tiff), NSPasteboardTypeTIFF);
+        }
+        match read_from(&pb) {
+            Pasted::Image(bytes) => assert!(bytes.starts_with(b"\x89PNG")),
+            other => panic!("expected an image, got {other:?}"),
+        }
+
+        unsafe {
+            pb.setString_forType(&NSString::from_str("a1\tb1"), NSPasteboardTypeString);
+        }
+        assert_eq!(read_from(&pb), Pasted::Text);
+
+        unsafe {
+            pb.setString_forType(&NSString::from_str("file:///tmp/a%20b.txt"), NSPasteboardTypeFileURL);
+        }
+        assert_eq!(read_from(&pb), Pasted::Files(vec!["/tmp/a b.txt".into()]));
+    }
 
     /// A file is named the way the CLI reading it can act on.
     ///
