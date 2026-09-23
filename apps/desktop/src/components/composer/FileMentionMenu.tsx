@@ -16,14 +16,12 @@ export default function FileMentionMenu({
   activeIndex,
   onPick,
   onHover,
-  placement = "above",
   bare = false,
 }: {
   files: FileMatch[];
   activeIndex: number;
   onPick: (file: FileMatch) => void;
   onHover: (index: number) => void;
-  placement?: "above" | "below";
   bare?: boolean;
 }) {
   return (
@@ -34,7 +32,6 @@ export default function FileMentionMenu({
       activeIndex={activeIndex}
       onPick={onPick}
       onHover={onHover}
-      placement={placement}
       bare={bare}
       renderItem={(file) => (
         <>

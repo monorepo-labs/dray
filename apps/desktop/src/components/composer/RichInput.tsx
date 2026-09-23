@@ -93,8 +93,6 @@ type Props = {
   onChange: (value: string, caret: number) => void;
   onCaretChange: (caret: number) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
-  onFocus?: () => void;
-  onBlur?: () => void;
   placeholder?: string;
   className?: string;
   /// Rows before it stops growing and starts scrolling.
@@ -131,8 +129,6 @@ export default function RichInput({
   onChange,
   onCaretChange,
   onKeyDown,
-  onFocus,
-  onBlur,
   placeholder,
   className,
   maxRows = 10,
@@ -262,12 +258,10 @@ export default function RichInput({
       onInput={read}
       onFocus={() => {
         focused.current = true;
-        onFocus?.();
       }}
       onBlur={() => {
         focused.current = false;
         setBlurs((n) => n + 1);
-        onBlur?.();
       }}
       onKeyDown={(event) => {
         // Taken before anything else looks at it: the chord must never reach

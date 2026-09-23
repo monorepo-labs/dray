@@ -4,6 +4,7 @@ import { ChevronRight, GitCompare } from "lucide-react";
 import FileIcon from "@/components/FileIcon";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
+import Note, { unreadableText } from "@/components/changes/Note";
 import DiffView from "@/components/chat/DiffView";
 import { Button } from "@/components/ui/button";
 import { useFileVersions, type useChanges } from "@/hooks/useChanges";
@@ -198,28 +199,11 @@ function FileBody({
   error: string | null;
   path: string;
 }) {
-  const note = (text: string, tone?: "error") => (
-    <p
-      className={cn(
-        "border-t border-border px-3 py-2 text-ui",
-        tone === "error" ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      {text}
-    </p>
-  );
-
-  if (error) return note(error, "error");
-  if (!versions) return note("Loading…");
+  const rule = "border-t border-border";
+  if (error) return <Note text={error} error className={rule} />;
+  if (!versions) return <Note text="Loading…" className={rule} />;
   if (versions.unreadable) {
-    // Deliberately "not UTF-8" rather than "binary": git's own binary test is
-    // NUL-based, so a Latin-1 or UTF-16 file passes it and the row above shows
-    // real line counts. Calling that binary contradicts the numbers next to it.
-    return note(
-      versions.unreadable === "binary"
-        ? "Not UTF-8 text — no diff to show."
-        : "File is too large to diff here.",
-    );
+    return <Note text={unreadableText(versions.unreadable)} className={rule} />;
   }
 
   // Full bleed: the panel is narrow, and a rounded inset card inside a list of

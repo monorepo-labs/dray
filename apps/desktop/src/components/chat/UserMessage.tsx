@@ -8,6 +8,7 @@ import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
+import { basename } from "@/lib/format";
 import {
   SEGMENT_COLOR,
   highlightSegments,
@@ -131,7 +132,7 @@ export default function UserMessage({
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the
           bubble sits on. */}
-      <ImageRow images={images} variant="sent" align="end" />
+      <ImageRow images={images} variant="sent" />
 
       {body && (
         // `none` in dark, where the bubble already reads as raised by being
@@ -203,7 +204,7 @@ export default function UserMessage({
               if (segment.kind === "path") {
                 const file = segment.inner ?? segment.text;
                 const name =
-                  (file.split("/").filter(Boolean).at(-1) ?? file) +
+                  basename(file) +
                   segment.text.slice(file.length);
                 const path = absolutePath(file, cwd);
 

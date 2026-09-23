@@ -3,6 +3,7 @@ import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, ChevronDown, Download, ExternalLink, Trash2, X } from "lucide-react";
 
+import { ConfirmOrKeep } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -207,7 +208,7 @@ function ModelRow({
                 variant="ghost"
                 onClick={onCancelDownload}
                 aria-label={`Cancel downloading ${model.name}`}
-                className="cursor-pointer text-muted-foreground hover:text-foreground"
+                className="text-muted-foreground hover:text-foreground"
               >
                 <X />
               </Button>
@@ -215,28 +216,13 @@ function ModelRow({
           ) : installed && confirming ? (
             // Asked in the row rather than in a dialog, which would take the
             // whole window over a file Download gets back.
-            <>
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                onClick={onDelete}
-                aria-label={`Delete ${model.name}`}
-                className="cursor-pointer"
-              >
-                Confirm
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                onClick={onKeepIt}
-                aria-label={`Keep ${model.name}`}
-                className="cursor-pointer text-muted-foreground hover:text-foreground"
-              >
-                <X />
-              </Button>
-            </>
+            <ConfirmOrKeep
+              size="sm"
+              confirmLabel={`Delete ${model.name}`}
+              keepLabel={`Keep ${model.name}`}
+              onConfirm={onDelete}
+              onKeep={onKeepIt}
+            />
           ) : installed ? (
             <Button
               type="button"
@@ -244,7 +230,7 @@ function ModelRow({
               variant="ghost"
               onClick={onAskDelete}
               aria-label={`Delete ${model.name}`}
-              className="cursor-pointer text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
             >
               <Trash2 />
             </Button>
@@ -256,7 +242,7 @@ function ModelRow({
               variant="ghost"
               onClick={onDownload}
               aria-label={`Download ${model.name}`}
-              className="cursor-pointer text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
             >
               <Download />
             </Button>
@@ -379,7 +365,7 @@ export default function TranscriptionSettings({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="max-w-56 cursor-pointer justify-between"
+                  className="max-w-56 justify-between"
                 >
                   <span className="truncate">{deviceLabel}</span>
                   <ChevronDown className="size-3 shrink-0 opacity-60" />

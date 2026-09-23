@@ -188,7 +188,6 @@ function ProviderRow({
 export default function ModelSelector({
   harness,
   onHarnessChange,
-  canSwitchHarness,
   models,
   modelId,
   effort,
@@ -201,14 +200,10 @@ export default function ModelSelector({
   onRefreshModels,
   onReloadModels,
   onSeedProvider,
-  loadingModels = false,
+  loadingModels,
 }: {
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
-  /// The agent is the child process, so it is fixed once a session exists. The
-  /// row of icons goes with it; the trigger's own mark stays, since naming the
-  /// agent a session runs is worth a glyph whether or not it can change.
-  canSwitchHarness: boolean;
   models: Model[];
   modelId: ModelId;
   effort: Effort | null;
@@ -220,8 +215,10 @@ export default function ModelSelector({
   /// The harness's own sentence about fast mode on the newest turn, drawn under
   /// the row. Never reconciled into `fast` above — see `fastNotice`.
   fastNote: string | null;
-  /// fx's fast mode is settled when its session is created and unreachable
-  /// after, so the row it draws has to go once one exists.
+  /// The agent is the child process, so it is fixed once a session exists. The
+  /// row of icons goes with it; the trigger's own mark stays, since naming the
+  /// agent a session runs is worth a glyph whether or not it can change. fx's
+  /// fast mode is settled the same way, so its row goes too.
   isNewSession: boolean;
   /// Whether this session's turn is in flight. The provider switch is the one
   /// control here that waits on it — everything else is a pick the send
@@ -229,17 +226,15 @@ export default function ModelSelector({
   busy: boolean;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
   /// Asks the harness for its list again, dropping the backend cache first.
-  /// Only pi has one that can change under the reader — the other two are
-  /// tables — so it is optional here.
-  onRefreshModels?: () => void;
+  onRefreshModels: () => void;
   /// Re-reads the current list *without* dropping the cache. The fx provider
   /// switch uses it: the new provider's list is keyed server-side, so this
   /// reads it cached rather than re-paying fx's startup on every hop.
-  onReloadModels?: () => void;
+  onReloadModels: () => void;
   /// Shows a provider's cached fx models the instant it is picked, before the
   /// fresh read lands. A provider never visited seeds nothing and waits.
-  onSeedProvider?: (provider: string) => void;
-  loadingModels?: boolean;
+  onSeedProvider: (provider: string) => void;
+  loadingModels: boolean;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
@@ -280,11 +275,8 @@ export default function ModelSelector({
     if (harness !== "fx" || !provider || seeded.includes(provider)) return;
     // A reader who already starred something here predates the marker; their
     // list is the answer and ours would arrive as three rows nobody asked for.
-    if (models.some((m) => starred.includes(m.id))) {
-      setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
-      return;
-    }
     setSeeded((prev) => (prev.includes(provider) ? prev : [...prev, provider]));
+    if (models.some((m) => starred.includes(m.id))) return;
     const seeds = defaultStars(provider, models);
     if (seeds.length) {
       setStarred((prev) => [...prev, ...seeds.filter((id) => !prev.includes(id))]);
@@ -349,14 +341,14 @@ export default function ModelSelector({
     setPendingProvider(id);
     // Cached rows on screen at once; the reload below refreshes them. A provider
     // never visited seeds nothing and falls to the loading state instead.
-    onSeedProvider?.(id);
+    onSeedProvider(id);
     latestProvider.current = id;
     switchQueue.current = switchQueue.current
       .catch(() => {})
       .then(() => invoke("set_fx_provider", { provider: id }))
       .then(
         () => {
-          if (latestProvider.current === id) onReloadModels?.();
+          if (latestProvider.current === id) onReloadModels();
         },
         (e) => {
           console.error("[fx provider]", e);
@@ -512,7 +504,7 @@ export default function ModelSelector({
             models is one visit rather than two. `mb-1` is the whole separation
             from the list below: a rule there drew a box round a control that is
             already a different shape. */}
-        {(canSwitchHarness || harness === "fx") && (
+        {(isNewSession || harness === "fx") && (
           <div className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1">
             {/* The one moving part. A thumb under the marks, placed by index,
                 so switching reads as the selection sliding across rather than
@@ -523,7 +515,7 @@ export default function ModelSelector({
                 come up *past* the surface the menu is drawn at, out of the well
                 the track cuts. `--accent` is a white veil on glass, which over
                 a scrim is a few percent of light and read as nothing. */}
-            {canSwitchHarness && (
+            {isNewSession && (
               <div role="radiogroup" aria-label="Agent" className="relative flex items-center">
                 <span
                   aria-hidden
@@ -576,16 +568,8 @@ export default function ModelSelector({
                 other harness, on the same track: fx is the one agent with a
                 second thing to pick, and a well of its own under this one read
                 as two rows of chrome above a list of three models. The hint is
-                lost from sight here and nowhere else — ⌘⇧A still cycles.
-
-                Unlike the agent beside it, this is *not* creation-time. fx
-                takes a provider switch in place, and a switched session keeps
-                it: the change persists onto fx's own session record, so a later
-                `session/resume` comes back on it rather than on whatever the
-                settings file names by then (`provider_switch.jsonl`). The
-                session itself moves at the next send, where `fx::set_model`
-                carries the provider across with the model — a model names its
-                provider, and fx refuses one belonging to another. */}
+                lost from sight here and nowhere else — ⌘⇧A still cycles. Not
+                creation-time — see [ProviderRow]. */}
             {harness === "fx" ? (
               <ProviderRow
                 providers={FX_PROVIDERS}
@@ -728,7 +712,7 @@ export default function ModelSelector({
         models={models}
         starred={starred}
         onStarredChange={setStarred}
-        onRefresh={() => onRefreshModels?.()}
+        onRefresh={onRefreshModels}
         loading={loadingModels}
       />
     </DropdownMenu>

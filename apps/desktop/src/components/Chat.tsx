@@ -5,12 +5,11 @@ import AssistantMessage from "@/components/chat/AssistantMessage";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
-import CompactingIndicator from "@/components/chat/CompactingIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
 import QuestionRequest from "@/components/chat/QuestionRequest";
 import Reasoning from "@/components/chat/Reasoning";
-import WorkingIndicator from "@/components/chat/WorkingIndicator";
+import WorkingIndicator, { OrbLine } from "@/components/chat/WorkingIndicator";
 import StreamingToolCall from "@/components/chat/StreamingToolCall";
 import TurnBlock from "@/components/chat/TurnBlock";
 import { Button } from "@/components/ui/button";
@@ -284,7 +283,7 @@ export default function Chat({
   //
   // A compaction suppresses it outright. The turn is genuinely open and drawing
   // nothing, so every test above passes — but the agent is not thinking, it is
-  // waiting on the compaction, and `CompactingIndicator` already says so.
+  // waiting on the compaction, and the compacting line already says so.
   //
   // A retry suppresses it for exactly that reason, and it matters more here:
   // attempts run to 10, so this is the longest blank stretch a turn has, and it
@@ -731,7 +730,11 @@ export default function Chat({
               />
             )}
 
-            {compacting && <CompactingIndicator />}
+            {/* Live rather than a settled row: rewriting the conversation into a
+                summary takes seconds on a small context and minutes on a full
+                one, with nothing else on screen to explain the wait. `shaping`
+                reads as its own activity beside `working` and `weaving`. */}
+            {compacting && <OrbLine state="shaping" label="Compacting context" />}
 
             {apiRetry && (
               <ApiRetryIndicator

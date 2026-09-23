@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 
+import { ConfirmOrKeep } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -129,28 +130,15 @@ export default function SpacesSettings({
                 // Confirm-and-X, the same shape a downloaded model is deleted
                 // with: two controls where two sat before, so the row answers
                 // in place instead of a sentence shoving the name sideways.
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    size="xs"
-                    variant="destructive"
-                    aria-label={`Remove ${name}`}
-                    onClick={() => {
-                      setConfirming(null);
-                      onRemoveSpace(name);
-                    }}
-                  >
-                    Confirm
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Keep ${name}`}
-                    onClick={() => setConfirming(null)}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <X />
-                  </Button>
-                </div>
+                <ConfirmOrKeep
+                  confirmLabel={`Remove ${name}`}
+                  keepLabel={`Keep ${name}`}
+                  onConfirm={() => {
+                    setConfirming(null);
+                    onRemoveSpace(name);
+                  }}
+                  onKeep={() => setConfirming(null)}
+                />
               ) : (
                 <div className="flex shrink-0 items-center gap-0.5">
                   {/* Two buttons rather than a drag handle: a row this size is
@@ -239,28 +227,15 @@ export default function SpacesSettings({
                   offering to file a project into a space while asking whether
                   to keep the project at all is two answers wanted at once. */}
               {detaching === project.path ? (
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    size="xs"
-                    variant="destructive"
-                    aria-label={`Remove ${project.name}`}
-                    onClick={() => {
-                      setDetaching(null);
-                      onRemoveProject(project.path);
-                    }}
-                  >
-                    Confirm
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Keep ${project.name}`}
-                    onClick={() => setDetaching(null)}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <X />
-                  </Button>
-                </div>
+                <ConfirmOrKeep
+                  confirmLabel={`Remove ${project.name}`}
+                  keepLabel={`Keep ${project.name}`}
+                  onConfirm={() => {
+                    setDetaching(null);
+                    onRemoveProject(project.path);
+                  }}
+                  onKeep={() => setDetaching(null)}
+                />
               ) : (
                 <div className="flex shrink-0 items-center gap-0.5">
                   <DropdownMenu>

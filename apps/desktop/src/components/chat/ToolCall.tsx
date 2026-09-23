@@ -401,10 +401,6 @@ export default function ToolCall({
 
           {settings && delegated && " "}
 
-        {/* `min-w-0` lets it shrink and `max-w-fit` stops it claiming the row's
-            free space, which would push the caret out to the far right. With the
-            label hidden this is the whole row, so it inherits the shimmer and
-            the failure color the label would have carried. */}
           {/* `min-w-0` lets it shrink and `max-w-fit` stops it claiming the
               row's free space, which would push the caret out to the far right.
               With the label hidden this is the whole row, so it inherits the

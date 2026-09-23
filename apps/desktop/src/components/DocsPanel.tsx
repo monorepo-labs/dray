@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Eye, Loader2, Pencil, X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
+import IconToggle from "@/components/IconToggle";
 import { Markdown } from "@/components/chat/Markdown";
 import {
   AlertDialog,
@@ -148,8 +149,11 @@ export default function DocsPanel({
         )}
 
         {current && (
-          <ModeToggle
+          // Per doc, not one setting for the panel. A reader flipping their
+          // notes into edit mode has said nothing about the readme beside it.
+          <IconToggle
             value={current.mode}
+            options={MODES}
             onChange={(mode) => setDocMode(sessionId, current.path, mode)}
           />
         )}
@@ -266,56 +270,6 @@ const MODES: { value: DocMode; label: string; Icon: typeof Eye }[] = [
   { value: "view", label: "Read", Icon: Eye },
   { value: "edit", label: "Edit", Icon: Pencil },
 ];
-
-/// Both options drawn, with the active one filled — the same control the diff
-/// pane's split/unified toggle is, and for its reason: a single glyph that
-/// swapped on click reads as a picture of the current state rather than as
-/// something that can be pressed.
-///
-/// Per doc, not one setting for the panel. A reader flipping their notes into
-/// edit mode has said nothing about the readme in the chip beside it.
-function ModeToggle({
-  value,
-  onChange,
-}: {
-  value: DocMode;
-  onChange: (next: DocMode) => void;
-}) {
-  return (
-    // `--surface-well`, the track token, rather than a muted fill: the well is
-    // a black scrim in both modes, so on a light page it cuts *into* the row
-    // instead of sitting a shade off it — which is what lets the thumb read as
-    // raised rather than as the one segment that happens to be greyer.
-    <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-surface-well p-0.5">
-      {/* No tooltip. Both options are drawn side by side, so the pair says what
-          each one does by contrast — a tooltip naming the glyph under the
-          cursor tells the reader what they can already see. `aria-label` still
-          carries the word for anyone not reading the shape. */}
-      {MODES.map(({ value: mode, label, Icon }) => (
-        <button
-          key={mode}
-          type="button"
-          onClick={() => onChange(mode)}
-          aria-label={label}
-          aria-pressed={value === mode}
-          className={cn(
-            "rounded-[min(var(--radius-md),6px)] p-1 transition-colors",
-            // The thumb has to come up past the surface the row is drawn at,
-            // out of the well the track cuts — so it takes `--surface-thumb`
-            // and the button shadow, the pair the composer's own segmented
-            // control uses. An accent fill is a veil, and a veil over a scrim
-            // is a few percent of light that reads as nothing.
-            value === mode
-              ? "bg-surface-thumb text-foreground shadow-(--shadow-button)"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <Icon className="size-3.5" strokeWidth={1.5} />
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /// What the reader has to settle before the body means anything.
 ///

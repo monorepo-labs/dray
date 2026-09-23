@@ -27,8 +27,9 @@ type Variant = "sent" | "returned";
 
 /// A row of pictures with the viewer wired to it.
 ///
-/// Shared rather than written twice: the two callers differ in the variant above
-/// and the edge the row grows from, and the parts that are easy to get wrong —
+/// Shared rather than written twice: the two callers differ in the variant above,
+/// which also picks the edge the row grows from — a sent row hangs off the
+/// right like the bubble it belongs to — and the parts that are easy to get wrong —
 /// the index meaning the same picture in the row and in the lightbox, the
 /// overflow control opening on the first picture it stands for — are the parts a
 /// second copy would drift on.
@@ -41,11 +42,9 @@ type Variant = "sent" | "returned";
 export default function ImageRow({
   images,
   variant = "returned",
-  align = "start",
 }: {
   images: ImageRef[];
   variant?: Variant;
-  align?: "start" | "end";
 }) {
   // Resolved once here rather than per picture, because the viewer needs the
   // same list in the same order — an index that means one picture in the row and
@@ -71,7 +70,7 @@ export default function ImageRow({
     <div
       className={cn(
         "flex max-w-full flex-col gap-1.5",
-        align === "end" ? "items-end" : "items-start",
+        sent ? "items-end" : "items-start",
       )}
     >
       {/* A row that wraps, not a stack. Two screenshots are usually two views of
@@ -80,7 +79,7 @@ export default function ImageRow({
       <div
         className={cn(
           "flex max-w-full flex-wrap gap-1.5",
-          align === "end" ? "justify-end" : "justify-start",
+          sent ? "justify-end" : "justify-start",
         )}
       >
         {shown.map((image, i) => (

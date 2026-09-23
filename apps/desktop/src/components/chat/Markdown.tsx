@@ -8,6 +8,7 @@ import { createSharedCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
+import { basename } from "@/lib/format";
 import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
@@ -246,7 +247,7 @@ function FilePathSpan({
     // marked text past the path, so `:12` and `#L12` come through as typed.
     const label = textOf(children);
     const locator = label?.startsWith(title) ? label.slice(title.length) : "";
-    const name = title.split("/").filter(Boolean).at(-1) ?? title;
+    const name = basename(title);
     const body = written ? children : `@${name}${locator}`;
     if (!path) {
       return (

@@ -23,7 +23,6 @@ export default function SessionMentionMenu({
   onPick,
   onHover,
   emptyNote,
-  placement = "above",
   bare = false,
 }: {
   sessions: SessionIndexItem[];
@@ -34,7 +33,6 @@ export default function SessionMentionMenu({
   activeIndex: number;
   onPick: (session: SessionIndexItem) => void;
   onHover: (index: number) => void;
-  placement?: "above" | "below";
   bare?: boolean;
 }) {
   const ambiguous = ambiguousTitles(sessions);
@@ -49,7 +47,6 @@ export default function SessionMentionMenu({
       activeIndex={activeIndex}
       onPick={onPick}
       onHover={onHover}
-      placement={placement}
       bare={bare}
       emptyNote={emptyNote}
       renderItem={(session) => (

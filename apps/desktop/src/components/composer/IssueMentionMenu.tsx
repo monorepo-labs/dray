@@ -20,7 +20,6 @@ export default function IssueMentionMenu({
   activeIndex,
   onPick,
   onHover,
-  placement = "above",
   bare = false,
   loading = false,
   emptyNote,
@@ -31,7 +30,6 @@ export default function IssueMentionMenu({
   activeIndex: number;
   onPick: (issue: Issue) => void;
   onHover: (index: number) => void;
-  placement?: "above" | "below";
   bare?: boolean;
   /// Whether the tracker is still being waited on. The one picker of the three
   /// that needs it: the other two read memory, where this reads the network on
@@ -54,7 +52,6 @@ export default function IssueMentionMenu({
       activeIndex={activeIndex}
       onPick={onPick}
       onHover={onHover}
-      placement={placement}
       bare={bare}
       loading={loading}
       emptyNote={emptyNote}

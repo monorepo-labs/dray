@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -17,6 +17,7 @@ import {
 import Avatar from "@/components/Avatar";
 import OpenInButton from "@/components/OpenInButton";
 import PrStateIcon from "@/components/PrStateIcon";
+import Counts from "@/components/changes/Counts";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
@@ -26,6 +27,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useCopied } from "@/hooks/useCopied";
 import type { usePullRequest, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import { TERMINAL_OPENER } from "@/lib/openWith";
@@ -86,10 +88,6 @@ const UNAVAILABLE: Record<PrUnavailable["kind"], string> = {
 /// GitHub's own install page would have sent them.
 const INSTALL_COMMAND = "brew install gh";
 const LOGIN_COMMAND = "gh auth login";
-
-/// How long "Copied" stands on the button, matching the composer notices that
-/// make the same offer.
-const COPIED_MS = 1600;
 
 /// The pull requests opened from this session's branch, one collapsible row
 /// each — the shape the changes panel already uses, because the question is the
@@ -200,26 +198,11 @@ export function MissingCli({
   loading: boolean;
   refresh: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, copy] = useCopied();
   const [checking, setChecking] = useState(false);
   const [stillMissing, setStillMissing] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
 
   const command = kind === "no_cli" ? INSTALL_COMMAND : LOGIN_COMMAND;
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-    } catch (err) {
-      console.error("failed to copy the command", err);
-      return;
-    }
-    setCopied(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-  };
 
   const recheck = async () => {
     // Logging in changes nothing about where `gh` is, so that half only asks
@@ -258,7 +241,7 @@ export function MissingCli({
         <button
           type="button"
           aria-label={`Copy ${command}`}
-          onClick={() => void copy()}
+          onClick={() => void copy(command)}
           className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -352,7 +335,7 @@ function PrRow({
         <PrStateIcon pr={pr} />
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
         <span className="min-w-0 flex-1 truncate text-sidebar-foreground">{pr.title}</span>
-        <Counts added={pr.additions} removed={pr.deletions} />
+        <Counts added={pr.additions} removed={pr.deletions} className="shrink-0" />
 
         {/* Beside the PR's own name, which is what it points at — and not in
             the readiness block, where it only existed on the states that draw
@@ -434,17 +417,6 @@ function PrRow({
   );
 }
 
-/// Lines added and removed, same shape and same colours as the changes panel's
-/// — a PR is a diff, and the reader already knows how to read this figure.
-function Counts({ added, removed }: { added: number; removed: number }) {
-  return (
-    <span className="shrink-0 font-mono text-ui">
-      {added > 0 && <span className="text-accent-add">+{added}</span>}
-      {added > 0 && removed > 0 && " "}
-      {removed > 0 && <span className="text-destructive">−{removed}</span>}
-    </span>
-  );
-}
 
 /// GitHub's green, on both halves of the split button.
 ///

@@ -1,4 +1,4 @@
-import Orb from "@/components/Orb";
+import { OrbLine } from "@/components/chat/WorkingIndicator";
 
 /// Shown while the harness retries a failed model request, from `api_retry`
 /// until the next request starts or the turn ends. It earns a live indicator
@@ -26,17 +26,12 @@ export default function ApiRetryIndicator({
   // on the way in, so anything arriving here is worth showing.
   const cause = [status, reason].filter(Boolean).join(" ");
 
+  // `searching` so a retry reads as its own activity rather than as ordinary
+  // progress.
   return (
-    <div className="flex items-center gap-2" aria-live="polite">
-      {/* Same 20px inline design as the working and compacting indicators.
-          `searching` so a retry reads as a fourth distinct activity rather than
-          as ordinary progress. */}
-      <Orb state="searching" size={20} aria-hidden />
-
-      <span className="shimmer-text text-chat">
-        Retrying — attempt {attempt} of {maxRetries}
-        {cause ? ` (${cause})` : ""}
-      </span>
-    </div>
+    <OrbLine
+      state="searching"
+      label={`Retrying — attempt ${attempt} of ${maxRetries}${cause ? ` (${cause})` : ""}`}
+    />
   );
 }

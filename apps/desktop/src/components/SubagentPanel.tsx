@@ -84,11 +84,6 @@ export default function SubagentPanel({
   );
 }
 
-/// One run: what it is doing on the row, what it did underneath.
-///
-/// No icon and no tool name. Every row here is a subagent, so an icon repeated
-/// down the list distinguishes nothing, and the name is the harness's word for
-/// the mechanism ("Task", "local_bash") rather than for the work.
 /// Whether the spawning call is worth a row of its own.
 ///
 /// The row exists to show the brief the agent was given. Claude's `Task`
@@ -108,6 +103,11 @@ function hasBrief(spawn: AgentEvent): boolean {
   return subagentBrief(spawn.payload.input) !== null;
 }
 
+/// One run: what it is doing on the row, what it did underneath.
+///
+/// No icon and no tool name. Every row here is a subagent, so an icon repeated
+/// down the list distinguishes nothing, and the name is the harness's word for
+/// the mechanism ("Task", "local_bash") rather than for the work.
 function RunRow({
   run,
   open,

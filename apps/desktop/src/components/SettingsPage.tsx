@@ -17,6 +17,7 @@ import LinearIcon from "@/components/LinearIcon";
 import rauchgAvatar from "@/assets/avatars/rauchg.jpg";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
+import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -98,7 +99,7 @@ const SUPPORTERS: { name: string; note: string; url: string; avatar?: string }[]
 export default function SettingsPage({
   open,
   onClose,
-  initialTab = "appearance",
+  initialTab,
   projects,
   spaces,
   startNamingSpace,
@@ -125,7 +126,7 @@ export default function SettingsPage({
   /// Which tab to open on. The composer's mic button sends the reader straight
   /// to Transcription when no model is downloaded, which is the whole reason
   /// this is a prop rather than internal state.
-  initialTab?: SettingsTab;
+  initialTab: SettingsTab;
   /// Every attached project, not the active space's — this is where one is
   /// filed into a space, so a narrowed list would hide the rows to move.
   projects: Project[];
@@ -717,31 +718,18 @@ function BetaUpdatesRow({
       description="Get new versions early, before they're fully tested."
     >
       {confirming ? (
-        <div className="flex items-center gap-1.5">
-          {/* Takes the focus the unmounting button just dropped — not stealing,
-              since a keyboard user was on this very spot. Cancel, not the verb,
-              so Enter pressed twice out of habit changes nothing. */}
-          <Button
-            autoFocus
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirming(null)}
-          >
-            Cancel
-          </Button>
-          {/* Not the verb again — the button just pressed said that, and the
-              same word twice reads as the press not having landed. */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              onChange(confirming);
-              setConfirming(null);
-            }}
-          >
-            Confirm
-          </Button>
-        </div>
+        // "Confirm", not the verb again — the button just pressed said that,
+        // and the same word twice reads as the press not having landed.
+        <CancelOrConfirm
+          verb="Confirm"
+          destructive={false}
+          autoFocus
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            onChange(confirming);
+            setConfirming(null);
+          }}
+        />
       ) : (
         <Button
           id={id}
@@ -955,33 +943,22 @@ function BrowserRow() {
         )
       ) : status.state === "ready" ? (
         confirming ? (
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
+          <CancelOrConfirm
+            verb="Remove"
+            onCancel={() => {
+              setConfirming(false);
+              setError(null);
+            }}
+            onConfirm={async () => {
+              try {
+                await removeChromium();
                 setConfirming(false);
                 setError(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={async () => {
-                try {
-                  await removeChromium();
-                  setConfirming(false);
-                  setError(null);
-                } catch (e) {
-                  setError(String(e));
-                }
-              }}
-            >
-              Remove
-            </Button>
-          </div>
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+          />
         ) : (
           <Button id={id} variant="outline" size="sm" onClick={() => setConfirming(true)}>
             Remove
@@ -1042,22 +1019,15 @@ function IssueTrackerRow({
           }
         >
           {confirming ? (
-            <div className="flex items-center gap-1.5">
-              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={async () => {
-                  await disconnect();
-                  setConfirming(false);
-                }}
-              >
-                Disconnect
-              </Button>
-            </div>
+            <CancelOrConfirm
+              verb="Disconnect"
+              busy={busy}
+              onCancel={() => setConfirming(false)}
+              onConfirm={async () => {
+                await disconnect();
+                setConfirming(false);
+              }}
+            />
           ) : (
             <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
               Disconnect
@@ -1165,40 +1135,20 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
   );
 }
 
-/// Set *and* order, so a group added later is one entry plus one body.
+/// Set *and* order, so a group added later is one entry plus one body. Icons
+/// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'
+/// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
 const SETTINGS_TABS = [
-  "appearance",
-  "spaces",
-  "accounts",
-  "transcription",
-  "integrations",
-  "shortcuts",
-  "about",
+  { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
+  { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
+  { id: "accounts", label: "Accounts", Icon: KeyIcon },
+  { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
+  { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
+  { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
+  { id: "about", label: "About", Icon: InformationCircleIcon },
 ] as const;
 
-export type SettingsTab = (typeof SETTINGS_TABS)[number];
-
-const TAB_LABELS: Record<SettingsTab, string> = {
-  appearance: "Appearance",
-  shortcuts: "Shortcuts",
-  spaces: "Spaces",
-  transcription: "Transcription",
-  integrations: "Integrations",
-  accounts: "Accounts",
-  about: "About",
-};
-
-/// Heroicons' filled 16px set, drawn for small sizes,
-/// at the sidebar rows' own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
-const TAB_ICONS: Record<SettingsTab, typeof BoltIcon> = {
-  appearance: PaintBrushIcon,
-  spaces: Square3Stack3DIcon,
-  accounts: KeyIcon,
-  transcription: MicrophoneIcon,
-  integrations: PuzzlePieceIcon,
-  shortcuts: BoltIcon,
-  about: InformationCircleIcon,
-};
+export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
 /// The page's groups as a list down the left, standing where the sidebar
 /// stands, with the picked group filling the rest of the window.
@@ -1228,9 +1178,9 @@ function SettingsTabs({
   // ref holds nothing on the first one.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
 
-  const index = SETTINGS_TABS.indexOf(tab);
+  const index = SETTINGS_TABS.findIndex((t) => t.id === tab);
   const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>
-    setTab(SETTINGS_TABS[next]),
+    setTab(SETTINGS_TABS[next].id),
   );
 
   // Focus lands on the picked group, so the arrows work at once and nothing
@@ -1294,7 +1244,7 @@ function SettingsTabs({
             onKeyDown={onKeyDown}
             className="flex flex-col gap-px"
           >
-            {SETTINGS_TABS.map((value, i) => (
+            {SETTINGS_TABS.map(({ id: value, label, Icon }, i) => (
               <TabButton
                 key={value}
                 ref={(el) => {
@@ -1309,11 +1259,8 @@ function SettingsTabs({
                 onClick={() => setTab(value)}
                 className="flex h-7 cursor-pointer items-center gap-1.5 px-1.5 text-left"
               >
-                {(() => {
-                  const Icon = TAB_ICONS[value];
-                  return <Icon className="size-3.5 shrink-0" />;
-                })()}
-                {TAB_LABELS[value]}
+                <Icon className="size-3.5 shrink-0" />
+                {label}
               </TabButton>
             ))}
           </div>
@@ -1341,7 +1288,7 @@ function SettingsTabs({
                 takes `ml-auto` to the far end, a back arrow `-order-1` to lead
                 the title. */}
             <div className="flex h-7 items-center gap-2">
-              <h1 className="text-base font-medium">{TAB_LABELS[tab]}</h1>
+              <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
               <div ref={setSlot} className="contents" />
             </div>
             <div

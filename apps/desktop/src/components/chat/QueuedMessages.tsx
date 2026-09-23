@@ -70,7 +70,7 @@ export default function QueuedMessages({
                 the sentence it was attached to. The hint is outside it: that is
                 the app talking, not the message. */}
             <div className="flex w-full flex-col items-end gap-1.5 opacity-55">
-              <ImageRow images={imagesOf(attachments)} variant="sent" align="end" />
+              <ImageRow images={imagesOf(attachments)} variant="sent" />
 
               {/* Guarded like the delivered bubble's: a prompt can be an
                   attachment and nothing else. */}
@@ -164,6 +164,3 @@ export default function QueuedMessages({
     </div>
   );
 }
-
-/// The pictures among the attachments, in the shape the delivered bubble's row
-/// takes. A file draws nothing — see CLAUDE.md.

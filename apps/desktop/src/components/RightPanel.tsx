@@ -208,6 +208,8 @@ export function tabOrder({
   return tabs;
 }
 
+const BASE_TABS = tabOrder({ pr: false, docs: false, issue: false, more: false });
+
 type RightPanelProps = {
   /// Closed hides the pane rather than unmounting it — its state, caches, and
   /// rendered diffs survive, so reopening is one class flip instead of a
@@ -218,20 +220,8 @@ type RightPanelProps = {
   /// Rendered beside its tab's label. Only shown above zero — a tab reading
   /// "Subagents 0" says the same thing as the empty state one click away.
   counts?: Partial<Record<PanelTab, number>>;
-  /// There is a pull request tab to draw at all — see `prTabVisible`.
-  pr?: boolean;
-  /// At least one markdown file is open in the pane.
-  docs?: boolean;
-  /// This session is tagged with at least one issue. Absent otherwise, for the
-  /// PR tab's reason: a tab whose only content is "there is nothing here" is one
-  /// the eye skips past on every session that will never have one.
-  issue?: boolean;
-  /// This session has something for the catch-all tab — a task list, a
-  /// subagent, a background task. Absent otherwise, for the same reason.
-  more?: boolean;
-  /// The agent has put a plan up in this session. Absent otherwise, for the
-  /// same reason.
-  plan?: boolean;
+  /// The tab row, as `tabOrder` answers it.
+  tabs?: readonly PanelTab[];
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
@@ -294,18 +284,13 @@ export default function RightPanel({
   tab,
   onTabChange,
   counts,
-  pr = false,
-  docs = false,
-  issue = false,
-  more = false,
-  plan = false,
+  tabs = BASE_TABS,
   refresh,
   cwd,
   actions,
   heading,
   children,
 }: RightPanelProps) {
-  const tabs = tabOrder({ pr, docs, issue, more, plan });
   // 32rem, the width this pane opened at before it could be dragged.
   const { style, handle } = useResizable({
     storageKey: "ade.rightPanelWidth",

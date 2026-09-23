@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCopied } from "@/hooks/useCopied";
 import { basename } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SessionSnapshot } from "@/types/events";
@@ -22,9 +22,6 @@ type SessionHeaderProps = {
   className?: string;
 };
 
-/// How long the button holds its confirmation, matching the notice stack's own.
-const COPIED_MS = 1400;
-
 /// One line: `project / title`, then the branch. The title is the only part
 /// that gives way to truncation, since it is the one thing here the reader
 /// wrote and can recognise from its opening words.
@@ -43,10 +40,7 @@ export default function SessionHeader({
   // directory was copied when it was the last one's. Holding the path instead
   // makes the check say something that stays true — including for a write that
   // resolves after the reader has moved on.
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+  const [copiedPath, copy] = useCopied();
 
   if (standIn || !session) {
     return (
@@ -65,18 +59,6 @@ export default function SessionHeader({
   // worktree session's two differ.
   const cwd = session.cwd;
   const copied = copiedPath === cwd;
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(cwd);
-    } catch (err) {
-      console.error("failed to copy the working directory", err);
-      return;
-    }
-    setCopiedPath(cwd);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopiedPath(null), COPIED_MS);
-  };
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>
@@ -99,7 +81,7 @@ export default function SessionHeader({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => void copy()}
+              onClick={() => void copy(cwd)}
               aria-label={`Copy the working directory, ${cwd}`}
               // Shrinkable, not `shrink-0`: a worktree branch name is long and
               // unbounded, so a fixed one overflowed the row and drew itself

@@ -283,7 +283,7 @@ Card name its subject — it and `worktree-failed` the only two that do — brea
 
 ## Notice cards
 
-Sidebar glow was third channel, cut. Landed in same corner as card, so it could not reach eye card wasn't already reaching, and invisible whenever sidebar collapsed. Animation shelved unimported in [attention-glow.css](src/styles/attention-glow.css) with own notes on how to rewire — worth several passes to get right, so next thing wanting pulse don't redo them.
+Sidebar glow was third channel, cut. Landed in same corner as card, so it could not reach eye card wasn't already reaching, and invisible whenever sidebar collapsed. Animation and its rewiring notes live in git history (`src/styles/attention-glow.css`, removed in #279) — worth several passes to get right, so next thing wanting pulse restore it rather than redo them.
 
 **Card carry verb and nothing else** ([NoticeStack](src/components/NoticeStack.tsx)) — "Needs permission", "Task finished" — top-left, over sidebar it talk about and below traffic lights, where nothing else in app draw. No session title, no project, no icon: rail already mark row, so card repeating name spend its width saying what next glance say anyway. That leave one fact not on screen anywhere else, which is *what* is wanted. Desktop banner do opposite and have to: it land in stack beside every other app's notifications, so it name session and project or it say nothing. One `announce` build both from same label.
 

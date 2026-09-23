@@ -1,44 +1,19 @@
 import * as React from "react"
-import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 
-const alertVariants = cva(
-  "group/alert relative grid w-full gap-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-data-[slot=alert-action]:relative has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
-  {
-    variants: {
-      variant: {
-        // `--popover`, not `--card`, and the two are the same colour with an
-        // opaque page under them — so this changes nothing until vibrancy is
-        // on. There `--card` becomes a 5.5% white veil, right for a surface
-        // sitting *in* the page; an alert floats over one, and lands on the
-        // sidebar, which has no fill at all under vibrancy. `--popover` plus
-        // the blur below is what makes that readable — the veil alone was not,
-        // which is why this was an opaque fill until the frames gained one.
-        default: "bg-popover backdrop-blur-xl text-popover-foreground",
-        destructive:
-          "bg-popover backdrop-blur-xl text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-)
+// `--popover`, not `--card`, and the two are the same colour with an opaque
+// page under them — so this changes nothing until vibrancy is on. There
+// `--card` becomes a 5.5% white veil, right for a surface sitting *in* the page;
+// an alert floats over one, and lands on the sidebar, which has no fill at all
+// under vibrancy. `--popover` plus the blur is what makes that readable — the
+// veil alone was not, which is why this was an opaque fill until the frames
+// gained one.
+const ALERT =
+  "group/alert relative grid w-full gap-0.5 rounded-lg border bg-popover px-2.5 py-2 text-left text-sm text-popover-foreground backdrop-blur-xl has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4"
 
-function Alert({
-  className,
-  variant,
-  ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
-  return (
-    <div
-      data-slot="alert"
-      role="alert"
-      className={cn(alertVariants({ variant }), className)}
-      {...props}
-    />
-  )
+function Alert({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-slot="alert" role="alert" className={cn(ALERT, className)} {...props} />
 }
 
 function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
@@ -70,14 +45,4 @@ function AlertDescription({
   )
 }
 
-function AlertAction({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-action"
-      className={cn("absolute top-2 right-2", className)}
-      {...props}
-    />
-  )
-}
-
-export { Alert, AlertTitle, AlertDescription, AlertAction }
+export { Alert, AlertTitle, AlertDescription }

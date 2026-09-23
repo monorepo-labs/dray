@@ -29,9 +29,7 @@ export default function BackgroundTasksIndicator({
       className="flex cursor-pointer items-center gap-2 text-left"
     >
       {/* Same 20px inline design as WorkingIndicator, `weaving` so the two
-          read as different activities at a glance. Theme pinned for the same
-          reason as there: the orb's `auto` expects `data-theme="dark|light"`
-          and this app stamps a palette name instead. */}
+          read as different activities at a glance. */}
       <Orb state="weaving" size={20} aria-hidden />
 
       <span className="shimmer-text text-chat">

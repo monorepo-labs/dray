@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import PrPanel from "@/components/PrPanel";
-import RightPanel, { TabBody } from "@/components/RightPanel";
+import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ExternalApp, PrUnavailable } from "@/types/events";
@@ -122,7 +122,7 @@ function Demo() {
 
         <RightPanel
           open
-          pr
+          tabs={tabOrder({ pr: true, docs: false, issue: false, more: false })}
           tab="pr"
           onTabChange={() => {}}
           cwd={CWD}
