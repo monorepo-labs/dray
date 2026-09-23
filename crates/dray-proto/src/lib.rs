@@ -268,8 +268,8 @@ pub struct CreateSession {
     /// levels must be sent none at all.
     #[serde(default)]
     pub effort: Option<String>,
-    /// `claude_code` today. `None` inherits the parent's, and defaults to
-    /// Claude Code with no parent.
+    /// `claude_code`, `codex`, `pi`, `fx` or `grok`. `None` inherits the
+    /// parent's, and defaults to Claude Code with no parent.
     #[serde(default)]
     pub harness: Option<String>,
     /// The session whose agent is making this call, from `DRAY_SESSION_ID`.
@@ -475,8 +475,8 @@ pub fn endpoint() -> Option<String> {
 }
 
 /// The socket one build of the app listens on, `~/.dray/dray.sock` by default.
-/// Resolved through `dirs` rather than `$HOME` so it agrees with the app's own
-/// `get_home_app_dir`, which creates the directory this sits in.
+/// Resolved through `std::env::home_dir`, the same call the app's own
+/// `get_home_app_dir` makes when it creates the directory this sits in.
 ///
 /// The CLI never asks for the dev one: `dray` typed in a terminal means the app
 /// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`

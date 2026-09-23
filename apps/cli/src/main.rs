@@ -71,7 +71,8 @@ struct New {
     #[arg(long)]
     project: Option<PathBuf>,
 
-    /// opus, sonnet, fable or haiku. Defaults to the calling session's model.
+    /// A model alias the harness knows, like opus or sonnet on claude_code.
+    /// Defaults to the calling session's model.
     #[arg(long)]
     model: Option<String>,
 
@@ -80,7 +81,7 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it: claude_code or codex.
+    /// Which agent runs it: claude_code, codex, pi, fx or grok.
     #[arg(long)]
     harness: Option<String>,
 
