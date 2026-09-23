@@ -1103,7 +1103,7 @@ struct GrokCredential {
 /// `session/new` refuses with `-32000 Authentication required` and **writes
 /// nothing to stderr**, so a Dray session simply could not start.
 async fn grok() -> anyhow::Result<Vec<Account>> {
-    let home = match std::env::var_os("GROK_HOME") {
+    let home = match std::env::var_os("GROK_HOME").filter(|home| !home.is_empty()) {
         Some(home) => std::path::PathBuf::from(home),
         None => std::env::home_dir()
             .ok_or_else(|| anyhow::anyhow!("no home directory to look for ~/.grok in"))?
