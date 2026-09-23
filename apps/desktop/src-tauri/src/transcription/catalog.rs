@@ -157,6 +157,11 @@ pub fn find(id: &str) -> Option<&'static TranscriptionModel> {
     MODELS.iter().find(|m| m.id == id)
 }
 
+/// [`find`] for a command, which answers a missing id with a sentence.
+pub fn require(id: &str) -> Result<&'static TranscriptionModel, String> {
+    find(id).ok_or_else(|| format!("unknown model \"{id}\""))
+}
+
 /// Which model to suggest on this machine.
 ///
 /// Handy ranks its list editorially — a static `recommended_rank` in its

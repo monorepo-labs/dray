@@ -59,12 +59,9 @@ notify-rust = { version = "4.18", features = ["preview-macos-un"] }
 # this app talks to directly, `gh` and `claude` being reached by spawning them
 # instead. `rustls` rather than the platform TLS so a Linux build needs no
 # OpenSSL. See issues/linear.rs and analytics.rs.
-# `stream` is for the model download, which is hundreds of megabytes and must
-# reach disk a chunk at a time — `bytes()` buffers the whole body first.
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
-  "stream",
 ] }
 
 # Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp

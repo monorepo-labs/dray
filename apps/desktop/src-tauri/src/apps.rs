@@ -313,12 +313,7 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
 
     // `open`'s own sentence names the cure — a moved bundle, a directory that
     // is gone — where the exit code names nothing.
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        format!("could not open {path}")
-    } else {
-        stderr
-    })
+    Err(crate::git::stderr_or(&out, || format!("could not open {path}")))
 }
 
 /// Terminal.app, and never the terminal the reader picked in the panel beside
@@ -349,10 +344,6 @@ const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
 /// silent. A `.command` file needs no permission at all.
 #[tauri::command]
 pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
-    }
-
     let binary = crate::binpath::agent_binary(harness).await;
     let mut command = sh_quote(&binary.to_string_lossy());
     for arg in harness.login_args() {
@@ -394,26 +385,11 @@ pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), Stri
     write_script(&path, &script)
         .map_err(|err| format!("could not write the login script: {err}"))?;
 
-    let out = tokio::process::Command::new("open")
-        .arg("-a")
-        .arg(TERMINAL)
-        .arg("--")
-        .arg(&path)
-        .output()
-        .await
-        .map_err(|err| format!("could not run open: {err}"))?;
-
-    if out.status.success() {
-        return Ok(());
+    let opened = open_in_app(TERMINAL.to_string(), path.to_string_lossy().into_owned()).await;
+    if opened.is_err() {
+        let _ = std::fs::remove_file(&path);
     }
-
-    let _ = std::fs::remove_file(&path);
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        "could not open Terminal".to_string()
-    } else {
-        stderr
-    })
+    opened
 }
 
 /// Writes the script at `0700` on the *create*, never by a `chmod` after.
@@ -427,26 +403,12 @@ pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), Stri
 fn write_script(path: &Path, body: &str) -> std::io::Result<()> {
     use std::io::Write;
 
-    let mut file = {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o700)
-                .open(path)?
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)?
-        }
-    };
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o700);
 
-    file.write_all(body.as_bytes())
+    options.open(path)?.write_all(body.as_bytes())
 }
 
 /// Quotes one word for `/bin/sh`.

@@ -238,7 +238,7 @@ pub struct PermissionRule {
 pub struct RateLimitInfo {
     #[serde(default)]
     pub status: Option<String>,
-    /// Unix seconds, not RFC3339 like [`crate::events::RateLimit::resets_at`].
+    /// Unix seconds, not RFC3339 like every other timestamp here.
     #[serde(default)]
     pub resets_at: Option<i64>,
     #[serde(default)]

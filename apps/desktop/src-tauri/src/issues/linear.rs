@@ -13,7 +13,7 @@
 //! onto a struct: a schema Linear extends must cost one absent field, never a
 //! whole list that fails to deserialize and leaves the page empty.
 
-use std::{sync::OnceLock, time::Duration};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value};
@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use super::{
     Issue, IssueAsset, IssueComment, IssueDetail, IssueFilters, IssueGroup, IssueLabel, IssuePerson,
     IssuePriority, IssueQuery, IssueScope, IssueState, IssueStateKind, IssueTracker,
-    IssueUnavailable, TrackerAccount,
+    IssueUnavailable, TrackerAccount, optional, pr_numbers, text,
 };
 
 const API: &str = "https://api.linear.app/graphql";
@@ -30,27 +30,14 @@ const API: &str = "https://api.linear.app/graphql";
 /// picker keystroke cannot hang the composer's list for a minute.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Shared, because a `Client` owns the connection pool: minting one per
-/// keystroke would open a TLS connection per keystroke.
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .user_agent(concat!("Dray/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("reqwest client")
-    })
-}
-
 /// One query, with the errors already read.
 ///
 /// The key travels in `Authorization` bare, not as a `Bearer` — that is how
 /// Linear takes a *personal* key, and the OAuth spelling is refused.
 async fn query(key: &str, document: &str, variables: Value) -> Result<Value, IssueUnavailable> {
-    let response = client()
+    let response = crate::http()
         .post(API)
+        .timeout(TIMEOUT)
         .header("Authorization", key)
         .json(&json!({ "query": document, "variables": variables }))
         .send()
@@ -201,8 +188,9 @@ pub async fn fetch_asset(
         ));
     }
 
-    let response = client()
+    let response = crate::http()
         .get(url)
+        .timeout(TIMEOUT)
         .header("Authorization", key)
         .send()
         .await
@@ -326,7 +314,7 @@ pub async fn list_issues(
     // the unfinished half: priority on a closed issue is a fact about a decision
     // already taken, and sorting by it buries the thing that just landed.
     if !filters.settled {
-        issues.sort_by_key(|issue| issue.priority.rank());
+        issues.sort_by_key(|issue| issue.priority);
     }
 
     Ok(issues)
@@ -381,9 +369,7 @@ pub async fn get_issue(
 /// into the same field. A UUID and a `DRA-53` cannot be confused for each other,
 /// which is the property `unlink_session_issue` already leans on.
 fn is_stable_id(id: &str) -> bool {
-    id.len() == 36
-        && id.split('-').map(str::len).eq([8, 4, 4, 4, 12])
-        && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    uuid::Uuid::try_parse(id).is_ok()
 }
 
 fn read_detail(node: &Value, identifier: &str) -> Result<IssueDetail, IssueUnavailable> {
@@ -577,22 +563,6 @@ fn nodes<'a>(parent: &'a Value, field: &str) -> &'a [Value] {
         .unwrap_or_default()
 }
 
-fn text(value: &Value, field: &str) -> String {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn optional(value: &Value, field: &str) -> Option<String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 /// `None` only for a node missing its identifier — a row that cannot be
 /// addressed is one no tag could ever reach, so it is dropped rather than drawn.
 /// Everything else degrades to a default, which costs a field on screen and not
@@ -637,17 +607,13 @@ fn map_issue(node: &Value) -> Option<Issue> {
 /// that is not a PR — a Slack thread, a Sentry issue, a document — simply
 /// answers `None`, which is most of them.
 ///
-/// Sorted and deduplicated: attachments arrive in Linear's order and one PR can
-/// be attached twice, and the row should read the same twice running.
+/// One PR can be attached twice, which [`pr_numbers`] folds.
 fn pull_requests(node: &Value) -> Vec<u32> {
-    let mut numbers: Vec<u32> = nodes(node, "attachments")
-        .iter()
-        .filter_map(|attachment| pull_request_number(&text(attachment, "url")))
-        .collect();
-
-    numbers.sort_unstable();
-    numbers.dedup();
-    numbers
+    pr_numbers(
+        nodes(node, "attachments")
+            .iter()
+            .filter_map(|attachment| pull_request_number(&text(attachment, "url"))),
+    )
 }
 
 /// The number in `https://github.com/<owner>/<repo>/pull/<n>`, or `None` for a
@@ -729,12 +695,7 @@ fn map_states(team: &Value) -> Vec<IssueState> {
         })
         .collect();
 
-    states.sort_by(|(a_pos, a), (b_pos, b)| {
-        a.kind
-            .flow_rank()
-            .cmp(&b.kind.flow_rank())
-            .then(a_pos.total_cmp(b_pos))
-    });
+    states.sort_by(|(a_pos, a), (b_pos, b)| a.kind.cmp(&b.kind).then(a_pos.total_cmp(b_pos)));
 
     states.into_iter().map(|(_, state)| state).collect()
 }

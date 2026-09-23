@@ -179,7 +179,7 @@ pub async fn transcription_status() -> Result<TranscriptionStatus, String> {
 /// called off.
 #[tauri::command]
 pub async fn download_transcription_model(app: AppHandle, model_id: String) -> Result<(), String> {
-    let model = catalog::find(&model_id).ok_or_else(|| format!("unknown model \"{model_id}\""))?;
+    let model = catalog::require(&model_id)?;
 
     let outcome = download::download(&app, model)
         .await
@@ -208,7 +208,7 @@ pub async fn download_transcription_model(app: AppHandle, model_id: String) -> R
 /// Calls off a running download. Harmless where none is running.
 #[tauri::command]
 pub async fn cancel_transcription_download(model_id: String) -> Result<(), String> {
-    download::cancel(&model_id);
+    download::cancel_flag(&model_id, true);
 
     Ok(())
 }
@@ -218,7 +218,7 @@ pub async fn delete_transcription_model(
     state: State<'_, TranscriptionState>,
     model_id: String,
 ) -> Result<(), String> {
-    let model = catalog::find(&model_id).ok_or_else(|| format!("unknown model \"{model_id}\""))?;
+    let model = catalog::require(&model_id)?;
 
     // Before the file goes, or the copy in memory outlives the weights it was
     // read from and a deleted model keeps on transcribing.
@@ -244,9 +244,7 @@ pub async fn select_transcription_model(
     model_id: Option<String>,
 ) -> Result<(), String> {
     if let Some(id) = &model_id {
-        if catalog::find(id).is_none() {
-            return Err(format!("unknown model \"{id}\""));
-        }
+        catalog::require(id)?;
     }
 
     // The next transcription loads the newly picked weights rather than running

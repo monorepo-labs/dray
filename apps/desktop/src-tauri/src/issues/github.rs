@@ -25,18 +25,18 @@ use serde_json::Value;
 use super::{
     Issue, IssueComment, IssueDetail, IssueFilters, IssueGroup, IssueLabel, IssuePerson,
     IssuePriority, IssueQuery, IssueScope, IssueState, IssueStateKind, IssueTracker,
-    IssueUnavailable, TrackerAccount,
+    IssueUnavailable, TrackerAccount, optional, pr_numbers, text,
 };
 use crate::{git, github, projects, store::get_home_app_dir};
 
 /// The fields a list row is read from. One string, since it is what `gh` takes
 /// and what the two callers below must not disagree about.
 const LIST_FIELDS: &str =
-    "number,title,url,state,stateReason,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id";
+    "number,title,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id";
 
 /// The list's fields plus what only an opened issue needs.
 const VIEW_FIELDS: &str =
-    "number,title,body,url,state,stateReason,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,comments";
+    "number,title,body,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,comments";
 
 /// Whose `gh` this is, cached for the process.
 ///
@@ -143,12 +143,6 @@ async fn read_account() -> Result<TrackerAccount, IssueUnavailable> {
     })
 }
 
-/// `owner/repo` for the checkout at `cwd`, or `None` where there is no GitHub
-/// remote. No network: a remote is read out of the repository's own config.
-pub async fn repo_of(cwd: &str) -> Option<String> {
-    git::github_slug(cwd).await
-}
-
 /// Every repository the reader has attached a project for, in project order.
 ///
 /// The issues page reads one repository at a time and this is the list it
@@ -163,7 +157,7 @@ pub async fn repos_of_projects() -> Vec<String> {
 
     let mut repos: Vec<String> = Vec::new();
     for project in projects {
-        if let Some(repo) = repo_of(&project.path).await {
+        if let Some(repo) = git::github_slug(&project.path).await {
             if !repos.contains(&repo) {
                 repos.push(repo);
             }
@@ -313,7 +307,7 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
 
     let now = run(
         &dir,
-        &["issue", "view", &number, "-R", &repo, "--json", "state,stateReason"],
+        &["issue", "view", &number, "-R", &repo, "--json", "state"],
     )
     .await
     .and_then(|out| parse(&out))?;
@@ -438,19 +432,16 @@ fn states() -> Vec<IssueState> {
     ]
 }
 
-/// The state a row is in, from the one field that says it. `stateReason` is
-/// read no longer — see [`states`] for why every closed issue reads as Closed.
+/// The state a row is in, from the one field that says it — see [`states`]
+/// for why every closed issue reads as Closed whatever its reason.
 fn map_state(node: &Value) -> IssueState {
     let closed = node
         .get("state")
         .and_then(Value::as_str)
         .is_some_and(|state| state.eq_ignore_ascii_case("CLOSED"));
 
-    if closed {
-        state(IssueStateKind::Completed, COMPLETED_ID, "Closed", "#8250df")
-    } else {
-        state(IssueStateKind::Unstarted, OPEN_ID, "Open", "#1a7f37")
-    }
+    // `states()` is `[Open, Closed]`.
+    states().remove(usize::from(closed))
 }
 
 // ── wire → vocabulary ────────────────────────────────────────────────────────
@@ -466,18 +457,6 @@ pub fn split_identifier(text: &str) -> Option<(String, u64)> {
     }
 
     Some((repo.to_string(), number.parse().ok()?))
-}
-
-fn optional(value: &Value, field: &str) -> Option<String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn text(value: &Value, field: &str) -> String {
-    optional(value, field).unwrap_or_default()
 }
 
 fn array<'a>(parent: &'a Value, field: &str) -> &'a [Value] {
@@ -530,17 +509,14 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
 /// `closedByPullRequestsReferences` is GitHub's own answer to what the issue
 /// sidebar calls Development — the PRs that would close this issue — which is
 /// narrower than every PR that happens to mention it, and is the set worth a
-/// chip. Sorted and deduplicated, so the row reads the same twice running.
+/// chip.
 fn pull_requests(node: &Value) -> Vec<u32> {
-    let mut numbers: Vec<u32> = array(node, "closedByPullRequestsReferences")
-        .iter()
-        .filter_map(|pr| pr.get("number").and_then(Value::as_u64))
-        .map(|number| number as u32)
-        .collect();
-
-    numbers.sort_unstable();
-    numbers.dedup();
-    numbers
+    pr_numbers(
+        array(node, "closedByPullRequestsReferences")
+            .iter()
+            .filter_map(|pr| pr.get("number").and_then(Value::as_u64))
+            .map(|number| number as u32),
+    )
 }
 
 /// Whether the reader's own query already names a sort order.
@@ -763,15 +739,12 @@ mod tests {
     /// What `update_issue` reads before it writes, so picking the state an
     /// issue is already on spawns nothing — `gh issue close` reports that
     /// refusal at exit 0, so a no-op cannot be told from a write by its result.
-    /// Every closed reason reads as Closed; see `states` for why.
     #[test]
     fn state_is_read_off_the_one_field_that_says_it() {
-        for reason in ["COMPLETED", "NOT_PLANNED", "DUPLICATE", ""] {
-            let closed = serde_json::json!({ "state": "CLOSED", "stateReason": reason });
-            assert_eq!(map_state(&closed).id, COMPLETED_ID, "{reason}");
-        }
+        let closed = serde_json::json!({ "state": "CLOSED" });
+        assert_eq!(map_state(&closed).id, COMPLETED_ID);
 
-        let open = serde_json::json!({ "state": "OPEN", "stateReason": "" });
+        let open = serde_json::json!({ "state": "OPEN" });
         assert_eq!(map_state(&open).id, OPEN_ID);
     }
 }

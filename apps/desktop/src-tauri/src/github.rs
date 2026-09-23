@@ -7,7 +7,7 @@
 //! an error, since this is a side view and never the reason the app is open.
 
 use anyhow::Result;
-use serde::de::IgnoredAny;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path, process::Stdio, sync::LazyLock};
 use tokio::{process::Command, sync::Mutex};
@@ -250,7 +250,6 @@ query($owner:String!,$repo:String!){
 /// `Option` is load-bearing rather than defensive.
 #[derive(Deserialize)]
 struct Nodes<T> {
-    #[serde(default = "Option::default")]
     nodes: Option<Vec<T>>,
 }
 
@@ -272,17 +271,19 @@ struct Response<R> {
     errors: Vec<GraphQlError>,
 }
 
-impl<R> Response<R> {
-    /// The repository answered with, or the first error GitHub reported.
+impl<R: DeserializeOwned> Response<R> {
+    /// The repository `out` answered with, or the first error GitHub reported.
     ///
     /// Errors are checked before the data: a failed query answers with a 200
     /// and a null `data`, so reading the connection first turns "could not
     /// resolve repository" into "this repo has no pull requests".
-    fn repository(self) -> Result<Option<R>, String> {
-        if let Some(first) = self.errors.first() {
+    fn repository(out: &str) -> Result<Option<R>, String> {
+        let response: Self =
+            serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
+        if let Some(first) = response.errors.first() {
             return Err(first.message.clone());
         }
-        Ok(self.data.and_then(|d| d.repository))
+        Ok(response.data.and_then(|d| d.repository))
     }
 }
 
@@ -309,7 +310,6 @@ struct PrsRepository {
 struct RawAuthor {
     #[serde(default)]
     login: String,
-    #[serde(default)]
     avatar_url: Option<String>,
 }
 
@@ -325,11 +325,8 @@ enum RawCheck {
         /// Null while the run is still going — GraphQL sends null where `gh`
         /// sent an empty string, and reading either as terminal draws a running
         /// check as finished.
-        #[serde(default)]
         conclusion: Option<String>,
-        #[serde(default)]
         details_url: Option<String>,
-        #[serde(default)]
         check_suite: Option<RawCheckSuite>,
     },
     #[serde(rename_all = "camelCase")]
@@ -338,9 +335,7 @@ enum RawCheck {
         context: String,
         #[serde(default)]
         state: String,
-        #[serde(default)]
         target_url: Option<String>,
-        #[serde(default)]
         avatar_url: Option<String>,
     },
     /// A rollup entry of a kind we don't model costs one row, not the whole
@@ -352,15 +347,12 @@ enum RawCheck {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawCheckSuite {
-    #[serde(default)]
     workflow_run: Option<RawWorkflowRun>,
-    #[serde(default)]
     app: Option<RawApp>,
 }
 
 #[derive(Deserialize)]
 struct RawWorkflowRun {
-    #[serde(default)]
     workflow: Option<RawWorkflow>,
 }
 
@@ -373,14 +365,12 @@ struct RawWorkflow {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawApp {
-    #[serde(default)]
     logo_url: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawComment {
-    #[serde(default)]
     author: Option<RawAuthor>,
     #[serde(default)]
     body: String,
@@ -390,7 +380,6 @@ struct RawComment {
     url: String,
     /// The review this was left under. Absent on a conversation comment, which
     /// belongs to no review at all.
-    #[serde(default)]
     pull_request_review: Option<RawNodeId>,
 }
 
@@ -407,7 +396,6 @@ struct RawReview {
     /// What the threads left under it name it by.
     #[serde(default)]
     id: String,
-    #[serde(default)]
     author: Option<RawAuthor>,
     #[serde(default)]
     body: String,
@@ -424,39 +412,32 @@ struct RawReview {
 struct RawThread {
     #[serde(default)]
     is_resolved: bool,
-    #[serde(default)]
     path: Option<String>,
     /// Null once the code it pointed at has been pushed over: GitHub keeps the
     /// thread and forgets the line.
-    #[serde(default)]
     line: Option<u32>,
-    #[serde(default)]
     comments: Option<Nodes<RawComment>>,
 }
 
 #[derive(Deserialize)]
 struct RawCommitNode {
-    #[serde(default)]
     commit: Option<RawCommit>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawCommit {
-    #[serde(default)]
     status_check_rollup: Option<RawRollup>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawRollup {
-    #[serde(default)]
     contexts: Option<Nodes<RawCheck>>,
     /// The rollup's own verdict over every context, which is all the sidebar's
     /// mark needs. Absent from the panel's query, which reads the contexts and
     /// counts them itself; absent from the sidebar's, which asks only for this.
     /// Both fields optional so one shape serves both.
-    #[serde(default)]
     state: Option<String>,
 }
 
@@ -472,7 +453,6 @@ struct RawPr {
     state: String,
     #[serde(default)]
     is_draft: bool,
-    #[serde(default)]
     author: Option<RawAuthor>,
     #[serde(default)]
     base_ref_name: String,
@@ -482,17 +462,14 @@ struct RawPr {
     /// node that tells a branch still there from one already gone. Only its
     /// presence is read: GraphQL needs a selection under it, but the name it
     /// would carry is `head_ref_name`, which outlives the ref.
-    #[serde(default)]
     head_ref: Option<IgnoredAny>,
     /// `Option` so that absent can be told from `false` and read as *fork* —
     /// see [`PullRequest::is_cross_repository`].
-    #[serde(default)]
     is_cross_repository: Option<bool>,
     #[serde(default)]
     mergeable: String,
     #[serde(default)]
     merge_state_status: String,
-    #[serde(default)]
     review_decision: Option<String>,
     #[serde(default)]
     additions: u32,
@@ -500,18 +477,14 @@ struct RawPr {
     deletions: u32,
     #[serde(default)]
     changed_files: u32,
-    #[serde(default)]
     comments: Option<Nodes<RawComment>>,
-    #[serde(default)]
     reviews: Option<Nodes<RawReview>>,
     /// The inline conversations. Not reachable through `reviews`: the review
     /// they were left under carries only its own body, which for a review that
     /// is nothing but file comments is empty.
-    #[serde(default)]
     review_threads: Option<Nodes<RawThread>>,
     /// Only the tip commit's rollup is asked for: a check reported against an
     /// older commit is describing code that has since been pushed over.
-    #[serde(default)]
     commits: Option<Nodes<RawCommitNode>>,
     #[serde(default)]
     updated_at: String,
@@ -822,12 +795,7 @@ pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("could not run gh: {e}"))?;
 
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if err.is_empty() {
-            "gh exited with an error".to_string()
-        } else {
-            err
-        });
+        return Err(git::stderr_or(&out, || "gh exited with an error".to_string()));
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -857,6 +825,22 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
 
     SLUGS.lock().await.insert(cwd.to_string(), pair.clone());
     Ok(pair)
+}
+
+/// `gh api graphql` against the repo `cwd` sits in, with `owner` and `repo`
+/// filled in and `branch` where the query takes one.
+async fn graphql(cwd: &str, query: &str, branch: Option<&str>) -> Result<String, String> {
+    let (owner, repo) = repo_slug(cwd).await?;
+    let owner = format!("owner={owner}");
+    let repo = format!("repo={repo}");
+    let query = format!("query={query}");
+    let branch = branch.map(|b| format!("branch={b}"));
+
+    let mut args = vec!["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query];
+    if let Some(branch) = &branch {
+        args.extend(["-f", branch]);
+    }
+    gh(cwd, &args).await
 }
 
 /// Every pull request opened from `branch`, newest first, open ones ahead of
@@ -917,35 +901,12 @@ fn unavailable(message: String) -> PrUnavailable {
 }
 
 async fn prs_for_branch_inner(cwd: &str, branch: &str) -> Result<Vec<PullRequest>, String> {
-    let (owner, repo) = repo_slug(cwd).await?;
-
-    let out = gh(
-        cwd,
-        &[
-            "api",
-            "graphql",
-            "-f",
-            &format!("owner={owner}"),
-            "-f",
-            &format!("repo={repo}"),
-            "-f",
-            &format!("branch={branch}"),
-            "-f",
-            &format!("query={QUERY}"),
-        ],
-    )
-    .await?;
-
-    read_prs(&out)
+    read_prs(&graphql(cwd, QUERY, Some(branch)).await?)
 }
 
 /// Splits parsing off the spawn so the fixture can exercise it.
 fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
-    let response: Response<PrsRepository> =
-        serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
-
-    let mut prs: Vec<PullRequest> = response
-        .repository()?
+    let mut prs: Vec<PullRequest> = Response::<PrsRepository>::repository(out)?
         .map(|r| Nodes::take(r.open).into_iter().chain(Nodes::take(r.settled)))
         .into_iter()
         .flatten()
@@ -1059,16 +1020,13 @@ struct RawPrMark {
     is_draft: bool,
     /// Only asked for on the open half, so absent — not empty — on the merged
     /// one. Same nesting the panel's query walks, so the same structs read it.
-    #[serde(default)]
     commits: Option<Nodes<RawCommitNode>>,
     /// Asked for on the open half alone, for the same reason `commits` is: a
     /// merged pull request cannot become ready to merge, and `mergeStateStatus`
     /// is the one field here GitHub computes *on being asked* — so putting it
     /// on the merged connection would spend that work a hundred times over to
     /// answer a question nobody asks.
-    #[serde(default)]
     mergeable: Option<String>,
-    #[serde(default)]
     merge_state_status: Option<String>,
 }
 
@@ -1110,32 +1068,12 @@ pub async fn pr_marks(cwd: String) -> Result<Vec<PrMark>, PrUnavailable> {
 }
 
 async fn pr_marks_inner(cwd: &str) -> Result<Vec<PrMark>, String> {
-    let (owner, repo) = repo_slug(cwd).await?;
-
-    let out = gh(
-        cwd,
-        &[
-            "api",
-            "graphql",
-            "-f",
-            &format!("owner={owner}"),
-            "-f",
-            &format!("repo={repo}"),
-            "-f",
-            &format!("query={QUERY_MARKS}"),
-        ],
-    )
-    .await?;
-
-    read_pr_marks(&out)
+    read_pr_marks(&graphql(cwd, QUERY_MARKS, None).await?)
 }
 
 /// Splits parsing off the spawn, like [`read_prs`].
 fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
-    let response: Response<MarksRepository> =
-        serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
-
-    let (open, merged) = match response.repository()? {
+    let (open, merged) = match Response::<MarksRepository>::repository(out)? {
         Some(r) => (Nodes::take(r.open), Nodes::take(r.merged)),
         None => (Vec::new(), Vec::new()),
     };

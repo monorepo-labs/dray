@@ -1,5 +1,4 @@
 use crate::{
-    attachments::Attachment,
     events::ApprovalPolicy,
     harness::claude_code::commands::SlashCommand,
     models::{Effort, Model, ModelId},
@@ -86,6 +85,19 @@ impl serde::Serialize for Fail {
     }
 }
 
+/// The app's one HTTP client, shared because a `Client` owns the connection
+/// pool. No timeout here: each caller sets its own on the request.
+pub fn http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(concat!("Dray/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("reqwest client")
+    })
+}
+
 #[tauri::command]
 async fn send_msg(
     session_id: &str,
@@ -107,13 +119,13 @@ async fn send_msg(
     is_new_session: bool,
     app: AppHandle,
     manager: State<'_, SessionManager>,
-) -> Result<SendOutcome, String> {
+) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
     // `Other`, which is right off the index and wrong here: this is the
     // composer naming a harness to *start*, so an unknown one is a caller
     // error rather than a session some other build wrote.
     if !harness.names_a_cli() {
-        return Err("invalid harness".to_string());
+        fail!("invalid harness");
     }
 
     // Reported here rather than inside `SessionManager::send_msg`, which is the
@@ -122,9 +134,9 @@ async fn send_msg(
     // a session `dray new` asked for, and an agent finishing at 3am would mark
     // the day active with nobody in the room. A Tauri command is reachable from
     // the webview alone, so getting here means somebody pressed send.
-    analytics::active_day();
+    analytics::track_active_day();
 
-    manager
+    Ok(manager
         .send_msg(
             session_id,
             prompt,
@@ -154,23 +166,7 @@ async fn send_msg(
             None,
             &app,
         )
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Describes dropped or picked paths for the composer's tray. Returns only the
-/// ones that can be attached — a folder dragged in alongside two files leaves
-/// the two files.
-#[tauri::command]
-async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
-    attachments::read_attachments(paths).await
-}
-
-/// Paths for whatever the clipboard holds as files, for the composer's paste.
-/// Empty means paste the text.
-#[tauri::command]
-async fn paste_attachments() -> Vec<String> {
-    attachments::paste_attachments().await
+        .await?)
 }
 
 /// Which agents can actually be run on this machine, and what to say about
@@ -305,18 +301,6 @@ async fn set_fx_provider(provider: String) -> Result<(), String> {
         .map_err(|e| format!("{e:#}"))
 }
 
-/// The preferences Rust owns. Everything else the settings dialog draws is the
-/// frontend's own local storage — see [`settings`].
-///
-/// Answers with the **effective** state, off `analytics::enabled`, not with
-/// what is on disk. The two differ whenever `DRAY_NO_ANALYTICS` is set, and a
-/// switch drawn from the file there would sit at `on` while nothing was being
-/// sent.
-#[tauri::command]
-async fn get_settings() -> settings::SettingsView {
-    settings_view().await
-}
-
 /// Persists the analytics opt-out. Every send reads the file, so the switch
 /// needs no restart to mean anything.
 ///
@@ -340,19 +324,7 @@ async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, 
     })
     .await?;
 
-    Ok(settings_view().await)
-}
-
-/// What the webview needs to run PostHog for itself, or `None` where it may not.
-///
-/// Surveys are drawn by `posthog-js` and by nothing else, so the SDK is the one
-/// thing here the Rust POST cannot stand in for. `None` is the refusal and the
-/// frontend initialises nothing on it — see [`analytics::identity`] for why the
-/// answer is one value rather than a consent flag the other side pairs with a
-/// lookup of its own.
-#[tauri::command]
-async fn analytics_identity() -> Option<analytics::SurveyIdentity> {
-    analytics::identity().await
+    Ok(settings::get_settings().await)
 }
 
 /// Reports a feature whose only chokepoint is in the frontend.
@@ -371,28 +343,6 @@ fn track_feature(feature: String) {
     analytics::track("feature_used", serde_json::json!({ "feature": feature }));
 }
 
-/// Reports that the app is being used today, from the frontend's focus channel.
-///
-/// The one kind of use nothing in Rust can see: coming back to read a session
-/// an agent is already running sends no prompt and starts nothing. The signal
-/// comes from `src/lib/focus.ts`, which is where the rule for reading it
-/// already lives — the DOM's `focus` fires for a native menu or devtools
-/// closing too, which is not the reader arriving.
-///
-/// Called on every focus gain and decides nothing: the daily throttle is in
-/// [`analytics::active_day`] and shared with the two backend call sites.
-#[tauri::command]
-fn track_active_day() {
-    analytics::active_day();
-}
-
-async fn settings_view() -> settings::SettingsView {
-    settings::SettingsView {
-        analytics_enabled: analytics::enabled().await,
-        analytics_locked: analytics::env_opt_out(),
-    }
-}
-
 /// The slash commands available in a directory, for the harness that will run
 /// there. Cached per directory in the backend, so the composer may call this
 /// whenever the project or the harness changes.
@@ -409,11 +359,9 @@ async fn settings_view() -> settings::SettingsView {
 /// walked on disk. Only `Other` answers none, which is the honest picker for a
 /// CLI this build has never heard of.
 #[tauri::command]
-async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, String> {
+async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, Fail> {
     Ok(match harness {
-        Harness::ClaudeCode => harness::claude_code::commands::list_commands(cwd)
-            .await
-            .map_err(|e| e.to_string())?,
+        Harness::ClaudeCode => harness::claude_code::commands::list_commands(cwd).await?,
         Harness::Pi => harness::pi::commands::list_commands(cwd).await,
         Harness::Codex => harness::codex::commands::list_commands(cwd).await,
         Harness::Fx => harness::fx::commands::list_commands(cwd).await,
@@ -423,9 +371,7 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         // session has run in answers an error, which the picker reads as a
         // probe that has not landed: the menu stays shut rather than claiming
         // grok has no commands. See `harness/grok/commands.rs`.
-        Harness::Grok => harness::grok::commands::list_commands(cwd)
-            .await
-            .map_err(|e| e.to_string())?,
+        Harness::Grok => harness::grok::commands::list_commands(cwd).await?,
         Harness::Other(_) => Vec::new(),
     })
 }
@@ -453,10 +399,8 @@ async fn work_status(cwd: String) -> git::WorkStatus {
 /// reading — so the caller has one shape to render rather than a null to
 /// branch on.
 #[tauri::command]
-async fn worktree_disposition(session_id: &str) -> Result<git::WorktreeDisposition, String> {
-    let item = store::get_session_index_item(session_id)
-        .await
-        .map_err(|e| e.to_string())?;
+async fn worktree_disposition(session_id: &str) -> Result<git::WorktreeDisposition, Fail> {
+    let item = store::get_session_index_item(session_id).await?;
 
     let Some(item) = item.filter(|i| i.worktree_name.is_some()) else {
         return Ok(git::WorktreeDisposition::default());
@@ -477,11 +421,8 @@ async fn worktree_disposition(session_id: &str) -> Result<git::WorktreeDispositi
 async fn remove_session_worktree(
     session_id: &str,
     manager: State<'_, SessionManager>,
-) -> Result<SessionIndexItem, String> {
-    manager
-        .remove_worktree(session_id)
-        .await
-        .map_err(|e| e.to_string())
+) -> Result<SessionIndexItem, Fail> {
+    Ok(manager.remove_worktree(session_id).await?)
 }
 
 /// Writes the flags, and on settle stops the session — child, its process
@@ -511,8 +452,8 @@ async fn set_session_flags(
 async fn delete_session(
     session_id: &str,
     manager: State<'_, SessionManager>,
-) -> Result<bool, String> {
-    manager.delete(session_id).await.map_err(|e| e.to_string())
+) -> Result<bool, Fail> {
+    Ok(manager.delete(session_id).await?)
 }
 
 /// Copies a session onto `fork_id`, to be carried on separately from the one it
@@ -533,11 +474,8 @@ async fn fork_session(
     fork_id: &str,
     worktree: bool,
     manager: State<'_, SessionManager>,
-) -> Result<SessionSnapshot, String> {
-    let snapshot = manager
-        .fork(session_id, fork_id, worktree)
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<SessionSnapshot, Fail> {
+    let snapshot = manager.fork(session_id, fork_id, worktree).await?;
 
     analytics::feature_used("fork");
 
@@ -551,11 +489,8 @@ async fn interrupt_session(
     session_id: &str,
     manager: State<'_, SessionManager>,
     app: AppHandle,
-) -> Result<(), String> {
-    manager
-        .interrupt(session_id, &app)
-        .await
-        .map_err(|e| e.to_string())
+) -> Result<(), Fail> {
+    Ok(manager.interrupt(session_id, &app).await?)
 }
 
 /// Stops one background task without touching the rest of the session.
@@ -569,11 +504,8 @@ async fn stop_task(
     session_id: &str,
     task_id: &str,
     manager: State<'_, SessionManager>,
-) -> Result<(), String> {
-    manager
-        .stop_task(session_id, task_id)
-        .await
-        .map_err(|e| e.to_string())
+) -> Result<(), Fail> {
+    Ok(manager.stop_task(session_id, task_id).await?)
 }
 
 /// Takes back the newest prompt still held for a running turn, returning its
@@ -583,7 +515,7 @@ async fn stop_task(
 async fn cancel_queued(
     session_id: &str,
     manager: State<'_, SessionManager>,
-) -> Result<Option<QueuedMessage>, String> {
+) -> Result<Option<QueuedMessage>, Fail> {
     Ok(manager.cancel_queued(session_id).await)
 }
 
@@ -598,11 +530,10 @@ async fn respond_permission(
     option_id: &str,
     manager: State<'_, SessionManager>,
     app: AppHandle,
-) -> Result<(), String> {
-    manager
+) -> Result<(), Fail> {
+    Ok(manager
         .respond_permission(session_id, request_id, option_id, &app)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// Answers the questions on a `questions_asked` event. `answers` is keyed by
@@ -616,11 +547,10 @@ async fn answer_questions(
     answers: HashMap<String, String>,
     manager: State<'_, SessionManager>,
     app: AppHandle,
-) -> Result<(), String> {
-    manager
+) -> Result<(), Fail> {
+    Ok(manager
         .answer_questions(session_id, request_id, answers, &app)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// Moves a session's unread mark. The frontend calls this with `read` when the
@@ -633,11 +563,8 @@ async fn mark_session_read(
     session_id: &str,
     read: bool,
     manager: State<'_, SessionManager>,
-) -> Result<Option<SessionStatus>, String> {
-    manager
-        .mark_read(session_id, read)
-        .await
-        .map_err(|e| e.to_string())
+) -> Result<Option<SessionStatus>, Fail> {
+    Ok(manager.mark_read(session_id, read).await?)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -711,21 +638,23 @@ pub fn run() {
 
             // Returns immediately: consent is read, and the id minted, inside
             // the task `track` spawns — so nothing on screen waits on a file
-            // read and an opted-out install still sends nothing.
-            analytics::app_started();
-            // The guaranteed half of `active_day`: `focus.ts` reports focus
+            // read and an opted-out install still sends nothing. The install
+            // and version signal, never the activity one: this app is left open
+            // for days, so launches undercount use badly.
+            analytics::track("app_started", serde_json::json!({}));
+            // The guaranteed half of `track_active_day`: `focus.ts` reports focus
             // *changes*, so a window that comes up already frontmost never
             // reports gaining it, and somebody who opens Dray, works and quits
             // without switching apps would go uncounted. Free to state beside
             // the other two sites — all three claim one daily key.
-            analytics::active_day();
+            analytics::track_active_day();
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             send_msg,
-            read_attachments,
-            paste_attachments,
+            attachments::read_attachments,
+            attachments::paste_attachments,
             list_models,
             refresh_models,
             set_fx_provider,
@@ -757,11 +686,11 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_remove,
             local_servers::list_local_servers,
-            get_settings,
+            settings::get_settings,
             set_analytics_enabled,
-            analytics_identity,
+            analytics::analytics_identity,
             track_feature,
-            track_active_day,
+            analytics::track_active_day,
             list_slash_commands,
             files::warm_file_index,
             files::search_files,

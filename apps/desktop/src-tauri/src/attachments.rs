@@ -127,7 +127,9 @@ async fn describe(path: &str) -> Result<Attachment> {
     })
 }
 
-/// Describes every path that can be attached, silently skipping the rest.
+/// Describes every path that can be attached, silently skipping the rest — a
+/// folder dragged in alongside two files leaves the two files.
+#[tauri::command]
 pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     let mut out = Vec::with_capacity(paths.len());
     for path in paths {
@@ -154,6 +156,7 @@ enum Pasted {
 /// Read off `NSPasteboard` rather than the webview's `DataTransfer`, which
 /// hands a copied file over as bytes with no path, and a non-image file has to
 /// travel as an `@path` mention naming the real one.
+#[tauri::command]
 pub async fn paste_attachments() -> Vec<String> {
     let pasted = tokio::task::spawn_blocking(read_pasteboard)
         .await

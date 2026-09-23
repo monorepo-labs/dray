@@ -225,22 +225,25 @@ async fn restrict_to_owner(path: &PathBuf) {
     }
 }
 
-/// `~/.dray/sessions`, creating it if needed.
-pub async fn get_sessions_dir() -> Result<PathBuf> {
-    let path = get_home_app_dir().await?.join("sessions");
+/// `~/.dray/<name>`, creating it if needed.
+pub async fn app_subdir(name: &str) -> Result<PathBuf> {
+    let path = get_home_app_dir().await?.join(name);
 
-    fs::create_dir_all(&path).await?;
+    fs::create_dir_all(&path)
+        .await
+        .with_context(|| format!("could not create {}", path.display()))?;
 
     Ok(path)
 }
 
+/// `~/.dray/sessions`, creating it if needed.
+pub async fn get_sessions_dir() -> Result<PathBuf> {
+    app_subdir("sessions").await
+}
+
 /// `~/.dray/pi-sessions`, creating it if needed.
 pub async fn get_pi_sessions_dir() -> Result<PathBuf> {
-    let path = get_home_app_dir().await?.join("pi-sessions");
-
-    fs::create_dir_all(&path).await?;
-
-    Ok(path)
+    app_subdir("pi-sessions").await
 }
 
 /// Where pi writes this session's own transcript.
@@ -334,6 +337,37 @@ pub async fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) ->
     serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
 }
 
+/// [`write_atomic`] for a file holding a credential: the temp file is created
+/// at `0600`, so the secret never sits on disk at a wider mode for a single
+/// byte. `create_new` on a fresh name, since a leftover could be somebody
+/// else's at whatever mode they chose. Synchronous so pi's store can call it
+/// under a std lock; the files are a few hundred bytes.
+pub fn write_private_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".dray-{}", uuid::Uuid::now_v7()));
+    let tmp = path.with_file_name(name);
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+
+    let written = options
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(contents)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
 /// Rewrites a file whole, landing via write-temp + `rename` so a reader never
 /// sees a torn file: the index parses as one `Vec`, and a half-written one
 /// reads as no sessions at all.
@@ -355,16 +389,13 @@ pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()>
 
 /// The index filtered to one side of `archived` — the sidebar shows exactly one
 /// of the two at a time, so a parameter keeps it to one function rather than a
-/// pair that would drift. Callers that need every entry (`set_*`, `get_*`) still
-/// use [`list_session_index_items`] directly.
+/// pair that would drift.
 #[tauri::command]
 pub async fn list_session_index_items(
     archived: bool,
 ) -> Result<Vec<SessionIndexItem>, Fail> {
-    Ok(filter_by_archived(
-        read_index().await?,
-        archived,
-    ))
+    let items = read_index().await?;
+    Ok(items.into_iter().filter(|i| i.archived == archived).collect())
 }
 
 /// The repo root for an entry whose `cwd` is gone, or `None` where none of the
@@ -431,11 +462,6 @@ fn worktree_root_of(path: &str) -> Option<&str> {
     let (root, name) = path.split_once("/.claude/worktrees/")?;
     let name = name.trim_end_matches('/');
     (!name.is_empty() && !name.contains('/')).then_some(root)
-}
-
-/// Split out from the async read so it can be tested without an `index.json`.
-fn filter_by_archived(items: Vec<SessionIndexItem>, archived: bool) -> Vec<SessionIndexItem> {
-    items.into_iter().filter(|i| i.archived == archived).collect()
 }
 
 impl SessionIndexItem {
@@ -597,8 +623,10 @@ fn fork_title(parent: &str) -> String {
     format!("{}…{SUFFIX}", truncated.trim_end())
 }
 
-/// A worktree name no tree, no session and no branch has claimed. Wider than
-/// [`resolve_worktree_name`] on purpose, and every caller wants the wider one.
+/// A worktree name no tree, no session and no branch has claimed.
+///
+/// The disk, because worktrees outlive the sessions that made them, so a name
+/// already there would silently attach this session to someone else's tree.
 ///
 /// The index, because a fork's tree is not created until its first send, so its
 /// name lives only there until then. Resolving against disk alone lets anything
@@ -635,9 +663,11 @@ pub async fn resolve_unclaimed_worktree_name(
         .map(|list| list.branches)
         .unwrap_or_default();
 
+    let on_disk = |name: &str| Path::new(&worktree_path(project_path, name)).exists();
     let taken = |name: &str| {
         claimed.iter().any(|c| c == name)
             || branches.contains(&crate::git::worktree_branch(name))
+            || on_disk(name)
     };
 
     // A name the user asked for is answered, never silently swapped — so a
@@ -653,11 +683,17 @@ pub async fn resolve_unclaimed_worktree_name(
                 crate::git::worktree_branch(name)
             );
         }
-        return resolve_worktree_name(project_path, Some(name));
+        if on_disk(name) {
+            bail!(
+                "a worktree named '{name}' already exists at {}",
+                worktree_path(project_path, name)
+            );
+        }
+        return Ok(name.to_string());
     }
 
     for _ in 0..16 {
-        let name = resolve_worktree_name(project_path, None)?;
+        let name = random_worktree_name();
         if !taken(&name) {
             return Ok(name);
         }
@@ -747,27 +783,6 @@ fn random_worktree_name() -> String {
     )
 }
 
-/// Worktrees outlive the sessions that made them, so a name already on disk
-/// would silently attach this session to someone else's tree.
-pub fn resolve_worktree_name(project_path: &str, requested: Option<&str>) -> Result<String> {
-    if let Some(name) = requested {
-        let path = worktree_path(project_path, name);
-        if PathBuf::from(&path).exists() {
-            bail!("a worktree named '{name}' already exists at {path}");
-        }
-        return Ok(name.to_string());
-    }
-
-    for _ in 0..16 {
-        let name = random_worktree_name();
-        if !PathBuf::from(worktree_path(project_path, &name)).exists() {
-            return Ok(name);
-        }
-    }
-
-    bail!("could not find an unused worktree name after 16 attempts")
-}
-
 /// Char-based so a multi-byte prompt can't panic on a byte-index slice.
 fn title_from_prompt(prompt: &str) -> String {
     const MAX: usize = 60;
@@ -801,34 +816,26 @@ pub async fn touch_session_index_item(
     permission_mode: ApprovalPolicy,
     fast: bool,
 ) -> Result<()> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(());
-    };
-
-    item.modified = now_rfc3339();
-    // An unset pick means "no explicit model" — the truth for a new session,
-    // but touching an existing one it must not *erase* a model already recorded.
-    // fx's model list is its active provider's and global, so switching provider
-    // drops a session's model out of the list, and the composer repairs an
-    // out-of-list pick to the unset sentinel; persisting that here would lose
-    // the real model and make a later resume omit `--model` and run the new
-    // provider's default. Only a real pick overwrites.
-    if !model.is_unset() {
-        item.model = model;
-    }
-    item.effort = effort;
-    item.permission_mode = permission_mode;
-    item.fast = fast;
-
-    write_session_index(&sessions).await
+    update_item(session_id, |item| {
+        item.modified = now_rfc3339();
+        // An unset pick means "no explicit model" — the truth for a new session,
+        // but touching an existing one it must not *erase* a model already recorded.
+        // fx's model list is its active provider's and global, so switching provider
+        // drops a session's model out of the list, and the composer repairs an
+        // out-of-list pick to the unset sentinel; persisting that here would lose
+        // the real model and make a later resume omit `--model` and run the new
+        // provider's default. Only a real pick overwrites.
+        if !model.is_unset() {
+            item.model = model;
+        }
+        item.effort = effort;
+        item.permission_mode = permission_mode;
+        item.fast = fast;
+    })
+    .await?;
+    Ok(())
 }
 
-/// Sets `archived` and/or `pinned` on one entry. `None` leaves that flag alone,
-/// so the two sidebar controls share one command without either clobbering the
-/// other's field. Returns the entry as written, or `None` if the id is unknown.
 /// Cuts a session loose from the parent that spawned it, so the sidebar draws
 /// it as a top-level row rather than nested.
 ///
@@ -841,21 +848,17 @@ pub async fn touch_session_index_item(
 /// list, and detaching must not jump the row to the top of it.
 #[tauri::command]
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(None);
-    };
-
-    item.parent_session_id = None;
-    let updated = item.clone();
-
-    write_session_index(&sessions).await?;
-
-    Ok(Some(updated))
+    Ok(update_item(session_id, |item| {
+        item.parent_session_id = None;
+        item.clone()
+    })
+    .await?)
 }
 
+/// Sets `archived` and/or `pinned` on one entry. `None` leaves that flag alone,
+/// so the two sidebar controls share one command without either clobbering the
+/// other's field. Returns the entry as written, or `None` if the id is unknown.
+///
 /// The index write alone. The command in `lib.rs` wraps it, since settling
 /// also stops the session and that needs the manager.
 pub async fn set_session_flags(
@@ -863,37 +866,34 @@ pub async fn set_session_flags(
     archived: Option<bool>,
     pinned: Option<bool>,
 ) -> Result<Option<SessionIndexItem>> {
-    let _guard = INDEX_LOCK.lock().await;
+    let written = update_item(session_id, |item| {
+        // Collected here and reported after the write, so a failed write reports
+        // nothing. Only a flag that actually *changed* is an action: the frontend
+        // sends the value it wants rather than a toggle, so setting `pinned: true`
+        // on an already-pinned session is a no-op and not somebody pinning it.
+        let mut actions: Vec<&'static str> = Vec::new();
 
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        if let Some(v) = archived {
+            if item.archived != v {
+                actions.push(if v { "settle" } else { "unsettle" });
+            }
+            item.archived = v;
+        }
+        if let Some(v) = pinned {
+            if item.pinned != v {
+                actions.push(if v { "pin" } else { "unpin" });
+            }
+            item.pinned = v;
+        }
+
+        // `modified` is deliberately left alone: it orders the list, and flipping a
+        // flag would jump the session to the top of it.
+        (actions, item.clone())
+    })
+    .await?;
+    let Some((actions, updated)) = written else {
         return Ok(None);
     };
-
-    // Collected here and reported after the write, so a failed write reports
-    // nothing. Only a flag that actually *changed* is an action: the frontend
-    // sends the value it wants rather than a toggle, so setting `pinned: true`
-    // on an already-pinned session is a no-op and not somebody pinning it.
-    let mut actions: Vec<&'static str> = Vec::new();
-
-    if let Some(v) = archived {
-        if item.archived != v {
-            actions.push(if v { "settle" } else { "unsettle" });
-        }
-        item.archived = v;
-    }
-    if let Some(v) = pinned {
-        if item.pinned != v {
-            actions.push(if v { "pin" } else { "unpin" });
-        }
-        item.pinned = v;
-    }
-
-    // `modified` is deliberately left alone: it orders the list, and flipping a
-    // flag would jump the session to the top of it.
-    let updated = item.clone();
-
-    write_session_index(&sessions).await?;
 
     // The reader's own vocabulary, not the field's: the row says Settle where
     // the index says `archived`, and the question being asked of this number is
@@ -922,26 +922,19 @@ pub async fn set_session_flags(
 /// `modified` is left alone for [`set_session_flags`]'s reason — it orders the
 /// sidebar, and tagging must not jump the row to the top of it.
 pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec<IssueRef>> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        bail!("no such session: {session_id}");
-    };
-
-    match item.issues.iter_mut().find(|linked| {
-        linked.tracker == issue.tracker
-            && (linked.id == issue.id
-                || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
-    }) {
-        Some(existing) => *existing = issue,
-        None => item.issues.push(issue),
-    }
-
-    let linked = item.issues.clone();
-    write_session_index(&sessions).await?;
-
-    Ok(linked)
+    update_item(session_id, |item| {
+        match item.issues.iter_mut().find(|linked| {
+            linked.tracker == issue.tracker
+                && (linked.id == issue.id
+                    || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
+        }) {
+            Some(existing) => *existing = issue,
+            None => item.issues.push(issue),
+        }
+        item.issues.clone()
+    })
+    .await?
+    .with_context(|| format!("no such session: {session_id}"))
 }
 
 /// Removes one link, matched on the tracker's own id *or* the human
@@ -954,20 +947,13 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
 /// A key the session never carried is not an error: the caller asked for it to
 /// be gone, and it is.
 pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<IssueRef>> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        bail!("no such session: {session_id}");
-    };
-
-    item.issues
-        .retain(|linked| linked.id != key && !linked.identifier.eq_ignore_ascii_case(key));
-    let linked = item.issues.clone();
-
-    write_session_index(&sessions).await?;
-
-    Ok(linked)
+    update_item(session_id, |item| {
+        item.issues
+            .retain(|linked| linked.id != key && !linked.identifier.eq_ignore_ascii_case(key));
+        item.issues.clone()
+    })
+    .await?
+    .with_context(|| format!("no such session: {session_id}"))
 }
 
 /// Drops one session from the index and deletes its `.jsonl` log. Returns
@@ -1012,22 +998,14 @@ pub async fn set_session_status(
     session_id: &str,
     status: SessionStatus,
 ) -> Result<Option<SessionIndexItem>> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(None);
-    };
-
-    item.status = status;
-    if status == SessionStatus::Completed {
-        item.modified = now_rfc3339();
-    }
-    let updated = item.clone();
-
-    write_session_index(&sessions).await?;
-
-    Ok(Some(updated))
+    update_item(session_id, |item| {
+        item.status = status;
+        if status == SessionStatus::Completed {
+            item.modified = now_rfc3339();
+        }
+        item.clone()
+    })
+    .await
 }
 
 /// Moves a session out of the worktree it was running in and back to its
@@ -1060,23 +1038,15 @@ pub async fn set_session_status(
 pub async fn relocate_session_to_project(
     session_id: &str,
 ) -> Result<Option<SessionIndexItem>> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(None);
-    };
-
-    let root = project_root_of(&item.project_path).to_string();
-    item.project_path = root.clone();
-    item.cwd = root;
-    item.worktree_name = None;
-    item.worktree_removed = true;
-    let updated = item.clone();
-
-    write_session_index(&sessions).await?;
-
-    Ok(Some(updated))
+    update_item(session_id, |item| {
+        let root = project_root_of(&item.project_path).to_string();
+        item.project_path = root.clone();
+        item.cwd = root;
+        item.worktree_name = None;
+        item.worktree_removed = true;
+        item.clone()
+    })
+    .await
 }
 
 /// Marks the sessions whose worktree was deleted before the index recorded it.
@@ -1185,19 +1155,11 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
 /// and a title landing seconds after the send would jump the session to the top
 /// of it for a reason the user never took.
 pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(None);
-    };
-
-    item.title = title.to_string();
-    let updated = item.clone();
-
-    write_session_index(&sessions).await?;
-
-    Ok(Some(updated))
+    update_item(session_id, |item| {
+        item.title = title.to_string();
+        item.clone()
+    })
+    .await
 }
 
 /// Records the id the harness knows this session by.
@@ -1206,15 +1168,8 @@ pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<S
 /// deleted while its child was starting — answers `Ok` rather than erroring:
 /// there is nothing to record it on and nothing has gone wrong.
 pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(());
-    };
-
-    item.thread_id = Some(thread_id.to_string());
-    write_session_index(&sessions).await
+    update_item(session_id, |item| item.thread_id = Some(thread_id.to_string())).await?;
+    Ok(())
 }
 
 /// A level no shipped build can spell, written as one every build can.
@@ -1296,6 +1251,25 @@ async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {
     let path = get_sessions_dir().await?.join("index.json");
     let encoded: Vec<SessionIndexItem> = sessions.iter().map(encode_effort).collect();
     write_atomic(&path, serde_json::to_string(&encoded)?).await
+}
+
+/// Edits one entry under `INDEX_LOCK` and writes the index back. `None` for an
+/// id the index doesn't hold, in which case nothing is written.
+async fn update_item<R>(
+    session_id: &str,
+    f: impl FnOnce(&mut SessionIndexItem) -> R,
+) -> Result<Option<R>> {
+    let _guard = INDEX_LOCK.lock().await;
+
+    let mut sessions = read_index().await?;
+    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
+        return Ok(None);
+    };
+
+    let out = f(item);
+    write_session_index(&sessions).await?;
+
+    Ok(Some(out))
 }
 
 /// Looks up one session's index entry by id.
@@ -1448,17 +1422,7 @@ async fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 /// Returns whether the entry was found; an unknown id means the session was
 /// deleted between the spawn and this write, which is nothing to report.
 pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
-    let _guard = INDEX_LOCK.lock().await;
-
-    let mut sessions = read_index().await?;
-    let Some(item) = sessions.iter_mut().find(|i| i.session_id == session_id) else {
-        return Ok(false);
-    };
-
-    item.fork_from = None;
-    write_session_index(&sessions).await?;
-
-    Ok(true)
+    Ok(update_item(session_id, |item| item.fork_from = None).await?.is_some())
 }
 
 /// Appends one event as a line to the session's `.jsonl` log.
@@ -2244,7 +2208,6 @@ mod tests {
             turn_id: None,
             subagent: None,
             payload,
-            raw: None,
         };
 
         let mut events = vec![
@@ -2314,47 +2277,6 @@ mod tests {
                 "/home/.dray/attachments/child/b.png",
                 "/tmp/elsewhere.png",
             ]
-        );
-    }
-
-    #[test]
-    fn archived_filter_splits_the_index_into_two_disjoint_views() {
-        let item = |id: &str, archived: bool| {
-            let mut i = SessionIndexItem::new(
-                id,
-                Harness::ClaudeCode,
-                "/p",
-                "/p",
-                None,
-                None,
-                "hi",
-                ModelId::new("opus"),
-                None,
-                ApprovalPolicy::Auto,
-                false,
-                None,
-            );
-            i.archived = archived;
-            i
-        };
-        let items = vec![item("a", false), item("b", true), item("c", false)];
-
-        let active = filter_by_archived(items.clone(), false);
-        let settled = filter_by_archived(items, true);
-
-        assert_eq!(
-            active
-                .iter()
-                .map(|i| i.session_id.as_str())
-                .collect::<Vec<_>>(),
-            ["a", "c"]
-        );
-        assert_eq!(
-            settled
-                .iter()
-                .map(|i| i.session_id.as_str())
-                .collect::<Vec<_>>(),
-            ["b"]
         );
     }
 

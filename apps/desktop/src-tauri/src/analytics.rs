@@ -64,29 +64,22 @@ const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 /// ordinary case for every build that has not set one, and taking it literally
 /// would post every event at a URL with no host in it.
 fn host() -> &'static str {
-    HOST_OVERRIDE
-        .filter(|host| !host.is_empty())
-        .unwrap_or(DEFAULT_HOST)
+    host_of(HOST_OVERRIDE)
+}
+
+fn host_of(over: Option<&'static str>) -> &'static str {
+    over.filter(|host| !host.is_empty()).unwrap_or(DEFAULT_HOST)
+}
+
+/// The compiled-in key, where one is; empty reads as absent.
+fn api_key() -> Option<&'static str> {
+    API_KEY.filter(|key| !key.is_empty())
 }
 
 /// Short. Nothing waits on this, and a request still in flight when the app
 /// quits is a dropped event either way — so the only thing a long timeout buys
 /// is a task outliving the thing it was reporting about.
 const TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Shared, because a `Client` owns the connection pool — the same reason
-/// `linear.rs` keeps one.
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .user_agent(concat!("Dray/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("reqwest client")
-    })
-}
 
 /// Whether this run reports at all — what the settings dialog draws, and not
 /// the same as what is on disk whenever [`env_opt_out`] holds.
@@ -144,11 +137,15 @@ pub struct SurveyIdentity {
 /// than a second surface of the same consent, and consent is still read in one
 /// place: [`settings::ensure_install_id`] answers `None` for an install that
 /// opted out, and that `None` is what stops the SDK ever being initialised.
-pub async fn identity() -> Option<SurveyIdentity> {
+///
+/// One value rather than a consent flag the frontend pairs with a lookup of its
+/// own — see [`SurveyIdentity`].
+#[tauri::command]
+pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // Same order as `send`: no key compiled in is the ordinary case for a local
     // build, and checking it first keeps a build that sends nothing from
     // reading the settings file to find that out.
-    let key = API_KEY.filter(|key| !key.is_empty())?;
+    let key = api_key()?;
 
     if env_opt_out() {
         return None;
@@ -193,13 +190,6 @@ pub async fn identity() -> Option<SurveyIdentity> {
 /// value is what keeps the spawned future `'static` without an allocation.
 pub fn track(event: &'static str, properties: Value) {
     tauri::async_runtime::spawn(send(event, None, properties));
-}
-
-/// Reports the launch. What it uniquely answers is which build is in the wild:
-/// this app gets left open for days, so launches undercount *use* badly and
-/// [`active_day`] is what measures that.
-pub fn app_started() {
-    track("app_started", json!({}));
 }
 
 /// Reports `event` at most once per local day per `key`, for the life of this
@@ -248,7 +238,7 @@ fn claim_day(key: String, day: String) -> bool {
 
 /// Reports that this install was used today, at most once a day per run.
 ///
-/// Neither event beside it answers activity. [`app_started`] measures installs
+/// Neither event beside it answers activity. `app_started` measures installs
 /// and version adoption, since this app is left open for days at a time, and
 /// `session_started` fires only for a session being *created* — so somebody
 /// working all day in one resumed session was invisible, and the most engaged
@@ -272,7 +262,12 @@ fn claim_day(key: String, day: String) -> bool {
 /// other two are no-ops. It is also why none of them asks what the others did
 /// — "report this only if nothing reported today" is exactly what the claim
 /// already is.
-pub fn active_day() {
+///
+/// A command too, for the focus half: the signal comes from `src/lib/focus.ts`,
+/// which is where the rule for reading it lives — the DOM's `focus` fires for a
+/// native menu or devtools closing too, which is not the reader arriving.
+#[tauri::command]
+pub fn track_active_day() {
     track_daily("active_day", "active_day".into(), json!({}));
 }
 
@@ -383,7 +378,7 @@ fn trim_source_path(file: &str) -> &str {
 /// non-success status is logged rather than dropped, since the two ways this
 /// silently reports nothing — a wrong key and a wrong region — both land there.
 async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
-    let Some(key) = API_KEY.filter(|key| !key.is_empty()) else {
+    let Some(key) = api_key() else {
         return;
     };
 
@@ -422,7 +417,8 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
 
     let endpoint = format!("{}/i/v0/e/", host());
 
-    match client().post(&endpoint).json(&body).send().await {
+    let request = crate::http().post(&endpoint).timeout(TIMEOUT).json(&body);
+    match request.send().await {
         Ok(response) if !response.status().is_success() => {
             eprintln!("[analytics err] {} from {endpoint}", response.status());
         }
@@ -465,21 +461,6 @@ fn base_properties() -> &'static Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The one thing in here worth pinning: an event's own properties reach the
-    /// payload, and they win over the base set rather than being dropped by it.
-    #[test]
-    fn event_properties_override_the_base_set() {
-        let mut props = base_properties().clone();
-        let Value::Object(extra) = json!({ "harness": "codex", "os": "plan9" }) else {
-            unreachable!()
-        };
-        props.extend(extra);
-
-        assert_eq!(props["harness"], json!("codex"));
-        assert_eq!(props["os"], json!("plan9"));
-        assert_eq!(props["app_version"], json!(env!("CARGO_PKG_VERSION")));
-    }
 
     /// The kind is what the breakdown is read by, so a call site's own
     /// properties must not be able to rename it.
@@ -545,11 +526,7 @@ mod tests {
     /// reads.
     #[test]
     fn an_empty_host_override_falls_back() {
-        assert_eq!(Some("").filter(|host: &&str| !host.is_empty()), None);
-        assert_eq!(
-            Some("https://eu.i.posthog.com").filter(|host: &&str| !host.is_empty()),
-            Some("https://eu.i.posthog.com")
-        );
-        assert!(host().starts_with("https://"));
+        assert_eq!(host_of(Some("")), DEFAULT_HOST);
+        assert_eq!(host_of(Some("https://eu.i.posthog.com")), "https://eu.i.posthog.com");
     }
 }

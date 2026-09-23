@@ -14,7 +14,6 @@ function turn(id: string, authFailed: boolean): AgentEvent {
     ts: "2026-08-30T00:00:00Z",
     turnId: null,
     subagent: null,
-    raw: null,
     payload: {
       type: "turn_completed",
       status: authFailed ? "error" : "success",

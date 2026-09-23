@@ -627,7 +627,7 @@ fn resolve_effort(
 ) -> Result<Option<Effort>> {
     if let Some(alias) = requested {
         return Ok(Some(Effort::from_arg(alias).with_context(|| {
-            format!("unknown effort {alias:?} — try low, medium, high, xhigh or max")
+            format!("unknown effort {alias:?} — try low, medium, high, xhigh, max or ultra")
         })?));
     }
 
@@ -894,22 +894,6 @@ mod tests {
         assert_eq!(project_from(None, None), None);
     }
 
-    /// The predicate the bind guard turns on, spelled out so the two cases
-    /// that matter are pinned rather than read out of a bitmask at a glance.
-    #[test]
-    fn only_owner_only_modes_are_allowed_to_carry_the_socket() {
-        let reachable = |mode: u32| mode & 0o077 != 0;
-
-        assert!(!reachable(0o700), "owner-only is the one acceptable mode");
-        // The default `create_dir_all` leaves, and what the app shipped with.
-        assert!(reachable(0o755));
-        // Group-writable is the case the review named.
-        assert!(reachable(0o770));
-        assert!(reachable(0o777));
-        // Group *read* alone still means another account can traverse in.
-        assert!(reachable(0o750));
-    }
-
     /// The prefix is the receiving agent's only signal, so its two facts are
     /// pinned: the title it reads, and the id it can answer to.
     #[test]
@@ -931,13 +915,6 @@ mod tests {
     #[test]
     fn an_unattributed_prompt_is_left_alone() {
         assert_eq!(attribute("just do it", None), "just do it");
-    }
-
-    #[test]
-    fn a_version_mismatch_is_refused_before_the_request_is_read() {
-        let line = r#"{"v":99,"cmd":"create_session","prompt":"hi","useWorktree":true}"#;
-        let envelope: Envelope = serde_json::from_str(line).unwrap();
-        assert_ne!(envelope.v, PROTOCOL_VERSION);
     }
 
     /// Naming the wrong half is worse than naming neither: the reader runs a

@@ -19,7 +19,6 @@ use tokio::fs;
 use uuid::Uuid;
 
 use super::audio::TARGET_RATE;
-use crate::store::get_home_app_dir;
 
 /// How long a recording nobody came back for is kept.
 ///
@@ -36,12 +35,7 @@ const HEADER_LEN: usize = 44;
 /// which the system is entitled to empty without asking — the whole point of
 /// the file is that it outlives the failure.
 pub async fn dir() -> Result<PathBuf> {
-    let dir = get_home_app_dir().await?.join("recordings");
-    fs::create_dir_all(&dir)
-        .await
-        .context("could not create the recordings directory")?;
-
-    Ok(dir)
+    crate::store::app_subdir("recordings").await
 }
 
 /// Writes one recording and answers where it landed.

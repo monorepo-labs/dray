@@ -211,13 +211,9 @@ export default function EventRow({
       );
     }
 
-    // Deliberately unrendered. Hooks, settings changes, and unrecognized event
-    // kinds are harness plumbing the reader never acts on; session setup, token
-    // counts, subagent lifecycle, and stream previews drive UI elsewhere (the
-    // header, the subagent panel, the live block).
-    case "hook":
-    case "settings_changed":
-    case "unknown":
+    // Deliberately unrendered. Session setup, token counts, subagent lifecycle,
+    // and stream previews drive UI elsewhere (the header, the subagent panel,
+    // the live block).
     case "turn_started":
     case "usage_update":
     case "subagent_started":
