@@ -414,6 +414,11 @@ describe("findBareUrls", () => {
       "https://docs.github.com",
     ]);
     expect(hrefs("(example.co.uk)")).toEqual(["https://example.co.uk"]);
+    expect(hrefs("example.com?q=1 example.com#top localhost:3000?x=1")).toEqual([
+      "https://example.com?q=1",
+      "https://example.com#top",
+      "http://localhost:3000?x=1",
+    ]);
   });
 
   it("links a local address only with a port, over http", () => {
