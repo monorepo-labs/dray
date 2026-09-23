@@ -310,6 +310,13 @@ export default function RichInput({
         // and the one inherited here is the card's text colour rather than the
         // foreground.
         "relative block w-full overflow-y-auto whitespace-pre-wrap break-words text-foreground outline-none",
+        // **`overflow-x-hidden` has to be said, since `overflow-y-auto` turns x
+        // to `auto` with it.** WebKit gives an editable scroll box 1px of caret
+        // room past every line and `pre-wrap` hangs trailing spaces, so a line
+        // that fills the width overflows by a pixel — and the app's classic
+        // scrollbars draw a whole track for it. Text wraps here; nothing scrolls
+        // sideways.
+        "overflow-x-hidden",
         // `lh` is the line box's own height, so the cap follows the composer's
         // font size wherever the reader sets it — which is the whole of what the
         // measuring effect this replaces was for. It read `scrollHeight` against
