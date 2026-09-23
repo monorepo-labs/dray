@@ -61,11 +61,6 @@ pub struct AppSettings {
     /// needs it.
     #[serde(default)]
     pub transcription: TranscriptionSettings,
-    /// The app version whose launch last brought the `dray` CLI up to date —
-    /// see [`crate::updater::sync_cli`]. `None` reads as never synced, so the
-    /// first launch of the build carrying this field runs once too.
-    #[serde(default)]
-    pub cli_synced_for: Option<String>,
 }
 
 /// The transcription picks. Model and device mean "not chosen" when absent.
@@ -112,7 +107,6 @@ impl Default for AppSettings {
             install_id: None,
             linear_account: None,
             transcription: TranscriptionSettings::default(),
-            cli_synced_for: None,
         }
     }
 }
@@ -166,7 +160,6 @@ fn opted_out() -> AppSettings {
         install_id: None,
         linear_account: None,
         transcription: TranscriptionSettings::default(),
-        cli_synced_for: None,
     }
 }
 
@@ -348,7 +341,6 @@ mod tests {
             install_id: Some("2f1c…".into()),
             linear_account: None,
             transcription: TranscriptionSettings::default(),
-            cli_synced_for: None,
         };
 
         write_to(&dir, &off).await.unwrap();
