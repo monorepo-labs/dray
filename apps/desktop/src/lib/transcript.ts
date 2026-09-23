@@ -661,7 +661,6 @@ export function buildTranscript(
       event.payload.type === "permission_requested" ||
       event.payload.type === "questions_asked"
     ) {
-      asks.delete(event.payload.requestId);
       asks.set(event.payload.requestId, event.payload);
     }
     if (event.payload.type === "permission_decided") {

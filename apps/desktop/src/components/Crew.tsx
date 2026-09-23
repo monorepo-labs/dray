@@ -284,14 +284,15 @@ function PendingCard({
     if (requestId) cardRef.current?.scrollIntoView({ block: "nearest" });
   }, [requestId]);
 
-  // The row is yellow because a request arrived, but the card is read out of the
-  // transcript, which may still be loading or may have failed to. Drawing
-  // nothing there left a yellow row with nothing to press over an agent blocked
-  // on it (#301), so there is always a way to the session's own column.
+  // The card is read out of the transcript, which may still be loading or may
+  // have failed to. Open is the retry: an unloaded session goes through the
+  // select path, which reads it again and reports a failure. A *loaded* one
+  // without the ask gets no button, since Open would redraw the same transcript.
   if (!ask) {
+    if (events) return null;
     return (
       <div className="flex items-center justify-between gap-2 px-3 pb-3 text-ui text-muted-foreground">
-        Waiting on your answer
+        Loading the request…
         <Button variant="outline" size="xs" onClick={onOpenInMain}>
           Open
         </Button>
