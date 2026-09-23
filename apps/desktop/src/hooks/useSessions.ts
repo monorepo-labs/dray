@@ -15,6 +15,7 @@ import {
 import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { lockedMidTurn } from "@/lib/liveControls";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
@@ -198,6 +199,11 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
   return null;
 }
 
+/// A composer pick made on a session and not yet sent — see `unsentPicks`.
+type UnsentPick = Partial<Pick<SessionIndexItem, "model" | "effort" | "permissionMode" | "fast">> & {
+  efforts?: Partial<Record<ModelId, Effort>>;
+};
+
 export function useSessions() {
 
     // The sticky defaults. Live state below seeds from these and writes back on
@@ -327,6 +333,23 @@ export function useSessions() {
     // after the reader has moved on, and an unguarded catch would write the
     // previous session's failure into the composer they moved to.
     const navGen = useRef(0);
+    // Composer picks made on a session and not yet sent. The index learns a
+    // pick only at the send, so restoring from it alone put the old model back
+    // over one the reader had just chosen. Cleared once a send records it.
+    //
+    // `efforts` holds every level picked in the session, per model: the index
+    // keeps one model/effort pair, so a level set on a model the reader then
+    // switched away from would otherwise be gone on the way back.
+    const unsentPicks = useRef(new Map<string, UnsentPick>());
+    const rememberPick = (pick: UnsentPick) => {
+      if (!selectedSessionId) return;
+      const prev = unsentPicks.current.get(selectedSessionId);
+      unsentPicks.current.set(selectedSessionId, {
+        ...prev,
+        ...pick,
+        efforts: { ...prev?.efforts, ...pick.efforts },
+      });
+    };
     /// A catch handler for a *session-scoped* action starting now. Reports into
     /// the slot only while the reader has not navigated since — taken at the
     /// start of the action, since the rejection lands after any move.
@@ -370,9 +393,13 @@ const effort: Effort | null = model
 // a model with no faster tier and the send cannot carry one the row never showed.
 const fast = fastFor(fastState, harness, models, modelId);
 
+// Every composer default — model, effort, stance, fast — moves only from the
+// new-task composer. A pick made inside a session is that session's, and
+// changing it there must not change what the next task starts on.
 const setFast = (next: boolean) => {
   setFastState(next);
-  setPrefs({ fast: next });
+  rememberPick({ fast: next });
+  if (!selectedSessionId) setPrefs({ fast: next });
 };
 
 // A null effort means "just switch to this model" — it must leave the model's
@@ -380,21 +407,35 @@ const setFast = (next: boolean) => {
 // on it earlier. Only an explicit level writes to the map.
 const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
   setModelId(nextModelId);
+  // Where effort cannot move mid-turn, a model picked now keeps the level that
+  // is running: taking the new model's own would reach the index and the
+  // picker but not the prompt queued behind this turn.
+  const carried = !nextEffort && lockedMidTurn(harness, "effort", busy) ? effort : null;
+  if (carried) setEffortByModel((prev) => ({ ...prev, [nextModelId]: carried }));
+  // A null effort still overwrites: the index's level belongs to the old model.
+  const level = nextEffort ?? carried;
+  rememberPick({
+    model: nextModelId,
+    effort: level,
+    efforts: level ? { [nextModelId]: level } : undefined,
+  });
   // fx's list is per-provider, so a pick also belongs to the provider on screen
   // — remembered under it so a round trip through another provider comes back
   // to this model rather than to "let fx decide".
   if (harness === "fx") recordFxPick(models[0]?.provider, nextModelId);
+  if (nextEffort) setEffortByModel({ ...effortByModel, [nextModelId]: nextEffort });
+  if (selectedSessionId) return;
   // Filed under the harness on screen, which is the only one that could have
   // offered this model — so coming back to that agent finds this pick rather
   // than whatever the other agent was left on.
   const byHarness = { ...prefs.modelByHarness, [harness]: nextModelId };
-  if (nextEffort) {
-    const next = { ...effortByModel, [nextModelId]: nextEffort };
-    setEffortByModel(next);
-    setPrefs({ modelByHarness: byHarness, effortByModel: next });
-    return;
-  }
-  setPrefs({ modelByHarness: byHarness });
+  setPrefs(
+    nextEffort
+      ? // Onto prefs, not the live map: that can hold a restored session's
+        // level, which is the session's and not the reader's default.
+        { modelByHarness: byHarness, effortByModel: { ...prefs.effortByModel, [nextModelId]: nextEffort } }
+      : { modelByHarness: byHarness },
+  );
 };
 
 // Wrapped like the rest: which agent you work in is a preference, not a
@@ -420,11 +461,12 @@ const setHarness = (next: Harness) => {
   setPrefs({ harness: next });
 };
 
-// Wrapped rather than exported raw: picking a mode is a preference, and the
-// hotkey in App.tsx goes through here too.
+// Wrapped rather than exported raw: the hotkey in App.tsx goes through here too.
+// A default only from the new-task composer, like the rest — see `setFast`.
 const setPermissionMode = (mode: ApprovalPolicy) => {
   setPermissionModeState(mode);
-  setPrefs({ permissionMode: mode });
+  rememberPick({ permissionMode: mode });
+  if (!selectedSessionId) setPrefs({ permissionMode: mode });
 };
 
 // Sticky, unlike before. Someone who works in worktrees works in worktrees; the
@@ -673,6 +715,9 @@ const handleSendMsg = async (
 
   let sessionId = selectedSessionId;
   const isNewSession = !sessionId;
+  // The unsent pick this send carries. A later edit made while it is out
+  // replaces the map entry, and must survive this send landing.
+  const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
 
   const existing = sessionId ? sessions.find((s) => s.sessionId === sessionId) : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
@@ -826,6 +871,25 @@ const handleSendMsg = async (
       );
     };
 
+    // The backend bumped `modified` and the controls on an existing session's
+    // index entry — before queueing too — so mirror it on every path but
+    // creation. Coming back to the session restores from this.
+    if (!isNewSession) {
+      // The index now holds what was sent; only the per-model levels outlive
+      // it, since the index keeps one.
+      if (unsentPicks.current.get(sessionId) === sentPick) {
+        if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
+        else unsentPicks.current.delete(sessionId);
+      }
+      setSessionIndexItems((prev) =>
+        prev.map((i) =>
+          i.sessionId === sessionId
+            ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
+            : i,
+        ),
+      );
+    }
+
     if (outcome.queued) {
       const queued = outcome.queued;
       // The prompt is held, and the queue draws its own pending row — so the
@@ -853,15 +917,6 @@ const handleSendMsg = async (
       return;
     }
 
-    // The backend just bumped `modified` and the model on an existing session's
-    // index entry; mirror it so the sidebar doesn't need a refetch.
-    setSessionIndexItems((prev) =>
-      prev.map((i) =>
-        i.sessionId === sessionId
-          ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
-          : i,
-      ),
-    );
     applySentIssues();
   } catch (e) {
     // A rejected invoke means the turn never started, so nothing will arrive to
@@ -1062,7 +1117,9 @@ const handleNewSession = () => {
 //
 // Project, branch, and the worktree flag aren't restored — the composer hides
 // all three once a session exists, and they'd only mislead the next new chat.
-const restoreSessionControls = (item: SessionIndexItem) => {
+const restoreSessionControls = (indexed: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(indexed.sessionId);
+  const item = { ...indexed, ...pick };
   // The raw setter, like the rest of this function: a session's harness is the
   // session's, and clicking through old ones must not rewrite the default.
   setHarnessState(item.harness);
@@ -1074,10 +1131,14 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   const restored = isUnsetModel(item.model) ? DEFAULT_MODEL_FOR[item.harness] : item.model;
   setModelId(restored);
   // The index stores one model/effort pair, so it can only seed that model's
-  // entry; the rest of the map falls back to per-model defaults.
-  if (item.effort) {
-    setEffortByModel((prev) => ({ ...prev, [restored]: item.effort! }));
-  }
+  // entry; the rest comes from the reader's defaults. Rebuilt from prefs rather
+  // than merged into the live map, or one session's level leaks into the next
+  // session's model switch.
+  setEffortByModel({
+    ...prefs.effortByModel,
+    ...pick?.efforts,
+    ...(item.effort ? { [restored]: item.effort } : {}),
+  });
   setPermissionModeState(item.permissionMode);
   setFastState(item.fast);
 };

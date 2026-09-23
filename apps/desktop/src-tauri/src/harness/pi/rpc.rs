@@ -101,6 +101,10 @@ pub struct PiClient {
     /// A field on `Session` would put a pi-only flag on the struct every
     /// harness shares.
     stopping: Arc<AtomicBool>,
+    /// The running model's context window, the ring's denominator. Here for
+    /// `stopping`'s reason: the mapper reads it and an in-place model switch
+    /// writes it, and the client is what both hold.
+    context_window: Arc<AtomicU64>,
 }
 
 impl PiClient {
@@ -116,7 +120,13 @@ impl PiClient {
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Pending::new(),
+            context_window: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The shared context window; `0` until the handshake fills it.
+    pub fn context_window(&self) -> Arc<AtomicU64> {
+        self.context_window.clone()
     }
 
     /// A client with nothing on the other end, for tests.
@@ -297,6 +307,7 @@ mod tests {
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Pending::new(),
+            context_window: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -475,6 +486,7 @@ mod tests {
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Pending::new(),
+            context_window: Arc::new(AtomicU64::new(0)),
         };
 
         client
@@ -501,6 +513,7 @@ mod tests {
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Pending::new(),
+            context_window: Arc::new(AtomicU64::new(0)),
         };
 
         client.send(&json!({"type": "before"})).expect("stdin is open");
@@ -532,6 +545,7 @@ mod tests {
             closed: Arc::new(std::sync::Mutex::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             pending: Pending::new(),
+            context_window: Arc::new(AtomicU64::new(0)),
         };
         let reader = client.clone();
 

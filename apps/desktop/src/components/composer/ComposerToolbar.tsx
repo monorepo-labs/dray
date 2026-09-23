@@ -11,6 +11,7 @@ import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { lockedMidTurn } from "@/lib/liveControls";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -216,6 +217,7 @@ export default function ComposerToolbar({
           harness={harness}
           value={permissionMode}
           onChange={onPermissionModeChange}
+          locked={lockedMidTurn(harness, "stance", busy)}
         />
       )}
 

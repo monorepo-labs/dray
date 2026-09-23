@@ -201,7 +201,7 @@ pub async fn init(
     // *before* that handshake — nothing settles a request except a line off
     // stdout — so the mapper exists a moment before its window does. `0` until
     // then, which draws no ring rather than a wrong one.
-    let context_window = Arc::new(AtomicU64::new(0));
+    let context_window = client.context_window();
 
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
@@ -292,8 +292,7 @@ pub async fn init(
     // The one number the ring cannot derive. Read off the handshake rather than
     // asked for per turn, which the reader could not do anyway: a request is
     // settled by a line off stdout, so awaiting one inside the read loop waits
-    // on itself. Sound for the child's life — pi respawns for a model change,
-    // so nothing moves the window under a running session.
+    // on itself. A model switch re-reads it — see [`set_model`].
     if let Some(window) = state["model"]["contextWindow"].as_u64() {
         context_window.store(window, Relaxed);
     }
@@ -543,6 +542,37 @@ pub async fn interrupt(client: &PiClient) -> Result<()> {
     Ok(())
 }
 
+/// Moves a running pi onto another model, mid-run included. Verified live: the
+/// next model call inside the run came from the new model, and pi wrote nothing
+/// to its own `settings.json`, which was the worry that had pi respawning.
+///
+/// `set_model` announces no `model_changed`, so the window is re-read here —
+/// dropped first, for the mixed-pair reason the read loop gives.
+pub async fn set_model(client: &PiClient, model: &Model) -> Result<()> {
+    client
+        .request(
+            "set_model",
+            json!({"provider": model.provider, "modelId": model.arg}),
+        )
+        .await?;
+
+    let window = client.context_window();
+    window.store(0, Relaxed);
+    let state = client.request("get_state", Value::Null).await?;
+    if let Some(size) = state["model"]["contextWindow"].as_u64() {
+        window.store(size, Relaxed);
+    }
+    Ok(())
+}
+
+/// The spawn's `--thinking` flag, sent to a running pi.
+pub async fn set_effort(client: &PiClient, effort: Effort) -> Result<()> {
+    client
+        .request("set_thinking_level", json!({"level": effort.as_arg()}))
+        .await?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn read_stdout(
     stdout: ChildStdout,
@@ -608,9 +638,9 @@ async fn read_stdout(
             continue;
         }
 
-        // The model moved under a running child, which Dray itself never does
-        // — it respawns — but a pi extension calling `setModel` does, and pi
-        // reports it here whoever asked. The ring's denominator belongs to the
+        // The model moved under a running child through a pi extension calling
+        // `setModel`, which pi reports here. Dray's own `set_model` announces no
+        // such line and re-reads the window itself. The ring's denominator belongs to the
         // model, so it is re-read rather than left describing the old one.
         //
         // Spawned, never awaited: a request is settled by a line off stdout and

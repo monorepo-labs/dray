@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/tooltip";
 import { invoke } from "@tauri-apps/api/core";
 import { offersFast } from "@/lib/fastMode";
+import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
@@ -221,9 +222,9 @@ export default function ModelSelector({
   /// agent a session runs is worth a glyph whether or not it can change. fx's
   /// fast mode is settled the same way, so its row goes too.
   isNewSession: boolean;
-  /// Whether this session's turn is in flight. The provider switch is the one
-  /// control here that waits on it — everything else is a pick the send
-  /// applies, where this one moves the child the moment it is clicked.
+  /// Whether this session's turn is in flight. The provider switch waits on it,
+  /// since it moves the child the moment it is clicked; model, effort and fast
+  /// wait on it only where the harness cannot apply them mid-turn.
   busy: boolean;
   onChange: (modelId: ModelId, effort: Effort | null) => void;
   /// Asks the harness for its list again, dropping the backend cache first.
@@ -378,6 +379,13 @@ export default function ModelSelector({
   const rowEffort = (model: Model): Effort | null =>
     model.id === modelId ? effort : model.defaultEffort;
 
+  // Locked mid-turn where the harness cannot carry the change onto the prompt
+  // sent next — see `lockedMidTurn`. The menu goes whole with the model, since
+  // no harness takes an effort mid-turn and not a model.
+  const modelLocked = lockedMidTurn(harness, "model", busy);
+  const effortLocked = lockedMidTurn(harness, "effort", busy);
+  const fastLocked = lockedMidTurn(harness, "fast", busy);
+
   const modelRow = (model: Model) =>
     model.efforts.length ? (
       // One row: hover opens the effort submenu (Radix's own behaviour), click
@@ -418,12 +426,17 @@ export default function ModelSelector({
               below say what it cycles, and a separator would draw a box round
               a hint. */}
           <div className="flex px-1.5 py-1">
-            <ShortcutKeys ids={["effort.next"]} />
+            {effortLocked ? (
+              <span className="text-ui text-muted-foreground">Can't change mid-turn</span>
+            ) : (
+              <ShortcutKeys ids={["effort.next"]} />
+            )}
           </div>
           {model.efforts.map((level) => (
             <DropdownMenuItem
               key={level}
               className="text-ui"
+              disabled={effortLocked}
               onSelect={() => {
                 onChange(model.id, level);
                 setOpen(false);
@@ -448,7 +461,7 @@ export default function ModelSelector({
     );
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu open={open} onOpenChange={(next) => setOpen(next && !modelLocked)}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -458,7 +471,10 @@ export default function ModelSelector({
               type="button"
               variant="ghost"
               size="sm"
-              className="gap-1 px-1.5 text-ui text-muted-foreground"
+              // `aria-disabled`, never `disabled`: a disabled button opens no
+              // tooltip, and the tooltip is where the reason lives.
+              aria-disabled={modelLocked}
+              className="gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
             >
               <AgentIcon harness={harness} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
@@ -486,8 +502,14 @@ export default function ModelSelector({
             as a menu of shortcuts — hence `max-w-none`, which the default
             `max-w-xs` would wrap. */}
         <TooltipContent side="top" className="max-w-none whitespace-nowrap">
-          Switch model
-          <ShortcutKeys ids={["model.next"]} />
+          {modelLocked ? (
+            "Model can't be changed mid-turn"
+          ) : (
+            <>
+              Switch model
+              <ShortcutKeys ids={["model.next"]} />
+            </>
+          )}
         </TooltipContent>
       </Tooltip>
 
@@ -651,6 +673,7 @@ export default function ModelSelector({
           <>
             <DropdownMenuItem
               className="cursor-pointer text-ui"
+              disabled={fastLocked}
               // The row is the control and the switch is its picture: a `Switch`
               // that took its own click would fire beside this one and toggle
               // twice. So the state is stated here — `role`/`aria-checked` over
@@ -666,6 +689,7 @@ export default function ModelSelector({
               }}
             >
               Fast mode
+              <ShortcutKeys ids={["composer.fast"]} />
               <Switch checked={fast} tabIndex={-1} aria-hidden className="pointer-events-none ml-auto" />
             </DropdownMenuItem>
 

@@ -77,9 +77,9 @@ pub struct Mapper {
     /// Shared rather than passed because the reader is running *before* the
     /// handshake it settles the answer for — nothing but a line off stdout
     /// resolves a request, so the mapper exists a moment before its window
-    /// does. Shared for a second reason too: Dray respawns for a model change
-    /// (`applies_model_in_place: false`) but a pi extension calling `setModel`
-    /// does not, so [`super::pi`] re-reads this on `model_changed`.
+    /// does. Shared for a second reason too: the model can move under a running
+    /// child — Dray's own `set_model`, or a pi extension calling `setModel` —
+    /// and [`super::pi`] re-reads this after either.
     context_window: Arc<AtomicU64>,
     /// Whether a compaction has landed since the reading in `usage` was taken.
     ///

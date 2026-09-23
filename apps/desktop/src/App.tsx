@@ -80,6 +80,7 @@ import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { offersFast } from "@/lib/fastMode";
+import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
@@ -2037,7 +2038,7 @@ function App() {
     const index = cycle.findIndex((m) => m.id === modelId);
     const next = cycle[(index + 1) % cycle.length];
     handleModelChange(next.id, null);
-  });
+  }, { enabled: !lockedMidTurn(harness, "model", busy) });
   // ⌘⇧E for effort, beside ⌘E for the right pane — near enough to remember and
   // no collision, since `useHotkey` matches Shift exactly and neither listener
   // answers the other's chord. No `code`: that option is for a chord whose
@@ -2046,7 +2047,7 @@ function App() {
   useHotkey("effort.next", () => {
     const next = nextEffort(models.find((m) => m.id === modelId), effort);
     if (next) handleModelChange(modelId, next);
-  });
+  }, { enabled: !lockedMidTurn(harness, "effort", busy) });
   // Shares ⌘⇧F with `issues.search`, which is the one documented pair in
   // `SHARED_CHORDS`: that binding is enabled only while the issues page is up
   // and this one only while it is not, so the chord belongs to whichever is on
@@ -2060,6 +2061,7 @@ function App() {
     {
       enabled:
         !issuesOpen &&
+        !lockedMidTurn(harness, "fast", busy) &&
         offersFast(harness, models.find((m) => m.id === modelId), composingNewSession),
     },
   );

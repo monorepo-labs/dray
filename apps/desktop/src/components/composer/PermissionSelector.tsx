@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,10 +45,13 @@ export default function PermissionSelector({
   harness,
   value,
   onChange,
+  locked = false,
 }: {
   harness: Harness;
   value: ApprovalPolicy;
   onChange: (mode: ApprovalPolicy) => void;
+  /// A turn is running and this harness cannot change stance under it.
+  locked?: boolean;
 }) {
   // Hidden rather than disabled: a dead entry in a four-item menu reads as a
   // bug, where a shorter menu reads as this harness having fewer stances.
@@ -63,10 +67,11 @@ export default function PermissionSelector({
   // The radio group reads it too, or the menu opens with nothing checked
   // underneath a trigger that just named a stance.
   const stance = stanceFor(harness, value);
+  const [open, setOpen] = useState(false);
   const selected = MODES.find((m) => m.id === stance);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open && !locked} onOpenChange={(next) => setOpen(next && !locked)}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -74,7 +79,9 @@ export default function PermissionSelector({
               type="button"
               variant="ghost"
               size="sm"
-              className="px-1.5 text-ui text-muted-foreground"
+              // `aria-disabled` so the tooltip saying why can still open.
+              aria-disabled={locked}
+              className="px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
               aria-label="Switch permission"
             >
               {selected?.label ?? "Permissions"}
@@ -84,7 +91,9 @@ export default function PermissionSelector({
         {/* No chord: Shift+Tab now cycles the model, which gets reached for far
             more often than a mode most sessions set once and leave. Effort took
             the chord first and gave it up to the model for the same reason. */}
-        <TooltipContent side="top">Switch permission</TooltipContent>
+        <TooltipContent side="top">
+          {locked ? "Permission can't be changed mid-turn" : "Switch permission"}
+        </TooltipContent>
       </Tooltip>
 
       <DropdownMenuContent align="start" className="min-w-44">

@@ -339,13 +339,13 @@ mod capability_tests {
         }
     }
 
-    /// The two ACP harnesses are the ones with an in-place effort switch —
-    /// `session/set_config_option`, verified live against each — so every other
-    /// effort change replaces the child. Stated because `true` here silently
-    /// drops the change on a harness whose wire cannot carry it.
+    /// The two ACP harnesses take `session/set_config_option` and pi takes
+    /// `set_thinking_level`, verified live against each — so every other effort
+    /// change replaces the child. Stated because `true` here silently drops the
+    /// change on a harness whose wire cannot carry it.
     #[test]
-    fn only_the_acp_harnesses_apply_effort_in_place() {
-        const IN_PLACE: [Harness; 2] = [Harness::Fx, Harness::Grok];
+    fn only_harnesses_with_an_effort_request_apply_it_in_place() {
+        const IN_PLACE: [Harness; 3] = [Harness::Fx, Harness::Grok, Harness::Pi];
 
         for harness in Harness::ALL {
             assert_eq!(
@@ -736,10 +736,12 @@ impl Harness {
             // needed: pi's resume handle *is* a file, so copying it is the whole
             // fork. Verified live — a pi spawned on a copy reports the new path,
             // counts the parent's messages, and quotes its first prompt back.
+            // Model and effort through `set_model` and `set_thinking_level`, mid-run
+            // included. The stance is `--tools`, fixed at spawn.
             Harness::Pi => Capabilities {
                 creates_own_worktree: false,
-                applies_model_in_place: false,
-                applies_effort_in_place: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
                 applies_permission_in_place: false,
                 fast_mode: FastMode::Unsupported,
                 expands_at_mentions: false,
