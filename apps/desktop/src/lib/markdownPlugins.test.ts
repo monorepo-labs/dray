@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  findBareUrls,
+  linkBareUrls,
   REHYPE_PLUGINS,
   TABLE_CELL_CLASS,
   walk,
@@ -400,5 +402,61 @@ describe("scoped package imports", () => {
   it("does not disturb an ordinary relative path", () => {
     expect(isRelativePath("apps/desktop/src/lib/highlight.ts")).toBe(true);
     expect(isRelativePath(".github/workflows/ci.yml")).toBe(true);
+  });
+});
+
+describe("findBareUrls", () => {
+  const hrefs = (text: string) => findBareUrls(text).map((u) => u.href);
+
+  it("links a bare host, with its path, minus the sentence's punctuation", () => {
+    expect(hrefs("See drayhq.com/docs, then docs.github.com.")).toEqual([
+      "https://drayhq.com/docs",
+      "https://docs.github.com",
+    ]);
+    expect(hrefs("(example.co.uk)")).toEqual(["https://example.co.uk"]);
+  });
+
+  it("links a local address only with a port, over http", () => {
+    expect(hrefs("open localhost:3000/app or 127.0.0.1:8080")).toEqual([
+      "http://localhost:3000/app",
+      "http://127.0.0.1:8080",
+    ]);
+    expect(hrefs("runs on localhost")).toEqual([]);
+  });
+
+  it("leaves file names, paths, emails and versions alone", () => {
+    expect(
+      hrefs(
+        "README.md main.rs app.py Dray.app libx.so Node.js src/foo.com me@example.com v1.2.3 e.g. example.community",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("linkBareUrls", () => {
+  it("wraps prose but not code or an existing link", () => {
+    const tree: Hast = {
+      type: "root",
+      children: [
+        { type: "text", value: "go to drayhq.com now" },
+        { type: "element", tagName: "code", children: [{ type: "text", value: "drayhq.com" }] },
+        {
+          type: "element",
+          tagName: "a",
+          properties: { href: "https://x.com" },
+          children: [{ type: "text", value: "x.com" }],
+        },
+      ],
+    };
+    linkBareUrls(tree);
+    expect(tree.children?.map((c) => c.tagName ?? c.value)).toEqual([
+      "go to ",
+      "a",
+      " now",
+      "code",
+      "a",
+    ]);
+    expect(tree.children?.[1].properties?.href).toBe("https://drayhq.com");
+    expect(tree.children?.[3].children?.[0].value).toBe("drayhq.com");
   });
 });

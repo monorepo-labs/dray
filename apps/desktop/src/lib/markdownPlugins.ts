@@ -1,6 +1,7 @@
 import { defaultRehypePlugins, type StreamdownProps } from "streamdown";
 
 import { findPromptPaths, isFilePath, isRelativePath, splitLocator } from "@/lib/filePath";
+import { trimUrlTail } from "@/lib/highlight";
 
 // `rehype-harden` drops the href of any link it cannot resolve, which is right,
 // and then writes " [blocked]" into the prose beside it, which is not: two
@@ -60,6 +61,70 @@ export function wrapCells(node: HastNode) {
   }
 }
 
+/// A bare host in prose — `drayhq.com/docs`, `localhost:3000` — which GFM
+/// leaves as text, since it autolinks only a scheme or `www.`.
+///
+/// The TLD list is the guess, and it is short on purpose: a file name is the
+/// false positive, so every TLD that is also a common extension is left out
+/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`). A miss costs one plain
+/// word; a hit on `README.md` costs a link to a stranger's site. Localhost and
+/// a bare IP need a port, or the word "localhost" in a sentence would link.
+/// Not after `/`, `@`, `.` or a word character, so a path segment or an email
+/// is never cut in half.
+const BARE_URL =
+  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-])(?:\/[^\s<>]*)?/gi;
+
+export type BareUrl = { start: number; end: number; href: string };
+
+/// Every bare host in `text`, with the scheme it opens under: `http` for a
+/// local address, which serves none of them over TLS, `https` for the rest.
+export function findBareUrls(text: string): BareUrl[] {
+  const out: BareUrl[] = [];
+  for (const m of text.matchAll(BARE_URL)) {
+    const url = trimUrlTail(m[0]);
+    const local = /^(localhost|\d)/i.test(url);
+    out.push({ start: m.index, end: m.index + url.length, href: `${local ? "http" : "https"}://${url}` });
+  }
+  return out;
+}
+
+/// Turns every bare host in prose into a link. Before the path pass, which
+/// then leaves the anchor alone, and before harden, which vets its href like
+/// any other.
+function rehypeBareUrls() {
+  return (tree: HastNode) => linkBareUrls(tree);
+}
+
+const NOT_LINKABLE = new Set(["pre", "code", "a", "script", "style"]);
+
+export function linkBareUrls(node: HastNode) {
+  if (!node.children) return;
+  node.children = node.children.flatMap((child): HastNode[] => {
+    if (child.type === "element") {
+      if (!NOT_LINKABLE.has(child.tagName ?? "")) linkBareUrls(child);
+      return [child];
+    }
+    const value = child.type === "text" ? child.value : undefined;
+    const matches = value ? findBareUrls(value) : [];
+    if (!value || matches.length === 0) return [child];
+
+    const parts: HastNode[] = [];
+    let at = 0;
+    for (const { start, end, href } of matches) {
+      if (start > at) parts.push({ type: "text", value: value.slice(at, start) });
+      parts.push({
+        type: "element",
+        tagName: "a",
+        properties: { href },
+        children: [{ type: "text", value: value.slice(start, end) }],
+      });
+      at = end;
+    }
+    if (at < value.length) parts.push({ type: "text", value: value.slice(at) });
+    return parts;
+  });
+}
+
 /// Streamdown's own rehype pipeline, with harden told to block a link by
 /// unwrapping it rather than by annotating the text around it, and every table
 /// cell given the block its width cap rides on. Cell wrapping sits after
@@ -68,6 +133,7 @@ export const REHYPE_PLUGINS = [
   defaultRehypePlugins.raw,
   defaultRehypePlugins.sanitize,
   rehypeTableCells,
+  rehypeBareUrls,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];
 
@@ -236,6 +302,7 @@ export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   defaultRehypePlugins.raw,
   defaultRehypePlugins.sanitize,
   rehypeTableCells,
+  rehypeBareUrls,
   rehypeFilePaths,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];

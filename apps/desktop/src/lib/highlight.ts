@@ -93,11 +93,17 @@ function urlAt(text: string, i: number): string | null {
   if (!/^https?:\/\/\S/i.test(text.slice(i, i + 9))) return null;
   let end = i;
   while (end < text.length && !SPACE.test(text[end])) end += 1;
-  let url = text.slice(i, end).replace(URL_TAIL, "");
-  while (url.endsWith(")") && (url.match(/\(/g) ?? []).length < (url.match(/\)/g) ?? []).length) {
-    url = url.slice(0, -1);
+  return trimUrlTail(text.slice(i, end));
+}
+
+/// `url` without the sentence punctuation after it, and without a closing paren
+/// it never opened.
+export function trimUrlTail(url: string): string {
+  let out = url.replace(URL_TAIL, "");
+  while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
+    out = out.slice(0, -1);
   }
-  return url;
+  return out;
 }
 
 /// A mention split into the part worth reading and the part that is only there

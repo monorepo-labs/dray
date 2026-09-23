@@ -62,11 +62,14 @@ const CONTROLS = { table: false, code: { copy: true, download: false } };
 
 // A link asks where to open — Dray's browser or the system one — through
 // the app-wide `LinkDialog`. ⌘-click skips the question and leaves the app.
-function Anchor({ href, children, ...rest }: React.ComponentProps<"a">) {
+// Passing `a` replaces Streamdown's renderer and its classes with it, so the
+// look is restated here — the same classes `FileLink` copies for a file link.
+function Anchor({ href, children, className, ...rest }: React.ComponentProps<"a">) {
   return (
     <a
       {...rest}
       href={href}
+      className={cn("wrap-anywhere font-medium text-primary underline underline-offset-2", className)}
       onClick={(e) => {
         if (!href) return;
         e.preventDefault();
