@@ -3,16 +3,23 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 
+/// The last good read per directory, for the life of the process. A failed
+/// read writes nothing, so what is drawn is always something an agent said.
+const lastRead = new Map<string, AgentAccounts[]>();
+
 /// Who each agent CLI is signed in as, and the two writes that move it.
 ///
 /// Per-component state rather than the module store [useAgentAvailability]
 /// keeps, and the difference is what the two answer. That one answers "is this
 /// agent offerable", which cannot change while the app runs and is read by the
 /// composer on every render; this one answers "who is it", which the reader is
-/// on this page to *change* — so it is read when the tab opens, re-read after
-/// every write, and forgotten when the dialog closes.
+/// on this page to *change* — so it is read every time the tab opens and
+/// re-read after every write. The last answer per directory is kept in
+/// `lastRead` and drawn meanwhile, so a second visit shows rows at once rather
+/// than a spinner over four child processes; the read still runs and replaces
+/// them.
 ///
-/// It takes no `enabled` flag, unlike every other hook the settings dialog
+/// It takes no `enabled` flag, unlike every other hook the settings page
 /// reads: the dialog switches tab bodies rather than hiding them, so the one
 /// component calling this exists only while its tab is on screen. Mounting is
 /// the gate, and a flag beside it would be a second answer to the same
@@ -23,7 +30,7 @@ import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 /// has to ask where the agent runs, and it is the directory the sign-in
 /// terminal opens in too.
 export function useAgentAccounts(cwd: string) {
-  const [agents, setAgents] = useState<AgentAccounts[] | null>(null);
+  const [agents, setAgents] = useState<AgentAccounts[] | null>(() => lastRead.get(cwd) ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +45,7 @@ export function useAgentAccounts(cwd: string) {
     setBusy(true);
     try {
       const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd });
+      lastRead.set(cwd, next);
       if (mine !== generation.current) return;
       setAgents(next);
       // A read that worked describes the page now, so whatever failed before it
@@ -54,9 +62,12 @@ export function useAgentAccounts(cwd: string) {
     }
   }, [cwd]);
 
+  // A moved `cwd` draws that directory's last answer, or waits — never the
+  // previous directory's rows under the new one.
   useEffect(() => {
+    setAgents(lastRead.get(cwd) ?? null);
     void load();
-  }, [load]);
+  }, [cwd, load]);
 
   /// Saves a pasted key into the agent's own store.
   ///

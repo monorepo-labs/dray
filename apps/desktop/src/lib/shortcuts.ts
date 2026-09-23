@@ -106,6 +106,7 @@ export const SHORTCUTS = [
   { id: "notice.delete", label: "Delete worktree from notification", group: "Notifications", chord: k("d", { shift: true }) },
 
   { id: "settings", label: "Settings", group: "General", chord: k(",") },
+  { id: "theme.next", label: "Next theme", group: "General", chord: k("t", { alt: true }) },
 ] as const satisfies readonly { id: string; label: string; group: ShortcutGroup; chord: Chord }[];
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];

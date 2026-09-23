@@ -72,12 +72,7 @@ export default function SpacesSettings({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        {/* `pr-7` on this row alone: the settings panel starts at the dialog's
-            top edge, where the close cross is drawn absolutely over whatever is
-            in that corner. Only the first row of the first tab body is under
-            it, so the gutter belongs here rather than on the panel, which would
-            take the width off every sentence in every tab. */}
-        <div className="flex items-center justify-between gap-4 pr-7">
+        <div className="flex items-center justify-between gap-4">
           <h2 className="text-ui font-medium text-muted-foreground">Spaces</h2>
           {/* On the heading's own row: it acts on the list under it, and a
               button at the bottom of a list that grows moves every time one is

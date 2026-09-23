@@ -10,7 +10,12 @@
       try {
         var t = localStorage.getItem("ade.theme") || "default";
         var m = localStorage.getItem("ade.mode") || "light";
+        // The stored mode is the reader's; a dark-only theme draws dark over
+        // it. Mirrors `darkOnly` in theme.ts, and theme.test.ts holds the two
+        // lists together.
+        var darkOnly = ["cobalt2", "one-dark-pro"];
         var dark =
+          darkOnly.indexOf(t) >= 0 ||
           m === "dark" ||
           (m === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
         var el = document.documentElement;

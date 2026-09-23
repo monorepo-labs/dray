@@ -655,24 +655,23 @@ export default function AccountsSettings({
           polls instead: a sign-in can take a browser round trip, and four
           children on a timer to catch it is worse than a button.
 
-          Up in the dialog's header rather than down here, and a glyph rather
+          Up in the page's heading rather than down here, and a glyph rather
           than a word: it acts on the whole tab, not on the rows nearest it, and
           a row of its own pushed every account down the page and scrolled away
           the moment the reader went looking for it. The name it loses off its
           face it keeps in a real tooltip and in `aria-label`.
 
-          The form takes the strip over instead: a back arrow leading it, level
-          with the close cross, where a reader already looks to get out of
-          something. Refresh has nothing to re-read while a credential is being
-          written, and the two would have sat a few pixels apart meaning
-          different kinds of "leave". */}
+          The form takes the heading over instead: a back arrow leading the
+          title, where a reader already looks to get out of something. Refresh
+          has nothing to re-read while a credential is being written, and the
+          two would have sat side by side meaning different kinds of "leave". */}
       <SettingsHeaderAction>
         {signingIn ? (
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label="Back"
-            className="mr-auto"
+            className="-order-1"
             onClick={() => setSigningIn(null)}
           >
             <ArrowLeft className="size-3.5" />
@@ -684,6 +683,7 @@ export default function AccountsSettings({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Refresh"
+                className="ml-auto"
                 disabled={busy}
                 onClick={() => void refresh()}
               >

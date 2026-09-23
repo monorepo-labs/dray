@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RotateCcw, X } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button } from "@/components/ui/button";
@@ -36,11 +36,14 @@ import { cn } from "@/lib/utils";
 /// `useHotkey` listens on `document`, so without that the chord being recorded
 /// would also fire whatever it currently means.
 ///
-/// Remove and Reset are two buttons because they mean opposite things: removing
-/// leaves the action with no chord at all, where resetting puts back what this
-/// build ships. A cross that quietly restored the default would hand the key
-/// back to whatever the reader was clearing it for — the clash is usually with
-/// something outside Dray, and the default is what clashes.
+/// Remove is Backspace inside the recorder, where Reset is a button, because
+/// they mean opposite things: removing leaves the action with no chord at all,
+/// where resetting puts back what this build ships. Removing that quietly
+/// restored the default would hand the key back to whatever the reader was
+/// clearing it for — the clash is usually with something outside Dray, and the
+/// default is what clashes. A cross per row was the first shape and read as
+/// noise down a column of keycaps; the recorder already owns "what is this
+/// key", so emptying it lives there, named in its own prompt.
 export default function ShortcutsSettings() {
   const overrides = useShortcutOverrides();
   const [recording, setRecording] = useState<ShortcutId | null>(null);
@@ -53,28 +56,13 @@ export default function ShortcutsSettings() {
         <section key={group} className="flex flex-col gap-1.5">
           <h2 className="text-ui font-medium text-muted-foreground">{group}</h2>
           {SHORTCUTS.filter((s) => s.group === group).map(({ id, label }) => (
-            <div key={id} className="flex flex-col">
+            // The hovered row takes the sidebar's hover fill, so the eye can
+            // follow one label across to its keys. Dimming the rest was tried
+            // and flickered as the pointer crossed the gaps between rows.
+            <div key={id} className="-mx-2 flex flex-col rounded-md px-2 hover:bg-sidebar-accent/50">
               <div className="flex min-h-7 items-center justify-between gap-4">
                 <span className="text-ui">{label}</span>
                 <span className="flex items-center gap-0.5">
-                  {chordFor(id) !== null && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label="Remove shortcut"
-                          onClick={() => {
-                            clearChord(id);
-                            setRefused(null);
-                          }}
-                        >
-                          <X />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">Remove shortcut</TooltipContent>
-                    </Tooltip>
-                  )}
                   {id in overrides && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -121,6 +109,15 @@ export default function ShortcutsSettings() {
                       e.preventDefault();
                       e.stopPropagation();
                       if (e.key === "Escape") return setRecording(null);
+                      // Bare Backspace is never a chord (`chordFromKey` refuses
+                      // it), so it is free to mean "no chord at all".
+                      if (
+                        (e.key === "Backspace" || e.key === "Delete") &&
+                        !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+                      ) {
+                        clearChord(id);
+                        return setRecording(null);
+                      }
                       const chord = chordFromKey(e);
                       if (!chord) return;
                       if (isReserved(chord))
@@ -132,7 +129,9 @@ export default function ShortcutsSettings() {
                     }}
                   >
                     {recording === id ? (
-                      <span className="text-ui text-muted-foreground">Press keys…</span>
+                      <span className="text-ui text-muted-foreground">
+                        {chordFor(id) === null ? "Press keys…" : "Press keys, ⌫ to remove"}
+                      </span>
                     ) : chordFor(id) === null ? (
                       // `ShortcutKeys` draws nothing for an unbound id, which
                       // leaves the recorder an empty box nothing invites a click

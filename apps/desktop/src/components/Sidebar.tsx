@@ -663,7 +663,7 @@ export function SidebarToggle({
   );
 }
 
-/// Opens the settings dialog.
+/// Opens the settings page.
 ///
 /// Shares the titlebar strip with the sidebar toggle rather than sitting in the
 /// filter row below it: settings are app-wide, and every control in that row
@@ -1144,7 +1144,7 @@ export default function Sidebar({
             issue is a task somebody already wrote down. Drawn whether or not a
             tracker is connected: the page's own empty state is where connecting
             is offered, and a row that only appears once you have found the
-            settings dialog can only be found by people who did not need it. */}
+            settings page can only be found by people who did not need it. */}
         <Button
           variant="ghost"
           size="sm"

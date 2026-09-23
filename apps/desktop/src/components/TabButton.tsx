@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 /// One entry in a row where exactly one is on.
 ///
-/// The main column's views, the right panel's panes and the settings dialog's
+/// The main column's views, the right panel's panes and the settings page's
 /// groups are the same control wearing three labels, so the look lives here
 /// rather than as three copies of one class string — which is the shape that
 /// drifts on whichever row nobody is looking at. Extras stay at the call site:

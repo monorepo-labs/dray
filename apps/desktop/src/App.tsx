@@ -17,7 +17,7 @@ import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
-import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
+import SettingsPage, { type SettingsTab } from "@/components/SettingsPage";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import IssuePanel from "@/components/IssuePanel";
 import IssuesView from "@/components/IssuesView";
@@ -93,6 +93,7 @@ import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { useHotkey } from "@/hooks/useHotkey";
+import { cycleTheme } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { useIntegrations } from "@/hooks/useIntegrations";
@@ -375,6 +376,11 @@ function App() {
   // reset as the tab, and for the same reason: it describes the way in, not the
   // dialog.
   const [namingSpace, setNamingSpace] = useState(false);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsTab("appearance");
+    setNamingSpace(false);
+  }, []);
 
   // Dictation writes into the composer's draft through the module-level store,
   // not through a prop: the controls reach `ChatInput` as an opaque node, so
@@ -1524,9 +1530,11 @@ function App() {
   // did not, which made ⌘N and ⌘⇧↑/↓ look inert: they moved the selection under
   // a column still full of issues, and the change only showed up on the way
   // back. The page itself is left as it was — its filters and its scroll come
-  // back with it — so this is a navigation, not a dismissal.
+  // back with it — so this is a navigation, not a dismissal. Settings cover the
+  // whole window, so they close too.
   const goToSession = (go: () => void) => {
     setIssuesOpen(false);
+    closeSettings();
     go();
   };
 
@@ -1985,6 +1993,8 @@ function App() {
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
   // custom menu carries no Settings item to swallow the key first.
   useHotkey("settings", () => setSettingsOpen(true));
+  // No notice on landing: the whole window changing is the answer.
+  useHotkey("theme.next", cycleTheme);
   // Both only mean anything before a session exists — the agent *is* the child
   // process and the worktree is where it starts — so they are unregistered
   // rather than no-ops there. `useHotkey` claims every chord it matches, and
@@ -2078,6 +2088,10 @@ function App() {
   return (
     <TooltipProvider>
     <DiffWorkerPool pair={codeThemePair}>
+    {/* Hidden, not unmounted, while settings take the window: transcripts,
+        scroll pins and drafts wait here. `display: none` is also what takes
+        the browser's native view down, its pane measuring zero. */}
+    <div className={cn("h-full w-full", settingsOpen && "hidden")}>
     <AppShell
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
@@ -2644,6 +2658,7 @@ function App() {
         </TabBody>
       )}
     </AppShell>
+    </div>
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
@@ -2664,15 +2679,9 @@ function App() {
     <LinkDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
         collapses and would take ⌘, with it. */}
-    <SettingsDialog
+    <SettingsPage
       open={settingsOpen}
-      onOpenChange={(next) => {
-        setSettingsOpen(next);
-        if (!next) {
-          setSettingsTab("appearance");
-          setNamingSpace(false);
-        }
-      }}
+      onClose={closeSettings}
       initialTab={settingsTab}
       // Every project, not the active space's: this is where a project is filed
       // into one, and a list narrowed by the space would hide exactly the rows

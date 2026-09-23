@@ -1,17 +1,14 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import AppIcon from "@/components/AppIcon";
 import LinearIcon from "@/components/LinearIcon";
+import rauchgAvatar from "@/assets/avatars/rauchg.jpg";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { inputClassName } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -27,6 +25,8 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import { resetFontSizes, setFontSize, useFontSizes } from "@/hooks/useFontSizes";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
+import { useFullscreen } from "@/hooks/useFullscreen";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
@@ -51,7 +51,7 @@ import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
-import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
+import { hasLightMode, modeFor, resolvedModeFor, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type {
   ExternalApp,
@@ -61,21 +61,34 @@ import type {
   UpdateStatus,
 } from "@/types/events";
 
-/// Where to send someone who wants to say something. Direct message rather than an
-/// issue tracker: most feedback is a sentence, and a form is more than a sentence is
-/// worth. The repo is beside it for the half who would rather send the fix.
+/// Where feedback and support go. Issues lead, since a report filed there is one
+/// the next person with the same bug can find; a direct message is beside it for
+/// what an issue is too heavy for.
 const CONTACT_URL = "https://x.com/yogesharc";
 const REPO_URL = "https://github.com/monorepo-labs/dray";
+const ISSUES_URL = `${REPO_URL}/issues/new`;
+// The landing page's own link, so both ask through one door.
+const SPONSOR_URL = "https://www.patreon.com/c/yogesharc/membership";
+
+/// People who sponsor Dray, drawn in About — the landing page's "Supported by"
+/// list, kept in step by hand. Avatars are bundled rather than fetched, so the
+/// row is whole offline; without one it carries an initial.
+const SUPPORTERS: { name: string; note: string; url: string; avatar?: string }[] = [
+  { name: "Guillermo Rauch", note: "Vercel CEO · OSS Grants", url: "https://x.com/rauchg", avatar: rauchgAvatar },
+];
 
 /// The app's preferences, such as they are.
 ///
+/// A page taking the whole window, drawn by `App` in place of the shell, which
+/// it hides rather than unmounts so every transcript is where it was left.
+///
 /// Mounted in `App` rather than beside the gear that opens it: the sidebar
-/// unmounts when it collapses, and a dialog living there would take the ⌘,
-/// shortcut with it — which is the one route into this that survives a
-/// collapsed sidebar.
-export default function SettingsDialog({
+/// unmounts when it collapses, and a page living there would take the ⌘,
+/// shortcut with it. Mounted while closed too, and drawing nothing, because
+/// the transcription hook's download listener has to outlive the page.
+export default function SettingsPage({
   open,
-  onOpenChange,
+  onClose,
   initialTab = "appearance",
   projects,
   spaces,
@@ -99,7 +112,7 @@ export default function SettingsDialog({
   cwd,
 }: {
   open: boolean;
-  onOpenChange: (next: boolean) => void;
+  onClose: () => void;
   /// Which tab to open on. The composer's mic button sends the reader straight
   /// to Transcription when no model is downloaded, which is the whole reason
   /// this is a prop rather than internal state.
@@ -144,104 +157,104 @@ export default function SettingsDialog({
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
   const transcription = useTranscriptionSettings(open);
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Each row carries its own sentence, so there is no one description the
-          dialog is described *by* — left unset, Radix warns about the missing
-          `aria-describedby` and pointing it at a row would read that row's copy
-          out as the dialog's purpose. */}
-      {/* Wider than the dialog default, and wider again since the groups moved
-          to a rail: that default is sized for a question and two buttons, this
-          holds prose, and the rail now takes 8rem off the panel before the
-          prose starts. At 34rem with a rail the analytics sentence went back to
-          breaking over three lines, which is the measure the width was set by
-          in the first place.
+  if (!open) return null;
 
-          `gap-0` because the title moved into the rail: the dialog holds one
-          child now, and the grid's own gap would be a band under nothing. */}
-      <DialogContent aria-describedby={undefined} className="max-w-176 gap-0">
-        <SettingsTabs initialTab={initialTab}>
-          {{
-            appearance: (
-              <>
-                <Section>
-                  <ThemeRow />
-                  <ModeRow />
-                  <AutoHideSidebarRow
-                    checked={autoHideSidebar}
-                    onChange={onAutoHideSidebarChange}
-                  />
-                </Section>
-                <Section title="Font size">
-                  <FontSizeRows />
-                </Section>
-              </>
-            ),
-            shortcuts: <ShortcutsSettings />,
-            spaces: (
-              <SpacesSettings
-                projects={projects}
-                spaces={spaces}
-                startNaming={startNamingSpace}
-                onSetProjectSpace={onSetProjectSpace}
-                onRemoveProject={onRemoveProject}
-                onCreateSpace={onCreateSpace}
-                onRenameSpace={onRenameSpace}
-                onRemoveSpace={onRemoveSpace}
-                onMoveSpace={onMoveSpace}
+  return (
+    <SettingsTabs initialTab={initialTab} onClose={onClose}>
+      {{
+        appearance: (
+          <>
+            <Section>
+              <ThemeRow />
+              <ModeRow />
+            </Section>
+            <Section title="Font size">
+              <FontSizeRows />
+            </Section>
+            <Section>
+              <AutoHideSidebarRow
+                checked={autoHideSidebar}
+                onChange={onAutoHideSidebarChange}
               />
-            ),
-            accounts: <AccountsSettings cwd={cwd} />,
-            transcription: (
-              <TranscriptionSettings
-                status={transcription.status}
-                downloads={transcription.downloads}
-                onDownload={transcription.download}
-                onCancelDownload={transcription.cancelDownload}
-                onDelete={transcription.remove}
-                onSelectModel={transcription.selectModel}
-                onSelectDevice={transcription.selectDevice}
-                onSetMute={transcription.setMute}
+            </Section>
+          </>
+        ),
+        shortcuts: <ShortcutsSettings />,
+        spaces: (
+          <SpacesSettings
+            projects={projects}
+            spaces={spaces}
+            startNaming={startNamingSpace}
+            onSetProjectSpace={onSetProjectSpace}
+            onRemoveProject={onRemoveProject}
+            onCreateSpace={onCreateSpace}
+            onRenameSpace={onRenameSpace}
+            onRemoveSpace={onRemoveSpace}
+            onMoveSpace={onMoveSpace}
+          />
+        ),
+        accounts: <AccountsSettings cwd={cwd} />,
+        transcription: (
+          <TranscriptionSettings
+            status={transcription.status}
+            downloads={transcription.downloads}
+            onDownload={transcription.download}
+            onCancelDownload={transcription.cancelDownload}
+            onDelete={transcription.remove}
+            onSelectModel={transcription.selectModel}
+            onSelectDevice={transcription.selectDevice}
+            onSetMute={transcription.setMute}
+          />
+        ),
+        integrations: (
+          <Section>
+            <OpenFilesRow />
+            <BrowserRow />
+            {/* Draws nothing until something is connected, which is why it
+                carries no heading of its own — a heading left standing over
+                nothing names a group the reader cannot reach. Connecting
+                happens on the issues page. */}
+            <IssueTrackerRow {...integrations} />
+          </Section>
+        ),
+        about: (
+          <>
+            <Section>
+              <UpdatesRow
+                status={updateStatus}
+                manual={updateManual}
+                blocked={updateBlocked}
+                onCheck={onCheckUpdates}
+                onInstall={onInstallUpdate}
               />
-            ),
-            integrations: (
-              <Section>
-                <OpenFilesRow />
-                <BrowserRow />
-                {/* Draws nothing until something is connected, which is why it
-                    carries no heading of its own — a heading left standing over
-                    nothing names a group the reader cannot reach. Connecting
-                    happens on the issues page. */}
-                <IssueTrackerRow {...integrations} />
-              </Section>
-            ),
-            about: (
-              <>
-                <Section>
-                  <UpdatesRow
-                    status={updateStatus}
-                    manual={updateManual}
-                    blocked={updateBlocked}
-                    onCheck={onCheckUpdates}
-                    onInstall={onInstallUpdate}
-                  />
-                  <BetaUpdatesRow
-                    channel={updateChannel}
-                    onChange={onUpdateChannelChange}
-                  />
-                  <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
-                </Section>
-                {/* The one block here with no label of its own, so it is the one
-                    that still wants a heading over it. */}
-                <Section title="Feedback">
-                  <ContactBlock />
-                </Section>
-              </>
-            ),
-          }}
-        </SettingsTabs>
-      </DialogContent>
-    </Dialog>
+              <BetaUpdatesRow
+                channel={updateChannel}
+                onChange={onUpdateChannelChange}
+              />
+              <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
+            </Section>
+            {/* The two blocks here with no label of their own, so they are the
+                ones that still want a heading over them. */}
+            <Section title="Support">
+              <SupportBlock />
+            </Section>
+            <Section title="Feedback">
+              <ContactBlock />
+            </Section>
+            <p className="text-ui text-muted-foreground">
+              Made by{" "}
+              <button
+                type="button"
+                onClick={() => void openUrl(CONTACT_URL)}
+                className="cursor-pointer text-foreground underline-offset-4 hover:underline"
+              >
+                Yogesh
+              </button>
+            </p>
+          </>
+        ),
+      }}
+    </SettingsTabs>
   );
 }
 
@@ -270,7 +283,7 @@ function FontSizeRows() {
 }
 
 /// The field keeps its own text while focused: a value in range is applied on
-/// every keystroke so the transcript moves behind the dialog, one outside it is
+/// every keystroke so the page answers as the reader types, one outside it is
 /// left alone until blur, where it is clamped. Clamping on change is the trap —
 /// a controlled field snapping `1` to `10` turns a typed `15` into `105`.
 ///
@@ -345,14 +358,28 @@ function FontSizeRow({
 /// named palettes is words spent on something the reader has already seen.
 function ThemeRow() {
   const id = useId();
-  const { theme, resolvedMode, setTheme } = useTheme();
+  const { theme, mode, setTheme } = useTheme();
+  useShortcutOverrides();
   const index = THEMES.findIndex((t) => t.id === theme);
   const { refs: swatches, onKeyDown } = useRovingGroup(THEMES.length, index, (next) =>
     setTheme(THEMES[next].id),
   );
 
   return (
-    <SettingRow id={id} asGroup stacked label="Theme">
+    <SettingRow
+      id={id}
+      asGroup
+      stacked
+      label="Theme"
+      // Gone with the chord: "Cycle" and no keys is a word pointing at nothing.
+      trailing={
+        chordFor("theme.next") && (
+          <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
+            Cycle <ShortcutKeys ids={["theme.next"]} />
+          </span>
+        )
+      }
+    >
       <div
         role="radiogroup"
         aria-labelledby={id}
@@ -374,17 +401,17 @@ function ThemeRow() {
           >
             <span
               data-theme={name}
-              // Its own mode, not the document's. A dark-only theme in light
-              // mode matches no palette block and falls through to the light
-              // ramp's neutrals — so the swatch would draw a light Default that
-              // clicking it does not give you, `modeFor` having forced dark.
-              data-mode={hasLightMode(name) ? resolvedMode : "dark"}
+              // What clicking it gives: the reader's chosen mode as this
+              // theme renders it, not the document's. On a dark-only theme the
+              // document is dark while a light reader stays light, and every
+              // other swatch has to say so.
+              data-mode={resolvedModeFor(name, mode)}
               className={cn(
                 "theme-swatch size-12 rounded-md border transition-colors",
-                // The offset has to be the dialog's own fill rather than
-                // `--background`: this floats over the sidebar, which has none.
+                // An outline, not a ring: a ring's offset is painted in a
+                // colour, and the page under it is glass with no fill to match.
                 theme === name
-                  ? "border-transparent ring-2 ring-ring ring-offset-2 ring-offset-popover"
+                  ? "border-transparent outline-2 outline-offset-2 outline-ring"
                   : "border-border group-hover:border-muted-foreground/60 group-focus-visible:border-ring",
               )}
             />
@@ -478,7 +505,7 @@ function OpenFilesRow() {
           </Button>
         </DropdownMenuTrigger>
 
-        {/* Aligned to the end because the control sits at the dialog's right
+        {/* Aligned to the end because the control sits at the page's right
             edge, where a start-aligned menu opens past it.
 
             Sized to the longest app name, floored at the trigger's own width.
@@ -534,12 +561,15 @@ const MODES: { id: ThemeMode; label: string }[] = [
 /// The group disables whole on a dark-only theme rather than dropping its light
 /// segments. Two segments where there were three reads as the control being broken,
 /// and it would still be lying — `system` is not offerable either, since the OS can
-/// resolve it to light. `modeFor` already forces dark, so the selected segment is
-/// honest about what is rendering.
+/// resolve it to light. The selected segment reads `modeFor`, so it is honest about
+/// what is rendering.
 function ModeRow() {
   const id = useId();
-  const { theme, mode, setMode } = useTheme();
+  const { theme, mode: chosen, setMode } = useTheme();
   const available = hasLightMode(theme);
+  // What is drawn: a dark-only theme shows Dark selected, while the reader's own
+  // mode waits in the store for the next theme that can use it.
+  const mode = modeFor(theme, chosen);
 
   const index = MODES.findIndex((m) => m.id === mode);
   const { refs, onKeyDown } = useRovingGroup(MODES.length, index, (next) =>
@@ -552,24 +582,21 @@ function ModeRow() {
       asGroup
       stacked
       label="Mode"
-      // Nothing to say while it works — the segments name themselves. The one
-      // sentence here is the reason it does not, which is the whole of why a
-      // setting that cannot apply is disabled rather than hidden.
-      description={
-        available ? undefined : "This theme is dark only for now — the others carry both."
-      }
     >
+      {/* On a dark-only theme the control gives way to the one fact, rather
+          than three disabled segments under a sentence explaining them. The
+          row stays, so the reader still learns why there is no light here. */}
+      {!available ? (
+        <p className="text-ui text-muted-foreground">This theme is dark only.</p>
+      ) : (
       <div
         role="radiogroup"
         aria-labelledby={id}
-        onKeyDown={available ? onKeyDown : undefined}
+        onKeyDown={onKeyDown}
         // Track and thumb, the way a segmented control reads everywhere: the
         // selected one is a raised card sitting *in* a recessed rail, so the
         // group says "one of these" before any label is read.
-        className={cn(
-          "inline-flex w-fit gap-0.5 rounded-lg bg-muted p-0.5",
-          !available && "opacity-50",
-        )}
+        className="inline-flex w-fit gap-0.5 rounded-lg bg-muted p-0.5"
       >
         {MODES.map(({ id: value, label }, i) => (
           <button
@@ -580,13 +607,12 @@ function ModeRow() {
             type="button"
             role="radio"
             aria-checked={mode === value}
-            disabled={!available}
             tabIndex={mode === value ? 0 : -1}
             onClick={() => setMode(value)}
             className={cn(
               "rounded-[calc(var(--radius)-4px)] px-3 py-1 text-ui transition-colors",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              available && "cursor-pointer",
+              "cursor-pointer",
               mode === value
                 ? "bg-card text-foreground shadow-2xs"
                 : "text-muted-foreground hover:text-foreground",
@@ -596,6 +622,7 @@ function ModeRow() {
           </button>
         ))}
       </div>
+      )}
     </SettingRow>
   );
 }
@@ -606,7 +633,7 @@ function ModeRow() {
 /// promise to a screen reader that the keyboard behaves this way, and two copies of
 /// it is two chances for one to quietly stop keeping it. Roving `tabIndex` is the
 /// other half and lives at the call site: without it every option is its own Tab
-/// stop, so tabbing through the dialog walks the palettes one at a time.
+/// stop, so tabbing through the page walks the palettes one at a time.
 ///
 /// Selection follows focus because both groups are cheap to try — here trying one
 /// *is* seeing it, which is the case the pattern exists for.
@@ -671,7 +698,7 @@ function BetaUpdatesRow({
 }) {
   const id = useId();
   /// The channel the reader is about to move to, or null at rest. Resets with
-  /// the dialog, since the tab bodies are switched rather than hidden.
+  /// the page, since the tab bodies are switched rather than hidden.
   const [confirming, setConfirming] = useState<UpdateChannel | null>(null);
 
   return (
@@ -787,7 +814,7 @@ function UpdatesRow({
     </Button>
   );
 
-  // The same sentence the sidebar row draws, since this dialog covers it — a
+  // The same sentence the sidebar row draws, since this page covers it — a
   // reader who pressed the button here would otherwise get no answer at all.
   return (
     <SettingRow id={id} label="Updates" description={updateFailure(manual)}>
@@ -842,7 +869,7 @@ function AnalyticsRow({
       <Switch
         id={id}
         // `null` until the first read lands. Disabled rather than guessing a
-        // value: either guess is wrong for somebody, and the dialog's own open
+        // value: either guess is wrong for somebody, and the page's own open
         // animation is longer than a local file read.
         disabled={view === null || view.analyticsLocked}
         checked={view?.analyticsEnabled ?? false}
@@ -867,10 +894,9 @@ function AutoHideSidebarRow({
   return (
     <SettingRow
       id={id}
-      label="Hide sidebar in Browser"
-      // Says both halves, because the giving back is the part that would
-      // otherwise read as the sidebar reappearing on its own.
-      description="Collapse the sidebar when the Browser view opens, and put it back on the way out. A sidebar you closed yourself stays closed."
+      // "Auto" carries what the sentence under it used to: the sidebar comes
+      // back on its own on the way out.
+      label="Auto-hide sidebar in Browser View"
     >
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </SettingRow>
@@ -965,7 +991,7 @@ function BrowserRow() {
 ///
 /// Connecting happens on the issues page, not here. That page is the surface
 /// with nothing to show without a key, so it is where the field that fixes it
-/// belongs; a second copy in this dialog would be a second form for one slot,
+/// belongs; a second copy in this page would be a second form for one slot,
 /// and a settings row offering to connect something the reader has never seen
 /// is a row they cannot judge. What is left here is what settings are actually
 /// for: seeing what is connected, and taking it back.
@@ -1040,7 +1066,8 @@ function IssueTrackerRow({
 /// Nothing here is a setting — there is no state to read back — so the label a row
 /// would demand ("Get in touch") sits under a heading that already says Feedback and
 /// earns nothing but a third line. A sentence and the two buttons it names is the
-/// whole block.
+/// whole block. An issue leads, since a report there is one the next person with the
+/// same bug can find; a message is for what an issue is too heavy for.
 ///
 /// Both go through `openUrl` — the same route the PR panel and transcript links
 /// take, so a link from here lands in the reader's own browser rather than turning
@@ -1049,16 +1076,63 @@ function ContactBlock() {
   return (
     <div className="flex flex-col gap-2.5">
       <p className="text-ui text-muted-foreground">
-        Tell me what&apos;s broken, or send a PR.
+        Found a bug or want something? Open an issue on GitHub, or send a PR.
       </p>
       <div className="flex items-center gap-1.5">
-        <Button variant="secondary" size="sm" onClick={() => void openUrl(CONTACT_URL)}>
+        <Button variant="secondary" size="sm" onClick={() => void openUrl(ISSUES_URL)}>
+          Open an issue
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => void openUrl(CONTACT_URL)}>
           Message me
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/// Sponsoring, starring, and who already did the first.
+///
+/// The list is written here and ships with a release — no fetch, so it cannot
+/// fail, and a name added is a line in this file.
+function SupportBlock() {
+  return (
+    <div className="flex flex-col gap-2.5">
+      <p className="text-ui text-muted-foreground">
+        Dray is free and open source. Sponsoring or starring the repo keeps it going.
+      </p>
+      <div className="flex items-center gap-1.5">
+        <Button variant="secondary" size="sm" onClick={() => void openUrl(SPONSOR_URL)}>
+          <Heart />
+          Sponsor
+        </Button>
         <Button variant="ghost" size="sm" onClick={() => void openUrl(REPO_URL)}>
-          GitHub
+          <Star />
+          Star on GitHub
         </Button>
       </div>
+      <ul className="flex flex-col gap-1 pt-1">
+        {SUPPORTERS.map((s) => (
+          <li key={s.name}>
+            <button
+              type="button"
+              onClick={() => void openUrl(s.url)}
+              className="-mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/50"
+            >
+              {s.avatar ? (
+                <img src={s.avatar} alt="" className="size-7 shrink-0 rounded-full object-cover" />
+              ) : (
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-xs text-muted-foreground">
+                  {s.name[0]}
+                </span>
+              )}
+              <span className="flex min-w-0 flex-col">
+                <span className="text-ui font-medium">{s.name}</span>
+                <span className="text-ui text-muted-foreground">{s.note}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -1068,7 +1142,7 @@ function ContactBlock() {
 /// The heading is the exception now that the groups are tabs: the tab's own
 /// label already names what is below it, so a heading repeating it is a second
 /// copy of one word. What still earns one is a block carrying no label of its
-/// own, which is the feedback links and nothing else.
+/// own, which is the support and feedback links and nothing else.
 ///
 /// Untitled it is still worth being: the tab panel spaces its groups apart at
 /// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
@@ -1105,14 +1179,8 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   about: "About",
 };
 
-/// The dialog's groups as a tab row, drawn as the app's tabs everywhere else.
-///
-/// One long scroll was the first shape and it stopped working at five groups:
-/// the reader who came to change one thing read past four others to find it,
-/// and every group added made that worse. Tabs across the top rather than a
-/// rail down the side, because the dialog is 28rem and a rail takes a third of
-/// that from the prose — the analytics sentence already broke across three
-/// lines at 25rem.
+/// The page's groups as a list down the left, standing where the sidebar
+/// stands, with the picked group filling the rest of the window.
 ///
 /// **About holds privacy and feedback**, which is the one grouping worth
 /// arguing about. Both answer what the app does with you rather than what it
@@ -1120,21 +1188,20 @@ const TAB_LABELS: Record<SettingsTab, string> = {
 /// Privacy alone was too thin to be a tab and reads oddly next to Appearance.
 ///
 /// Bodies are switched, not hidden, unlike the right panel's. There is no
-/// scroll position or expensive render to preserve here, and mounting all three
-/// would have the external-app scan run every time the dialog opens whichever
-/// tab the reader wanted. The pick resets on close for the same reason the
-/// dialog's own open state is not persisted.
+/// scroll position or expensive render to preserve here, and mounting them all
+/// would have the external-app scan run on every open whichever tab the reader
+/// wanted. The pick resets on close, since this only mounts while open.
 function SettingsTabs({
   initialTab,
+  onClose,
   children,
 }: {
   initialTab: SettingsTab;
+  onClose: () => void;
   children: Record<SettingsTab, ReactNode>;
 }) {
   const id = useId();
-  // An initializer, not an effect: `DialogContent` unmounts on close, so every
-  // open builds this fresh and the caller's tab is simply where it starts.
-  // That is also what keeps "the pick resets on close" true.
+  const fullscreen = useFullscreen();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   // State rather than a ref, since a portal needs the node during render and a
   // ref holds nothing on the first one.
@@ -1145,121 +1212,122 @@ function SettingsTabs({
     setTab(SETTINGS_TABS[next]),
   );
 
+  // Focus lands on the picked group, so the arrows work at once and nothing
+  // behind the page keeps it.
+  useEffect(() => refs.current[index]?.focus(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On the document, so Escape leaves from wherever focus is, body included.
+  // Anything inside that answers Escape itself — a menu, the chord recorder,
+  // the space name field — marks the event handled first, and keeps it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Handled, or WebKit passes the key on to the window, and Escape is
+      // how macOS leaves fullscreen.
+      e.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="flex gap-5">
-      {/* A rail down the side, which reverses this dialog's first shape and the
-          reason is that the dialog moved. Tabs across the top were right at
-          28rem, where a rail would have taken a third of the width from prose
-          that was already breaking over three lines. At 34rem with seven groups
-          the row was the thing that broke instead — wrapping onto a second line,
-          which reads as two rows of tabs rather than one list — and a rail is a
-          column that grows down, where a row can only grow into the panel. */}
-      {/* The title heads the rail rather than the dialog, which is what closes
-          the empty band the header row used to be: a line spent on one word on
-          the left and the close cross on the right, with the groups starting
-          below all of it. Over the rail it names the list it sits on and the
-          panel starts at the top of the dialog. `px-2` is the tab buttons' own
-          padding, so the word lines up with the labels under it. */}
-      <div className="flex w-32 shrink-0 flex-col gap-3">
-        <DialogTitle className="px-2">Settings</DialogTitle>
+    <div className="flex h-full w-full overflow-hidden">
+      {/* The sidebar's own width, border and titlebar strip, so the page
+          reads as the sidebar changing what it lists rather than as a second
+          window. */}
+      <aside className="flex w-60 shrink-0 flex-col border-r border-sidebar-border">
+        {/* The way back sits where the gear that opened this sits: the
+            strip's inner end, clearing the traffic lights, and the free left
+            edge in fullscreen where they are gone. */}
         <div
-          role="tablist"
-          aria-label="Settings"
-          aria-orientation="vertical"
-          onKeyDown={onKeyDown}
-          className="flex flex-col gap-0.5"
+          className={cn(
+            "flex h-(--titlebar-h) shrink-0 items-center px-2",
+            fullscreen ? "justify-start" : "justify-end",
+          )}
+          data-tauri-drag-region="deep"
         >
-          {SETTINGS_TABS.map((value, i) => (
-            <TabButton
-              key={value}
-              ref={(el) => {
-                refs.current[i] = el;
-              }}
-              role="tab"
-              id={`${id}-${value}`}
-              aria-selected={tab === value}
-              aria-controls={`${id}-panel`}
-              tabIndex={tab === value ? 0 : -1}
-              active={tab === value}
-              onClick={() => setTab(value)}
-              className="cursor-pointer text-left"
-            >
-              {TAB_LABELS[value]}
-            </TabButton>
-          ))}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Back"
+                onClick={onClose}
+                className="opacity-80 transition-opacity hover:opacity-100"
+              >
+                <ArrowLeft className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              Back
+              <Kbd>Esc</Kbd>
+            </TooltipContent>
+          </Tooltip>
         </div>
-      </div>
+        <div className="px-2">
+          <div
+            role="tablist"
+            aria-label="Settings"
+            aria-orientation="vertical"
+            onKeyDown={onKeyDown}
+            className="flex flex-col gap-px"
+          >
+            {SETTINGS_TABS.map((value, i) => (
+              <TabButton
+                key={value}
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
+                role="tab"
+                id={`${id}-${value}`}
+                aria-selected={tab === value}
+                aria-controls={`${id}-panel`}
+                tabIndex={tab === value ? 0 : -1}
+                active={tab === value}
+                onClick={() => setTab(value)}
+                className="h-7 cursor-pointer px-1.5 text-left"
+              >
+                {TAB_LABELS[value]}
+              </TabButton>
+            ))}
+          </div>
+        </div>
+      </aside>
 
-      {/* Fixed, and scrolling past it. A floor was enough while the tabs were
-          within a line or two of each other, and stopped being enough the
-          moment Transcription arrived carrying a list of models — the dialog
-          then doubled in height on the way in and halved on the way out, which
-          reads as the window jumping rather than as the content changing.
-          Raising the floor to the tallest tab instead would spend that height
-          on About, which is four lines.
-
-          The negative margin is for the model rows' focus ring: `overflow-y`
-          clips the other axis too, so a ring drawn at the panel's own edge
-          loses its outer edge without it. */}
-      <div className="relative min-w-0 flex-1">
-        {/* A tab's own header action, drawn over the panel's top-right and
-            outside its scroll box — a control that scrolls away is one the
-            reader has to go looking for, and one drawn *in* the panel spends a
-            whole row on itself. `right-6` leaves the corner to the close cross,
-            which is absolute against the dialog and answers to nothing here.
-
-            `h-4` is that cross, and it is what the strip aligns to: a button
-            here is taller than the glyph it holds, so sat at `top-0` it hung
-            half a row below the cross it sits beside. The box is the cross's
-            own line and a taller child centres on it, overflowing both ways.
-
-            It spans the panel so a tab can put something at either end — a back
-            arrow leads, `mr-auto` and all, where an action follows — which is
-            why the strip itself takes no pointer events and its children take
-            them back: an empty 16px band over the panel would otherwise swallow
-            clicks meant for the first row under it. */}
-        <div
-          ref={setSlot}
-          className="pointer-events-none absolute top-0 right-6 left-0 z-10 flex h-4 items-center justify-end gap-1 [&>*]:pointer-events-auto"
-        />
-
-        <div
-          role="tabpanel"
-          id={`${id}-panel`}
-          aria-labelledby={`${id}-${tab}`}
-          // `shrink-0` on the sections, since a column flex item's default is to
-          // shrink toward its content before the container agrees to scroll.
-          // Capped against the viewport as well as fixed: the height is still
-          // one number for every tab, so nothing jumps on a switch, but a short
-          // window gets a dialog that fits inside it rather than one running off
-          // both ends. No *text* gutter, deliberately: the close cross is drawn
-          // over this panel's top corner, but only the *first row of one tab*
-          // ever reaches it, so that row keeps its own `pr-7` and every
-          // sentence in every other tab keeps the full measure. A gutter there
-          // was 28px of empty column down the whole dialog to clear a 16px
-          // glyph. Header actions dodge it by another route — they are drawn in
-          // the strip above, which reserves the corner itself.
-          //
-          // The track is inset from both ends, because this box runs the
-          // dialog's full height: left alone the bar met the close cross and
-          // the header strip at one end and the dialog's own rounded corner at
-          // the other, reading as chrome laid over the window rather than as a
-          // panel that scrolls. A margin on the track is the only place that
-          // inset can go — padding here is inside the scrollport and the bar
-          // spans it whatever the box is padded by.
-          //
-          // **Not `scrollbar-overlay`, and the two cannot be combined.** WebKit
-          // drops `::-webkit-scrollbar` styling outright for any element that
-          // sets the standard `scrollbar-width`/`scrollbar-color`, so the
-          // sidebar's hidden-until-hover treatment and this inset are a choice
-          // of one. The corner is the part that was wrong in both states, where
-          // a bar drawn while a tab overflows is what every other scroller in
-          // the app does. Static, so the warning on that utility — a
-          // hover-driven pseudo rule resolving late and never clearing — is not
-          // in play here.
-          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&::-webkit-scrollbar-track]:my-4 [&>*]:shrink-0"
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* The app header's height and muted stand-in word, but the content's own
+            `px-8`, so "Settings" and the tab title start on one edge. */}
+        <header
+          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-8"
+          data-tauri-drag-region="deep"
         >
-          <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
+          <span className="text-ui text-muted-foreground">Settings</span>
+        </header>
+        {/* The scroll box spans the column so the bar sits at the window's
+            edge; the text inside is capped, since a row stretched across a
+            wide window leaves its label and its switch a screen apart.
+            `shrink-0` on the sections, since a column flex item shrinks toward
+            its content before the container agrees to scroll. */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex w-full max-w-160 flex-col gap-7 px-8 pt-4 pb-16 [&>*]:shrink-0">
+            {/* A tab hangs a header action here through a portal. The slot is
+                `contents`, so what lands in it lays out in this row — an action
+                takes `ml-auto` to the far end, a back arrow `-order-1` to lead
+                the title. */}
+            <div className="flex h-7 items-center gap-2">
+              <h1 className="text-base font-medium">{TAB_LABELS[tab]}</h1>
+              <div ref={setSlot} className="contents" />
+            </div>
+            <div
+              role="tabpanel"
+              id={`${id}-panel`}
+              aria-labelledby={`${id}-${tab}`}
+              className="flex flex-col gap-7 [&>*]:shrink-0"
+            >
+              <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1270,7 +1338,7 @@ function SettingsTabs({
 /// `stacked` for when even that is the wrong shape.
 ///
 /// Side by side was the first shape, and it broke on the widest control here: two
-/// buttons pushed the sentence into a third of the dialog, where four words took
+/// buttons pushed the sentence into a third of the page, where four words took
 /// three lines and the row's height jumped every time the control changed. The
 /// description is prose and wants a measure; the control is a fixed thing and wants
 /// an edge to sit against.
@@ -1296,6 +1364,7 @@ function SettingRow({
   description,
   asGroup = false,
   stacked = false,
+  trailing,
   children,
 }: {
   id: string;
@@ -1305,6 +1374,9 @@ function SettingRow({
   description?: ReactNode;
   asGroup?: boolean;
   stacked?: boolean;
+  /// Drawn at the far end of a stacked row's label line — a hint about the
+  /// control, such as the chord that cycles it.
+  trailing?: ReactNode;
   children: ReactNode;
 }) {
   const labelEl = (
@@ -1324,7 +1396,10 @@ function SettingRow({
     return (
       <div className="flex flex-col gap-2.5">
         <div className="flex flex-col gap-1">
-          {labelEl}
+          <div className="flex items-center justify-between gap-4">
+            {labelEl}
+            {trailing}
+          </div>
           {descriptionEl}
         </div>
         {children}

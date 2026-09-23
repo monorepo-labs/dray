@@ -97,7 +97,7 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **Opacity cannot hold a keycap back in both mode.** `opacity` fade group toward **page**, and cap's fill = veil running page's opposite way: dark move white toward black and box soften, light move black toward white and box survive every step down. Measured: fill-to-page contrast **1.12 in both** at `opacity-50`, so lowering number never close gap. Right-panel chord hint therefore `dark:opacity-50` — light take none, its cap already quieter than dark twin. Sidebar's own jump hint take other route, fading each cap against its **own** token (`bg-muted/40`), which reduce equally on both side.
 
-**Mode = three segment, not switch.** System/Light/Dark. Switch can only ask light-or-dark, leaving `system` reachable from nowhere — and it the one that keep following OS after being set. Drawn off `mode` as *chosen*, never `resolvedMode`, since whole point of System = it read Dark today and Light tonight. Dark-only theme disable **whole group** rather than drop its light segment: two segment where there were three read as broken control, and `system` unofferable there anyway.
+**Mode = three segment, not switch.** System/Light/Dark. Switch can only ask light-or-dark, leaving `system` reachable from nowhere — and it the one that keep following OS after being set. Drawn off `mode` as *chosen*, never `resolvedMode`, since whole point of System = it read Dark today and Light tonight. Dark-only theme **replace the control** with one line, "This theme is dark only." — three disabled segment under sentence explaining them said same fact three time.
 
 **`--sidebar` = `transparent` unconditionally now, not `--background` under another name.** Sidebar read as part of page, and honest way to say that = let page show through. Old way held only while every backdrop flat: against gradient, flat sidebar draw visible seam down window at x where two furthest apart.
 
@@ -249,7 +249,7 @@ Card name its subject — it and `worktree-failed` the only two that do — brea
 
 **Destructive confirm sit rightmost and take solid red.** `AlertDialogFooter` = `sm:flex-row sm:justify-end`, so source order = screen order — confirm must come **after** `AlertDialogCancel` in markup or it land on left. `destructive` prop on `AlertDialogAction` carry solid fill, not button's own `destructive` variant: that one a tint, for control sitting among others, where this the one thing in dialog that do something. Prop caller's to set — both dialog today destructive, but red default quietly colour first one that isn't.
 
-## Settings dialog
+## Settings
 
 **Dialog, not alert, and `showClose` = whole difference.** Frame, overlay and both animation copied from `alert-dialog` deliberately: to reader two are same object, differing only in whether app asking question or reader opened something. Alert answered by own buttons so carry no dismiss; dialog dismissed rather than answered, and Escape alone = way out only for people who already know it there. `--popover` not `--card` on both, so both take glass on vibrancy — they float over page, and wash of own colour plus blur is what say so. [Reason above](#worktree-notice-and-confirm-dialog).
 
@@ -257,7 +257,7 @@ Card name its subject — it and `worktree-failed` the only two that do — brea
 
 **Row = label and reason left, control right** (`SettingRow`), **except where control wider than a switch — then it go under label, full width** (`stacked`). Beside-the-label take its width out of description, which then wrap to three ragged line and leave orphan, and dialog read as set of row that don't fit rather than list of setting. Under = also where picker want to be: option ranged along one edge, not pushed against far one. Description **not optional except where control show answer instead of telling it** — see theme row below; everywhere else it where "why is this off by default" live, and row with bare label make reader guess.
 
-**Dialog wider than `Dialog`'s own default** (28rem against 25rem). Default sized for question and two button; this hold prose. Setting that cannot apply on this platform **disabled, not hidden**: row that vanish read as setting app forgot, and sentence under it = only place reason can be said.
+**Page, not dialog, and content capped at 40rem, left-aligned.** Settings take whole window — list where sidebar stand, group filling rest — because every dialog width it tried was argument about prose measure. Cap keep that measure on wide window. Setting that cannot apply on this platform **disabled, not hidden**: row that vanish read as setting app forgot, and sentence under it = only place reason can be said.
 
 **Switch one rung up from composer's own toggle** — `h-4 w-7` against its `h-3 w-5`. There track sit inside toolbar button among other 12px chrome; here it thing being pressed and have to take click on own.
 

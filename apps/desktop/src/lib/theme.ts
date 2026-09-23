@@ -123,13 +123,23 @@ export function hasLightMode(name: ThemeName): boolean {
 
 /// The mode this theme can actually render, given the one asked for.
 ///
-/// The guard that matters: picking a dark-only theme while in light mode has to force
-/// dark, or `[data-theme="default"][data-mode="light"]` matches no block and the app
-/// falls through to the light ramp's own neutral values — legible, but not the theme
-/// anyone chose, and nothing on screen would say why. Applied on every write and on
-/// the first read, so a store carrying that pair from an older build heals itself.
+/// The guard that matters: a dark-only theme in light mode has to draw dark, or
+/// `[data-theme="cobalt2"][data-mode="light"]` matches no block and the app falls
+/// through to the light ramp's own neutral values — legible, but not the theme
+/// anyone chose, and nothing on screen would say why.
+///
+/// Applied when the mode is *drawn*, never when it is stored. Storing the forced
+/// `dark` was the older shape, and it lost the reader's own mode: light on one
+/// theme, a pass through a dark-only one, and every light theme after it came back
+/// dark. The pre-paint script in index.html answers the same question and carries
+/// its own copy of the dark-only list.
 export function modeFor(name: ThemeName, mode: ThemeMode): ThemeMode {
   return hasLightMode(name) ? mode : "dark";
+}
+
+/// What `name` renders as under the reader's chosen `mode`.
+export function resolvedModeFor(name: ThemeName, mode: ThemeMode): ResolvedMode {
+  return resolveMode(modeFor(name, mode));
 }
 
 // Shared with the pre-paint script in index.html. Changing either key means
@@ -159,11 +169,12 @@ export function coerceTheme(raw: string | null): ThemeName {
   return THEMES.some((t) => t.id === raw) ? (raw as ThemeName) : DEFAULT_THEME;
 }
 
-/// Stamps the document and persists the choice. The `.dark` class is set alongside
+/// Stamps the document and persists the choice — the mode as chosen, so a
+/// dark-only theme drawn dark leaves a light reader light for the next theme. The `.dark` class is set alongside
 /// `data-mode` because shadcn primitives and Streamdown both style through `dark:`
 /// variants — dropping it would leave them light against a dark palette.
 export function applyTheme(name: ThemeName, mode: ThemeMode): ResolvedMode {
-  const resolved = resolveMode(mode);
+  const resolved = resolvedModeFor(name, mode);
   const el = document.documentElement;
 
   el.dataset.theme = name;

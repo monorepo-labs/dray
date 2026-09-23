@@ -3,7 +3,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import { channel } from "@/lib/channel";
 import {
   applyTheme,
-  modeFor,
+  THEMES,
   readStoredTheme,
   watchSystemMode,
   type ResolvedMode,
@@ -15,7 +15,7 @@ import {
 ///
 /// A module store rather than the per-hook `useState` this used to be, and that
 /// stopped being a preference the moment [useGlass](./useGlass.ts) started reading
-/// the theme: with a copy each, the settings dialog would set a theme its own hook
+/// the theme: with a copy each, the settings page would set a theme its own hook
 /// knew about and the window would keep the old one's fullscreen behaviour. Several
 /// components hold this at once — every mounted diff reads `resolvedMode` — so the
 /// same argument [useCodeTheme](./useCodeTheme.ts) makes applies here too.
@@ -70,9 +70,9 @@ function rewatch() {
 function set(next: Partial<Pick<ThemeState, "name" | "mode">>) {
   const state = store();
   const name = next.name ?? state.name;
-  // Picking a dark-only theme while in light mode has to force dark here rather
-  // than at the call site, or every future setter has to remember the rule.
-  const mode = modeFor(name, next.mode ?? state.mode);
+  // The mode as chosen, never forced: `applyTheme` draws a dark-only theme dark
+  // on its own, and storing that would lose a light reader's mode for good.
+  const mode = next.mode ?? state.mode;
   if (name === state.name && mode === state.mode) return;
   current = { name, mode, resolvedMode: applyTheme(name, mode) };
   rewatch();
@@ -86,6 +86,12 @@ export function setTheme(name: ThemeName) {
 
 export function setMode(mode: ThemeMode) {
   set({ mode });
+}
+
+/// Steps to the next palette in `THEMES` order, wrapping. What ⌘⌥T does.
+export function cycleTheme() {
+  const i = THEMES.findIndex((t) => t.id === store().name);
+  set({ name: THEMES[(i + 1) % THEMES.length].id });
 }
 
 /// The palette, the mode as chosen, and the mode as rendered.

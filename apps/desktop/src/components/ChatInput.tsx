@@ -99,7 +99,7 @@ type ChatInputProps = {
   /// Throws away a recording in flight, answering whether there was one.
   ///
   /// A prop rather than a hook here because the recorder lives in `App`, beside
-  /// the settings dialog a first press has to open. Escape is bound in this
+  /// the settings page a first press has to open. Escape is bound in this
   /// component because that is where the one document-level handler lives.
   onCancelRecording?: () => boolean;
   /// How many prompts are waiting. Only decides whether Esc is bound — the rows
@@ -112,7 +112,7 @@ type ChatInputProps = {
   /// The dictate button and, while recording, the level and its two buttons.
   ///
   /// A node like `toolbar`, and for the same reason: the recorder lives in
-  /// `App`, beside the settings dialog a first press has to open. It sits
+  /// `App`, beside the settings page a first press has to open. It sits
   /// immediately left of Send, since both act on the message being written.
   dictation?: ReactNode;
   /// A recording or a transcription is under way, which **hides Send**.
