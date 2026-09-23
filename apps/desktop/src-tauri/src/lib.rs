@@ -745,8 +745,6 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_shutter_ready,
             #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_zoom,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_devtools,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_pick,

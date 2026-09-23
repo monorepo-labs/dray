@@ -19,20 +19,6 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Reads `null` as the type's default, which `#[serde(default)]` alone will not.
-///
-/// `default` answers for a key that is *absent* and does nothing for one that is
-/// present and null. Codex does both on the same field: `webSearch` arrives
-/// twice, and the opening one sends `"results": null` where the closing one
-/// sends an array. That failed the whole line, so a search drew no row at all.
-fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
-
 /// A notification we act on, or a marker saying why we don't.
 pub enum CodexEvent {
     TurnStarted(TurnNotification),
@@ -129,8 +115,6 @@ pub struct TurnError {
 #[serde(rename_all = "camelCase")]
 pub struct ItemNotification {
     pub thread_id: String,
-    #[serde(default)]
-    pub turn_id: Option<String>,
     pub item: ThreadItem,
 }
 
@@ -142,8 +126,6 @@ pub struct DeltaNotification {
     /// main transcript as though the primary agent said it.
     #[serde(default)]
     pub thread_id: Option<String>,
-    #[serde(default)]
-    pub turn_id: Option<String>,
     pub item_id: String,
     pub delta: String,
 }
@@ -156,29 +138,18 @@ pub struct DeltaNotification {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadItem {
-    /// Our own prompt, echoed back.
-    ///
-    /// Dropped by the mapper: Dray mints its own `UserMessage` carrying the
-    /// tree baseline, the images and the issue links, none of which this
-    /// carries. Drawing both would double every prompt in the transcript.
-    UserMessage { id: String },
     AgentMessage {
         id: String,
         #[serde(default)]
         text: String,
-        /// `commentary` for the running narration, `final_answer` for the
-        /// answer. Read but not drawn — noted because nothing in Claude Code
-        /// distinguishes the two, so a surface for it would be new.
-        #[serde(default)]
-        phase: Option<String>,
     },
     Reasoning {
         id: String,
         /// Readable summaries, which is what most OpenAI models emit.
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         summary: Vec<String>,
         /// Raw reasoning blocks, which open-weight models emit instead.
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         content: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
@@ -186,8 +157,6 @@ pub enum ThreadItem {
         id: String,
         #[serde(default)]
         command: String,
-        #[serde(default)]
-        cwd: Option<String>,
         #[serde(default)]
         status: ItemStatus,
         #[serde(default)]
@@ -200,7 +169,7 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     FileChange {
         id: String,
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         changes: Vec<FileChangeEntry>,
         #[serde(default)]
         status: ItemStatus,
@@ -214,9 +183,9 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     WebSearch {
         id: String,
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         query: String,
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         results: Vec<WebSearchResult>,
     },
     /// The model looked at an image on disk.
@@ -271,7 +240,7 @@ pub enum ThreadItem {
         status: ItemStatus,
         #[serde(default)]
         prompt: Option<String>,
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         receiver_thread_ids: Vec<String>,
     },
     /// A tool belonging to a connector rather than to Codex itself.
@@ -289,7 +258,7 @@ pub enum ThreadItem {
         kind: Option<String>,
         #[serde(default)]
         query: Option<String>,
-        #[serde(default, deserialize_with = "null_as_default")]
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         results: Vec<WebSearchResult>,
     },
     /// Codex compacted the conversation. Can happen without being asked.
@@ -299,7 +268,7 @@ pub enum ThreadItem {
 }
 
 /// One hit from either search route. Every field optional — this is somebody
-/// else's payload and a missing snippet must cost a line of the card, never the
+/// else's payload and a missing field must cost a line of the card, never the
 /// item it arrived on.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -308,10 +277,6 @@ pub struct WebSearchResult {
     pub title: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub snippet: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,8 +310,6 @@ pub struct TokenUsageNotification {
     /// a conversation the reader is not having.
     #[serde(default)]
     pub thread_id: Option<String>,
-    #[serde(default)]
-    pub turn_id: Option<String>,
     pub token_usage: TokenUsage,
 }
 
@@ -409,7 +372,7 @@ pub struct PlanNotification {
     /// The model's own sentence about why the plan looks like this.
     #[serde(default)]
     pub explanation: Option<String>,
-    #[serde(default, deserialize_with = "null_as_default")]
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub plan: Vec<PlanStep>,
 }
 
@@ -456,7 +419,7 @@ pub struct ApprovalRequest {
     /// on the command params; it is on the wire, and the capture is what proves
     /// it. Kept as raw values because the answer echoes one back untouched: a
     /// decision Dray retyped would be a decision it could get wrong.
-    #[serde(default, deserialize_with = "null_as_default")]
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub available_decisions: Vec<Value>,
 }
 
@@ -680,29 +643,5 @@ mod tests {
             panic!("wrong variant");
         };
         assert_eq!(turn.turn.status, TurnStatus::Unknown);
-    }
-
-    /// The real shape off the wire, including the `phase` field the docs do not
-    /// mention.
-    #[test]
-    fn agent_message_carries_phase() {
-        let params = json!({
-            "threadId": "t", "turnId": "u",
-            "item": {"type": "agentMessage", "id": "msg_1", "text": "ok",
-                     "phase": "final_answer", "memoryCitation": null}
-        });
-
-        let CodexEvent::ItemCompleted(done) =
-            parse_notification("item/completed", params).expect("should parse")
-        else {
-            panic!("wrong variant");
-        };
-        match done.item {
-            ThreadItem::AgentMessage { text, phase, .. } => {
-                assert_eq!(text, "ok");
-                assert_eq!(phase.as_deref(), Some("final_answer"));
-            }
-            _ => panic!("wrong item"),
-        }
     }
 }

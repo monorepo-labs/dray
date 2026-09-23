@@ -401,7 +401,7 @@ async fn open_session(
 pub async fn stored_cwd(session_id: &str) -> Result<Option<String>> {
     let home = match std::env::var("GROK_HOME") {
         Ok(home) if !home.is_empty() => std::path::PathBuf::from(home),
-        _ => dirs_home().context("no home directory")?.join(".grok"),
+        _ => std::env::home_dir().context("no home directory")?.join(".grok"),
     };
 
     stored_cwd_under(&home.join("sessions"), session_id).await
@@ -431,11 +431,6 @@ async fn stored_cwd_under(
     }
 
     Ok(None)
-}
-
-/// The reader's home directory, by the one route that does not need a crate.
-fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 /// Percent-decodes one of grok's session-store directory names back into the

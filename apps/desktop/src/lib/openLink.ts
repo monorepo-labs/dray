@@ -1,6 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
+
 type Opener = (url: string, opts: { external: boolean }) => void;
 
 /// Where a link in the transcript goes. `App` installs one that opens the
@@ -16,21 +18,15 @@ export function setLinkOpener(fn: Opener | null) {
 
 /// The link waiting on the reader's answer in `LinkDialog`, or `null`.
 let pending: string | null = null;
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 function set(url: string | null) {
   pending = url;
-  for (const l of listeners) l();
+  changed.emit();
 }
 
 export function usePendingLink(): string | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => void listeners.delete(l);
-    },
-    () => pending,
-  );
+  return useSyncExternalStore(changed.subscribe, () => pending);
 }
 
 /// A click on a link asks first — in Dray or outside — since the two mean

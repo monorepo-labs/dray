@@ -7,7 +7,6 @@
 /* Streamdown ships prebuilt classes Tailwind would otherwise never see, since it
    only scans our own source. Paths are relative to this file. */
 @source "../node_modules/streamdown/dist/*.js";
-@source "../node_modules/@streamdown/code/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -73,8 +72,6 @@
   --secondary-foreground: var(--foreground);
   --accent-foreground: var(--foreground);
   --sidebar-foreground: var(--foreground);
-  --sidebar-primary: var(--primary);
-  --sidebar-primary-foreground: var(--primary-foreground);
   /* What a filled button is, which is not always what `--primary` is. The two
      part company wherever the palette's primary is a *colour* rather than a
      dark rung: Send is the app's one branded control and wears it, and every
@@ -94,13 +91,6 @@
   --sidebar-accent: var(--surface-selected);
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-ring: var(--ring);
-  /* Nothing draws a chart yet. Aliased rather than invented so a palette does
-     not carry five values it will never show. */
-  --chart-1: var(--foreground);
-  --chart-2: var(--ring);
-  --chart-3: var(--muted-foreground);
-  --chart-4: var(--muted);
-  --chart-5: var(--surface-card);
 
   /* What the app paints edge to edge, behind every surface — the thing the
      translucent fills composite against. Two stops rather than one colour, so a
@@ -919,8 +909,6 @@
   --color-surface-raised: var(--surface-raised);
   --color-surface-well: var(--surface-well);
   --color-surface-thumb: var(--surface-thumb);
-  --color-surface-card: var(--surface-card);
-  --color-veil-selected: var(--veil-selected);
   --color-accent-add: var(--accent-add);
   --color-accent-merged: var(--accent-merged);
   --color-accent-thinking: var(--accent-thinking);
@@ -941,15 +929,8 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -981,8 +962,6 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
 
   @keyframes shimmer {
     from {

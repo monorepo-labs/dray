@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import MorePanel from "@/components/MorePanel";
-import RightPanel, { TabBody } from "@/components/RightPanel";
+import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
@@ -312,7 +312,13 @@ function Demo() {
           ))}
         </div>
 
-        <RightPanel open more tab="more" onTabChange={() => {}} cwd="/Users/you/code/dray">
+        <RightPanel
+          open
+          tabs={tabOrder({ pr: false, docs: false, issue: false, more: true })}
+          tab="more"
+          onTabChange={() => {}}
+          cwd="/Users/you/code/dray"
+        >
           <TabBody active>
             <MorePanel
               todos={picked.todos}

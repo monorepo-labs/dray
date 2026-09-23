@@ -1,3 +1,4 @@
+import { basename } from "@/lib/format";
 import type { PrCheck, PrMark, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
@@ -460,7 +461,7 @@ export function firstLine(body: string): string {
 /// row's `title`, which is what that attribute is for here — text the app is
 /// truncating rather than a fact it is hiding.
 export function threadLabel(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
+  return basename(path);
 }
 
 /// Bodies as bots write them, minus the machinery they hide their state in.

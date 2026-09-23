@@ -137,7 +137,11 @@ impl RpcClient {
         let id = self.next_id.fetch_add(1, Relaxed);
         let rx = self.pending.register(id);
 
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        // pi's rule: a line never written must hand its slot back, or it leaks.
+        if let Err(err) = self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})) {
+            self.pending.forget(&id);
+            return Err(err);
+        }
 
         self.pending.wait(&id, rx, timeout, method, "the agent").await
     }
@@ -249,6 +253,22 @@ mod tests {
 
         // The slot goes with it, or one unresponsive server leaks an entry per
         // attempt for as long as the session is open.
+        assert!(client.pending.is_empty());
+    }
+
+    /// A line that was never written can never be answered, so its slot has
+    /// to go back or a dead pipe leaks one entry per attempt.
+    #[tokio::test]
+    async fn a_failed_write_leaves_no_slot_behind() {
+        let (tx, rx) = mpsc::unbounded_channel::<Outbound>();
+        drop(rx);
+        let client = RpcClient::over(tx);
+
+        client
+            .request("turn/start", json!({}))
+            .await
+            .expect_err("the pipe is closed");
+
         assert!(client.pending.is_empty());
     }
 

@@ -236,7 +236,7 @@ impl Mapper {
 
             // A liveness ping for a long-running call. The tool row already
             // shimmers for exactly as long, so there is nothing to draw.
-            ClaudeCodeEvent::ToolProgress { .. } => Ok(None),
+            ClaudeCodeEvent::ToolProgress => Ok(None),
 
             ClaudeCodeEvent::ControlRequest {
                 request_id,
@@ -315,14 +315,14 @@ impl Mapper {
         seq
     }
 
-    /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
-    /// double-assigned.
     /// A main-thread event the app mints itself, numbered through the same
     /// counter as the mapped lines so `seq` stays gap-free.
     pub fn synthesize(&mut self, session_id: &str, payload: AgentEventPayload) -> AgentEvent {
         self.build(session_id.to_string(), None, None, payload)
     }
 
+    /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
+    /// double-assigned.
     fn build(
         &mut self,
         session_id: String,
@@ -358,11 +358,39 @@ impl Mapper {
     /// and fall through to `None`.
     fn handle_system_event(&mut self, e: SystemEvent) -> Result<Option<AgentEventPayload>> {
         match e {
-            SystemEvent::Init { .. } => {
-                if let SystemEvent::Init { model, .. } = &e {
-                    self.model = Some(model.clone());
-                }
-                Self::handle_init(e).map(Some)
+            // Per turn, not just per session — Claude Code sends `init` again for
+            // every turn.
+            SystemEvent::Init {
+                cwd,
+                tools,
+                mcp_servers,
+                model,
+                permission_mode,
+                claude_code_version,
+                agents,
+                fast_mode_state,
+                ..
+            } => {
+                self.model = Some(model.clone());
+
+                let settings = Settings {
+                    model: Some(model.clone()),
+                    approval_policy: Some(permission_mode),
+                    sandbox: None,
+                    writable_roots: Vec::new(),
+                    network_access: None,
+                    fast_mode: Some(fast_mode_state),
+                };
+
+                Ok(Some(AgentEventPayload::TurnStarted(SessionInfo {
+                    cwd: Some(cwd),
+                    model: Some(model),
+                    harness_version: Some(claude_code_version),
+                    tools,
+                    mcp_servers,
+                    subagent_types: agents,
+                    settings: Some(settings),
+                })))
             }
             // A live counter for the thinking block in flight. Reported as
             // usage rather than given its own payload: it is the same fact
@@ -383,9 +411,45 @@ impl Mapper {
                 tool_use_id,
                 message,
             })),
-            SystemEvent::TaskStarted { .. }
-            | SystemEvent::TaskProgress { .. }
-            | SystemEvent::TaskNotification { .. } => Self::handle_task(e).map(Some),
+            SystemEvent::TaskStarted {
+                task_id,
+                description,
+                prompt,
+                subagent_type,
+                task_type,
+                ..
+            } => Ok(Some(AgentEventPayload::SubagentStarted {
+                agent_id: task_id,
+                // A non-agent task has no subagent type; its kind
+                // (`local_bash`) is the closest honest label.
+                label: subagent_type.unwrap_or(task_type),
+                description: Some(description),
+                prompt,
+            })),
+            SystemEvent::TaskProgress {
+                task_id,
+                description,
+                usage,
+                last_tool_name,
+                ..
+            } => Ok(Some(AgentEventPayload::SubagentProgress {
+                agent_id: task_id,
+                description: Some(description),
+                last_tool: Some(last_tool_name),
+                usage: Some(Usage::from(usage)),
+            })),
+            SystemEvent::TaskNotification {
+                task_id,
+                status,
+                summary,
+                usage,
+                ..
+            } => Ok(Some(AgentEventPayload::SubagentCompleted {
+                agent_id: task_id,
+                status,
+                summary: Some(summary),
+                usage: usage.map(Usage::from),
+            })),
             SystemEvent::BackgroundTasksChanged { tasks, .. } => {
                 Ok(Some(AgentEventPayload::BackgroundTasksChanged {
                     tasks: tasks.into_iter().map(BackgroundTask::from).collect(),
@@ -450,94 +514,6 @@ impl Mapper {
         }
     }
 
-    /// Maps a subagent lifecycle event: `TaskStarted`, `TaskProgress`, or
-    /// `TaskNotification`. Errors on any other variant.
-    fn handle_task(e: SystemEvent) -> Result<AgentEventPayload> {
-        match e {
-            SystemEvent::TaskStarted {
-                task_id,
-                description,
-                prompt,
-                subagent_type,
-                task_type,
-                ..
-            } => Ok(AgentEventPayload::SubagentStarted {
-                agent_id: task_id,
-                // A non-agent task has no subagent type; its kind
-                // (`local_bash`) is the closest honest label.
-                label: subagent_type.unwrap_or(task_type),
-                description: Some(description),
-                prompt,
-            }),
-            SystemEvent::TaskProgress {
-                task_id,
-                description,
-                usage,
-                last_tool_name,
-                ..
-            } => Ok(AgentEventPayload::SubagentProgress {
-                agent_id: task_id,
-                description: Some(description),
-                last_tool: Some(last_tool_name),
-                usage: Some(Usage::from(usage)),
-            }),
-            SystemEvent::TaskNotification {
-                task_id,
-                status,
-                summary,
-                usage,
-                ..
-            } => Ok(AgentEventPayload::SubagentCompleted {
-                agent_id: task_id,
-                status,
-                summary: Some(summary),
-                usage: usage.map(Usage::from),
-            }),
-            other => bail!("handle_task called with a non-task system event: {other:?}"),
-        }
-    }
-
-    /// Maps `system/init` into `TurnStarted`. This is per turn, not just per
-    /// session — Claude Code sends `init` again for every turn.
-    fn handle_init(e: SystemEvent) -> Result<AgentEventPayload> {
-        if let SystemEvent::Init {
-            cwd,
-            session_id: _,
-            tools,
-            mcp_servers,
-            model,
-            permission_mode,
-            claude_code_version,
-            agents,
-            fast_mode_state,
-            ..
-        } = e
-        {
-            let settings = Settings {
-                model: Some(model.clone()),
-                approval_policy: Some(permission_mode),
-                sandbox: None,
-                writable_roots: Vec::new(),
-                network_access: None,
-                fast_mode: Some(fast_mode_state),
-            };
-
-            let session_info = SessionInfo {
-                cwd: Some(cwd),
-                model: Some(model),
-                harness_version: Some(claude_code_version),
-                tools,
-                mcp_servers,
-                subagent_types: agents,
-                settings: Some(settings),
-            };
-
-            Ok(AgentEventPayload::TurnStarted(session_info))
-        } else {
-            bail!("handle_init called with a non-init system event")
-        }
-    }
-
     /// Maps one SSE frame to a `Delta`, tracking `current_msg_id` as frames arrive.
     fn handle_stream_event(&mut self, event: StreamFrame) -> Result<Option<AgentEventPayload>> {
         match event {
@@ -597,8 +573,7 @@ impl Mapper {
             }
 
             // The committed `assistant` and `result` events carry these facts.
-            StreamFrame::MessageDelta { .. } | StreamFrame::MessageStop => Ok(None),
-            // Q: don't we need to clear the current msg id from self when msg stops or will the next message start update it so no need to handle it here?
+            StreamFrame::MessageDelta | StreamFrame::MessageStop => Ok(None),
             StreamFrame::Unrecognized => Ok(None),
         }
     }
@@ -835,9 +810,6 @@ impl Mapper {
     }
 }
 
-/// A `parent_tool_use_id` is exactly what marks an event as a subagent's, so
-/// its presence decides the whole thing. The label rides along on the same
-/// events (`subagent_type`), needing no lookup against `task_started`.
 /// Whether a `user` text block is the CLI narrating an interruption rather than
 /// something the user said. The block carries no other signal, but matching
 /// prose fails safe: the abort is reported for real on the `result` line
@@ -933,6 +905,9 @@ fn user_message(text: String) -> AgentEventPayload {
     }
 }
 
+/// A `parent_tool_use_id` is exactly what marks an event as a subagent's, so
+/// its presence decides the whole thing. The label rides along on the same
+/// events (`subagent_type`), needing no lookup against `task_started`.
 fn subagent(parent_tool_use_id: Option<String>, label: Option<String>) -> Option<Subagent> {
     parent_tool_use_id.map(|id| Subagent { id, label })
 }

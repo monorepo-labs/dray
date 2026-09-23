@@ -7,7 +7,7 @@
 
 use super::rpc::RpcClient;
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -84,16 +84,7 @@ async fn one_request(
         }
     });
 
-    // Every other method is refused with "Not initialized" until both halves of
-    // the handshake have gone out.
-    client
-        .request(
-            "initialize",
-            json!({"clientInfo": {"name": "dray", "title": "Dray",
-                                  "version": env!("CARGO_PKG_VERSION")}}),
-        )
-        .await?;
-    client.notify("initialized", json!({}))?;
+    super::handshake(&client).await?;
 
     client.request(method, params).await
 }

@@ -18,14 +18,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Reads `null` as the type's default, which `#[serde(default)]` alone will not.
-fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
+use crate::harness::null_as_default;
+pub use crate::harness::acp::{ContentBlock, PermissionChoice, ToolContent, ToolKind, ToolStatus};
 
 /// A line the mapper acts on, or a marker saying why it does not.
 pub enum FxEvent {
@@ -44,8 +38,6 @@ pub enum FxEvent {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateNotification {
-    #[serde(default)]
-    pub session_id: String,
     pub update: SessionUpdate,
 }
 
@@ -73,11 +65,7 @@ pub enum SessionUpdate {
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
-        title: Option<String>,
-        #[serde(default)]
         kind: ToolKind,
-        #[serde(default)]
-        status: ToolStatus,
         #[serde(default)]
         raw_input: Option<Value>,
     },
@@ -94,10 +82,7 @@ pub enum SessionUpdate {
         #[serde(default, rename = "command_result")]
         command_result: Option<CommandResult>,
     },
-    SessionInfoUpdate {
-        #[serde(default)]
-        title: Option<String>,
-    },
+    SessionInfoUpdate,
     /// An occupancy reading — `used` of `size` — not a cumulative. The trap
     /// Codex's `total` and Claude's `result.usage` both set is absent here.
     UsageUpdate {
@@ -114,98 +99,12 @@ pub enum SessionUpdate {
     Unknown,
 }
 
-/// An ACP content block. Only text is drawn; an image or resource block is
-/// kept from failing the line and drawn as nothing.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentBlock {
-    Text {
-        #[serde(default)]
-        text: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
-impl ContentBlock {
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            ContentBlock::Text { text } => Some(text),
-            ContentBlock::Other => None,
-        }
-    }
-}
-
-/// What a tool call reports back, tagged on `type`.
-///
-/// `diff` is in the ACP schema and no capture carried one — fx's editor names
-/// its sides in `rawInput` instead — so it is modelled to keep the line and
-/// read by nothing yet.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolContent {
-    Content {
-        content: ContentBlock,
-    },
-    #[serde(rename_all = "camelCase")]
-    Diff {
-        #[serde(default)]
-        path: String,
-        #[serde(default)]
-        old_text: Option<String>,
-        #[serde(default)]
-        new_text: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
-/// ACP's closed set of tool kinds, which is what makes classifying a call
-/// possible without knowing fx's tool names.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    Read,
-    Edit,
-    Delete,
-    Move,
-    Search,
-    Execute,
-    Think,
-    Fetch,
-    SwitchMode,
-    #[default]
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-    #[serde(other)]
-    Unknown,
-}
-
-impl ToolStatus {
-    /// Whether this update closes the call.
-    pub fn is_final(self) -> bool {
-        matches!(self, ToolStatus::Completed | ToolStatus::Failed)
-    }
-}
-
 /// fx's own account of a finished shell command. Snake case, since it is fx's
 /// field and not ACP's.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct CommandResult {
     #[serde(default)]
     pub exit_code: Option<i64>,
-    #[serde(default)]
-    pub signal: Option<i64>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
 }
@@ -215,8 +114,6 @@ pub struct CommandResult {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionRequest {
-    #[serde(default)]
-    pub session_id: String,
     #[serde(default)]
     pub tool_call: ToolCallRef,
     #[serde(default)]
@@ -233,24 +130,9 @@ pub struct ToolCallRef {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
     pub kind: ToolKind,
     #[serde(default)]
     pub raw_input: Option<Value>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionChoice {
-    pub option_id: String,
-    #[serde(default)]
-    pub name: String,
-    /// `allow_once`, `allow_always`, `reject_once`, `reject_always`. A string
-    /// rather than an enum so a kind added later reaches [`permissions`]'s
-    /// own fallback instead of failing the request.
-    #[serde(default)]
-    pub kind: String,
 }
 
 /// The `session/prompt` response.

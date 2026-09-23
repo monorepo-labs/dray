@@ -4,10 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCopied } from "@/hooks/useCopied";
 import { cn } from "@/lib/utils";
 import type { AgentAvailability } from "@/types/events";
 
-const COPIED_MS = 1600;
 const FAILED_MS = 4000;
 
 /// Why the composer will not send when the agent's login has run out, and the
@@ -49,18 +49,11 @@ export default function LoginExpiredNotice({
   cwd: string;
   onHandled: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, copyText] = useCopied();
   const [error, setError] = useState<string | null>(null);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(
-    () => () => {
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      if (errorTimer.current) clearTimeout(errorTimer.current);
-    },
-    [],
-  );
+  useEffect(() => () => void (errorTimer.current && clearTimeout(errorTimer.current)), []);
 
   const logIn = async () => {
     try {
@@ -77,16 +70,7 @@ export default function LoginExpiredNotice({
   };
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(agent.loginCommand);
-    } catch (err) {
-      console.error("failed to copy the login command", err);
-      return;
-    }
-    setCopied(true);
-    if (copiedTimer.current) clearTimeout(copiedTimer.current);
-    copiedTimer.current = setTimeout(() => setCopied(false), COPIED_MS);
-    onHandled();
+    if (await copyText(agent.loginCommand)) onHandled();
   };
 
   return (

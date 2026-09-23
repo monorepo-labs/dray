@@ -4,23 +4,13 @@ import {
   applyIssue,
   filterIssues,
   groupIssues,
-  groupLabel,
   issueSpan,
   issueTag,
-  issueUrl,
   parseIdentifier,
   shortIdentifier,
   trackerOf,
 } from "@/lib/issue";
-import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
-
-const ref = (identifier: string, title: string): IssueRef => ({
-  tracker: "linear",
-  id: `uuid-${identifier}`,
-  identifier,
-  title,
-  url: `https://linear.app/x/issue/${identifier}`,
-});
+import type { Issue, IssueStateKind } from "@/types/events";
 
 describe("issueSpan", () => {
   it("opens on a tag the caret is inside", () => {
@@ -137,21 +127,6 @@ describe("shortIdentifier", () => {
   });
 });
 
-describe("issueUrl", () => {
-  it("finds where a tag points", () => {
-    const issues = [ref("DRA-53", "One"), ref("DRA-9", "Two")];
-
-    expect(issueUrl(issues, "DRA-9")).toBe("https://linear.app/x/issue/DRA-9");
-  });
-
-  /// A tag whose issue never resolved — the tracker was unreachable when the
-  /// prompt was sent — stays plain text rather than becoming a dead link.
-  it("is null for a tag nothing was linked for", () => {
-    expect(issueUrl([], "DRA-53")).toBeNull();
-    expect(issueUrl([ref("DRA-53", "One")], "DRA-9")).toBeNull();
-  });
-});
-
 const issue = (identifier: string, kind: IssueStateKind): Issue => ({
   tracker: "linear",
   id: `uuid-${identifier}`,
@@ -209,9 +184,6 @@ describe("groupIssues", () => {
     const rows = [issue("DRA-1", "unstarted"), issue("DRA-2", "completed")];
 
     expect(groupIssues(rows).map((g) => g.label)).toEqual(["Todo", "Done"]);
-    // Drawn before its rows are read, so the settled headings ask this one
-    // directly rather than going through `groupIssues`.
-    expect(groupLabel("canceled")).toBe("Cancelled");
   });
 });
 

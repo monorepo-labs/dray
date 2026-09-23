@@ -1,23 +1,8 @@
 use std::format;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// Reads an explicit `null` as the type's default.
-///
-/// `#[serde(default)]` covers a field that is *absent*; it does nothing for one
-/// that is present and null, which fails against any non-`Option` type. The CLI
-/// does both — a synthetic message (the reply to a built-in slash command) sends
-/// `"iterations": null` where an ordinary one omits the key — so a collection
-/// that can arrive either way needs this as well as `default`.
-fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -27,35 +12,24 @@ pub enum ClaudeCodeEvent {
         event: StreamFrame,
         session_id: String,
         parent_tool_use_id: Option<String>,
-        uuid: String,
-        #[serde(default)]
-        ttft_ms: Option<u64>,
     },
     Assistant {
         message: AssistantMessage,
         parent_tool_use_id: Option<String>,
         session_id: String,
-        uuid: String,
-        #[serde(default)]
-        request_id: Option<String>,
         #[serde(default)]
         subagent_type: Option<String>,
-        #[serde(default)]
-        task_description: Option<String>,
     },
     User {
         message: UserMessage,
         parent_tool_use_id: Option<String>,
         session_id: String,
-        uuid: String,
         #[serde(default)]
         timestamp: Option<String>,
         #[serde(default)]
         tool_use_result: Option<Value>,
         #[serde(default)]
         subagent_type: Option<String>,
-        #[serde(default)]
-        task_description: Option<String>,
         /// A message the CLI replayed into its own context rather than one the
         /// user typed. Both flags are needed and neither implies the other: a
         /// compaction emits its summary as `isSynthetic` and the `/compact`
@@ -70,7 +44,6 @@ pub enum ClaudeCodeEvent {
     Result(ResultEvent),
     RateLimitEvent {
         rate_limit_info: RateLimitInfo,
-        uuid: String,
         session_id: String,
     },
     /// The CLI's reply to a `control_request` we wrote to stdin — the ack for
@@ -111,17 +84,7 @@ pub enum ClaudeCodeEvent {
     /// while everything in it is a real gap. Nothing renders from it: the tool
     /// row already shimmers for as long as the call is pending, so the ping
     /// says nothing the transcript isn't showing.
-    ToolProgress {
-        tool_use_id: String,
-        tool_name: String,
-        #[serde(default)]
-        parent_tool_use_id: Option<String>,
-        elapsed_time_seconds: u64,
-        #[serde(default)]
-        heartbeat: bool,
-        session_id: String,
-        uuid: String,
-    },
+    ToolProgress,
 }
 
 /// A question from the CLI. Externally tagged on `subtype`, like the control
@@ -157,10 +120,6 @@ pub struct PermissionRequest {
     pub decision_reason: Option<String>,
     #[serde(default)]
     pub decision_reason_type: Option<String>,
-    /// Set when a safety check is involved: `false` means at least one check
-    /// wants a human, `true` that a classifier could approve it.
-    #[serde(default)]
-    pub classifier_approvable: Option<bool>,
     /// The ask's own verb is narrower than a whole-tool rule would be, so
     /// offering "always allow" here would grant more than the question asked.
     #[serde(default)]
@@ -290,13 +249,6 @@ pub struct RateLimitInfo {
     pub overage_disabled_reason: Option<String>,
     #[serde(default)]
     pub is_using_overage: Option<bool>,
-    /// Fraction of the window spent, `0.93` at 93%. Only sent alongside
-    /// `allowed_warning`.
-    #[serde(default)]
-    pub utilization: Option<f64>,
-    /// The threshold that tripped the warning — `0.9` observed.
-    #[serde(default)]
-    pub surpassed_threshold: Option<f64>,
 }
 
 /// Statuses that mean work continues and nothing needs saying.
@@ -326,7 +278,6 @@ impl RateLimitInfo {
 
         self.is_using_overage.unwrap_or(false) || !healthy
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,9 +303,6 @@ pub enum SystemEvent {
     },
     Status {
         status: Option<String>,
-        #[serde(default, rename = "permissionMode")]
-        permission_mode: Option<PermissionMode>,
-        uuid: String,
         session_id: String,
     },
     TaskStarted {
@@ -368,7 +316,6 @@ pub enum SystemEvent {
         task_type: String,
         #[serde(default)]
         prompt: Option<String>,
-        uuid: String,
         session_id: String,
     },
     TaskProgress {
@@ -378,7 +325,6 @@ pub enum SystemEvent {
         subagent_type: String,
         usage: TaskUsage,
         last_tool_name: String,
-        uuid: String,
         session_id: String,
     },
     TaskUpdated {
@@ -388,12 +334,10 @@ pub enum SystemEvent {
         task_id: String,
         tool_use_id: String,
         status: String,
-        output_file: String,
         summary: String,
         /// Absent for `local_bash` tasks, which spend no agent tokens.
         #[serde(default)]
         usage: Option<TaskUsage>,
-        uuid: String,
         session_id: String,
     },
     /// A one-line recap of the turn that just ended, emitted just before its
@@ -407,16 +351,13 @@ pub enum SystemEvent {
     /// say whether the session is idle.
     BackgroundTasksChanged {
         tasks: Vec<BackgroundTask>,
-        uuid: String,
         session_id: String,
     },
     /// A running estimate of the current thinking block's size, emitted every
     /// few tokens while the model reasons. `estimated_tokens` is the block's
-    /// total so far, `_delta` the increment since the last line.
+    /// total so far.
     ThinkingTokens {
         estimated_tokens: u64,
-        estimated_tokens_delta: u64,
-        uuid: String,
         session_id: String,
     },
     /// The seam where a compaction dropped the earlier conversation. Arrives
@@ -425,7 +366,6 @@ pub enum SystemEvent {
     /// it.
     CompactBoundary {
         compact_metadata: CompactMetadata,
-        uuid: String,
         session_id: String,
     },
     /// A tool call refused without ever being asked about. Two causes, and the
@@ -443,7 +383,6 @@ pub enum SystemEvent {
         tool_name: String,
         tool_use_id: String,
         message: String,
-        uuid: String,
         session_id: String,
     },
     /// A model request failed and the CLI is trying it again, one line per
@@ -459,13 +398,10 @@ pub enum SystemEvent {
     ApiRetry {
         attempt: u32,
         max_retries: u32,
-        #[serde(default, deserialize_with = "null_as_default")]
-        retry_delay_ms: u64,
         #[serde(default)]
         error_status: Option<u32>,
         #[serde(default)]
         error: Option<String>,
-        uuid: String,
         session_id: String,
     },
     /// A sentence the CLI wants said, keyed rather than typed — the shape is
@@ -478,9 +414,7 @@ pub enum SystemEvent {
     /// only fail the line it rides on, and this is the one system subtype whose
     /// *whole* value is a sentence read at the moment a refusal happens, so a
     /// notice dropped for want of a field no consumer wants is the refusal
-    /// going unsaid again. The siblings above keep their `uuid` because they
-    /// were modelled whole before anything asked the question, not because
-    /// something reads it.
+    /// going unsaid again.
     Notification {
         key: String,
         text: String,
@@ -529,17 +463,7 @@ pub struct BackgroundTask {
 pub enum ResultEvent {
     Success {
         is_error: bool,
-        #[serde(default)]
-        api_error_status: Option<Value>,
         duration_ms: u64,
-        duration_api_ms: u64,
-        #[serde(default)]
-        ttft_ms: Option<u64>,
-        #[serde(default)]
-        ttft_stream_ms: Option<u64>,
-        #[serde(default)]
-        time_to_request_ms: Option<u64>,
-        num_turns: u32,
         result: String,
         /// Null on the `result` that closes a compaction — the CLI ran no
         /// inference of its own, so nothing stopped. A required `String` here
@@ -551,17 +475,11 @@ pub enum ResultEvent {
         total_cost_usd: f64,
         usage: Usage,
         /// Per-model breakdown, keyed by model name — a different shape from
-        /// [`Usage`], and nothing consumes it yet.
+        /// [`Usage`], read field by field by `map_model_usage`.
         #[serde(rename = "modelUsage")]
         model_usage: Value,
-        permission_denials: Vec<Value>,
-        /// Absent on a compaction's `result`, present on an ordinary turn's.
-        #[serde(default)]
-        terminal_reason: Option<String>,
-        fast_mode_state: String,
         #[serde(default)]
         origin: Option<ResultOrigin>,
-        uuid: String,
     },
     /// A turn that ended without completing — today, the user interrupting a
     /// streaming response.
@@ -573,10 +491,7 @@ pub enum ResultEvent {
     ///
     /// [`Success`]: Self::Success
     ErrorDuringExecution {
-        is_error: bool,
         duration_ms: u64,
-        duration_api_ms: u64,
-        num_turns: u32,
         #[serde(default)]
         stop_reason: Option<String>,
         session_id: String,
@@ -584,13 +499,10 @@ pub enum ResultEvent {
         usage: Usage,
         #[serde(rename = "modelUsage")]
         model_usage: Value,
-        permission_denials: Vec<Value>,
         terminal_reason: String,
-        fast_mode_state: String,
         /// Diagnostic strings; free-form, and not meant for display.
         #[serde(default)]
         errors: Vec<String>,
-        uuid: String,
     },
 }
 
@@ -620,13 +532,7 @@ pub enum StreamFrame {
     ContentBlockStop {
         index: u32,
     },
-    MessageDelta {
-        delta: MessageDelta,
-        #[serde(default)]
-        usage: Option<Usage>,
-        #[serde(default)]
-        context_management: Option<Value>,
-    },
+    MessageDelta,
     MessageStop,
     /// A frame type this build doesn't model. Anthropic adds frame types over
     /// time, and dropping the whole line over one unknown frame would lose
@@ -651,9 +557,6 @@ pub struct AssistantMessage {
     pub model: String,
     pub role: String,
     pub content: Vec<ContentBlock>,
-    /// Null on every fixture event; the terminal reason arrives on `result`.
-    #[serde(default)]
-    pub stop_reason: Option<String>,
     #[serde(default)]
     pub usage: Option<Usage>,
 }
@@ -665,7 +568,6 @@ pub struct AssistantMessage {
 /// results, abort notices — which arrives as a block array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessage {
-    pub role: String,
     pub content: UserContent,
 }
 
@@ -768,12 +670,6 @@ impl ToolResultContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamMessage {
     pub id: String,
-    pub model: String,
-    pub role: String,
-    #[serde(default)]
-    pub stop_reason: Option<String>,
-    #[serde(default)]
-    pub usage: Option<Usage>,
 }
 
 /// A content block's identity, known when the block opens.
@@ -786,16 +682,12 @@ pub enum ContentBlock {
     Thinking {
         #[serde(default)]
         thinking: String,
-        #[serde(default)]
-        signature: Option<String>,
     },
     ToolUse {
         id: String,
         name: String,
         #[serde(default)]
         input: Value,
-        #[serde(default)]
-        caller: Option<Value>,
     },
     #[serde(other)]
     Unrecognized,
@@ -824,24 +716,8 @@ pub enum ContentDelta {
     Unrecognized,
 }
 
-/// Terminal metadata for a message, carried on
-/// [`StreamFrame::MessageDelta`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageDelta {
-    #[serde(default)]
-    pub stop_reason: Option<String>,
-    #[serde(default)]
-    pub stop_sequence: Option<String>,
-    #[serde(default)]
-    pub stop_details: Option<Value>,
-}
-
-/// Anthropic's token accounting, as it appears on `result`, `assistant.message`,
-/// and the `message_start`/`message_delta` stream frames.
-///
-/// The four token counts are present everywhere; the rest varies by location
-/// (`message_delta` omits the cache-tier breakdown, only `result` carries
-/// `server_tool_use` and `speed`), so everything beyond them is optional.
+/// Anthropic's token accounting, as it appears on `result` and
+/// `assistant.message`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
@@ -850,62 +726,11 @@ pub struct Usage {
     pub cache_read_input_tokens: u64,
     /// Tokens written *into* the cache, billed at a premium.
     pub cache_creation_input_tokens: u64,
-    #[serde(default)]
-    pub cache_creation: Option<CacheCreation>,
-    #[serde(default)]
-    pub server_tool_use: Option<ServerToolUse>,
-    #[serde(default)]
-    pub service_tier: Option<String>,
-    #[serde(default)]
-    pub speed: Option<String>,
-    #[serde(default)]
-    pub inference_geo: Option<String>,
-    /// Per-request breakdown when a turn took several model calls. Sent as an
-    /// explicit `null` on a synthetic message, hence `null_as_default` — without
-    /// it every built-in slash command's reply failed the whole line, so the
-    /// command appeared to do nothing at all.
-    #[serde(default, deserialize_with = "null_as_default")]
-    pub iterations: Vec<UsageIteration>,
-}
-
-/// `cache_creation_input_tokens` split by TTL, which are priced differently.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct CacheCreation {
-    #[serde(default)]
-    pub ephemeral_5m_input_tokens: u64,
-    #[serde(default)]
-    pub ephemeral_1h_input_tokens: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct ServerToolUse {
-    #[serde(default)]
-    pub web_search_requests: u64,
-    #[serde(default)]
-    pub web_fetch_requests: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageIteration {
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub output_tokens: u64,
-    #[serde(default)]
-    pub cache_read_input_tokens: u64,
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
-    #[serde(default)]
-    pub cache_creation: Option<CacheCreation>,
-    #[serde(rename = "type", default)]
-    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskUsage {
     pub total_tokens: u64,
-    pub tool_uses: u32,
-    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -935,12 +760,6 @@ mod tests {
             })
             .map(|line| parse_line(line).unwrap_or_else(|err| panic!("{err}\n{line}")))
             .collect()
-    }
-
-    #[test]
-    fn parses_simple_fixture() {
-        let events = parse_fixture(include_str!("fixtures/printed.jsonl"));
-        assert!(!events.is_empty(), "expected at least one event");
     }
 
     #[test]
@@ -1079,7 +898,7 @@ mod tests {
             assert!(
                 frames.iter().any(|f| match (f, expected) {
                     (StreamFrame::MessageStart { .. }, "message_start") => true,
-                    (StreamFrame::MessageDelta { .. }, "message_delta") => true,
+                    (StreamFrame::MessageDelta, "message_delta") => true,
                     (StreamFrame::MessageStop, "message_stop") => true,
                     (StreamFrame::ContentBlockStart { .. }, "content_block_start") => true,
                     (StreamFrame::ContentBlockDelta { .. }, "content_block_delta") => true,
@@ -1255,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_usage_including_nested_breakdowns() {
+    fn parses_result_usage() {
         let events = parse_fixture(include_str!("fixtures/complex.jsonl"));
 
         let usages: Vec<&Usage> = events
@@ -1271,32 +1090,7 @@ mod tests {
             assert!(usage.input_tokens > 0);
             assert!(usage.output_tokens > 0);
             assert!(usage.cache_read_input_tokens > 0);
-
-            let cache = usage
-                .cache_creation
-                .expect("result usage carries a cache_creation breakdown");
-            assert_eq!(
-                cache.ephemeral_5m_input_tokens + cache.ephemeral_1h_input_tokens,
-                usage.cache_creation_input_tokens,
-                "tier split must sum to the total"
-            );
-
-            assert!(usage.server_tool_use.is_some());
-            assert!(!usage.iterations.is_empty());
         }
-
-        // message_delta omits the cache-tier breakdown, so the same struct has to
-        // tolerate its absence.
-        let stream_usage = events.iter().find_map(|event| match event {
-            ClaudeCodeEvent::StreamEvent {
-                event: StreamFrame::MessageDelta { usage, .. },
-                ..
-            } => usage.as_ref(),
-            _ => None,
-        });
-        let stream_usage = stream_usage.expect("message_delta carries usage");
-        assert!(stream_usage.output_tokens > 0);
-        assert!(stream_usage.cache_creation.is_none());
     }
 
     /// A tool call interrupted via a `control_request` on stdin. Captured live:
@@ -1525,14 +1319,9 @@ mod tests {
 
     /// A built-in slash command (`/rename`) answered by the CLI itself rather
     /// than by the model. The reply is a **synthetic** assistant message —
-    /// `model: "<synthetic>"`, every token count zero — and it is the only
-    /// capture where `usage.iterations` arrives as an explicit `null`.
-    ///
-    /// That null is what made every built-in command look broken: `iterations`
-    /// is a `Vec` and `#[serde(default)]` only covers an absent key, so the
-    /// whole line failed to parse, the reply never reached the transcript, and
-    /// the command read as doing nothing. Skills were unaffected because they
-    /// answer through an ordinary model turn.
+    /// `model: "<synthetic>"`, every token count zero. Its shape once failed the
+    /// whole line, so the reply never reached the transcript and every built-in
+    /// command read as doing nothing; this pins that it still parses.
     #[test]
     fn parses_a_builtin_commands_synthetic_reply() {
         let events = parse_fixture(include_str!("fixtures/builtin_command.jsonl"));
@@ -1553,24 +1342,7 @@ mod tests {
         ));
 
         let usage = message.usage.as_ref().expect("a synthetic message carries usage");
-        assert!(usage.iterations.is_empty(), "a null list reads as an empty one");
         assert_eq!(usage.input_tokens, 0, "the CLI answered without the model");
-    }
-
-    /// Pinned apart from the fixture because the distinction is exactly the one
-    /// that was missed: `default` answers for a key that isn't there, and does
-    /// nothing at all for a key that is there and null.
-    #[test]
-    fn a_null_collection_is_not_the_same_as_a_missing_one() {
-        let with_null: Usage =
-            serde_json::from_str(r#"{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"iterations":null}"#)
-                .expect("an explicit null must not fail the line");
-        assert!(with_null.iterations.is_empty());
-
-        let omitted: Usage =
-            serde_json::from_str(r#"{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}"#)
-                .unwrap();
-        assert!(omitted.iterations.is_empty());
     }
 
     /// A subtype this build has never seen must degrade to `Unrecognized`, not

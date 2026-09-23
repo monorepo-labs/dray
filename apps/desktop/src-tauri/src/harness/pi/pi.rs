@@ -478,6 +478,51 @@ pub async fn shutdown(child: &mut Child, client: &PiClient) {
     }
 }
 
+/// Spawns a throwaway pi for a picker to ask one question of, in `cwd` where
+/// the answer depends on the directory. `what` names the question for the
+/// spawn error.
+pub(super) async fn spawn_probe(cwd: Option<&str>, what: &str) -> Result<(Child, PiClient)> {
+    let bin = crate::binpath::pi().await;
+    let mut command = Command::new(&bin);
+    command
+        .args([
+            "--mode",
+            "rpc",
+            // Mandatory, not tidiness: without it every probe writes a session
+            // file into the reader's own `~/.pi/agent/sessions/`, and their
+            // session list fills with empty runs Dray started.
+            "--no-session",
+        ])
+        .env("PATH", crate::harness::agent_path(&bin))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("couldn't start pi to ask for its {what}"))?;
+
+    let stdin = child.stdin.take().context("failed to take stdin")?;
+    let stdout = child.stdout.take().context("failed to take stdout")?;
+    let client = PiClient::new(stdin);
+
+    tokio::spawn({
+        let client = client.clone();
+        async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                // Only answers matter here. The probe sends no prompt, so
+                // anything else pi says is not about us.
+                client.accept(&line).await;
+            }
+        }
+    });
+
+    Ok((child, client))
+}
+
 /// Stops the running agent and drops whatever was queued behind it.
 ///
 /// Order is load-bearing: `abort` ends the agent that is running and leaves
@@ -618,24 +663,14 @@ async fn read_stdout(
                     // resolving each to the default it was built with. A refusal
                     // reaches the extension as its own dialog being dismissed,
                     // which is a state its author already had to handle.
-                    let _ = client.send(&json!({
-                        "type": "extension_ui_response",
-                        "id": id,
-                        "cancelled": true,
-                    }));
+                    let _ = client.send(&dialog::cancel(id));
                 }
                 continue;
             };
 
             let tool_use_id = request.tool_use_id.clone();
             if !register_dialog(&client, &pending, &request_id, request) {
-                // `cancelled` is what every dialog understands, resolving each
-                // to the default it was built with.
-                let _ = client.send(&json!({
-                    "type": "extension_ui_response",
-                    "id": id,
-                    "cancelled": true,
-                }));
+                let _ = client.send(&dialog::cancel(id));
                 continue;
             }
 

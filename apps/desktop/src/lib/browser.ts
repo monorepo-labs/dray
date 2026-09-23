@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
 import type { ChromiumStatus } from "@/types/events";
 
 /// The in-app browser's frontend half: tabs per session as the backend
@@ -24,24 +25,13 @@ export type BrowserTab = {
   canGoForward: boolean;
   /// The main frame's last load failure, from Chromium's own words.
   error: string | null;
-  /// CEF's level: 0 is 100%, a step is ×1.2.
-  zoom: number;
 };
 
 const EMPTY: BrowserTab[] = [];
 const tabsBySession = new Map<string, BrowserTab[]>();
 const fetched = new Set<string>();
-const listeners = new Set<() => void>();
+const { emit: notify, subscribe } = channel<void>();
 let started = false;
-
-function notify() {
-  for (const l of listeners) l();
-}
-
-function subscribe(l: () => void) {
-  listeners.add(l);
-  return () => void listeners.delete(l);
-}
 
 function start() {
   if (started) return;
@@ -219,10 +209,6 @@ export function closeTab(sessionId: string, id: number) {
 
 export function navigate(sessionId: string, action: "back" | "forward" | "reload" | "stop" | "hard_reload") {
   return invoke("browser_nav", { sessionId, action });
-}
-
-export function zoom(sessionId: string, action: "in" | "out" | "reset") {
-  return invoke("browser_zoom", { sessionId, action });
 }
 
 export function openDevTools(sessionId: string) {

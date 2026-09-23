@@ -60,7 +60,7 @@ import Sidebar, {
   sortSessions,
 } from "@/components/Sidebar";
 import Crew, { CREW_W } from "@/components/Crew";
-import SplitView, { DragGhost, DropZone } from "@/components/SplitView";
+import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -744,6 +744,17 @@ function App() {
     [panelKey, openKey],
   );
 
+  /// Opens the pane onto one tab. The pick moves as well as the pane opening:
+  /// `activeTab` honours a standing pick over the derived default, so opening
+  /// alone lands wherever the reader last left it.
+  const showPanel = useCallback(
+    (tab: PanelTab, id?: string | null) => {
+      setPanelTab(tab, id ?? undefined);
+      setPanelOpen(true, id);
+    },
+    [setPanelTab, setPanelOpen],
+  );
+
   /// Whether the right pane is actually on screen, as against whether the
   /// reader has asked for it.
   ///
@@ -1018,10 +1029,7 @@ function App() {
     // pane is opened onto a turn that touched files. So opening alone landed on
     // Changes for anyone who had ever used ⌘E, which is everyone.
     // A fresh closure each render is fine: the hook holds it in a ref.
-    () => {
-      setPanelTab("pr");
-      setPanelOpen(true);
-    },
+    () => showPanel("pr"),
     // A merge or a reopen changes what the sidebar's mark should say, and that
     // mark comes from a different read with a two-minute freshness window — so
     // without this the row keeps its open-PR glyph until the window expires or
@@ -1111,7 +1119,7 @@ function App() {
     const previous = seen.get(selectedSession.sessionId);
     seen.set(selectedSession.sessionId, sessionTodos);
     if (previous === undefined) return;
-    if (sessionTodos && startsNewList(previous, sessionTodos)) openMorePanel();
+    if (sessionTodos && startsNewList(previous, sessionTodos)) showPanel("more");
   }, [selectedSession, sessionTodos]);
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
@@ -1176,8 +1184,7 @@ function App() {
   const expandBrowser = () => setViewTab("browser");
   const collapseBrowser = () => {
     setViewTab("chat");
-    setPanelTab("browser");
-    setPanelOpen(true);
+    showPanel("browser");
   };
 
   // A live background task counts even where no run is built for it yet, and a
@@ -1213,19 +1220,9 @@ function App() {
 
   // Opens the tab without touching the selection, so a run the reader already
   // had expanded is still expanded when they come back to it.
-  const openMorePanel = () => {
-    setPanelTab("more");
-    setPanelOpen(true);
-  };
-
-  const openPlanPanel = () => {
-    setPanelTab("plan");
-    setPanelOpen(true);
-  };
-
   const openSubagent = (id: string) => {
     setSelectedSubagentId(id);
-    openMorePanel();
+    showPanel("more");
   };
 
   // An open session's own directory, since project- and local-scoped commands
@@ -1441,9 +1438,8 @@ function App() {
   useEffect(() => {
     if (docsOpened === lastOpened.current) return;
     lastOpened.current = docsOpened;
-    setPanelTab("docs");
-    setPanelOpen(true);
-  }, [docsOpened, setPanelTab, setPanelOpen]);
+    showPanel("docs");
+  }, [docsOpened, showPanel]);
 
   // The same signal for the other half of a file link: a path that is not
   // markdown opens in the Files view, which is a whole column rather than a
@@ -1522,11 +1518,8 @@ function App() {
     const was = lastTabs.current;
     lastTabs.current = { id: selectedSessionId, had: hasBrowserTabs };
     if (was.id !== selectedSessionId || was.had !== false) return;
-    if (hasBrowserTabs && !fullBrowserOpen) {
-      setPanelTab("browser");
-      setPanelOpen(true);
-    }
-  }, [selectedSessionId, hasBrowserTabs, fullBrowserOpen, setPanelTab, setPanelOpen]);
+    if (hasBrowserTabs && !fullBrowserOpen) showPanel("browser");
+  }, [selectedSessionId, hasBrowserTabs, fullBrowserOpen, showPanel]);
 
   // Every way of arriving at a session, so none of them can forget to leave the
   // issues page. The two sidebar buttons closed it and the chords beside them
@@ -2088,6 +2081,18 @@ function App() {
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
 
+  // What every transcript on screen reports back through: the main column, a
+  // split pane and a crew strip alike.
+  const paneChat: PaneChat = {
+    onOpenSubagent: openSubagent,
+    onOpenSession: (id) => void handleSelectSessionIndexItem(id),
+    onOpenSubagentPanel: () => showPanel("more"),
+    onOpenPlan: () => showPanel("plan"),
+    onRespondPermission: handleRespondPermission,
+    onAnswerQuestions: handleAnswerQuestions,
+    onSendNow: handleInterrupt,
+  };
+
   return (
     <TooltipProvider>
     <DiffWorkerPool pair={codeThemePair}>
@@ -2117,15 +2122,7 @@ function App() {
             onOpenInMain={openCrewRowInMain}
             composing={composing}
             active={!issuesOpen && viewTab === "chat"}
-            chat={{
-              onOpenSubagent: openSubagent,
-              onOpenSession: (id) => void handleSelectSessionIndexItem(id),
-              onOpenSubagentPanel: openMorePanel,
-              onOpenPlan: openPlanPanel,
-              onRespondPermission: handleRespondPermission,
-              onAnswerQuestions: handleAnswerQuestions,
-              onSendNow: handleInterrupt,
-            }}
+            chat={paneChat}
           />
         ) : undefined
       }
@@ -2316,11 +2313,7 @@ function App() {
               // news exactly when there is more than one file behind the tab.
               docs: docs.length > 1 ? docs.length : 0,
             }}
-            pr={hasPrTab}
-            docs={hasDocsTab}
-            issue={hasIssueTab}
-            more={hasMoreTab}
-            plan={hasPlanTab}
+            tabs={tabs}
             refresh={panelRefresh}
             cwd={shownSession.cwd}
           >
@@ -2559,15 +2552,7 @@ function App() {
           onFocus={(id) => void handleSelectSessionIndexItem(id)}
           onClose={closeSessionPane}
           active={!issuesOpen && viewTab === "chat"}
-          chat={{
-            onOpenSubagent: openSubagent,
-            onOpenSession: (id) => void handleSelectSessionIndexItem(id),
-            onOpenSubagentPanel: openMorePanel,
-            onOpenPlan: openPlanPanel,
-            onRespondPermission: handleRespondPermission,
-            onAnswerQuestions: handleAnswerQuestions,
-            onSendNow: handleInterrupt,
-          }}
+          chat={paneChat}
         />
       ) : (
       // The single view is one drop target: a row let go here opens beside
@@ -2602,13 +2587,7 @@ function App() {
       >
         <Chat
           {...paneState(mainSessionId ?? "")}
-          onOpenSubagent={openSubagent}
-          onOpenSession={(id) => void handleSelectSessionIndexItem(id)}
-          onOpenSubagentPanel={openMorePanel}
-          onOpenPlan={openPlanPanel}
-          onRespondPermission={handleRespondPermission}
-          onAnswerQuestions={handleAnswerQuestions}
-          onSendNow={handleInterrupt}
+          {...paneChat}
           crowded={!collapsed && (panelShown || crewUp || (issuesOpen && !!pickedIssue))}
           // Its own chords only while the composer is pointed here — the same
           // gate a split pane takes, since Stop and scroll-to-bottom act on
@@ -2672,8 +2651,7 @@ function App() {
       // standing pick, and opening the pane stores "changes" on its own.
       onOpenPr={(id) => {
         void handleSelectSessionIndexItem(id);
-        setPanelTab("pr", id);
-        setPanelOpen(true, id);
+        showPanel("pr", id);
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />

@@ -201,19 +201,6 @@ export function trackerOf(identifier: string): IssueTracker {
   return identifier.includes("#") ? "github" : "linear";
 }
 
-/// Where an identifier points, from the links a message carries.
-///
-/// `null` for a tag whose issue was never resolved — an unreachable tracker at
-/// send time, or a tag naming an issue that does not exist. Those stay drawn as
-/// plain coloured text rather than becoming a link to nowhere.
-export function issueUrl(issues: IssueRef[], identifier: string): string | null {
-  // An empty URL is as good as none, and reaches here whenever a link was made
-  // by `dray issue link` with no `--url`: the app writes down what the caller
-  // gave it and asks the tracker nothing, so the field can simply be blank.
-  // Left unchecked, the tag becomes a button that opens nowhere.
-  return issues.find((issue) => issue.identifier === identifier)?.url || null;
-}
-
 /// The status buckets the issues page draws, in the order it draws them.
 ///
 /// Keyed on the state's *kind* rather than its name: a name is per-team prose
@@ -224,7 +211,7 @@ export function issueUrl(issues: IssueRef[], identifier: string): string | null 
 ///
 /// Started first and settled last — the order work moves through, which is also
 /// the order attention should reach it in.
-const GROUPS: { key: IssueStateKind; label: string }[] = [
+export const GROUPS: { key: IssueStateKind; label: string }[] = [
   { key: "started", label: "In Progress" },
   { key: "triage", label: "Triage" },
   { key: "unstarted", label: "Todo" },
@@ -250,27 +237,6 @@ type IssueGrouping = {
   label: string;
   issues: Issue[];
 };
-
-/// What the three kinds a GitHub issue can be in are called there.
-///
-/// The *kinds* are shared — a GitHub issue folds onto `unstarted`, `completed`
-/// and `canceled`, which is what lets one page group both trackers — but the
-/// words are not: a GitHub issue is Open or Closed, never "Todo" or "Done", and
-/// a heading in the wrong vocabulary reads as the app describing some other
-/// tracker's workspace. Only the three that occur; nothing else can arrive.
-/// What a heading calls a state kind.
-///
-/// Exported because the settled headings are drawn without going through
-/// `groupIssues` — they exist before their rows have been read, which is the
-/// whole of how they cost a round trip only when opened.
-///
-/// **Linear's vocabulary, and only Linear's, because only Linear groups.** A
-/// GitHub list is drawn flat under a two-way switch: it has two states where
-/// this names six, so a heading there was the switch's own answer repeated over
-/// the rows it had already picked.
-export function groupLabel(kind: IssueStateKind): string {
-  return GROUPS.find((group) => group.key === kind)?.label ?? "Other";
-}
 
 /// `issues` bucketed by state, with empty buckets dropped.
 ///

@@ -59,24 +59,10 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 /// read is not one to make them open again — and the panel opens itself here on
 /// a new list, which a collapsed section would answer with a heading.
 function TodoSection({ todos, live }: { todos: Todo[]; live: boolean }) {
-  // const done = todos.filter((todo) => todo.status === "completed").length;
-
   return (
     // No rule under it — the next section's own heading is what says one
     // ended, the same reading the sidebar's runs take.
     <div className="shrink-0">
-      {/* Parked rather than deleted while the section's shape is being looked
-          at — the count is the only thing here the list itself does not say.
-      <SectionTitle>
-        <span className="flex items-center gap-1.5">
-          <span className="shrink-0">Todo</span>
-          <span className="shrink-0 font-mono tabular-nums">
-            {done}/{todos.length}
-          </span>
-        </span>
-      </SectionTitle>
-      */}
-
       {/* No cap and no scroller of its own: a list cut off at a fixed height
           hides the very items the reader opened the tab for, and the pane
           already scrolls. A long plan pushes the runs down instead, which is

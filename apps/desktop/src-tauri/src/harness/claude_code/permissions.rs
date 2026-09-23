@@ -333,7 +333,6 @@ mod tests {
             blocked_path: None,
             decision_reason: None,
             decision_reason_type: None,
-            classifier_approvable: None,
             suppress_always_allow_rule: false,
             requires_user_interaction: false,
             title: None,

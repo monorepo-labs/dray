@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { channel } from "@/lib/channel";
 import type { AgentCheck, AgentUpdate, Harness } from "@/types/events";
 
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -17,11 +18,11 @@ type State = {
 /// whether or not a composer is mounted, and a run outlives the composer that
 /// started it.
 let state: State = { updates: [], running: null, done: null, failed: null };
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
-  for (const listener of listeners) listener();
+  changed.emit();
 }
 
 /// Bumped as an update starts and as it ends. A check spanning either read a
@@ -93,13 +94,6 @@ export function updateAgentInTerminal(harness: Harness) {
   );
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
 export function useAgentUpdates(): State {
-  return useSyncExternalStore(subscribe, () => state);
+  return useSyncExternalStore(changed.subscribe, () => state);
 }

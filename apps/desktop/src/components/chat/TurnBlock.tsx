@@ -96,6 +96,40 @@ export default function TurnBlock({
   // puts it on screen twice if `finalText` keeps rendering.
   const lastOpen = collapsible && !!openSegments[segments.length - 1];
 
+  /// One work item, shared by the expanded walk and a segment's queued prompt
+  /// so the two views cannot drift on how a row draws.
+  const renderItem = (item: WorkItem) => {
+    if (isToolGroup(item)) {
+      return (
+        <ToolGroupRow
+          key={item.key}
+          group={item}
+          resultByCallId={resultByCallId}
+          editsByCallId={editsByCallId}
+        />
+      );
+    }
+
+    const run =
+      item.payload.type === "tool_call_started"
+        ? subagentById.get(item.payload.callId)
+        : undefined;
+
+    // An `inline` run draws its spawning tool row, which for a harness that
+    // reports nothing about the child is the whole run — see `SubagentRun`.
+    return run && !run.inline ? (
+      <SubagentRow key={item.id} run={run} onOpen={onOpenSubagent} />
+    ) : (
+      <EventRow
+        key={item.id}
+        event={item}
+        resultByCallId={resultByCallId}
+        editsByCallId={editsByCallId}
+        onOpenSession={onOpenSession}
+      />
+    );
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {turn.prompt && <UserMessage {...userProps(turn)} onOpenSession={onOpenSession} />}
@@ -105,9 +139,7 @@ export default function TurnBlock({
           would bunch them all together at the end, and *when* the reader said
           something is part of what they said. */}
       {!collapsible
-        ? turn.work.map((item) =>
-            renderItem(item, subagentById, resultByCallId, editsByCallId, onOpenSubagent, onOpenSession),
-          )
+        ? turn.work.map(renderItem)
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
             return (
@@ -127,19 +159,8 @@ export default function TurnBlock({
                     />
                   </button>
                 )}
-                {open &&
-                  seg.items.map((item) =>
-                    renderItem(item, subagentById, resultByCallId, editsByCallId, onOpenSubagent, onOpenSession),
-                  )}
-                {seg.prompt &&
-                  renderItem(
-                    seg.prompt,
-                    subagentById,
-                    resultByCallId,
-                    editsByCallId,
-                    onOpenSubagent,
-                    onOpenSession,
-                  )}
+                {open && seg.items.map(renderItem)}
+                {seg.prompt && renderItem(seg.prompt)}
               </Fragment>
             );
           })}
@@ -159,46 +180,6 @@ export default function TurnBlock({
         />
       )}
     </div>
-  );
-}
-
-/// One work item, shared by the expanded walk and a segment's queued prompt so
-/// the two views cannot drift on how a row draws.
-function renderItem(
-  item: WorkItem,
-  subagentById: Map<string, SubagentRun>,
-  resultByCallId: Map<string, ToolResult>,
-  editsByCallId: Map<string, FileEdit[]> | undefined,
-  onOpenSubagent: (id: string) => void,
-  onOpenSession: (sessionId: string) => void,
-) {
-  if (isToolGroup(item)) {
-    return (
-      <ToolGroupRow
-        key={item.key}
-        group={item}
-        resultByCallId={resultByCallId}
-        editsByCallId={editsByCallId}
-      />
-    );
-  }
-
-  const run =
-    item.payload.type === "tool_call_started"
-      ? subagentById.get(item.payload.callId)
-      : undefined;
-
-  // An `inline` run draws its spawning tool row, which for a harness that
-  // reports nothing about the child is the whole run — see `SubagentRun`.
-  return run && !run.inline ? (
-    <SubagentRow key={item.id} run={run} onOpen={onOpenSubagent} />
-  ) : (
-    <EventRow
-      key={item.id}
-      event={item}
-      resultByCallId={resultByCallId}
-      onOpenSession={onOpenSession}
-    />
   );
 }
 

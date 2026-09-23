@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
 
 import Orb from "@/components/Orb";
 import { compactTokens } from "@/lib/format";
@@ -25,14 +25,7 @@ export default function WorkingIndicator({
   const [label] = useState(() => LABELS[Math.floor(Math.random() * LABELS.length)]);
 
   return (
-    <div className="flex items-center gap-2" aria-live="polite">
-      {/* 20 and 64 are separately tuned designs rather than one scaled to the
-          other, so 20 is the only inline-with-text option. Mode comes from
-          `Orb`, which is the whole reason that wrapper exists. */}
-      <Orb state="listening" size={20} aria-hidden />
-
-      <span className="shimmer-text text-chat">{label}</span>
-
+    <OrbLine state="listening" label={label}>
       {/* Dimmer than the label and deliberately unshimmered: the count is the
           one part of this row that is really moving, so it doesn't need the
           animation to say so, and pairing the two just made the row noisy. */}
@@ -41,6 +34,32 @@ export default function WorkingIndicator({
           {compactTokens(tokens)} tokens
         </span>
       )}
+    </OrbLine>
+  );
+}
+
+/// A live wait drawn inline with the transcript: a 20px orb and a shimmering
+/// label. Each wait takes its own orb state so they read as different
+/// activities at a glance.
+export function OrbLine({
+  state,
+  label,
+  children,
+}: {
+  state: ComponentProps<typeof Orb>["state"];
+  label: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2" aria-live="polite">
+      {/* 20 and 64 are separately tuned designs rather than one scaled to the
+          other, so 20 is the only inline-with-text option. Mode comes from
+          `Orb`, which is the whole reason that wrapper exists. */}
+      <Orb state={state} size={20} aria-hidden />
+
+      <span className="shimmer-text text-chat">{label}</span>
+
+      {children}
     </div>
   );
 }

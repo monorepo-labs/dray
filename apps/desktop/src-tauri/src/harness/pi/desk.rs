@@ -135,12 +135,7 @@ pub fn end(session_id: &str, token: u64, app: &AppHandle) {
 
 /// The desk registered under this id, if the token still names it.
 fn current(session_id: &str, token: u64) -> Option<Desk> {
-    DESKS
-        .lock()
-        .expect("desk registry poisoned")
-        .get(session_id)
-        .filter(|desk| desk.token == token)
-        .cloned()
+    find(session_id).filter(|desk| desk.token == token)
 }
 
 /// Takes a desk out of the registry, but only where the token still names the
@@ -234,14 +229,11 @@ impl Desk {
 
         let outstanding = self.drain();
         for (request_id, request) in &outstanding {
-            let Some(method) = request.reply.dialog_method() else {
+            if request.reply.dialog_method().is_none() {
                 continue;
-            };
+            }
 
-            if let Err(error) =
-                self.client
-                    .send(&super::dialog::response(method, request_id, &HashMap::new()))
-            {
+            if let Err(error) = self.client.send(&super::dialog::cancel(request_id)) {
                 eprintln!("[pi] could not cancel dialog {request_id}: {error}");
             }
         }
@@ -296,23 +288,20 @@ impl Desk {
     /// decision here — the request was never written either, since only the
     /// child that asked could answer it.
     fn emit_decided(&self, app: &AppHandle, request_id: String, tool_use_id: String, label: &str) {
-        let decided = AgentEvent {
-            id: uuid::Uuid::now_v7().to_string(),
-            session_id: self.session_id.clone(),
-            harness: crate::harness::Harness::Pi,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: crate::events::now_rfc3339(),
-            turn_id: None,
-            subagent: None,
-            payload: crate::events::AgentEventPayload::PermissionDecided {
+        let decided = AgentEvent::mint(
+            self.session_id.clone(),
+            crate::harness::Harness::Pi,
+            self.seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            crate::events::AgentEventPayload::PermissionDecided {
                 request_id,
                 tool_use_id,
                 behavior: crate::events::PermissionBehavior::Deny,
                 label: label.to_string(),
                 automatic: true,
             },
-            raw: None,
-        };
+        );
 
         if let Err(error) = app.emit("agent_event", &decided) {
             eprintln!("[pi] could not retire a dialog: {error}");

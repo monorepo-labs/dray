@@ -93,8 +93,6 @@ type Props = {
   onChange: (value: string, caret: number) => void;
   onCaretChange: (caret: number) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
-  onFocus?: () => void;
-  onBlur?: () => void;
   /// Asked before a paste lands as text; `true` means it was taken as files.
   onPasteFiles?: () => Promise<boolean>;
   placeholder?: string;
@@ -133,8 +131,6 @@ export default function RichInput({
   onChange,
   onCaretChange,
   onKeyDown,
-  onFocus,
-  onBlur,
   onPasteFiles,
   placeholder,
   className,
@@ -266,12 +262,10 @@ export default function RichInput({
       onInput={read}
       onFocus={() => {
         focused.current = true;
-        onFocus?.();
       }}
       onBlur={() => {
         focused.current = false;
         setBlurs((n) => n + 1);
-        onBlur?.();
       }}
       onKeyDown={(event) => {
         // Taken before anything else looks at it: the chord must never reach

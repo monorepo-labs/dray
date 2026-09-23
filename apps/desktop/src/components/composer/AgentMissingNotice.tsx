@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Button } from "@/components/ui/button";
+import { useCopied } from "@/hooks/useCopied";
 import type { AgentAvailability } from "@/types/events";
-
-const COPIED_MS = 1600;
 
 /// Why the composer will not send, and the two things that fix it.
 ///
@@ -41,23 +39,7 @@ const COPIED_MS = 1600;
 /// reader to fix something that is not broken. So a missing `installCommand`
 /// draws the sentence alone rather than a disabled pair.
 export default function AgentMissingNotice({ agent }: { agent: AgentAvailability }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-
-  const copy = async () => {
-    if (!agent.installCommand) return;
-    try {
-      await navigator.clipboard.writeText(agent.installCommand);
-    } catch (err) {
-      console.error("failed to copy the install command", err);
-      return;
-    }
-    setCopied(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-  };
+  const [copied, copy] = useCopied();
 
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
@@ -65,7 +47,7 @@ export default function AgentMissingNotice({ agent }: { agent: AgentAvailability
 
       {agent.installCommand && agent.docsUrl && (
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button variant="secondary" size="sm" onClick={() => void copy()}>
+          <Button variant="secondary" size="sm" onClick={() => void copy(agent.installCommand!)}>
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             {copied ? "Copied" : "Copy command"}
           </Button>

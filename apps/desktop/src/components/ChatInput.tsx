@@ -189,23 +189,6 @@ const MAX_ROWS = 10;
 // scroll it back.
 const NEW_TASK_MAX_ROWS = 20;
 
-// Everything that decides where a glyph lands. The textarea and the overlay that
-// colours a command inside it must agree on all of it exactly, or the two copies
-// of the text drift apart and show as ghosting — so they share one constant
-// rather than two matching class lists. The horizontal padding varies by state
-// and is applied at both call sites alongside this.
-const TEXT_BOX = "py-1 text-prompt";
-
-// `String.raw` because the glyphs are drawn with backslashes; an ordinary
-// template literal would eat them as escapes.
-// const WORDMARK = String.raw` ___    ____    ____  __ __
-// |   \  |    \  /    ||  |  |
-// |    \ |  D  )|  o  ||  |  |
-// |  D  ||    / |     ||  ~  |
-// |     ||    \ |  _  ||___, |
-// |     ||  .  \|  |  ||     |
-// |_____||__|\_||__|__||____/`;
-
 // The file is the source, so editing the logo needs no change here — but an
 // <img> paints the file's own fill and this has to take the page's text color.
 // So it is a mask over a `currentColor` background: the SVG supplies the shape,
@@ -268,7 +251,6 @@ export default function ChatInput({
 }: ChatInputProps) {
   const [message, setMessage] = useDraft(sessionId);
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
   // Read by the session-switch effect below, which must stay keyed on the
   // session alone: the draft it wants is the one that arrived *with* that
   // switch, and depending on `message` would rerun it on every keystroke and
@@ -836,7 +818,6 @@ export default function ChatInput({
                 activeIndex={active}
                 onPick={pickFile}
                 onHover={setActiveIndex}
-                placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
               />
             ) : issue ? (
@@ -845,7 +826,6 @@ export default function ChatInput({
                 activeIndex={active}
                 onPick={pickIssue}
                 onHover={setActiveIndex}
-                placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
                 loading={issuesLoading}
                 emptyNote={issuesNote}
@@ -859,7 +839,6 @@ export default function ChatInput({
                 activeIndex={active}
                 onPick={pickSession}
                 onHover={setActiveIndex}
-                placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
               />
             ) : (
@@ -868,14 +847,12 @@ export default function ChatInput({
                 activeIndex={active}
                 onPick={pickCommand}
                 onHover={setActiveIndex}
-                placement={isNewTask ? "below" : "above"}
                 bare={isNewTask}
                 emptyNote={noCommands ? NO_COMMANDS_NOTE : undefined}
               />
             ))}
 
           <div
-            ref={cardRef}
             className={cn(
               "relative rounded-2xl transition-colors",
               // `--edge-surface` and `--shadow-surface` are one pair, and exactly
@@ -923,14 +900,12 @@ export default function ChatInput({
             <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
               <div className="relative min-w-0 flex-1">
                 <RichInput
-                  // **One editor per session, because the undo stack is the
-                  // browser's and nothing can clear it.** Outside changes are
-                  // applied through `execCommand` so a pick stays undoable, and
-                  // that puts a session switch on the same stack — ⌘Z in the
+                  // **One editor per session, because the undo stack lives in
+                  // the editor.** Kept across a session switch, ⌘Z in the
                   // session moved to would restore the text of the one left, and
                   // the input event would write it into *this* session's draft.
-                  // A remount is the only thing that ends a stack; the cost is
-                  // focus, which a switch was not keeping anyway.
+                  // A remount is what ends a stack; the cost is focus, which a
+                  // switch was not keeping anyway.
                   key={sessionId ?? "new"}
                   // Registered as well as held, so dictation can hand focus
                   // back from `App`, which has no route to this element.
@@ -1056,7 +1031,7 @@ export default function ChatInput({
                       setCaret(at.start + 1);
                     }
                   }}
-                  className={cn(TEXT_BOX, isNewTask ? "px-0" : "px-1")}
+                  className={cn("py-1 text-prompt", isNewTask ? "px-0" : "px-1")}
                 />
               </div>
 

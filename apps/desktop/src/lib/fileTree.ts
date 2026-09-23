@@ -1,3 +1,4 @@
+import { basename } from "@/lib/format";
 import type { DirEntry } from "@/types/events";
 
 /// One drawn row: an entry and how deep it sits.
@@ -65,8 +66,4 @@ export function tabLabels(paths: readonly string[]): string[] {
     // which is where that question gets answered.
     return parent ? `${name} — ${parent}` : name;
   });
-}
-
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
 }

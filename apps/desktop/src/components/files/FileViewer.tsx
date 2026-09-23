@@ -2,11 +2,12 @@ import { useCallback, useMemo, useRef } from "react";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
+import Note from "@/components/changes/Note";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
-import { diffSide, fileName } from "@/lib/diff";
-import { cn } from "@/lib/utils";
+import { diffSide } from "@/lib/diff";
+import { basename } from "@/lib/format";
 
 /// The line a chat link named, painted where the row sits.
 ///
@@ -38,7 +39,7 @@ export default function FileViewer({
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
   const path = file?.path ?? "";
-  const name = fileName(path);
+  const name = basename(path);
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
   // Which reveal this pane has already scrolled for. Held in a ref rather than
@@ -173,19 +174,8 @@ function Body({
   options: Parameters<typeof File>[0]["options"];
   ready: boolean;
 }) {
-  const note = (text: string, tone?: "error") => (
-    <p
-      className={cn(
-        "px-3 py-2 text-ui",
-        tone === "error" ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      {text}
-    </p>
-  );
-
-  if (file.state.status === "loading") return note("Loading…");
-  if (file.state.status === "error") return note(file.state.message, "error");
+  if (file.state.status === "loading") return <Note text="Loading…" />;
+  if (file.state.status === "error") return <Note text={file.state.message} error />;
 
   if (file.state.body.kind === "image") {
     return (

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { openInFiles } from "@/hooks/useOpenFiles";
+import { channel } from "@/lib/channel";
 import { isMarkdownPath } from "@/lib/markdown";
 import type { SaveOutcome } from "@/types/events";
 
@@ -115,7 +116,7 @@ const EMPTY: SessionDocs = { docs: [], activePath: null };
 /// reopening an open file leaves it unchanged.
 let opened = 0;
 
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 /// Bumped whenever a read or a save is issued for a path, and whenever the path
 /// is closed. An async answer only lands where the number it captured is still
@@ -161,7 +162,7 @@ let version = 0;
 
 function emit() {
   version += 1;
-  for (const listener of listeners) listener();
+  changed.emit();
 }
 
 function find(sid: string, path: string): Doc | undefined {
@@ -414,13 +415,6 @@ function refreshDoc(sid: string | null, path: string) {
     });
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
 /// One session's view of the store. Exported so the split between sessions can
 /// be tested without a renderer.
 export function docsFor(sid: string | null): DocsSnapshot {
@@ -433,7 +427,7 @@ export function docsFor(sid: string | null): DocsSnapshot {
 /// two callers holding different sessions each read their own — where a single
 /// stored snapshot could only ever describe one of them.
 export function useDocs(sid: string | null): DocsSnapshot {
-  useSyncExternalStore(subscribe, getVersion, getVersion);
+  useSyncExternalStore(changed.subscribe, getVersion, getVersion);
   return docsFor(sid);
 }
 

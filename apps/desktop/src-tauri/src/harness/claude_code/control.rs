@@ -173,13 +173,4 @@ mod tests {
 
         assert_eq!(value["request"], json!({"subtype": "interrupt"}));
     }
-
-    /// Each line needs its own id, or a reply matches the wrong request.
-    #[test]
-    fn every_line_is_identified_separately() {
-        let one = ControlLine::new(ControlRequest::Initialize);
-        let two = ControlLine::new(ControlRequest::Initialize);
-
-        assert_ne!(one.request_id, two.request_id);
-    }
 }

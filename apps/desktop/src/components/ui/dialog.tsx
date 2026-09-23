@@ -12,18 +12,15 @@ function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>)
 /// two are the same object, and they differ only in whether the app is asking a
 /// question or the reader opened something.
 ///
-/// That difference is what `showClose` is. An alert is answered by its own
-/// buttons, so it carries no dismiss; a dialog the reader opened is dismissed
-/// rather than answered, and Escape alone is a way out only for people who
-/// already know it is there.
+/// That difference is the close cross. An alert is answered by its own buttons,
+/// so it carries no dismiss; a dialog the reader opened is dismissed rather than
+/// answered, and Escape alone is a way out only for people who already know it
+/// is there.
 function DialogContent({
   className,
   children,
-  showClose = true,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
-  showClose?: boolean
-}) {
+}: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
@@ -39,15 +36,13 @@ function DialogContent({
         {...props}
       >
         {children}
-        {showClose && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            className="absolute top-5 right-5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            <X className="size-4" />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        )}
+        <DialogPrimitive.Close
+          data-slot="dialog-close"
+          className="absolute top-5 right-5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <X className="size-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   )

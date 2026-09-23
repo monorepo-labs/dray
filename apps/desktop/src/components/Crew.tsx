@@ -9,6 +9,7 @@ import QuestionRequest from "@/components/chat/QuestionRequest";
 import Orb from "@/components/Orb";
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import { HINT_KEYS } from "@/components/Sidebar";
+import type { PaneChat } from "@/components/SplitView";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -55,16 +56,7 @@ type CrewProps = {
   /// transcript on every keystroke.
   composing: boolean;
   active: boolean;
-  chat: Pick<
-    React.ComponentProps<typeof Chat>,
-    | "onOpenSubagent"
-    | "onOpenSession"
-    | "onOpenSubagentPanel"
-    | "onOpenPlan"
-    | "onRespondPermission"
-    | "onAnswerQuestions"
-    | "onSendNow"
-  >;
+  chat: PaneChat;
 };
 
 /// The sessions the conversation on the left started, one strip each, with the

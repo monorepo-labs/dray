@@ -1,7 +1,8 @@
 import { Check, Copy } from "lucide-react";
-import { memo, useRef, useState, type ComponentProps } from "react";
+import { memo, useRef, type ComponentProps } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useCopied } from "@/hooks/useCopied";
 import { serializeTable, type TableFormat } from "@/lib/markdownTable";
 
 /// The copy control's formats, in menu order. Markdown first because it is
@@ -26,20 +27,11 @@ function cells(table: HTMLTableElement): string[][] {
 /// holds the menu behind React state only a click reaches.
 function MarkdownTableImpl({ children, ...props }: ComponentProps<"table"> & { node?: unknown }) {
   const table = useRef<HTMLTableElement>(null);
-  const [copied, setCopied] = useState<TableFormat | null>(null);
-  const timer = useRef(0);
+  const [copied, copyText] = useCopied<TableFormat>(2000);
   const { node: _node, ...rest } = props;
 
-  const copy = async (format: TableFormat) => {
-    if (!table.current) return;
-    // A failed write shows no check mark and nothing else — a transcript row
-    // has nowhere to put an error sentence.
-    try {
-      await navigator.clipboard.writeText(serializeTable(cells(table.current), format));
-      setCopied(format);
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => setCopied(null), 2000);
-    } catch {}
+  const copy = (format: TableFormat) => {
+    if (table.current) void copyText(serializeTable(cells(table.current), format), format);
   };
 
   return (

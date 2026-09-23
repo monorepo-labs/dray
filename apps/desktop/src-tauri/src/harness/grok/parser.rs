@@ -20,6 +20,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::harness::null_as_default;
+pub use crate::harness::acp::{ContentBlock, PermissionChoice, ToolContent, ToolKind, ToolStatus};
+
 /// A line the mapper acts on, or a marker saying why it does not.
 pub enum GrokEvent {
     /// An update belonging to **this** session. The read loop is what checks
@@ -92,10 +95,6 @@ pub enum GrokUpdate {
         tool_call_id: String,
         #[serde(default)]
         status: Option<ToolStatus>,
-        #[serde(default)]
-        title: Option<String>,
-        #[serde(default)]
-        kind: Option<ToolKind>,
         #[serde(default, deserialize_with = "null_as_default")]
         content: Vec<ToolContent>,
         #[serde(default)]
@@ -115,14 +114,14 @@ pub enum GrokUpdate {
         available_commands: Vec<AvailableCommand>,
     },
 
-    // ---------- `_x.ai/session_notification` kinds ----------
+    // `_x.ai/session_notification` kinds from here.
     /// The whole live task set, republished on every change.
     BackgroundTasks {
         #[serde(default, deserialize_with = "null_as_default")]
         tasks: Vec<GrokTask>,
     },
     SubagentSpawned(Box<SubagentSpawned>),
-    SubagentProgress(Box<SubagentProgress>),
+    SubagentProgress,
     SubagentFinished(Box<SubagentFinished>),
     /// The one compaction event there is — no start, no boundary. `0` for both
     /// token figures is ordinary: it fires even where nothing was dropped.
@@ -133,7 +132,7 @@ pub enum GrokUpdate {
         tokens_after: Option<u64>,
     },
 
-    // ---------- seen, and drawn as nothing ----------
+    // Seen, and drawn as nothing.
     UserMessageChunk,
     ToolCallDeltaChunk,
     ResponseCompleted,
@@ -149,15 +148,6 @@ pub enum GrokUpdate {
     Plan,
     #[serde(other)]
     Unknown,
-}
-
-/// Reads `null` as the type's default, which `#[serde(default)]` alone will not.
-fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// grok's own account of a tool, hung off `_meta` under a namespaced key.
@@ -190,88 +180,6 @@ pub struct XaiTool {
     pub kind: String,
 }
 
-/// An ACP content block. Only text is drawn; anything else is kept from failing
-/// the line and drawn as nothing.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentBlock {
-    Text {
-        #[serde(default)]
-        text: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
-impl ContentBlock {
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            ContentBlock::Text { text } => Some(text),
-            ContentBlock::Other => None,
-        }
-    }
-}
-
-/// What a tool call reports back, tagged on `type`.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolContent {
-    Content {
-        content: ContentBlock,
-    },
-    /// Sent on both `write` and `search_replace`, which is the difference from
-    /// fx — there the sides live in `rawInput` and no diff block exists.
-    #[serde(rename_all = "camelCase")]
-    Diff {
-        #[serde(default)]
-        path: String,
-        #[serde(default)]
-        old_text: Option<String>,
-        #[serde(default)]
-        new_text: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
-/// ACP's closed set of tool kinds. Read as a fallback: grok's own
-/// `_meta["x.ai/tool"].kind` arrives on the opening line where this does not.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    Read,
-    Edit,
-    Delete,
-    Move,
-    Search,
-    Execute,
-    Think,
-    Fetch,
-    SwitchMode,
-    #[default]
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-    #[serde(other)]
-    Unknown,
-}
-
-impl ToolStatus {
-    /// Whether this update closes the call.
-    pub fn is_final(self) -> bool {
-        matches!(self, ToolStatus::Completed | ToolStatus::Failed)
-    }
-}
-
 /// A finished call's structured result, tagged on `type`.
 ///
 /// Only the shell arm carries anything the row needs. The `output` field beside
@@ -293,13 +201,6 @@ pub struct RawOutput {
     pub exit_code: Option<i64>,
     #[serde(default)]
     pub output_for_prompt: Option<String>,
-    /// The OS pid of a command grok detached, which Claude Code never hands
-    /// over. It is the only handle on a task that outlives both `session/cancel`
-    /// and the agent process — see [`GrokTask`].
-    #[serde(default)]
-    pub pid: Option<u32>,
-    #[serde(default)]
-    pub task_id: Option<String>,
 }
 
 /// One outstanding background task, as `background_tasks` republishes it.
@@ -316,8 +217,6 @@ pub struct GrokTask {
     pub description: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -329,19 +228,6 @@ pub struct SubagentSpawned {
     pub subagent_type: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SubagentProgress {
-    #[serde(default)]
-    pub subagent_id: String,
-    #[serde(default)]
-    pub tokens_used: Option<u64>,
-    #[serde(default)]
-    pub tools_used: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -424,8 +310,6 @@ pub struct PromptMeta {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionRequest {
     #[serde(default)]
-    pub session_id: String,
-    #[serde(default)]
     pub tool_call: ToolCallRef,
     #[serde(default)]
     pub options: Vec<PermissionChoice>,
@@ -438,25 +322,9 @@ pub struct ToolCallRef {
     #[serde(default)]
     pub tool_call_id: String,
     #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
     pub raw_input: Option<Value>,
     #[serde(default, rename = "_meta")]
     pub meta: ToolMeta,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionChoice {
-    pub option_id: String,
-    #[serde(default)]
-    pub name: String,
-    /// `allow_once`, `allow_always`, `reject_once`, `reject_always`. A string
-    /// rather than an enum so a kind grok adds later reaches
-    /// [`permissions`](super::permissions)'s own fallback instead of failing
-    /// the request — and an unanswered request stalls the turn.
-    #[serde(default)]
-    pub kind: String,
 }
 
 /// `_x.ai/ask_user_question`'s params — its own client request, not a

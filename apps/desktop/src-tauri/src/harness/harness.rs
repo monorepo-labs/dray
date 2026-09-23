@@ -20,7 +20,19 @@ pub mod grok;
 
 pub mod rpc;
 
+pub mod acp;
+
 use serde::{Deserialize, Serialize};
+
+/// Reads `null` as the type's default, which `#[serde(default)]` alone will not:
+/// `default` answers for an *absent* key and fails a present-and-null one.
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 use std::{
     collections::{HashMap, HashSet},
     future::Future,

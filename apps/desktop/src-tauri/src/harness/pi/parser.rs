@@ -54,10 +54,7 @@ pub enum PiEvent {
     /// One model call opens. Several per `agent_start` on any turn that calls a
     /// tool.
     TurnStart,
-    TurnEnd {
-        #[serde(default)]
-        message: Option<PiMessage>,
-    },
+    TurnEnd,
 
     /// A message opens. The `user` and `toolResult` ones are echoes of what Dray
     /// already knows and are dropped by the mapper.
@@ -92,7 +89,6 @@ pub enum PiEvent {
 
     ToolExecutionEnd {
         tool_call_id: String,
-        tool_name: String,
         #[serde(default)]
         result: Value,
         #[serde(default)]
@@ -262,10 +258,7 @@ pub struct ResponseLine {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "role", rename_all = "camelCase")]
 pub enum PiMessage {
-    User {
-        #[serde(default)]
-        content: Vec<ContentBlock>,
-    },
+    User,
     #[serde(rename_all = "camelCase")]
     Assistant {
         #[serde(default)]
@@ -282,15 +275,8 @@ pub enum PiMessage {
         error_message: Option<String>,
         #[serde(default)]
         usage: Option<Usage>,
-        #[serde(default)]
-        model: Option<String>,
     },
-    #[serde(rename_all = "camelCase")]
-    ToolResult {
-        tool_call_id: String,
-        #[serde(default)]
-        is_error: bool,
-    },
+    ToolResult,
     #[serde(other)]
     Unknown,
 }
@@ -307,13 +293,7 @@ pub enum ContentBlock {
         #[serde(default)]
         thinking: String,
     },
-    #[serde(rename_all = "camelCase")]
-    ToolCall {
-        id: String,
-        name: String,
-        #[serde(default)]
-        arguments: Value,
-    },
+    ToolCall,
     #[serde(other)]
     Unknown,
 }
@@ -335,8 +315,6 @@ pub enum AssistantEvent {
     },
     TextEnd {
         content_index: u32,
-        #[serde(default)]
-        content: String,
     },
 
     ThinkingStart {
@@ -348,8 +326,6 @@ pub enum AssistantEvent {
     },
     ThinkingEnd {
         content_index: u32,
-        #[serde(default)]
-        content: String,
     },
 
     /// Names the tool before any argument has arrived, which is what lets the
@@ -370,7 +346,6 @@ pub enum AssistantEvent {
     },
     ToolcallEnd {
         content_index: u32,
-        tool_call: ToolCallBlock,
     },
 
     #[serde(other)]
@@ -393,15 +368,6 @@ impl AssistantEvent {
             AssistantEvent::Unknown => None,
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolCallBlock {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub arguments: Value,
 }
 
 /// Token counts on a committed message.

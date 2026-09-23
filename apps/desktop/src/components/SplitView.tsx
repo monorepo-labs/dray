@@ -17,6 +17,19 @@ import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type { SessionIndexItem } from "@/types/events";
 
+/// What a transcript reports back through, wherever it is drawn: the main
+/// column, a split pane or a crew strip.
+export type PaneChat = Pick<
+  React.ComponentProps<typeof Chat>,
+  | "onOpenSubagent"
+  | "onOpenSession"
+  | "onOpenSubagentPanel"
+  | "onOpenPlan"
+  | "onRespondPermission"
+  | "onAnswerQuestions"
+  | "onSendNow"
+>;
+
 type SplitViewProps = {
   /// Left to right, each top to bottom.
   columns: SessionIndexItem[][];
@@ -29,18 +42,10 @@ type SplitViewProps = {
   onClose: (sessionId: string) => void;
   /// Whether the view is on screen, for the focused pane's own chords.
   active: boolean;
-  chat: Pick<
-    React.ComponentProps<typeof Chat>,
-    | "onOpenSubagent"
-    | "onOpenSession"
-    | "onOpenSubagentPanel"
-    | "onOpenPlan"
-    | "onRespondPermission"
-    | "onAnswerQuestions"
-    // Interrupts the selected session, which is the focused pane — `Chat` gates
-    // it on `active`, so only that pane draws the control and binds its chord.
-    | "onSendNow"
-  >;
+  /// `onSendNow` interrupts the selected session, which is the focused pane —
+  /// `Chat` gates it on `active`, so only that pane draws the control and binds
+  /// its chord.
+  chat: PaneChat;
 };
 
 /// How many panes have a chord: `pane.1` through `pane.9` in the registry.

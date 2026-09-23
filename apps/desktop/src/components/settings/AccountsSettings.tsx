@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import AgentIcon from "@/components/AgentIcon";
+import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,10 +28,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import SettingsHeaderAction from "@/components/settings/headerAction";
 import { useAgentAccounts, useAuthOptions } from "@/hooks/useAgentAccounts";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
+import { useCopied } from "@/hooks/useCopied";
 import { cn } from "@/lib/utils";
 import type { Account, AccountState, AgentAccounts, Harness } from "@/types/events";
-
-const COPIED_MS = 1600;
 
 /// What each state is called, in the reader's words rather than the wire's.
 ///
@@ -110,13 +110,7 @@ function CommandRow({
   onRun: () => void;
   busy: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
+  const [copied, copy] = useCopied();
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -125,7 +119,7 @@ function CommandRow({
         <button
           type="button"
           aria-label={`Copy ${command}`}
-          onClick={() => void navigator.clipboard.writeText(command).then(() => setCopied(true))}
+          onClick={() => void copy(command)}
           className="flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -200,15 +194,15 @@ function AccountRow({
           undoable and this one is not: one slip sent `codex logout` with
           nothing between the press and the credential. */}
       {confirming ? (
-        <div className="flex items-center gap-1">
+        <CancelOrConfirm
+          verb="Sign out"
+          onConfirm={onSignOut}
+          onCancel={onCancelSignOut}
+          busy={busy}
+          className="gap-1"
+        >
           <span className="text-ui text-muted-foreground">Sign out?</span>
-          <Button variant="ghost" size="sm" onClick={onCancelSignOut}>
-            Cancel
-          </Button>
-          <Button variant="destructive" size="sm" disabled={busy} onClick={onSignOut}>
-            Sign out
-          </Button>
-        </div>
+        </CancelOrConfirm>
       ) : /* A row with nothing signed in has exactly one thing to offer, and
              `can_sign_out` follows being signed in on every harness — so its
              menu was one item behind a caret, which is a button with a step in
@@ -552,16 +546,10 @@ function SignInForm({
 /// An agent with no CLI behind it: the one row that is about the machine rather
 /// than about an account.
 function MissingAgent({ agent }: { agent: AgentAccounts }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, copy] = useCopied();
   const availability = useAgentAvailability()?.find((a) => a.harness === agent.harness);
   const installCommand = availability?.installCommand;
   const docsUrl = availability?.docsUrl;
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
 
   return (
     <div className="flex items-center gap-3 py-1.5">
@@ -573,9 +561,7 @@ function MissingAgent({ agent }: { agent: AgentAccounts }) {
         <Button
           variant="secondary"
           size="sm"
-          onClick={() =>
-            void navigator.clipboard.writeText(installCommand).then(() => setCopied(true))
-          }
+          onClick={() => void copy(installCommand)}
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           {copied ? "Copied" : "Copy install"}
@@ -822,21 +808,15 @@ export default function AccountsSettings({
 /// is the one place they are joined, and an unrecognised label answers `null`
 /// rather than guessing. `null` costs the preselection and nothing else: the
 /// form opens with no method picked, which is where it was before.
+const AUTH_IDS: Record<string, string> = {
+  "Claude subscription": "claudeai",
+  "Anthropic Console": "console",
+  "ChatGPT subscription": "chatgpt",
+  "OpenAI API key": "api_key",
+  OAuth: "oauth",
+  "API key": "api_key",
+};
+
 function authIdOf(authType: string | null): string | null {
-  switch (authType) {
-    case "Claude subscription":
-      return "claudeai";
-    case "Anthropic Console":
-      return "console";
-    case "ChatGPT subscription":
-      return "chatgpt";
-    case "OpenAI API key":
-      return "api_key";
-    case "OAuth":
-      return "oauth";
-    case "API key":
-      return "api_key";
-    default:
-      return null;
-  }
+  return (authType && Object.hasOwn(AUTH_IDS, authType) && AUTH_IDS[authType]) || null;
 }

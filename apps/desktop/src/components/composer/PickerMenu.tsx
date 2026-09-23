@@ -61,7 +61,6 @@ export default function PickerMenu<T>({
   activeIndex,
   onPick,
   onHover,
-  placement = "above",
   bare = false,
   loading = false,
   emptyNote,
@@ -80,17 +79,12 @@ export default function PickerMenu<T>({
   /// Two independently lit rows would leave Enter and the click landing on
   /// different items, which is the one thing this list must never do.
   onHover: (index: number) => void;
-  /// Which side of the composer to open on. Above by default, where the
-  /// transcript is the only thing covered; below on a new task, where the
-  /// toolbar sits above the input and the empty half of the window is
-  /// underneath it. The hint row swaps ends to match, so the list always stays
-  /// the half nearer the input.
-  placement?: "above" | "below";
   /// Follows the composer's own empty state, where the card drops its fill and
-  /// border: the list drops them too and sits directly on the page. A separate
-  /// prop from `placement` rather than inferred from it — the two happen to
-  /// travel together today, but one is geometry and one is surface, and reading
-  /// the second off the first is what makes a later third state impossible.
+  /// border: the list drops them too and sits directly on the page. It also
+  /// opens *below* there, where the toolbar sits above the input and the empty
+  /// half of the window is underneath it — above otherwise, where the
+  /// transcript is the only thing covered. The hint row swaps ends to match, so
+  /// the list always stays the half nearer the input.
   bare?: boolean;
   /// Whether an answer is still being waited on. Only read where there are no
   /// rows: a list already holding something paints that, since replacing rows
@@ -176,7 +170,7 @@ export default function PickerMenu<T>({
   // Runs across the whole list rather than restarting per group, so it lines up
   // with the flat index the composer navigates by.
   let row = -1;
-  const below = placement === "below";
+  const below = bare;
 
   /* Outside the box: nothing about a list that never holds focus says it is
      navigable, but the hint is chrome about the list rather than part of it.

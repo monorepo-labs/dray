@@ -57,13 +57,6 @@ pub struct Mapper {
     /// in a turn would stream under the same `BlockRef` and the second one's
     /// blocks would land on the first one's previews.
     message_id: Option<String>,
-    /// Which `contentIndex` values are open as a tool call, and the tool id
-    /// each carries.
-    ///
-    /// `toolcall_start` names the tool id; `toolcall_delta` does not, carrying
-    /// only the index. Without this the argument fragments could not be
-    /// attributed to the call they belong to.
-    open_calls: std::collections::HashMap<u32, String>,
     /// The stop reason and sentence from the newest committed assistant
     /// message, held until `agent_settled` closes the turn.
     ///
@@ -120,7 +113,6 @@ impl Mapper {
             session_id,
             seq,
             message_id: None,
-            open_calls: std::collections::HashMap::new(),
             outcome: None,
             usage: None,
             context_window,
@@ -219,14 +211,13 @@ impl Mapper {
             // One model call inside the run. Dray's transcript groups by user
             // message, so these draw nothing — the turn they sit inside is the
             // one the reader sees.
-            PiEvent::TurnStart | PiEvent::TurnEnd { .. } => Vec::new(),
+            PiEvent::TurnStart | PiEvent::TurnEnd => Vec::new(),
 
             PiEvent::MessageStart { message } => match message {
                 // Minted per message so two in one turn cannot collide on
                 // `contentIndex` 0.
                 PiMessage::Assistant { .. } => {
                     self.message_id = Some(Uuid::now_v7().to_string());
-                    self.open_calls.clear();
                     Vec::new()
                 }
                 // The prompt Dray itself sent, echoed back, and the tool result
@@ -262,7 +253,6 @@ impl Mapper {
                 tool_call_id,
                 result,
                 is_error,
-                ..
             } => vec![self.event(AgentEventPayload::ToolCallCompleted {
                 call_id: tool_call_id,
                 result: ToolResult {
@@ -435,7 +425,7 @@ impl Mapper {
                 // The model *asking* for a tool. The call itself is
                 // `tool_execution_start`, which is what draws the row — emitting
                 // one here too would draw every call twice.
-                ContentBlock::ToolCall { .. } | ContentBlock::Unknown => {}
+                ContentBlock::ToolCall | ContentBlock::Unknown => {}
             }
         }
 
@@ -465,16 +455,13 @@ impl Mapper {
                 block,
                 block_type: BlockType::Thinking,
             },
-            AssistantEvent::ToolcallStart { id, tool_name, .. } => {
-                self.open_calls.insert(index, id.clone());
-                DeltaEvent::BlockStart {
-                    block,
-                    block_type: BlockType::ToolUse {
-                        id,
-                        name: tool_name,
-                    },
-                }
-            }
+            AssistantEvent::ToolcallStart { id, tool_name, .. } => DeltaEvent::BlockStart {
+                block,
+                block_type: BlockType::ToolUse {
+                    id,
+                    name: tool_name,
+                },
+            },
 
             AssistantEvent::TextDelta { delta, .. }
             | AssistantEvent::ThinkingDelta { delta, .. } => {

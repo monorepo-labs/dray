@@ -42,7 +42,7 @@ import GitHubIcon from "@/components/GitHubIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
 import { useHotkey } from "@/hooks/useHotkey";
 import { issueErrorText, useIssues } from "@/hooks/useIssues";
-import { groupIssues, groupLabel, shortIdentifier } from "@/lib/issue";
+import { GROUPS, groupIssues, shortIdentifier } from "@/lib/issue";
 import {
   readIssueTracker,
   subscribeIssueTracker,
@@ -125,12 +125,9 @@ const STATES = [
   { value: "closed", label: "Closed" },
 ] as const;
 
-/// The two buckets that are read on demand. Drawn in the same order [groupIssues]
-/// would put them in, so opening one does not reshuffle the page.
-const SETTLED_KINDS: { key: IssueStateKind; label: string }[] = [
-  { key: "completed", label: "Done" },
-  { key: "canceled", label: "Cancelled" },
-];
+/// The two buckets that are read on demand. Taken from [groupIssues]' own list,
+/// so their headings and order match the rest of the page.
+const SETTLED_KINDS = GROUPS.filter((g) => g.key === "completed" || g.key === "canceled");
 
 /// Every issue the reader could pick up.
 ///
@@ -231,16 +228,6 @@ export default function IssuesView({
   /// failed read — the page simply has no repository named yet, which is the
   /// state it opens in the first time.
   const needsRepo = tracker === "github" && !query.teamId;
-
-  /// The settled headings in the tracker's own words. The *kinds* are shared —
-  /// which is what lets one page group both — where "Done" and "Cancelled" are
-  /// Linear's vocabulary and would read as some other tracker's workspace over
-  /// a list of GitHub issues.
-  const settledKinds = useMemo(
-    () =>
-      SETTLED_KINDS.map(({ key }) => ({ key, label: groupLabel(key) })),
-    [],
-  );
 
   // Linear's alone: GitHub draws its rows flat under the state switch.
   const groups = useMemo(() => groupIssues(issues), [issues]);
@@ -546,7 +533,7 @@ export default function IssuesView({
                 question of them. */}
             {loaded &&
               tracker !== "github" &&
-              settledKinds.map(({ key, label }) => {
+              SETTLED_KINDS.map(({ key, label }) => {
                 const group = settledGroups.find((g) => g.key === key);
 
                 return (

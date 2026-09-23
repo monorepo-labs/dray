@@ -10,16 +10,13 @@
 //! and 145 others, none of which pi has ever heard of, and typing one sent it
 //! as a prompt.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
-use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
-use super::rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
+use super::rpc::HANDSHAKE_TIMEOUT;
 use crate::harness::{claude_code::commands::SlashCommand, ProbeCache};
 
 /// How long a cached answer stands.
@@ -46,11 +43,6 @@ struct PiCommand {
     name: String,
     #[serde(default)]
     description: Option<String>,
-    /// `extension`, `prompt` or `skill`. Read only to keep a command whose kind
-    /// pi adds later from being dropped — every value is offered.
-    #[serde(default)]
-    #[allow(dead_code)]
-    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,52 +67,13 @@ pub async fn list_commands(cwd: &str) -> Vec<SlashCommand> {
         })
 }
 
-/// Drops every cached answer, so the next read asks pi again.
-pub fn forget() {
-    CACHE.forget();
-}
-
 /// Spawns a throwaway pi in `cwd`, asks it, and asks it to leave.
 ///
 /// The directory is load-bearing: pi discovers project-scoped commands relative
 /// to where it runs, so a probe spawned anywhere else answers for the wrong
 /// project.
 async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
-    let bin = crate::binpath::pi().await;
-    let mut child = Command::new(&bin)
-        .args([
-            "--mode",
-            "rpc",
-            // Mandatory, not tidiness: without it every probe writes a session
-            // file into the reader's own `~/.pi/agent/sessions/`, and their
-            // session list fills with empty runs Dray started.
-            "--no-session",
-        ])
-        .current_dir(cwd)
-        .env("PATH", crate::harness::agent_path(&bin))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("couldn't start pi to ask for its commands")?;
-
-    let stdin = child.stdin.take().context("failed to take stdin")?;
-    let stdout = child.stdout.take().context("failed to take stdout")?;
-    let client = PiClient::new(stdin);
-
-    tokio::spawn({
-        let client = client.clone();
-        async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                // Only answers matter here. The probe sends no prompt, so
-                // anything else pi says is not about us.
-                if let Incoming::Malformed = client.accept(&line).await {
-                    continue;
-                }
-            }
-        }
-    });
+    let (mut child, client) = super::spawn_probe(Some(cwd), "commands").await?;
 
     let listed = client
         .request_within("get_commands", Value::Null, HANDSHAKE_TIMEOUT)
@@ -207,9 +160,9 @@ mod tests {
 
     /// A command pi adds a new `source` kind for is still offered.
     ///
-    /// The field is read to keep the row rather than to filter on it: pi's own
-    /// three are `extension`, `prompt` and `skill`, and a fourth would otherwise
-    /// have to be added here before a reader could see commands they installed.
+    /// Nothing filters on `source`: pi's own three are `extension`, `prompt` and
+    /// `skill`, and a fourth would otherwise have to be added here before a
+    /// reader could see commands they installed.
     #[test]
     fn a_command_of_an_unfamiliar_kind_is_still_offered() {
         let rows = read_rows(&json!({

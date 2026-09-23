@@ -4,7 +4,8 @@ import { File } from "@pierre/diffs/react";
 
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
-import { diffSide, fileName, type ReadRange } from "@/lib/diff";
+import { diffSide, type ReadRange } from "@/lib/diff";
+import { basename } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /// The slice a ranged `Read` returned, highlighted. Not a diff — nothing
@@ -19,7 +20,7 @@ export default function CodeView({
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
 
-  const name = fileName(range.path);
+  const name = basename(range.path);
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
   // Keyed on content like a diff side, or the pool caches nothing for it and a

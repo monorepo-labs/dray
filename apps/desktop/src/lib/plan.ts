@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
+
 /// The plan a session's agent last put up for approval, per session, in memory.
 ///
 /// **In memory because the wire gives it nowhere else to live.** grok sends the
@@ -16,18 +18,11 @@ import { useSyncExternalStore } from "react";
 const bySession = new Map<string, string>();
 
 let version = 0;
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 function emit() {
   version += 1;
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  changed.emit();
 }
 
 const getVersion = () => version;
@@ -57,16 +52,8 @@ export function planAsked(toolName: string, input: unknown): string | null {
   return typeof plan === "string" && plan.trim() ? plan : null;
 }
 
-export function planFor(sessionId: string | null): string | null {
-  return sessionId ? bySession.get(sessionId) ?? null : null;
-}
-
-export function forgetPlan(sessionId: string): void {
-  if (bySession.delete(sessionId)) emit();
-}
-
 /// The session's plan, or `null`. Drives whether the panel draws a Plan tab.
 export function usePlan(sessionId: string | null): string | null {
-  useSyncExternalStore(subscribe, getVersion, getVersion);
-  return planFor(sessionId);
+  useSyncExternalStore(changed.subscribe, getVersion, getVersion);
+  return sessionId ? bySession.get(sessionId) ?? null : null;
 }

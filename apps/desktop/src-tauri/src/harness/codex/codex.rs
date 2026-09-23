@@ -423,7 +423,6 @@ struct ReaderHandles {
     app: AppHandle,
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn read_stdout(
     stdout: ChildStdout,
     handles: ReaderHandles,
@@ -765,7 +764,6 @@ mod tests {
         for mode in [
             ApprovalPolicy::Plan,
             ApprovalPolicy::Manual,
-            ApprovalPolicy::Auto,
             ApprovalPolicy::Auto,
             ApprovalPolicy::DontAsk,
             ApprovalPolicy::BypassPermissions,

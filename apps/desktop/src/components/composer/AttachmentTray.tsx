@@ -1,7 +1,6 @@
 import { X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
-import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/types/events";
 
@@ -10,7 +9,7 @@ import type { Attachment } from "@/types/events";
 /// Two presentations for two things that travel differently. An image goes down
 /// the wire as pixels, so it is shown as pixels — a thumbnail is the only label
 /// a screenshot has. Anything else is handed to the model as a path, so it gets
-/// the row a path deserves: the type glyph, the name, and the size. Neither is a
+/// the row a path deserves: the type glyph and the name. Neither is a
 /// "file preview" — a tile says *this is attached*, and opening it is the job of
 /// the editor the user already has.
 ///
@@ -18,16 +17,14 @@ import type { Attachment } from "@/types/events";
 export default function AttachmentTray({
   attachments,
   onRemove,
-  modelTakesImages = true,
+  modelTakesImages,
 }: {
   attachments: Attachment[];
   onRemove: (path: string) => void;
   /// Whether the picked model can be handed an image at all. Some pi models
   /// report `input: ["text"]` and mean it.
-  modelTakesImages?: boolean;
+  modelTakesImages: boolean;
 }) {
-  if (!attachments.length) return null;
-
   // Said, not enforced. The image is still sent, because the harness's own
   // refusal names what was wrong where a guess made here could not — and Dray's
   // copy of what a model accepts can be stale, or absent where the harness
@@ -60,16 +57,7 @@ export default function AttachmentTray({
 
               {/* `min-w-0` so the name truncates instead of setting the tile's
                   floor and pushing the rest out of the box. */}
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate text-ui">{attachment.name}</span>
-                {/* Hidden rather than deleted. A size is what a file manager
-                    owes you before you open something; here the file is already
-                    attached and the number changes no decision. Kept wired up
-                    because the judgement is about the tile, not the figure. */}
-                <span className="hidden text-ui text-muted-foreground/70">
-                  {formatBytes(attachment.size)}
-                </span>
-              </div>
+              <span className="min-w-0 truncate text-ui">{attachment.name}</span>
             </div>
           )}
 

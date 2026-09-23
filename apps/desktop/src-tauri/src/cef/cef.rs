@@ -36,8 +36,6 @@ pub mod automation;
 
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 const HELPER: &str = "Dray Helper.app/Contents/MacOS/Dray Helper";
-/// Fixed for now; a per-app free port and a per-session proxy come later.
-const DEBUG_PORT: i32 = 9333;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 /// Never held across a call into CEF. Every `ImplBrowser`/`ImplFrame` call
@@ -67,8 +65,6 @@ struct Tab {
     can_go_forward: bool,
     /// The main frame's last load failure, cleared when a new load starts.
     error: Option<String>,
-    /// CEF's zoom level: 0 is 100%, each step is ×1.2.
-    zoom: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -93,7 +89,6 @@ pub struct TabInfo {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub error: Option<String>,
-    pub zoom: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -210,7 +205,6 @@ fn start() -> Option<bool> {
     let settings = Settings {
         no_sandbox: 1,
         external_message_pump: 1,
-        remote_debugging_port: DEBUG_PORT,
         browser_subprocess_path: path_str(&paths.helpers.join(HELPER)),
         framework_dir_path: path_str(&framework),
         main_bundle_path: path_str(&paths.bundle),
@@ -229,7 +223,7 @@ fn start() -> Option<bool> {
         return Some(false);
     }
     start_pump(app.clone());
-    eprintln!("cef: initialized, devtools on 127.0.0.1:{DEBUG_PORT}");
+    eprintln!("cef: initialized");
     Some(true)
 }
 
@@ -476,7 +470,6 @@ fn tabs_of(session: &str) -> Vec<TabInfo> {
             can_go_back: t.can_go_back,
             can_go_forward: t.can_go_forward,
             error: t.error.clone(),
-            zoom: t.zoom,
         })
         .collect()
 }
@@ -702,7 +695,6 @@ wrap_life_span_handler! {
                 can_go_back: false,
                 can_go_forward: false,
                 error: None,
-                zoom: 0.0,
             };
             // CEF can hand over a replacement browser under an id it has not
             // yet closed the old one for; a second entry would then go out
@@ -1068,9 +1060,7 @@ wrap_load_handler! {
     }
 }
 
-/// Zoom on CEF's level scale, where 0 is 100% and a step is ×1.2. Written
-/// back onto the tab, since `zoom_level()` is the only reading and it lives
-/// on the host.
+/// Zoom on CEF's level scale, where 0 is 100% and a step is ×1.2.
 fn zoom(browser: &Browser, action: &str) {
     let Some(host) = browser.host() else { return };
     let level = match action {
@@ -1079,7 +1069,6 @@ fn zoom(browser: &Browser, action: &str) {
         _ => 0.0,
     };
     host.set_zoom_level(level);
-    update_tab(browser.identifier(), |t| t.zoom = level);
 }
 
 /// DevTools in its own window: the default `WindowInfo` is a top-level one.
@@ -1268,16 +1257,6 @@ pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
             "stop" => browser.stop_load(),
             "hard_reload" => browser.reload_ignore_cache(),
             _ => browser.reload(),
-        }
-    })
-}
-
-/// `in`, `out` or `reset`, on the active tab.
-#[tauri::command]
-pub fn browser_zoom(session_id: String, action: String) -> Result<(), String> {
-    on_main(move || {
-        if let Some(browser) = active_id(&session_id).and_then(browser_of) {
-            zoom(&browser, &action);
         }
     })
 }

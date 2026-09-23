@@ -11,7 +11,6 @@ export default function SlashCommandMenu({
   activeIndex,
   onPick,
   onHover,
-  placement = "above",
   bare = false,
   emptyNote,
 }: {
@@ -19,7 +18,6 @@ export default function SlashCommandMenu({
   activeIndex: number;
   onPick: (command: SlashCommand) => void;
   onHover: (index: number) => void;
-  placement?: "above" | "below";
   bare?: boolean;
   /// Drawn in place of rows where the harness offers none at all.
   emptyNote?: string;
@@ -32,7 +30,6 @@ export default function SlashCommandMenu({
       activeIndex={activeIndex}
       onPick={onPick}
       onHover={onHover}
-      placement={placement}
       bare={bare}
       emptyNote={emptyNote}
       renderItem={(command) => (

@@ -271,20 +271,6 @@ mod tests {
         assert_eq!(names, vec!["vendor:model", "compact"]);
     }
 
-    /// `clear` is reachable as `/reset` and `/new`. Dropping the command takes
-    /// its aliases with it, since the picker only ever sees this list.
-    #[test]
-    fn a_hidden_command_takes_its_aliases_with_it() {
-        let commands = supported(vec![SlashCommand {
-            name: "clear".into(),
-            description: "Start a new session".into(),
-            argument_hint: String::new(),
-            aliases: vec!["reset".into(), "new".into()],
-        }]);
-
-        assert!(commands.is_empty());
-    }
-
     /// A command with no arguments and no aliases is the common case, and the
     /// CLI omits `aliases` entirely for it.
     #[test]

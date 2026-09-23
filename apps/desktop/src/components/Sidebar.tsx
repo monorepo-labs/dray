@@ -48,7 +48,7 @@ import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
-import { isToday, relativeTime } from "@/lib/format";
+import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { useResizable } from "@/components/ResizeHandle";
@@ -103,8 +103,8 @@ type SidebarProps = {
   /// of everything else. Each holds only sessions in `items`.
   groups: SplitGroup[];
   /// A row dropped on the transcript column: `anchor` is the session it landed
-  /// beside. Absent in the settled list, where nothing is dragged.
-  onDropSession?: (target: DropTarget, dropped: string) => void;
+  /// beside. Unused in the settled list, where nothing is dragged.
+  onDropSession: (target: DropTarget, dropped: string) => void;
   /// The reader has made a group at some point, so the drag needs no teaching.
   splitLearned: boolean;
   onNewSession: () => void;
@@ -1032,7 +1032,7 @@ export default function Sidebar({
   const projectName = useMemo(() => {
     const named = new Map(projects.map((p) => [p.path, p.name]));
     return (path: string) =>
-      named.get(path) ?? path.split("/").filter(Boolean).pop() ?? path;
+      named.get(path) ?? basename(path);
   }, [projects]);
 
   // A filtered list that comes up empty is a different fact from an empty app,
@@ -1358,7 +1358,7 @@ export default function Sidebar({
                     }
                     onSelect={onSelect}
                     onDragStart={
-                      onDropSession && !archivedShown
+                      !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
                         : undefined
                     }
@@ -1383,7 +1383,7 @@ export default function Sidebar({
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!archivedShown && splits.length > 0}
-            splittable={!!onDropSession && !archivedShown && !splitLearned}
+            splittable={!archivedShown && !splitLearned}
           />
         )}
       </div>
@@ -1779,12 +1779,7 @@ function RowAction({
             e.stopPropagation();
             onClick(e);
           }}
-          // Set here rather than inherited from the row: the UA stylesheet's own
-          // `button { cursor: default }` wins over an inherited value.
-          className={cn(
-            "cursor-pointer",
-            active ? "text-foreground" : "text-muted-foreground",
-          )}
+          className={active ? "text-foreground" : "text-muted-foreground"}
         >
           {children}
         </Button>

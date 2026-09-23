@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
+import { channel } from "@/lib/channel";
 import type { Attachment } from "@/types/events";
 
 /// What is pinned to the composer but not yet sent, keyed by the session it was
@@ -18,21 +19,12 @@ import type { Attachment } from "@/types/events";
 /// Not persisted: an attachment is part of a sentence you were in the middle of,
 /// and the file it points at may not survive a restart either.
 const bySession = new Map<string | null, Attachment[]>();
-const listeners = new Set<() => void>();
+const { emit, subscribe } = channel<void>();
 
 // One frozen array for every empty key. `useSyncExternalStore` re-renders on any
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
 // would loop forever.
 const EMPTY: Attachment[] = [];
-
-function emit() {
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
 
 function write(sessionId: string | null, next: Attachment[]) {
   if (next.length) bySession.set(sessionId, next);

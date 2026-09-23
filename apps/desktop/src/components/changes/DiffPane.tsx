@@ -2,13 +2,13 @@ import type { CSSProperties } from "react";
 import { Columns2, Rows3 } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
+import IconToggle from "@/components/IconToggle";
 import Counts from "@/components/changes/Counts";
+import Note, { unreadableText } from "@/components/changes/Note";
 import DiffView from "@/components/chat/DiffView";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFileVersions } from "@/hooks/useChanges";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { splitPath } from "@/lib/changes";
-import { cn } from "@/lib/utils";
 import type { ChangedFile } from "@/types/events";
 
 type DiffStyle = "split" | "unified";
@@ -112,7 +112,7 @@ export default function DiffPane({
           <Counts added={file.added} removed={file.removed} />
         )}
 
-        <StyleToggle value={diffStyle} onChange={setDiffStyle} />
+        <IconToggle value={diffStyle} options={STYLES} onChange={setDiffStyle} tooltips />
       </div>
 
       {/* No padding: the pane's own border is the frame, and an inset would
@@ -137,59 +137,10 @@ const EMPTY_FILE: ChangedFile = {
 };
 
 const STYLES: { value: DiffStyle; label: string; Icon: typeof Columns2 }[] = [
-  { value: "split", label: "Split", Icon: Columns2 },
-  { value: "unified", label: "Unified", Icon: Rows3 },
+  { value: "split", label: "Split view", Icon: Columns2 },
+  { value: "unified", label: "Unified view", Icon: Rows3 },
 ];
 
-/// Both options drawn side by side, with the active one filled.
-///
-/// A single glyph that swapped on click was tried first and read as a picture
-/// of the current state rather than as a control — nothing about it said it
-/// could be pressed. Two segments make the choice visible before it is made,
-/// which is worth the extra width on a row this wide.
-function StyleToggle({
-  value,
-  onChange,
-}: {
-  value: DiffStyle;
-  onChange: (next: DiffStyle) => void;
-}) {
-  return (
-    // `--surface-well`, the track token, rather than a muted fill: the well is
-    // a black scrim in both modes, so on a light page it cuts *into* the row
-    // instead of sitting a shade off it — which is what lets the thumb read as
-    // raised rather than as the one segment that happens to be greyer.
-    <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-surface-well p-0.5">
-      {STYLES.map(({ value: style, label, Icon }) => (
-        <Tooltip key={style}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => onChange(style)}
-              aria-label={`${label} view`}
-              aria-pressed={value === style}
-              className={cn(
-                "rounded-[min(var(--radius-md),6px)] p-1 transition-colors",
-                // The thumb has to come up past the surface the row is drawn
-                // at, out of the well the track cuts — so it takes
-                // `--surface-thumb` and the button shadow, the pair the
-                // composer's own segmented control uses. An accent fill is a
-                // veil, and a veil over a scrim is a few percent of light that
-                // reads as nothing.
-                value === style
-                  ? "bg-surface-thumb text-foreground shadow-(--shadow-button)"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-3.5" strokeWidth={1.5} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left">{label} view</TooltipContent>
-        </Tooltip>
-      ))}
-    </div>
-  );
-}
 
 function Body({
   file,
@@ -202,29 +153,10 @@ function Body({
   error: string | null;
   diffStyle: DiffStyle;
 }) {
-  const note = (text: string, tone?: "error") => (
-    <p
-      className={cn(
-        "px-3 py-2 text-ui",
-        tone === "error" ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      {text}
-    </p>
-  );
-
-  // Same wording as the turn panel's rows: git's binary test is NUL-based, so
-  // a Latin-1 file passes it while the counts beside it stay real.
-  if (file.binary) return note("Not UTF-8 text — no diff to show.");
-  if (error) return note(error, "error");
-  if (!versions) return note("Loading…");
-  if (versions.unreadable) {
-    return note(
-      versions.unreadable === "binary"
-        ? "Not UTF-8 text — no diff to show."
-        : "File is too large to diff here.",
-    );
-  }
+  if (file.binary) return <Note text={unreadableText("binary")} />;
+  if (error) return <Note text={error} error />;
+  if (!versions) return <Note text="Loading…" />;
+  if (versions.unreadable) return <Note text={unreadableText(versions.unreadable)} />;
 
   // A deletion's new side is null, which the viewer reads as an empty file and
   // renders as a full removal; an addition keeps a null old side and draws as

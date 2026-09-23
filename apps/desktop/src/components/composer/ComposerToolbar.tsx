@@ -147,7 +147,6 @@ export default function ComposerToolbar({
       <ModelSelector
         harness={harness}
         onHarnessChange={onHarnessChange}
-        canSwitchHarness={isNewSession}
         models={models}
         modelId={modelId}
         effort={effort}
