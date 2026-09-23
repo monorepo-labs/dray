@@ -126,6 +126,21 @@ pub struct SettingsView {
     pub analytics_locked: bool,
 }
 
+/// The preferences Rust owns. Everything else the settings page draws is the
+/// frontend's own local storage.
+///
+/// Answers with the **effective** state, off `analytics::enabled`, not with
+/// what is on disk. The two differ whenever `DRAY_NO_ANALYTICS` is set, and a
+/// switch drawn from the file there would sit at `on` while nothing was being
+/// sent.
+#[tauri::command]
+pub async fn get_settings() -> SettingsView {
+    SettingsView {
+        analytics_enabled: crate::analytics::enabled().await,
+        analytics_locked: crate::analytics::env_opt_out(),
+    }
+}
+
 /// Reads `settings.json`, **failing closed**.
 ///
 /// A missing or empty file is a fresh install and reads as the defaults. Any
@@ -152,14 +167,11 @@ pub async fn read() -> AppSettings {
     }
 }
 
-/// The fail-closed answer. Spelled out rather than reusing `Default` so the two
-/// can never be confused: the default is opted *in*, and this is its opposite.
+/// The fail-closed answer: the default is opted *in*, and this is its opposite.
 fn opted_out() -> AppSettings {
     AppSettings {
         analytics_enabled: false,
-        install_id: None,
-        linear_account: None,
-        transcription: TranscriptionSettings::default(),
+        ..Default::default()
     }
 }
 

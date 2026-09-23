@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::fs;
@@ -20,7 +20,6 @@ use ts_rs::TS;
 
 use super::catalog::{self, TranscriptionModel};
 use crate::download::{download_verified, Cancelled};
-use crate::store::get_home_app_dir;
 
 /// Progress for the settings tab's bar.
 ///
@@ -51,12 +50,7 @@ pub struct DownloadProgress {
 /// these are hundreds of megabytes the reader chose to download, and a cache is
 /// a place the system is entitled to empty without asking.
 pub async fn models_dir() -> Result<PathBuf> {
-    let dir = get_home_app_dir().await?.join("models");
-    fs::create_dir_all(&dir)
-        .await
-        .context("could not create the models directory")?;
-
-    Ok(dir)
+    crate::store::app_subdir("models").await
 }
 
 pub async fn model_path(model: &TranscriptionModel) -> Result<PathBuf> {
@@ -107,7 +101,11 @@ pub async fn delete(model: &TranscriptionModel) -> Result<()> {
 /// what the button in settings has to hand.
 static CANCELLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn cancel_flag(model_id: &str, set: bool) {
+/// Setting it asks a running download to stop, harmless where none is.
+/// Cooperative rather than aborting the task: the stream loop owns a
+/// half-written file and a hasher, and the one safe place to give up is between
+/// chunks, where it can delete the `.part` on its way out.
+pub fn cancel_flag(model_id: &str, set: bool) {
     let mut ids = CANCELLED.lock().expect("cancel set poisoned");
 
     if set {
@@ -150,15 +148,6 @@ fn in_flight_slot(model_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         .entry(model_id.to_string())
         .or_default()
         .clone()
-}
-
-/// Asks a running download to stop. Harmless where none is.
-///
-/// Cooperative rather than aborting the task: the stream loop owns a half-written
-/// file and a hasher, and the one safe place to give up is between chunks, where
-/// it can delete the `.part` on its way out.
-pub fn cancel(model_id: &str) {
-    cancel_flag(model_id, true);
 }
 
 /// Whether the bytes actually landed on disk.
@@ -261,32 +250,15 @@ fn emit(
     );
 }
 
-/// Resolves an id to the path of an installed model, or says why not.
-pub async fn installed_path(model_id: &str) -> Result<PathBuf> {
-    let model =
-        catalog::find(model_id).ok_or_else(|| anyhow!("unknown model \"{model_id}\""))?;
-
-    if !is_installed(model).await {
-        bail!("{} is not downloaded yet", model.name);
-    }
-
-    model_path(model).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn unknown_model_id_is_an_error() {
-        assert!(installed_path("not-a-model").await.is_err());
-    }
 
     /// Ids are namespaced by the catalog, so these use names no model has —
     /// the flag set is process-wide and a real id would leak between tests.
     #[test]
     fn cancelling_marks_only_the_named_download() {
-        cancel("test-cancel-a");
+        cancel_flag("test-cancel-a", true);
 
         assert!(is_cancelled("test-cancel-a"));
         assert!(!is_cancelled("test-cancel-b"));
@@ -298,7 +270,7 @@ mod tests {
     /// once could never be downloaded again for the life of the process.
     #[test]
     fn clearing_lets_a_download_run_again() {
-        cancel("test-cancel-retry");
+        cancel_flag("test-cancel-retry", true);
         assert!(is_cancelled("test-cancel-retry"));
 
         cancel_flag("test-cancel-retry", false);
@@ -319,12 +291,5 @@ mod tests {
 
         assert!(e.downcast_ref::<Cancelled>().is_some());
         assert_eq!(e.to_string(), "download cancelled");
-    }
-
-    #[test]
-    fn part_and_final_paths_differ() {
-        let path = PathBuf::from("/tmp/models/whisper-small.gguf");
-
-        assert_ne!(path.with_extension("part"), path);
     }
 }

@@ -96,7 +96,11 @@ pub struct IssueRef {
 /// Linear reports a workflow state's `type`, which is this set exactly — the
 /// state's *name* is per-team prose ("In Review", "Shipping") and belongs on
 /// screen, not in a match arm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+///
+/// Declaration order is the sort order: the workflow's, so a status menu reads
+/// the way work moves. Linear orders states by type first and by `position`
+/// only *within* one, so position alone puts "Done" above "Todo".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum IssueStateKind {
@@ -117,25 +121,6 @@ impl IssueStateKind {
     pub fn settled(self) -> bool {
         matches!(self, Self::Completed | Self::Canceled)
     }
-
-    /// Where the kind sits in the workflow, so a status menu reads in the order
-    /// work moves through rather than in whatever order the API listed.
-    ///
-    /// Linear orders a team's states by type first and by `position` only
-    /// *within* one, so position alone is not an ordering across the whole
-    /// workflow — sorting by it puts "Done" above "Todo" wherever a workspace
-    /// has been reorganised.
-    pub fn flow_rank(self) -> u8 {
-        match self {
-            Self::Triage => 0,
-            Self::Backlog => 1,
-            Self::Unstarted => 2,
-            Self::Started => 3,
-            Self::Completed => 4,
-            Self::Canceled => 5,
-            Self::Other => 6,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -154,7 +139,9 @@ pub struct IssueState {
 
 /// Linear's five levels, by name rather than by its `0..4` integer — where `0`
 /// is *no* priority and therefore sorts nothing like a number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+///
+/// Declaration order is the sort order, urgent first and unprioritized last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum IssuePriority {
@@ -189,18 +176,6 @@ impl IssuePriority {
             Self::Medium => 3,
             Self::Low => 4,
             Self::None => 0,
-        }
-    }
-
-    /// Sort key, urgent first and unprioritized last. The whole reason this is
-    /// an enum: ordering by Linear's own integer puts "No priority" at the top.
-    pub fn rank(self) -> u8 {
-        match self {
-            Self::Urgent => 0,
-            Self::High => 1,
-            Self::Medium => 2,
-            Self::Low => 3,
-            Self::None => 4,
         }
     }
 }
@@ -484,19 +459,9 @@ const CREDENTIALS_FILE: &str = "credentials.json";
 /// Serializes writers, like every other whole-file rewrite here.
 static CREDENTIALS_LOCK: Mutex<()> = Mutex::const_new(());
 
-impl IssueTracker {
-    /// The key this tracker's credential is filed under. Stable across
-    /// renames of the enum, because it is written to disk.
-    fn credential_key(self) -> &'static str {
-        match self {
-            Self::Linear => "linear",
-            // Nothing is ever filed under it: GitHub's credential is `gh`'s own
-            // and Dray stores none. The arm keeps the match total, so a third
-            // tracker fails to compile here rather than at a call site.
-            Self::Github => "github",
-        }
-    }
-}
+/// What Linear's key is filed under, on disk. GitHub's credential is `gh`'s own
+/// and Dray stores none, so this is the only entry.
+const LINEAR_CREDENTIAL: &str = "linear";
 
 async fn credentials_path() -> Result<PathBuf, String> {
     get_home_app_dir()
@@ -519,102 +484,85 @@ async fn read_credentials() -> HashMap<String, String> {
     })
 }
 
-/// The key for a tracker, or `None` for one nothing is stored under.
+/// Linear's key, or `None` where nothing is stored.
 ///
 /// Unreadable reads as *not connected* rather than as an error — the cure is
 /// the same either way, which is to connect again.
-pub async fn read_key(tracker: IssueTracker) -> Option<String> {
+pub async fn read_key() -> Option<String> {
     read_credentials()
         .await
-        .get(tracker.credential_key())
+        .get(LINEAR_CREDENTIAL)
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
 }
 
-/// Writes the file whole at `0600`, temp file included.
-///
-/// The mode rides the **create**, on the temp file, rather than being set after
-/// the write or on the final file after the rename. `fs::write` creates at the
-/// process umask, so every other order leaves a window in which the key sits on
-/// disk world-readable — a `chmod` after the write closes a wide window and
-/// leaves a narrow one, where `OpenOptions::mode` leaves none at all: the file
-/// never exists with a wider mode for a single byte to be written into.
-///
-/// `mode` applies only to a file this call creates, which is what the
-/// `create_new` beside it guarantees. A temp file left behind by a crashed
-/// write could otherwise be one somebody else made, at whatever mode they chose.
+/// [`read_key`] for a read that cannot go on without one.
+async fn linear_key() -> Result<String, IssueUnavailable> {
+    read_key().await.ok_or(IssueUnavailable::NotConnected)
+}
+
+/// Writes the file whole at `0600`, the mode riding the temp file's create —
+/// see [`store::write_private_atomic`] for why no other order will do.
 async fn write_credentials(next: &HashMap<String, String>) -> Result<(), String> {
-    write_credentials_at(&credentials_path().await?, next).await
+    write_credentials_at(&credentials_path().await?, next)
 }
 
 /// Takes the path so a test can round-trip against a tempdir and read the mode
 /// back, rather than writing into the real `~/.dray`.
-async fn write_credentials_at(
+fn write_credentials_at(
     path: &std::path::Path,
     next: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let tmp = path.with_extension("json.tmp");
-
     let body = serde_json::to_string_pretty(next).map_err(|e| e.to_string())?;
 
-    // Cleared first, so `create_new` below is answering "did this call make the
-    // file" rather than failing over one a crashed write left behind.
-    let _ = tokio::fs::remove_file(&tmp).await;
-
-    let mut options = tokio::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    // `mode` is inherent on tokio's own `OpenOptions` under unix — no ext trait
-    // to import, and none to forget.
-    #[cfg(unix)]
-    options.mode(0o600);
-
-    let mut file = options
-        .open(&tmp)
-        .await
-        .map_err(|e| format!("could not write the credentials file: {e}"))?;
-
-    let written = async {
-        use tokio::io::AsyncWriteExt;
-        file.write_all(body.as_bytes()).await?;
-        file.sync_all().await
-    }
-    .await;
-
-    if let Err(e) = written {
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(format!("could not write the credentials file: {e}"));
-    }
-    drop(file);
-
-    if let Err(e) = tokio::fs::rename(&tmp, path).await {
-        // Or the next write inherits a stale temp file holding an old key.
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(format!("could not replace the credentials file: {e}"));
-    }
-
-    Ok(())
+    store::write_private_atomic(path, body.as_bytes())
+        .map_err(|e| format!("could not write the credentials file: {e}"))
 }
 
-async fn write_key(tracker: IssueTracker, key: &str) -> Result<(), String> {
+async fn write_key(key: &str) -> Result<(), String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
 
     let mut next = read_credentials().await;
-    next.insert(tracker.credential_key().to_string(), key.to_string());
+    next.insert(LINEAR_CREDENTIAL.to_string(), key.to_string());
 
     write_credentials(&next).await
 }
 
-async fn delete_key(tracker: IssueTracker) -> Result<(), String> {
+async fn delete_key() -> Result<(), String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
 
     let mut next = read_credentials().await;
     // Already gone is what the caller asked for, and rewriting the file to say
     // the same thing is work with no reader.
-    if next.remove(tracker.credential_key()).is_none() {
+    if next.remove(LINEAR_CREDENTIAL).is_none() {
         return Ok(());
     }
 
     write_credentials(&next).await
+}
+
+// ── wire helpers both trackers read with ─────────────────────────────────────
+
+/// A string field, with an empty one read as absent.
+fn optional(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn text(value: &serde_json::Value, field: &str) -> String {
+    optional(value, field).unwrap_or_default()
+}
+
+/// Linked PR numbers, sorted and deduplicated so a row reads the same twice
+/// running whatever order the tracker listed them in.
+fn pr_numbers(numbers: impl Iterator<Item = u32>) -> Vec<u32> {
+    let mut numbers: Vec<u32> = numbers.collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
 }
 
 // ── what a tag puts in front of the model ────────────────────────────────────
@@ -756,6 +704,24 @@ pub struct ExpandedTags {
     pub linked: Vec<IssueRef>,
 }
 
+/// A link with the identifier and nothing else — what is written down when the
+/// tracker could not be asked, and what `dray issue link` writes when its caller
+/// passes no `--title`. `tag_text` drops the trailing space for one of these and
+/// `openIssue` reads the empty address as none, so a ⌘-click on its tag opens
+/// no page rather than one that is not there.
+fn bare_ref(identifier: String) -> IssueRef {
+    IssueRef {
+        // By shape, like everything else that has to name a tracker without
+        // being told one: a bare link is written down exactly when the tracker
+        // could not be asked, so the spelling is all there is to go on.
+        tracker: IssueTracker::of(&identifier),
+        id: identifier.clone(),
+        identifier,
+        title: String::new(),
+        url: String::new(),
+    }
+}
+
 /// The prompt as the model will see it, and every issue it is against.
 ///
 /// Two sources, one answer: the `#ABC-123` tags already in the text, and
@@ -784,24 +750,6 @@ pub struct ExpandedTags {
 ///
 /// Sequential rather than concurrent: a prompt carries a handful of tags at
 /// most, and one at a time keeps the order they were written in.
-/// A link with the identifier and nothing else — what is written down when the
-/// tracker could not be asked, and what `dray issue link` writes when its caller
-/// passes no `--title`. `tag_text` drops the trailing space for one of these and
-/// `openIssue` reads the empty address as none, so a ⌘-click on its tag opens
-/// no page rather than one that is not there.
-fn bare_ref(identifier: String) -> IssueRef {
-    IssueRef {
-        // By shape, like everything else that has to name a tracker without
-        // being told one: a bare link is written down exactly when the tracker
-        // could not be asked, so the spelling is all there is to go on.
-        tracker: IssueTracker::of(&identifier),
-        id: identifier.clone(),
-        identifier,
-        title: String::new(),
-        url: String::new(),
-    }
-}
-
 pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
     let wanted = wanted_tags(prompt, named);
 
@@ -816,7 +764,7 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
     // `None` is ordinary: nobody has connected Linear. The named issues below
     // still have to reach the prompt, so this is not a return — and a GitHub
     // tag in the same prompt does not need it at all.
-    let key = read_key(IssueTracker::Linear).await;
+    let key = read_key().await;
 
     let mut resolved = Vec::with_capacity(wanted.len());
     for WantedTag { id: tag, .. } in &wanted {
@@ -973,7 +921,7 @@ pub struct IntegrationsView {
 #[tauri::command]
 pub async fn get_integrations() -> IntegrationsView {
     let cached = settings::read().await.linear_account;
-    let connected = read_key(IssueTracker::Linear).await.is_some();
+    let connected = read_key().await.is_some();
 
     let github = match crate::binpath::gh().await {
         Some(_) => github::account().await.ok(),
@@ -994,7 +942,7 @@ pub async fn get_integrations() -> IntegrationsView {
 /// repository's own config — so the frontend caches it per directory.
 #[tauri::command]
 pub async fn github_repo(cwd: String) -> Option<String> {
-    github::repo_of(&cwd).await
+    crate::git::github_slug(&cwd).await
 }
 
 /// Validates a personal API key, then saves it.
@@ -1020,7 +968,7 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
         IssueUnavailable::NotConnected => "No key.".to_string(),
     })?;
 
-    write_key(IssueTracker::Linear, &key).await?;
+    write_key(&key).await?;
 
     settings::update(|next| next.linear_account = Some(account))
         .await
@@ -1039,7 +987,7 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
 /// title are already on it — whether or not anyone can still reach the tracker.
 #[tauri::command]
 pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
-    delete_key(IssueTracker::Linear).await?;
+    delete_key().await?;
 
     settings::update(|next| next.linear_account = None)
         .await
@@ -1058,7 +1006,7 @@ pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
 pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, IssueUnavailable> {
     match query.tracker {
         IssueTracker::Linear => {
-            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+            let key = linear_key().await?;
 
             linear::list_issues(&key, &query, limit).await
         }
@@ -1085,7 +1033,7 @@ pub async fn get_issue(
 ) -> Result<IssueDetail, IssueUnavailable> {
     match IssueTracker::of(&identifier) {
         IssueTracker::Linear => {
-            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+            let key = linear_key().await?;
 
             linear::get_issue(&key, &identifier, id.as_deref()).await
         }
@@ -1137,7 +1085,7 @@ pub async fn update_issue(
         return github::get_issue(&identifier).await;
     }
 
-    let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+    let key = linear_key().await?;
 
     linear::update_issue(&key, &id, state_id.as_deref(), priority).await?;
 
@@ -1172,9 +1120,7 @@ const MAX_ASSET: u64 = 10 * 1024 * 1024;
 
 #[tauri::command]
 pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailable> {
-    let key = read_key(IssueTracker::Linear)
-        .await
-        .ok_or(IssueUnavailable::NotConnected)?;
+    let key = linear_key().await?;
 
     linear::fetch_asset(&key, &url, MAX_ASSET).await
 }
@@ -1188,7 +1134,7 @@ pub async fn list_issue_filters(
 ) -> Result<IssueFilters, IssueUnavailable> {
     match tracker {
         IssueTracker::Linear => {
-            let key = read_key(IssueTracker::Linear).await.ok_or(IssueUnavailable::NotConnected)?;
+            let key = linear_key().await?;
 
             linear::list_filters(&key).await
         }
@@ -1198,11 +1144,6 @@ pub async fn list_issue_filters(
     }
 }
 
-/// Tags a session with an issue, by identifier.
-///
-/// Reads the issue back before recording it, so the link carries the current
-/// title rather than whatever the caller believed — the CLI passes a string a
-/// person typed, and the picker one it read a moment ago.
 /// Untags a session. The issue itself is untouched: a link is a fact about the
 /// session, and the only write this app makes to a tracker is [`update_issue`],
 /// which a reader has to ask for by name.
@@ -1230,10 +1171,6 @@ mod tests {
         }
     }
 
-    /// The whole of what this file buys over the keychain it replaced: nobody
-    /// but the owner can read it. Worth a test because the failure is silent —
-    /// a key written at the process umask sits there world-readable and behaves
-    /// identically in every other respect.
     #[test]
     fn a_named_issue_reaches_the_prompt_even_when_nothing_resolves() {
         let wanted = wanted_tags("do the thing", &["DRA-53".into()]);
@@ -1309,9 +1246,13 @@ mod tests {
         assert_eq!(out.linked[0].identifier, "DRA-53");
     }
 
+    /// The whole of what this file buys over the keychain it replaced: nobody
+    /// but the owner can read it. Worth a test because the failure is silent —
+    /// a key written at the process umask sits there world-readable and behaves
+    /// identically in every other respect.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_credentials_file_is_owner_only() {
+    #[test]
+    fn the_credentials_file_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir().join(format!(
@@ -1324,14 +1265,15 @@ mod tests {
 
         let mut creds = HashMap::new();
         creds.insert("linear".to_string(), "lin_api_secret".to_string());
-        write_credentials_at(&path, &creds).await.unwrap();
+        write_credentials_at(&path, &creds).unwrap();
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "credentials must be owner-only");
 
         // And the temp file it landed through is gone, not left beside it
-        // holding the same key at whatever mode the umask gave.
-        assert!(!path.with_extension("json.tmp").exists());
+        // holding the same key.
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(left.len(), 1, "only the credentials file should remain");
     }
 
     #[test]
@@ -1431,14 +1373,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_settled_state_is_the_two_that_end_the_work() {
-        assert!(IssueStateKind::Completed.settled());
-        assert!(IssueStateKind::Canceled.settled());
-        assert!(!IssueStateKind::Started.settled());
-        assert!(!IssueStateKind::Backlog.settled());
-    }
-
     /// Linear's `0` is "no priority", so ordering by the wire integer puts the
     /// least urgent issues at the top of the page.
     #[test]
@@ -1449,7 +1383,7 @@ mod tests {
             IssuePriority::from_wire(1),
             IssuePriority::from_wire(9),
         ];
-        levels.sort_by_key(|p| p.rank());
+        levels.sort();
 
         assert_eq!(
             levels,

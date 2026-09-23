@@ -147,7 +147,7 @@ fn pi_known(provider: &str) -> Option<&'static PiProvider> {
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct AuthOption {
-    /// Closed per harness — `add_account` matches on it and refuses anything
+    /// Closed per harness — `add_agent_account` matches on it and refuses anything
     /// else, which is what keeps a frontend string out of a command line.
     pub id: String,
     pub label: String,
@@ -265,9 +265,15 @@ pub struct AgentAccounts {
 /// this agent running as" has to be asked where the agent runs or the tab can
 /// answer for a context the session never uses. It is the same directory
 /// [`run_agent_login`] opens its terminal in, so the read and the write cannot
-/// disagree about which project is being signed into.
-pub async fn all(cwd: &str) -> Vec<AgentAccounts> {
-    futures_util::future::join_all(Harness::ALL.map(|harness| one(harness, cwd))).await
+/// disagree about which project is being signed into. Empty is ordinary: the
+/// new-task composer has no session yet.
+///
+/// Uncached and re-asked on every open: the reader arrives at the Accounts tab
+/// *because* they are about to change a login, so a cached answer would be
+/// stale exactly when it is being read.
+#[tauri::command]
+pub async fn agent_accounts(cwd: String) -> Vec<AgentAccounts> {
+    futures_util::future::join_all(Harness::ALL.map(|harness| one(harness, &cwd))).await
 }
 
 async fn one(harness: Harness, cwd: &str) -> AgentAccounts {
@@ -327,7 +333,7 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
 /// The ways into one harness — and, where it has several credentials, into one
 /// of its providers.
 ///
-/// The list is the whole of what `add_account` will accept, so a frontend
+/// The list is the whole of what `add_agent_account` will accept, so a frontend
 /// cannot ask for a flow this build did not offer. It is also **per provider**
 /// wherever the harness is, which is the correction that matters most here: pi
 /// offers OAuth on six of its providers and a key on all but one, and drawing
@@ -457,6 +463,26 @@ struct Said {
     err: String,
 }
 
+impl From<std::process::Output> for Said {
+    fn from(output: std::process::Output) -> Self {
+        Said {
+            ok: output.status.success(),
+            out: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            err: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }
+    }
+}
+
+impl Said {
+    /// Success, else the CLI's own sentence, else `fallback`.
+    fn or_refused(self, fallback: String) -> Result<(), String> {
+        if self.ok {
+            return Ok(());
+        }
+        Err(if self.err.is_empty() { fallback } else { self.err })
+    }
+}
+
 /// Runs a CLI and hands back both streams, whatever it exited with.
 ///
 /// Two things here are measured rather than assumed, and each cost a wrong row
@@ -487,13 +513,10 @@ async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said>
 
     let output = tokio::time::timeout(PROBE_TIMEOUT, command.output())
         .await
-        .map_err(|_| anyhow::anyhow!("{} took too long to answer", harness.label()))??;
+        .map_err(|_| anyhow::anyhow!("{} took too long to answer", harness.label()))?
+        .map_err(|err| anyhow::anyhow!("couldn't run {}: {err}", harness.label()))?;
 
-    Ok(Said {
-        ok: output.status.success(),
-        out: String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        err: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-    })
+    Ok(output.into())
 }
 
 #[derive(Deserialize)]
@@ -869,12 +892,8 @@ fn pi_edit_store(edit: impl FnOnce(&mut Map<String, Value>) -> Result<(), String
     let body = serde_json::to_string_pretty(&auth).map_err(|err| err.to_string())?;
 
     std::fs::create_dir_all(&dir).map_err(|err| format!("couldn't reach pi's directory: {err}"))?;
-    let tmp = dir.join(format!("auth.json.dray-{}", uuid::Uuid::now_v7()));
-    write_private(&tmp, &body).map_err(|err| format!("couldn't write pi's credentials: {err}"))?;
-    if let Err(err) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("couldn't replace pi's credentials: {err}"));
-    }
+    crate::store::write_private_atomic(&path, body.as_bytes())
+        .map_err(|err| format!("couldn't write pi's credentials: {err}"))?;
 
     // The model list is per provider, so a credential moving is a new list.
     crate::harness::pi::models::forget();
@@ -919,31 +938,6 @@ fn pi_forget_provider(provider: &str) -> Result<(), String> {
     })
 }
 
-/// Creates at `0600` and writes, never a `chmod` after.
-///
-/// `create_new` because a leftover from a crashed write could be somebody
-/// else's, at whatever mode they chose.
-fn write_private(path: &std::path::Path, body: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let mut file = {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)?
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::OpenOptions::new().write(true).create_new(true).open(path)?
-        }
-    };
-    file.write_all(body.as_bytes())
-}
-
 // -------------------------------------------------------------------- writes
 
 /// Whether this harness's login command takes `provider` as an argument.
@@ -980,7 +974,8 @@ fn plausible_provider(provider: &str) -> bool {
 /// taken as given: `auth` must be an id that list holds *for this provider*,
 /// which is what stops a key field being honoured on `openai-codex`, whose only
 /// way in is OAuth.
-pub async fn add_account(
+#[tauri::command]
+pub async fn add_agent_account(
     harness: Harness,
     provider: Option<String>,
     auth: String,
@@ -1072,15 +1067,7 @@ async fn codex_set_key(key: &str) -> Result<(), String> {
         .map_err(|_| "codex took too long to take the key.".to_string())?
         .map_err(|err| format!("codex didn't finish: {err}"))?;
 
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        "Codex refused the key.".to_string()
-    } else {
-        stderr
-    })
+    Said::from(output).or_refused("Codex refused the key.".to_string())
 }
 
 /// One entry of `~/.grok/auth.json`, keyed by its issuer.
@@ -1191,7 +1178,8 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
 /// such subcommand, so its half is removing the record from the store this
 /// module writes the other half of — which is why it is offered on a pi row
 /// only where that store actually holds the provider.
-pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), String> {
+#[tauri::command]
+pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
     let provider = provider.filter(|p| !p.is_empty());
 
     let args: Vec<&str> = match harness {
@@ -1215,73 +1203,21 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
         Harness::Other(_) => return Err("Dray cannot drive that agent.".to_string()),
     };
 
-    let bin = binpath::agent_binary(harness).await;
-    // Bounded like the probes, and `kill_on_drop` is what makes the bound real:
-    // a CLI that decides to prompt instead of answering would otherwise hold
-    // the page busy for the life of the app, with Refresh and every row's menu
-    // disabled behind it.
-    let output = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        Command::new(&bin)
-            .args(&args)
-            .env("PATH", agent_path(&bin))
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| format!("{} took too long to sign out.", harness.label()))?
-    .map_err(|err| format!("couldn't run {}: {err}", harness.label()))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        format!("{} refused the sign-out.", harness.label())
-    } else {
-        stderr
-    })
+    // Bounded like the probes: a CLI that decides to prompt instead of
+    // answering would otherwise hold the page busy for the life of the app,
+    // with Refresh and every row's menu disabled behind it.
+    run(harness, &args, "")
+        .await
+        .map_err(|err| format!("{err:#}"))?
+        .or_refused(format!("{} refused the sign-out.", harness.label()))
 }
 
 // ------------------------------------------------------------------ commands
-
-/// Every harness's login state, for the Accounts tab.
-///
-/// A command rather than something the tab computes, since each answer is a
-/// child process. Uncached and re-asked on every open: the reader arrives here
-/// *because* they are about to change a login, so a cached answer would be
-/// stale exactly when it is being read.
-///
-/// `cwd` is the selected session's directory — see [`all`] for why the probes
-/// are asked there. Empty is ordinary: the new-task composer has no session
-/// yet.
-#[tauri::command]
-pub async fn agent_accounts(cwd: String) -> Vec<AgentAccounts> {
-    all(&cwd).await
-}
 
 /// The ways into one harness, for the Add-account flow's second step.
 #[tauri::command]
 pub fn agent_auth_options(harness: Harness, provider: Option<String>) -> Vec<AuthOption> {
     auth_options(harness, provider.as_deref())
-}
-
-/// Saves a pasted key — see [`add_account`].
-#[tauri::command]
-pub async fn add_agent_account(
-    harness: Harness,
-    provider: Option<String>,
-    auth: String,
-    key: Option<String>,
-) -> Result<(), String> {
-    add_account(harness, provider, auth, key).await
-}
-
-/// Signs one credential out — see [`sign_out`].
-#[tauri::command]
-pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
-    sign_out(harness, provider).await
 }
 
 /// Runs an interactive sign-in in a terminal.
@@ -1545,7 +1481,7 @@ mod tests {
     }
 
     /// Every harness that can be driven offers at least one way in, and every
-    /// option it offers is one `add_account` will accept — the list *is* the
+    /// option it offers is one `add_agent_account` will accept — the list *is* the
     /// closed set, so an option nobody can take is a dead control.
     #[test]
     fn every_offered_option_is_one_that_can_be_taken() {
@@ -1586,7 +1522,7 @@ mod tests {
     async fn a_key_is_refused_where_it_cannot_land() {
         // Claude has no key form at all, so no option of its own carries one —
         // which is what makes this a refusal rather than a spawn.
-        assert!(add_account(
+        assert!(add_agent_account(
             Harness::ClaudeCode,
             None,
             "api_key".into(),
@@ -1596,10 +1532,10 @@ mod tests {
         .is_err());
 
         // A real option, no key behind it.
-        assert!(add_account(Harness::Codex, None, "api_key".into(), None)
+        assert!(add_agent_account(Harness::Codex, None, "api_key".into(), None)
             .await
             .is_err());
-        assert!(add_account(
+        assert!(add_agent_account(
             Harness::Codex,
             None,
             "api_key".into(),
@@ -1609,7 +1545,7 @@ mod tests {
         .is_err());
 
         // An option nobody offered.
-        assert!(add_account(Harness::Fx, Some("grok".into()), "api_key".into(), Some("k".into()))
+        assert!(add_agent_account(Harness::Fx, Some("grok".into()), "api_key".into(), Some("k".into()))
             .await
             .is_err());
     }
@@ -1618,7 +1554,7 @@ mod tests {
     /// asked to do.
     #[tokio::test]
     async fn a_bad_provider_never_reaches_a_cli() {
-        assert!(add_account(
+        assert!(add_agent_account(
             Harness::Pi,
             Some("../../etc".into()),
             "api_key".into(),
@@ -1626,10 +1562,10 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(sign_out(Harness::Fx, Some("anthropic".into())).await.is_err());
-        assert!(sign_out(Harness::Pi, Some("a b".into())).await.is_err());
+        assert!(sign_out_agent(Harness::Fx, Some("anthropic".into())).await.is_err());
+        assert!(sign_out_agent(Harness::Pi, Some("a b".into())).await.is_err());
         // fx signs out one of three, so it must be told which.
-        assert!(sign_out(Harness::Fx, None).await.is_err());
+        assert!(sign_out_agent(Harness::Fx, None).await.is_err());
     }
 
     /// What the CLIs on *this* machine actually answer.
@@ -1643,7 +1579,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn what_the_installed_agents_answer() {
-        for agent in all("").await {
+        for agent in agent_accounts(String::new()).await {
             println!(
                 "{} installed={} providers={} error={:?}",
                 agent.label,

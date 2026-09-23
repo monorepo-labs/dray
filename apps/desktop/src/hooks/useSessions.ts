@@ -602,7 +602,6 @@ const provisionalPrompt = (
     from: null,
     cwd: null,
   },
-  raw: null,
 });
 
 // Taken back where the send answered with something else to draw — a prompt the

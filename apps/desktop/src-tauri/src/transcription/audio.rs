@@ -138,12 +138,12 @@ pub fn restore_other_audio() {
 /// Whether the system output is muted, or `None` where it cannot be read.
 #[cfg(target_os = "macos")]
 fn read_muted() -> Option<bool> {
-    parse_muted(&osascript(&["output muted of (get volume settings) as text"]).ok()?)
+    parse_muted(&osascript("output muted of (get volume settings) as text").ok()?)
 }
 
 #[cfg(target_os = "macos")]
 fn set_muted(muted: bool) -> bool {
-    osascript(&[&format!("set volume output muted {muted}")]).is_ok()
+    osascript(&format!("set volume output muted {muted}")).is_ok()
 }
 
 /// Reads `"true"` or `"false"` back out of the AppleScript above.
@@ -152,26 +152,20 @@ fn set_muted(muted: bool) -> bool {
 /// silent: a machine with no output device answers `missing value`, and taking
 /// that as "not muted" would leave the sound off on the way back out.
 fn parse_muted(answer: &str) -> Option<bool> {
-    match answer.trim() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
+    answer.trim().parse().ok()
 }
 
-/// Runs one AppleScript, each line its own `-e`.
+/// Runs one line of AppleScript.
 ///
 /// AppleScript rather than CoreAudio: `set volume` is the documented way to
 /// move the *system* output, where the CoreAudio route is a device lookup plus
 /// a property write per channel for the same answer.
 #[cfg(target_os = "macos")]
-fn osascript(lines: &[&str]) -> Result<String> {
-    let mut command = std::process::Command::new("/usr/bin/osascript");
-    for line in lines {
-        command.arg("-e").arg(line);
-    }
-
-    let output = command.output().context("could not run osascript")?;
+fn osascript(line: &str) -> Result<String> {
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", line])
+        .output()
+        .context("could not run osascript")?;
 
     if !output.status.success() {
         return Err(anyhow!(

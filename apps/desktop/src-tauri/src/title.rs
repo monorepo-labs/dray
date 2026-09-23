@@ -94,11 +94,7 @@ const SCRATCH_DIR: &str = "title-scratch";
 /// removing it between runs would open exactly the window where two overlapping
 /// title children disagree about whether their cwd exists.
 async fn scratch_dir() -> Result<std::path::PathBuf> {
-    let path = crate::store::get_home_app_dir().await?.join(SCRATCH_DIR);
-    tokio::fs::create_dir_all(&path)
-        .await
-        .with_context(|| format!("couldn't create the title scratch dir at {path:?}"))?;
-    Ok(path)
+    crate::store::app_subdir(SCRATCH_DIR).await
 }
 
 /// The reader's text with Dray's own rules cut out of it, if they are in there.
@@ -147,18 +143,10 @@ fn strip_dray_rules(prompt: &str) -> String {
 /// given is one somebody actually sent an agent, so it is never meaningless.
 /// `clean_title` still takes a one-word answer, so nothing here has a floor.
 fn build_prompt(user_prompt: &str) -> String {
-    // Before the truncation below, which would otherwise cut the block in half
-    // and leave a suffix match with nothing to match against.
-    let user_prompt = strip_dray_rules(user_prompt);
-    let user_prompt = user_prompt.as_str();
-
-    // Char-based, so a cut can't land mid-codepoint and hand the CLI invalid
-    // UTF-8 in argv.
-    let user_prompt: String = if user_prompt.chars().count() > MAX_PROMPT_CHARS {
-        user_prompt.chars().take(MAX_PROMPT_CHARS).collect()
-    } else {
-        user_prompt.to_string()
-    };
+    // Stripped before the cut, which would otherwise halve the block and leave
+    // a suffix match with nothing to match against. Char-based, so a cut can't
+    // land mid-codepoint and hand the CLI invalid UTF-8 in argv.
+    let user_prompt: String = strip_dray_rules(user_prompt).chars().take(MAX_PROMPT_CHARS).collect();
 
     format!(
         "Write a title for a coding-agent session, given the user's first \

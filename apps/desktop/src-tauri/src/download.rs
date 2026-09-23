@@ -9,7 +9,6 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::{
     fs,
@@ -45,7 +44,7 @@ pub async fn download_verified(
     mut cancelled: impl FnMut() -> bool,
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
-    let response = reqwest::get(url)
+    let mut response = reqwest::get(url)
         .await
         .context("could not reach the download server")?;
     if !response.status().is_success() {
@@ -59,14 +58,12 @@ pub async fn download_verified(
     let mut hasher = Sha256::new();
     let mut received = 0u64;
     let mut last_emit = 0u64;
-    let mut stream = response.bytes_stream();
 
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = response.chunk().await.context("the download was interrupted")? {
         if cancelled() {
             return Err(Cancelled.into());
         }
 
-        let chunk = chunk.context("the download was interrupted")?;
         hasher.update(&chunk);
         writer
             .write_all(&chunk)
@@ -87,36 +84,8 @@ pub async fn download_verified(
     if received != size {
         bail!("downloaded {received} bytes where {size} were expected");
     }
-    if hex(&hasher.finalize()) != sha256 {
+    if format!("{:x}", hasher.finalize()) != sha256 {
         bail!("the download does not match its published checksum");
     }
     Ok(())
-}
-
-/// Lowercase, zero-padded — the spelling every pinned hash uses.
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_is_lowercase_and_padded() {
-        assert_eq!(hex(&[0x00, 0x0f, 0xff]), "000fff");
-    }
-
-    /// The pinned hashes are compared against this spelling, so a change in
-    /// width or case here silently fails every download.
-    #[test]
-    fn hex_of_a_known_digest_matches_the_pinned_spelling() {
-        let digest = hex(&Sha256::digest(b""));
-
-        assert_eq!(
-            digest,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(digest.len(), 64);
-    }
 }

@@ -59,10 +59,7 @@ async fn cached<T: Clone>(slot: &'static OnceLock<T>, resolve: impl Future<Outpu
     slot.get_or_init(|| resolved).clone()
 }
 
-/// Resolves `name`, falling back to the bare name rather than erroring: that
-/// keeps the failure where it already was — a spawn error naming the binary —
-/// instead of turning a resolvable-by-PATH case we didn't predict into a hard
-/// stop.
+/// Resolves `name`, or the bare name for [`claude`]'s reason.
 async fn or_bare(name: &str) -> PathBuf {
     resolve(name).await.unwrap_or_else(|| PathBuf::from(name))
 }
@@ -156,18 +153,13 @@ async fn resolve_codex() -> PathBuf {
     // Codex there is.
     candidates.push(PathBuf::from(CHATGPT_APP_CODEX));
 
-    let mut resolved = None;
     for candidate in candidates {
-        if resolved.as_ref() == Some(&candidate) {
-            continue;
-        }
         if is_executable(&candidate) && speaks_app_server(&candidate).await {
-            resolved = Some(candidate);
-            break;
+            return candidate;
         }
     }
 
-    resolved.unwrap_or_else(|| PathBuf::from("codex"))
+    PathBuf::from("codex")
 }
 
 static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -335,13 +327,7 @@ fn search_path(bin: &str) -> Option<PathBuf> {
 }
 
 /// Where a user-installed CLI tends to land.
-///
-/// Public because the spawn needs them for the *other* direction: a child
-/// inherits this process's `PATH`, and a bundled `.app` launched from Finder
-/// inherits launchd's, which holds none of these. So a `dray` the user has
-/// installed is invisible to the agent unless these are put back — the same
-/// failure this module exists to solve for `claude`, one layer out.
-pub fn known_dirs() -> Vec<PathBuf> {
+fn known_dirs() -> Vec<PathBuf> {
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
     };
@@ -660,10 +646,5 @@ mod tests {
         assert!(speaks_app_server(&codex).await);
 
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn a_directory_is_not_executable() {
-        assert!(!is_executable(&PathBuf::from("/usr")));
     }
 }

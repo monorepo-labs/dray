@@ -1,7 +1,7 @@
 use crate::{
     attachments,
     events::{
-        now_rfc3339, AgentEvent, AgentEventPayload, ApprovalPolicy, ErrorSource, ImageRef,
+        AgentEvent, AgentEventPayload, ApprovalPolicy, ErrorSource, ImageRef,
         MessageSender, PermissionBehavior,
     },
     git,
@@ -395,17 +395,17 @@ pub async fn publish_status(session_id: &str, status: SessionStatus, app: &AppHa
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SessionManager {
     pub sessions: Mutex<HashMap<String, Session>>,
 }
 
-impl Default for SessionManager {
-    fn default() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-        }
-    }
+/// The live session under `id`, or the error every caller answers a dead child
+/// with.
+fn live<'a>(guard: &'a mut HashMap<String, Session>, id: &str) -> Result<&'a mut Session> {
+    guard
+        .get_mut(id)
+        .with_context(|| format!("no running session {id}"))
 }
 
 impl SessionManager {
@@ -1335,21 +1335,14 @@ impl SessionManager {
         }
 
         let mut sessions_guard = self.sessions.lock().await;
-        let Some(session) = sessions_guard.get_mut(session_id) else {
-            bail!("no running session {session_id}");
-        };
-
-        session.interrupt().await
+        live(&mut sessions_guard, session_id)?.interrupt().await
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
     /// the rest of these: the task ran inside that process and died with it.
     pub async fn stop_task(&self, session_id: &str, task_id: &str) -> Result<()> {
         let mut sessions_guard = self.sessions.lock().await;
-        let Some(session) = sessions_guard.get_mut(session_id) else {
-            bail!("no running session {session_id}");
-        };
-        session.stop_task(task_id).await
+        live(&mut sessions_guard, session_id)?.stop_task(task_id).await
     }
 
     /// Takes back the newest prompt still waiting on a boundary, returning it
@@ -1374,10 +1367,9 @@ impl SessionManager {
         app: &AppHandle,
     ) -> Result<()> {
         let mut sessions_guard = self.sessions.lock().await;
-        let Some(session) = sessions_guard.get_mut(session_id) else {
-            bail!("no running session {session_id}");
-        };
-        session.respond_permission(request_id, option_id, app).await
+        live(&mut sessions_guard, session_id)?
+            .respond_permission(request_id, option_id, app)
+            .await
     }
 
     /// Answers an `AskUserQuestion`. Fails for a dead child like
@@ -1400,10 +1392,9 @@ impl SessionManager {
         }
 
         let mut sessions_guard = self.sessions.lock().await;
-        let Some(session) = sessions_guard.get_mut(session_id) else {
-            bail!("no running session {session_id}");
-        };
-        session.answer_questions(request_id, answers, app).await
+        live(&mut sessions_guard, session_id)?
+            .answer_questions(request_id, answers, app)
+            .await
     }
 
     /// Deletes the worktree a session was running in and moves the session to
@@ -1449,9 +1440,6 @@ impl SessionManager {
         Ok(relocated)
     }
 
-    /// Deletes a session: kills its child if one is running, then drops the
-    /// index entry and the log. Returns whether the index held it.
-    ///
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
@@ -1477,6 +1465,9 @@ impl SessionManager {
         killed
     }
 
+    /// Deletes a session: kills its child if one is running, then drops the
+    /// index entry and the log. Returns whether the index held it.
+    ///
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {
@@ -2298,17 +2289,14 @@ impl Session {
         // Emitted, never persisted — it exists to retire the request's card, and
         // the request itself is not persisted either. Still numbered through the
         // shared counter so the live transcript orders it correctly.
-        let decision = AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: self.id.clone(),
-            harness: self.harness,
-            seq: self.seq.fetch_add(1, Relaxed),
-            ts: now_rfc3339(),
-            turn_id: None,
-            subagent: None,
+        let decision = AgentEvent::mint(
+            self.id.clone(),
+            self.harness,
+            self.seq.fetch_add(1, Relaxed),
+            None,
+            None,
             payload,
-            raw: None,
-        };
+        );
 
         app.emit("agent_event", &decision)?;
 
@@ -2466,23 +2454,20 @@ pub fn dialog_decided(
     tool_use_id: String,
     skipped: bool,
 ) -> AgentEvent {
-    AgentEvent {
-        id: Uuid::now_v7().to_string(),
-        session_id: session_id.to_string(),
+    AgentEvent::mint(
+        session_id.to_string(),
         harness,
-        seq: seq.fetch_add(1, Relaxed),
-        ts: now_rfc3339(),
-        turn_id: None,
-        subagent: None,
-        payload: AgentEventPayload::PermissionDecided {
+        seq.fetch_add(1, Relaxed),
+        None,
+        None,
+        AgentEventPayload::PermissionDecided {
             request_id: request_id.to_string(),
             tool_use_id,
             behavior: PermissionBehavior::Allow,
             label: if skipped { "Skipped" } else { "Answered" }.to_string(),
             automatic: false,
         },
-        raw: None,
-    }
+    )
 }
 
 /// Writes one JSON line to a child's stdin. The CLI's input format is
@@ -2580,18 +2565,8 @@ async fn deliver_prompt(
         // message a session logs itself. Only a fork records one.
         cwd: None,
     };
-    let agent_event = AgentEvent {
-        id: Uuid::now_v7().to_string(),
-        session_id: session_id.to_string(),
-        harness,
-        seq,
-        ts: now_rfc3339(),
-        // Nothing tracks turns yet; Claude Code opens one per `init`.
-        turn_id: None,
-        subagent: None,
-        payload,
-        raw: None,
-    };
+    // Nothing tracks turns yet; Claude Code opens one per `init`.
+    let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
 
     app.emit("agent_event", &agent_event)?;
 
@@ -3146,21 +3121,18 @@ pub(crate) async fn report_session_error(
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
-    let agent_event = AgentEvent {
-        id: Uuid::now_v7().to_string(),
-        session_id: session_id.to_string(),
+    let agent_event = AgentEvent::mint(
+        session_id.to_string(),
         harness,
-        seq: seq.fetch_add(1, Relaxed),
-        ts: now_rfc3339(),
-        turn_id: None,
-        subagent: None,
-        payload: AgentEventPayload::Error {
+        seq.fetch_add(1, Relaxed),
+        None,
+        None,
+        AgentEventPayload::Error {
             source: ErrorSource::Process,
             message: message.to_string(),
             fatal: false,
         },
-        raw: None,
-    };
+    );
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
         eprintln!("[session error emit err] {err}");
@@ -3221,15 +3193,13 @@ pub async fn strand_queue_on_exit(
                     (message.text.clone(), Vec::new())
                 }
             };
-        let bubble = AgentEvent {
-            id: Uuid::now_v7().to_string(),
-            session_id: session_id.to_string(),
+        let bubble = AgentEvent::mint(
+            session_id.to_string(),
             harness,
-            seq: seq.fetch_add(1, Relaxed),
-            ts: now_rfc3339(),
-            turn_id: None,
-            subagent: None,
-            payload: AgentEventPayload::UserMessage {
+            seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            AgentEventPayload::UserMessage {
                 text,
                 issues: message.issues.clone(),
                 images,
@@ -3238,8 +3208,7 @@ pub async fn strand_queue_on_exit(
                 from: message.from.clone(),
                 cwd: None,
             },
-            raw: None,
-        };
+        );
         if let Err(err) = app.emit("agent_event", &bubble) {
             eprintln!("[fx strand emit err] {err}");
         }

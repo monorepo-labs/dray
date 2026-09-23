@@ -127,7 +127,9 @@ async fn describe(path: &str) -> Result<Attachment> {
     })
 }
 
-/// Describes every path that can be attached, silently skipping the rest.
+/// Describes every path that can be attached, silently skipping the rest — a
+/// folder dragged in alongside two files leaves the two files.
+#[tauri::command]
 pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     let mut out = Vec::with_capacity(paths.len());
     for path in paths {

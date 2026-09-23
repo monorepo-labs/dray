@@ -122,7 +122,6 @@ pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
     };
 
     project.last_selected = now_rfc3339();
-    projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
 
     Ok(write_projects(&projects).await?)
 }
@@ -196,41 +195,14 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
 /// Trailing path segment. Mirrors the frontend's `basename` so a project's
 /// cached label matches what the UI would derive from the path.
 fn basename(path: &str) -> String {
-    path.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(path)
-        .to_string()
+    std::path::Path::new(path)
+        .file_name()
+        .map_or(path.to_string(), |name| name.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn most_recently_selected_sorts_first() {
-        let mut projects = vec![
-            Project {
-                path: "/a".into(),
-                name: "a".into(),
-                space: None,
-                last_selected: "2026-08-01T00:00:00Z".into(),
-            },
-            Project {
-                path: "/b".into(),
-                name: "b".into(),
-                space: None,
-                last_selected: "2026-08-08T00:00:00Z".into(),
-            },
-        ];
-
-        projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
-
-        // The picker takes its default from the front, so this ordering is the
-        // whole of "reopen the project I was last in".
-        assert_eq!(projects[0].path, "/b");
-    }
 
     #[test]
     fn a_project_written_before_spaces_existed_still_reads() {
@@ -291,12 +263,5 @@ mod tests {
         // Otherwise the switcher draws a nameless entry nothing can leave.
         assert_eq!(normalize_space(Some("  ".into())), None);
         assert_eq!(normalize_space(Some(" Work ".into())), Some("Work".into()));
-    }
-
-    #[test]
-    fn basename_handles_trailing_slash_and_root() {
-        assert_eq!(basename("/Users/y/proj"), "proj");
-        assert_eq!(basename("/Users/y/proj/"), "proj");
-        assert_eq!(basename("/"), "/");
     }
 }

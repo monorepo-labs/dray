@@ -78,7 +78,6 @@ const ev = (sessionId: string, payload: AgentEventPayload): AgentEvent => ({
   turnId: null,
   subagent: null,
   payload,
-  raw: null,
 });
 
 const prompt = (id: string, text: string) =>

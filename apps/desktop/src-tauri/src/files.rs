@@ -36,7 +36,7 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
 
 use crate::attachments::{image_mime, MAX_IMAGE_BYTES};
-use crate::docs::{read_capped, TOO_LARGE};
+use crate::docs::read_file_capped;
 use crate::Fail;
 
 /// One row in the picker. `path` is relative to the indexed directory, which is
@@ -203,8 +203,8 @@ fn search(cwd: &str, query: &str, limit: usize) -> Result<Vec<FileMatch>> {
             // Split here rather than in the frontend: the crate already knows
             // where the last segment starts, and a path is bytes the UI should
             // not be re-parsing to draw a row.
-            let (dir, name) = match path.rfind('/') {
-                Some(cut) => (path[..cut].to_string(), path[cut + 1..].to_string()),
+            let (dir, name) = match path.rsplit_once('/') {
+                Some((dir, name)) => (dir.to_string(), name.to_string()),
                 None => (String::new(), path.clone()),
             };
 
@@ -388,31 +388,15 @@ pub enum FileBody {
 /// text branch since their bytes are never text.
 #[tauri::command]
 pub async fn read_file(path: String) -> Result<FileBody, String> {
-    let meta = tokio::fs::metadata(&path)
-        .await
-        .map_err(|_| "No file at this path.".to_string())?;
-    if !meta.is_file() {
-        return Err("Not a file — nothing to show here.".to_string());
-    }
+    let image = viewable_image(Path::new(&path));
+    let bytes = read_file_capped(&path, if image.is_some() { MAX_IMAGE_BYTES } else { MAX_FILE }).await?;
 
-    if let Some(mime) = viewable_image(Path::new(&path)) {
-        if meta.len() > MAX_IMAGE_BYTES {
-            return Err(TOO_LARGE.to_string());
-        }
-        // Capped as well as measured, for `read_doc`'s reason: the two are
-        // separate calls, so a file replaced or appended to between them would
-        // otherwise arrive at whatever length it had reached.
-        let bytes = read_capped(&path, MAX_IMAGE_BYTES).await?;
+    if let Some(mime) = image {
         return Ok(FileBody::Image {
             data_url: format!("data:{mime};base64,{}", STANDARD.encode(bytes)),
         });
     }
 
-    if meta.len() > MAX_FILE {
-        return Err(TOO_LARGE.to_string());
-    }
-
-    let bytes = read_capped(&path, MAX_FILE).await?;
     String::from_utf8(bytes)
         .map(|text| FileBody::Text { text })
         .map_err(|_| "Not text — nothing to show.".to_string())

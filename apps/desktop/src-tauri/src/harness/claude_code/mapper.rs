@@ -1032,7 +1032,6 @@ fn map_usage(
         total_tokens: Some(wire.input_tokens + wire.output_tokens),
         cost_usd,
         context_window,
-        rate_limit: None,
         model: None,
         per_model,
     }
@@ -2297,7 +2296,6 @@ mod tests {
                 assert!(usage.cached_input_tokens.is_some());
                 assert!(usage.cache_write_tokens.is_some());
                 assert!(usage.cost_usd.is_some());
-                assert!(!usage.is_empty());
             }
         }
 

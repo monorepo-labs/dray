@@ -38,6 +38,23 @@ async fn git(cwd: &str, args: &[&str]) -> Option<String> {
     exec(cwd, &[("GIT_OPTIONAL_LOCKS", "0")], args).await.ok()
 }
 
+/// [`git`]'s stdout trimmed, and `None` where that leaves nothing.
+async fn git_line(cwd: &str, args: &[&str]) -> Option<String> {
+    let out = git(cwd, args).await?;
+    let out = out.trim();
+    (!out.is_empty()).then(|| out.to_string())
+}
+
+/// A `rev-list --count` answer, or `None` where git gave none.
+async fn git_count(cwd: &str, args: &[&str]) -> Option<u32> {
+    git(cwd, args).await?.trim().parse().ok()
+}
+
+/// Uncommitted paths, and zero where git cannot say.
+async fn dirty_count(cwd: &str) -> u32 {
+    git(cwd, &["status", "--porcelain"]).await.map_or(0, |s| count_changes(&s))
+}
+
 /// Local branches, the current one, and whether the tree is dirty.
 ///
 /// A directory that isn't a repo reads as an empty list rather than an error:
@@ -56,17 +73,11 @@ pub async fn list_branches(cwd: &str) -> Result<BranchList, Fail> {
         return Ok(BranchList::default());
     };
 
-    let current = head_branch(cwd).await;
-
-    let dirty = git(cwd, &["status", "--porcelain"])
-        .await
-        .map_or(0, |s| count_changes(&s));
-
     Ok(BranchList {
-        current,
+        current: head_branch(cwd).await,
         branches: parse_branches(&raw),
         default_base: default_base(cwd).await,
-        dirty,
+        dirty: dirty_count(cwd).await,
     })
 }
 
@@ -212,11 +223,7 @@ fn remote_host(url: &str) -> Option<&str> {
 /// string `main`, which it then fails to `rev-parse`, and claiming a base that
 /// can't resolve would be worse than saying nothing.
 pub async fn default_base(cwd: &str) -> Option<String> {
-    if let Some(head) = git(cwd, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(head) = git_line(cwd, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]).await {
         return Some(head);
     }
 
@@ -292,15 +299,21 @@ async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String>
     let out = cmd.output().await?;
 
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        bail!(if err.is_empty() {
-            format!("git {} failed", args[0])
-        } else {
-            err
-        });
+        bail!(stderr_or(&out, || format!("git {} failed", args[0])));
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A failed child's own stderr, trimmed, or `fallback` where it said nothing.
+pub(crate) fn stderr_or(out: &std::process::Output, fallback: impl FnOnce() -> String) -> String {
+    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err.trim();
+    if err.is_empty() {
+        fallback()
+    } else {
+        err.to_string()
+    }
 }
 
 /// Porcelain prints one line per changed path, so the count is the line count.
@@ -403,10 +416,7 @@ pub async fn base_ref_tree(cwd: &str) -> Option<String> {
     let base = default_base(cwd).await;
     let base = base.as_deref().unwrap_or("HEAD");
 
-    let tree = git(cwd, &["rev-parse", "--verify", "-q", &format!("{base}^{{tree}}")]).await?;
-
-    let tree = tree.trim().to_string();
-    (!tree.is_empty()).then_some(tree)
+    git_line(cwd, &["rev-parse", "--verify", "-q", &format!("{base}^{{tree}}")]).await
 }
 
 /// Git's empty tree, which every repository can resolve whether or not
@@ -429,11 +439,7 @@ pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 ///
 /// So `None` means one thing only: this is not a repository.
 pub async fn head_tree(cwd: &str) -> Option<String> {
-    if let Some(tree) = git(cwd, &["rev-parse", "--verify", "-q", "HEAD^{tree}"])
-        .await
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-    {
+    if let Some(tree) = git_line(cwd, &["rev-parse", "--verify", "-q", "HEAD^{tree}"]).await {
         return Some(tree);
     }
 
@@ -1171,28 +1177,12 @@ fn parse_log(raw: &str) -> Vec<Commit> {
         .collect()
 }
 
-/// Where the current branch stands against its upstream. Read by [`work_status`]
-/// alone since the repo view lost its push button; nothing crosses the bridge
-/// with it.
-#[derive(Debug, Clone, Default)]
-pub struct SyncStatus {
-    /// `None` on a detached HEAD and for a directory that isn't a repo, which
-    /// is how the row hides itself rather than offering a push it can't do.
-    pub branch: Option<String>,
-    /// `None` for a branch that has never been pushed — the "publish" case.
-    pub upstream: Option<String>,
-    /// Commits the upstream doesn't have. Zero when there is no upstream: the
-    /// button reads "Publish branch" there, and a count would be answering a
-    /// question nobody asked yet.
-    pub ahead: u32,
-}
-
 /// What the composer's action row needs to decide which buttons it has, in one
 /// read.
 ///
-/// A superset of [`SyncStatus`] rather than three calls stitched together in
-/// the frontend: every field here answers the same question — "what is there
-/// left to do with this work" — and reading them separately would let the row
+/// One read rather than several stitched together in the frontend: every
+/// field here answers the same question — "what is there left to do with this
+/// work" — and reading them separately would let the row
 /// draw a Commit button from one snapshot beside a Push count from another.
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
@@ -1206,6 +1196,8 @@ pub struct WorkStatus {
     pub branch: Option<String>,
     /// `None` for a branch never pushed — the "publish" case.
     pub upstream: Option<String>,
+    /// Commits the upstream doesn't have, zero where there is none. Counted
+    /// against the *last known* upstream: nothing here fetches.
     pub ahead: u32,
     /// The branch this work would land on, short of its remote (`main`, not
     /// `origin/main`). Stripped here rather than in the row, so "am I on the
@@ -1227,15 +1219,19 @@ pub struct WorkStatus {
     pub ahead_of_base: Option<u32>,
 }
 
-/// Infallible like [`sync_status`], and for the same reason: a directory that
-/// isn't a repo answers with the default, and the row reads that as nothing to
-/// offer rather than as an error.
+/// Infallible like [`list_branches`]: a directory that isn't a repo answers
+/// with the default, and the row reads that as nothing to offer rather than as
+/// an error.
 pub async fn work_status(cwd: &str) -> WorkStatus {
-    let sync = sync_status(cwd).await;
-
-    let dirty = git(cwd, &["status", "--porcelain"])
-        .await
-        .map_or(0, |s| count_changes(&s));
+    let branch = head_branch(cwd).await;
+    let upstream = match branch {
+        Some(_) => upstream_branch(cwd).await,
+        None => None,
+    };
+    let ahead = match upstream {
+        Some(_) => git_count(cwd, &["rev-list", "--count", "@{u}..HEAD"]).await.unwrap_or(0),
+        None => 0,
+    };
 
     let base = default_base(cwd).await;
 
@@ -1243,9 +1239,7 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
     // name: a local `main` can be stale or absent entirely in a worktree, and
     // either way it is not what the pull request would be opened against.
     let ahead_of_base = match &base {
-        Some(base_ref) => git(cwd, &["rev-list", "--count", &format!("{base_ref}..HEAD")])
-            .await
-            .and_then(|s| s.trim().parse().ok()),
+        Some(base_ref) => git_count(cwd, &["rev-list", "--count", &format!("{base_ref}..HEAD")]).await,
         None => None,
     };
 
@@ -1257,41 +1251,12 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
     let default_branch = base.map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string());
 
     WorkStatus {
-        dirty,
-        branch: sync.branch,
-        upstream: sync.upstream,
-        ahead: sync.ahead,
-        default_branch,
-        ahead_of_base,
-    }
-}
-
-/// Infallible by design, like [`list_branches`]: a directory that isn't a repo
-/// answers with the default rather than an error the reader can't act on.
-///
-/// Nothing here fetches. The count is against the *last known* upstream, so a
-/// branch someone else has pushed to reads as fewer commits behind than it is —
-/// the push itself is what surfaces that, as git's own rejection.
-pub async fn sync_status(cwd: &str) -> SyncStatus {
-    let Some(branch) = head_branch(cwd).await else {
-        return SyncStatus::default();
-    };
-
-    let upstream = upstream_branch(cwd).await;
-
-    let ahead = if upstream.is_some() {
-        git(cwd, &["rev-list", "--count", "@{u}..HEAD"])
-            .await
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
-    SyncStatus {
-        branch: Some(branch),
+        dirty: dirty_count(cwd).await,
+        branch,
         upstream,
         ahead,
+        default_branch,
+        ahead_of_base,
     }
 }
 
@@ -1387,7 +1352,7 @@ fn parse_lock_reason(porcelain: &str, worktree_path: &Path) -> Option<String> {
 /// Symlinks resolved where the path exists, left alone where it doesn't — so
 /// this is usable on a tree that has already been deleted, and in tests over
 /// paths that were never on disk.
-fn resolved(path: &Path) -> PathBuf {
+pub(crate) fn resolved(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
@@ -1410,7 +1375,7 @@ fn is_managed_worktree(project_path: &Path, worktree_path: &Path) -> bool {
 
 /// Reads a worktree's state without changing anything.
 ///
-/// Infallible like [`sync_status`]: every question here has an honest answer
+/// Infallible like [`work_status`]: every question here has an honest answer
 /// for a directory that is missing or isn't a repo, and none of them is
 /// something the reader could act on as an error.
 pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> WorktreeDisposition {
@@ -1418,10 +1383,7 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         return WorktreeDisposition::default();
     }
 
-    let changed_files = git(worktree_path, &["status", "--porcelain"])
-        .await
-        .map(|raw| count_changes(&raw))
-        .unwrap_or(0);
+    let changed_files = dirty_count(worktree_path).await;
 
     let branch = current_branch(worktree_path).await;
 
@@ -1431,7 +1393,7 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
     // The glob is relative to `refs/heads`, and spelling it in full silently
     // matches nothing, leaving every count at zero.
     let unpushed_commits = match &branch {
-        Some(branch) => git(
+        Some(branch) => git_count(
             worktree_path,
             &[
                 "rev-list",
@@ -1445,7 +1407,6 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
             ],
         )
         .await
-        .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0),
         // A detached HEAD has no branch to exclude, and nothing here can be
         // deleted along with it either.
@@ -1472,10 +1433,7 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
 /// literal string `HEAD` on a detached one — a branch name nothing can look up
 /// and everything downstream would treat as real.
 pub async fn current_branch(cwd: &str) -> Option<String> {
-    git(cwd, &["symbolic-ref", "--short", "-q", "HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    git_line(cwd, &["symbolic-ref", "--short", "-q", "HEAD"]).await
 }
 
 /// The checked-out branch by `rev-parse`: `None` on a detached HEAD, where it
@@ -1483,18 +1441,14 @@ pub async fn current_branch(cwd: &str) -> Option<String> {
 /// [`current_branch`] names an unborn branch, which the callers here do not
 /// want — nothing can be pushed from or synced against it yet.
 async fn head_branch(cwd: &str) -> Option<String> {
-    git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+    git_line(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "HEAD")
+        .filter(|s| s != "HEAD")
 }
 
 /// The branch HEAD tracks, or `None` where it tracks nothing.
 async fn upstream_branch(cwd: &str) -> Option<String> {
-    git(cwd, &["rev-parse", "--abbrev-ref", "@{u}"])
-        .await
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    git_line(cwd, &["rev-parse", "--abbrev-ref", "@{u}"]).await
 }
 
 /// Where a project's managed worktrees live — the CLI's own `-w` layout.
@@ -1508,7 +1462,7 @@ pub fn worktrees_dir(project_path: &Path) -> PathBuf {
 /// peeled to a commit or refused — `worktree add` wants a commit, and the
 /// failure it gives for anything else arrives after the tree is half made.
 pub async fn resolve_commit(cwd: &str, base: &str) -> Option<String> {
-    git(
+    git_line(
         cwd,
         &[
             "rev-parse",
@@ -1519,11 +1473,8 @@ pub async fn resolve_commit(cwd: &str, base: &str) -> Option<String> {
         ],
     )
     .await
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
 }
 
-/// Creates a worktree at `<project>/.claude/worktrees/<name>` on a new branch
 /// The branch a worktree of this name lands on.
 ///
 /// Stated here because two callers need it and they need it for opposite
@@ -1534,6 +1485,7 @@ pub fn worktree_branch(name: &str) -> String {
     format!("worktree-{name}")
 }
 
+/// Creates a worktree at `<project>/.claude/worktrees/<name>` on a new branch
 /// `worktree-<name>`, starting from `base`. Returns the path.
 ///
 /// The symmetric half of [`remove_worktree`], and it exists because the harness

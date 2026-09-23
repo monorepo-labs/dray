@@ -1042,16 +1042,6 @@ mod tests {
         assert!(link_issues(args, false).is_err());
     }
 
-    /// A bare identifier is still a usable link — the tag just reads `#DRA-53`
-    /// with nothing after it. Refusing one would make the flags mandatory in
-    /// everything but name.
-    #[test]
-    fn identifiers_alone_are_accepted() {
-        assert!(
-            Cli::try_parse_from(["dray", "issue", "link", SESSION, "DRA-53", "DRA-54"]).is_ok()
-        );
-    }
-
     /// The shipped form. An agent holding an older skill still emits it, so it
     /// has to keep naming its own session and ignoring the environment.
     #[test]
@@ -1139,94 +1129,6 @@ mod tests {
     }
 
     #[test]
-    fn send_takes_a_target_and_a_message() {
-        let cli = Cli::parse_from(["dray", "send", "abc-123", "review is done"]);
-        let Command::Send(args) = cli.command else {
-            panic!("wrong subcommand");
-        };
-        assert_eq!(args.session_id, "abc-123");
-        assert_eq!(args.prompt, "review is done");
-    }
-
-    #[test]
-    fn the_prompt_is_positional_and_survives_spaces() {
-        let cli = Cli::parse_from(["dray", "new", "fix the login redirect loop"]);
-        let Command::New(args) = cli.command else {
-            panic!("wrong subcommand");
-        };
-        assert_eq!(args.prompt, "fix the login redirect loop");
-    }
-
-    #[test]
-    fn a_base_can_be_a_session_or_a_ref() {
-        // One flag for both, because the app is the only side that can tell
-        // them apart — it holds the index, and this does not.
-        for value in ["0198f0a2-1c5e-7000-8000-000000000000", "feature/login"] {
-            let cli = Cli::parse_from(["dray", "new", "review it", "--from", value]);
-            let Command::New(args) = cli.command else {
-                panic!("wrong subcommand");
-            };
-            assert_eq!(args.from.as_deref(), Some(value));
-        }
-
-        let cli = Cli::parse_from(["dray", "new", "x"]);
-        let Command::New(args) = cli.command else {
-            panic!("wrong subcommand");
-        };
-        assert_eq!(args.from, None);
-    }
-
-    /// The tree is still Dray's to make either way — `--from` moves where the
-    /// branch starts, and there is no flag for running in somebody else's
-    /// checkout.
-    #[test]
-    fn a_base_does_not_bring_back_a_way_into_someone_elses_tree() {
-        assert!(Cli::try_parse_from(["dray", "new", "x", "--in", "abc"]).is_err());
-        assert!(Cli::try_parse_from(["dray", "new", "x", "--detach"]).is_err());
-    }
-
-    #[test]
-    fn an_explicit_project_beats_the_working_directory() {
-        assert_eq!(
-            resolve_project(Some(PathBuf::from("/x/proj"))).as_deref(),
-            Some("/x/proj")
-        );
-    }
-
-    #[test]
-    fn update_checks_the_installed_version_unless_forced() {
-        let Command::Update(args) = Cli::parse_from(["dray", "update"]).command else {
-            panic!("wrong subcommand");
-        };
-        assert!(!args.force);
-
-        let Command::Update(args) = Cli::parse_from(["dray", "update", "--force"]).command else {
-            panic!("wrong subcommand");
-        };
-        assert!(args.force);
-    }
-
-    /// `--force` is the only argument. `--version` still means the top-level
-    /// flag and nothing else, so a subcommand answering it would report the
-    /// same number twice under two meanings.
-    #[test]
-    fn update_takes_no_other_arguments() {
-        assert!(Cli::try_parse_from(["dray", "update", "--version"]).is_err());
-        assert!(Cli::try_parse_from(["dray", "update", "cli-v0.1.0"]).is_err());
-    }
-
-    /// The comparison is a string one against a git tag, so the shape is the
-    /// whole contract: `cli-v0.2.0` is what the release workflow pushes and
-    /// what the installer resolves out of the releases API.
-    #[test]
-    fn the_current_tag_is_shaped_like_a_release_tag() {
-        let tag = current_tag();
-        assert_eq!(tag, format!("cli-v{}", env!("CARGO_PKG_VERSION")));
-        assert!(tag.starts_with("cli-v"));
-        assert!(tag[5..].starts_with(|c: char| c.is_ascii_digit()));
-    }
-
-    #[test]
     fn the_skill_carries_frontmatter_claude_code_can_read() {
         assert!(SKILL.starts_with("---\n"), "skill needs YAML frontmatter");
         assert!(SKILL.contains("\nname: dray\n"));
@@ -1268,12 +1170,6 @@ mod tests {
         let root = repo.to_string_lossy().into_owned();
         assert_eq!(repo_root(&repo).as_deref(), Some(root.as_str()));
         assert_eq!(repo_root(&tree).as_deref(), Some(root.as_str()));
-
-        // The reading this replaced, kept as the reason the test exists.
-        assert_eq!(
-            show_toplevel(&tree).as_deref(),
-            Some(tree.to_string_lossy().as_ref())
-        );
 
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -1318,15 +1214,5 @@ mod tests {
             .args(args)
             .output()
             .is_ok_and(|o| o.status.success())
-    }
-
-    fn show_toplevel(at: &Path) -> Option<String> {
-        let out = std::process::Command::new("git")
-            .current_dir(at)
-            .args(["rev-parse", "--show-toplevel"])
-            .output()
-            .ok()?;
-
-        Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
     }
 }

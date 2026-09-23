@@ -122,7 +122,7 @@ pub fn installed_framework() -> Option<PathBuf> {
 pub fn not_ready_reason() -> String {
     match status() {
         ChromiumStatus::Downloading { received, total } => {
-            format!("Chromium is still downloading ({}%)", percent(received, total))
+            format!("Chromium is still downloading ({}%)", (received * 100).checked_div(total).unwrap_or(0))
         }
         ChromiumStatus::Extracting => "Chromium is still downloading (unpacking)".into(),
         ChromiumStatus::Failed { message } => {
@@ -132,14 +132,6 @@ pub fn not_ready_reason() -> String {
             "Chromium isn't downloaded. Download it from Settings › Integrations.".into()
         }
         ChromiumStatus::Ready { .. } => "Chromium could not start".into(),
-    }
-}
-
-fn percent(received: u64, total: u64) -> u64 {
-    if total == 0 {
-        0
-    } else {
-        received * 100 / total
     }
 }
 
@@ -161,11 +153,6 @@ pub fn start(app: AppHandle, present: Option<PathBuf>) {
         tokio::time::sleep(Duration::from_secs(3)).await;
         run(app).await;
     });
-}
-
-/// Fetches now, or wakes a loop already waiting out a failure.
-pub fn download_now(app: AppHandle) {
-    tauri::async_runtime::spawn(run(app));
 }
 
 /// Download with backoff. Each failure is reported as it happens, so the
@@ -209,8 +196,19 @@ async fn download(app: &AppHandle) -> Result<()> {
     fs::create_dir_all(&dir).await.context("could not create ~/.dray/cef")?;
     let part = dir.join(format!("{}.part", tarball.name()));
 
-    set(app, ChromiumStatus::Downloading { received: 0, total: tarball.size });
-    if let Err(e) = stream_to(app, tarball, &part).await {
+    let total = tarball.size;
+    set(app, ChromiumStatus::Downloading { received: 0, total });
+    let fetched = crate::download::download_verified(
+        &tarball.url(),
+        &part,
+        total,
+        tarball.sha256,
+        // Nothing cancels this one: no prompt, no opt-out.
+        || false,
+        |received| set(app, ChromiumStatus::Downloading { received, total }),
+    )
+    .await;
+    if let Err(e) = fetched {
         let _ = fs::remove_file(&part).await;
         return Err(e);
     }
@@ -248,20 +246,6 @@ async fn download(app: &AppHandle) -> Result<()> {
 
     set(app, ready(&version_dir().join(FRAMEWORK)).await);
     Ok(())
-}
-
-async fn stream_to(app: &AppHandle, tarball: &Tarball, part: &Path) -> Result<()> {
-    let total = tarball.size;
-    crate::download::download_verified(
-        &tarball.url(),
-        part,
-        total,
-        tarball.sha256,
-        // Nothing cancels this one: no prompt, no opt-out.
-        || false,
-        |received| set(app, ChromiumStatus::Downloading { received, total }),
-    )
-    .await
 }
 
 /// Everything in `~/.dray/cef` but the current version: older frameworks,
@@ -347,9 +331,10 @@ pub fn chromium_status() -> ChromiumStatus {
     status()
 }
 
+/// Fetches now, or wakes a loop already waiting out a failure.
 #[tauri::command]
 pub fn chromium_download(app: AppHandle) {
-    download_now(app);
+    tauri::async_runtime::spawn(run(app));
 }
 
 #[tauri::command]
@@ -389,11 +374,5 @@ mod tests {
             assert_eq!(t.sha256.len(), 64);
             assert!(t.sha256.bytes().all(|b| b.is_ascii_hexdigit()));
         }
-    }
-
-    #[test]
-    fn a_percent_of_nothing_is_zero() {
-        assert_eq!(percent(5, 0), 0);
-        assert_eq!(percent(50, 200), 25);
     }
 }

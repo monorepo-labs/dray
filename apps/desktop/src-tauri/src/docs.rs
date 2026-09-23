@@ -32,25 +32,9 @@ pub enum SaveOutcome {
 }
 
 /// Reads one doc for the panel, or names why it can't.
-///
-/// The size is read before the body, so an oversized file is refused rather
-/// than pulled into memory and then rejected — the same reading `git.rs`'s two
-/// `cat-file` passes exist for. The read is capped as well as the metadata
-/// check, because the two are separate calls and a file being appended to
-/// between them would otherwise arrive at whatever length it had reached.
 #[tauri::command]
 pub async fn read_doc(path: String) -> Result<String, String> {
-    let meta = fs::metadata(&path)
-        .await
-        .map_err(|_| "No file at this path.".to_string())?;
-    if !meta.is_file() {
-        return Err("Not a file — nothing to show here.".to_string());
-    }
-    if meta.len() > MAX_DOC {
-        return Err(TOO_LARGE.to_string());
-    }
-
-    let bytes = read_capped(&path, MAX_DOC).await?;
+    let bytes = read_file_capped(&path, MAX_DOC).await?;
     // Withheld rather than mangled: `from_utf8_lossy` would swap every invalid
     // byte for U+FFFD and draw a confident view of a file that never existed —
     // which the reader could then save back over the real one.
@@ -225,6 +209,26 @@ fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>)
 /// large to write, and the reader meets the same limit either way. Shared with
 /// the Files view, which reads to a larger cap and says the same sentence.
 pub(crate) const TOO_LARGE: &str = "File is too large to open here.";
+
+/// The file at `path`, refused unless it is a file of at most `cap` bytes.
+///
+/// The size is read before the body, so an oversized file is refused rather
+/// than pulled into memory and then rejected — the same reading `git.rs`'s two
+/// `cat-file` passes exist for. The read is capped as well as the metadata
+/// check, because the two are separate calls and a file being appended to
+/// between them would otherwise arrive at whatever length it had reached.
+pub(crate) async fn read_file_capped(path: &str, cap: u64) -> Result<Vec<u8>, String> {
+    let meta = fs::metadata(path)
+        .await
+        .map_err(|_| "No file at this path.".to_string())?;
+    if !meta.is_file() {
+        return Err("Not a file — nothing to show here.".to_string());
+    }
+    if meta.len() > cap {
+        return Err(TOO_LARGE.to_string());
+    }
+    read_capped(path, cap).await
+}
 
 /// Reads at most `cap`, refusing anything longer rather than truncating it.
 ///

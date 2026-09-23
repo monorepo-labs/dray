@@ -20,7 +20,7 @@ use ts_rs::TS;
 
 pub mod usage;
 
-pub use usage::{ContextWindow, ModelUsage, RateLimit, Usage};
+pub use usage::{ContextWindow, ModelUsage, Usage};
 
 // `Harness` is a harness concept, not an event one; it lives in `crate::harness`
 // and is used here only as a field type.
@@ -45,11 +45,6 @@ pub struct AgentEvent {
     /// `None` = main conversation, `Some` = the subagent that produced this.
     pub subagent: Option<Subagent>,
     pub payload: AgentEventPayload,
-    /// `None` on the emitted path — raw lines are archived separately — but
-    /// always populated for [`AgentEventPayload::Unknown`], which is useless
-    /// without it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw: Option<Value>,
 }
 
 /// A running subagent, whose events interleave with the main conversation's on
@@ -69,9 +64,6 @@ pub struct Subagent {
 }
 
 /// What happened.
-///
-/// Permission request/resolve is deliberately absent: no captured fixture shows
-/// their shape, so the variants would be a guess. Add once captured.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(
@@ -120,7 +112,6 @@ pub enum AgentEventPayload {
         #[serde(default)]
         auth_failed: bool,
     },
-    SettingsChanged(Settings),
 
     // ---------- conversation ----------
     UserMessage {
@@ -411,13 +402,6 @@ pub enum AgentEventPayload {
         text: String,
     },
 
-    Hook {
-        name: String,
-        event: String,
-        phase: HookPhase,
-        exit_code: Option<i32>,
-        outcome: Option<String>,
-    },
     /// The harness has sent a request to the model and is waiting on its first
     /// token. Drives the working indicator and nothing else.
     ///
@@ -465,16 +449,10 @@ pub enum AgentEventPayload {
         #[serde(default)]
         fatal: bool,
     },
-    /// A line we parsed but could not classify. Surfacing these beats silently
-    /// dropping them.
-    Unknown {
-        harness_type: String,
-    },
 
     /// A payload `kind` this build doesn't know — a log written by a newer
     /// version. Produced by the deserializer, never a mapper; the envelope
-    /// survives so the event keeps its place. Distinct from
-    /// [`Unknown`](Self::Unknown), a harness line the mapper couldn't classify.
+    /// survives so the event keeps its place.
     #[serde(other)]
     Unrecognized,
 }
@@ -757,14 +735,6 @@ pub enum FileChange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
-pub enum HookPhase {
-    Started,
-    Finished,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "snake_case")]
 pub enum ErrorSource {
     /// The harness reported an error of its own.
     Harness,
@@ -808,8 +778,7 @@ pub struct McpServer {
     pub status: String,
 }
 
-/// Settings that can change mid-session, so they arrive as events rather than
-/// living only on [`SessionInfo`].
+/// The settings a turn was configured with, carried on [`SessionInfo`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase", default)]
@@ -899,8 +868,8 @@ pub fn rfc3339_from_unix(secs: i64) -> String {
 }
 
 impl AgentEvent {
-    /// The fields every mapper mints the same way: a fresh id, the time now,
-    /// no raw line. The rest is the harness's own — its counter, its turn id,
+    /// The fields every mapper mints the same way: a fresh id and the time now.
+    /// The rest is the harness's own — its counter, its turn id,
     /// whichever subagent the line belongs to.
     pub fn mint(
         session_id: String,
@@ -919,7 +888,6 @@ impl AgentEvent {
             turn_id,
             subagent,
             payload,
-            raw: None,
         }
     }
 }
@@ -1050,13 +1018,5 @@ mod tests {
         assert_eq!(m, PermissionMode::Default);
 
         assert!(serde_json::from_str::<ApprovalPolicy>(r#""default""#).is_err());
-    }
-
-    /// An index entry written before `permissionMode` existed reads as `auto`,
-    /// which is also the composer's default — so old sessions resume under the
-    /// mode the picker would show for them.
-    #[test]
-    fn default_policy_is_auto() {
-        assert_eq!(ApprovalPolicy::default(), ApprovalPolicy::Auto);
     }
 }

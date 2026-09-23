@@ -274,13 +274,7 @@ fn relaunch(app: &AppHandle) -> Result<(), String> {
             .map_err(|e| format!("could not run `open`: {e}"))?;
 
         if !out.status.success() {
-            let why = String::from_utf8_lossy(&out.stderr);
-            let why = why.trim();
-            return Err(if why.is_empty() {
-                format!("`open` refused {}", bundle.display())
-            } else {
-                why.to_string()
-            });
+            return Err(crate::git::stderr_or(&out, || format!("`open` refused {}", bundle.display())));
         }
         return Ok(());
     }

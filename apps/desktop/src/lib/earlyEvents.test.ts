@@ -15,7 +15,6 @@ const event = (id: string, sessionId: string, seq = 0): AgentEvent =>
     turnId: null,
     subagent: null,
     payload: { type: "user_message", text: "hi" },
-    raw: null,
   }) as AgentEvent;
 
 // Module state, so every test starts by clearing what the last one left —

@@ -129,19 +129,10 @@ seq: number, ts: string, turnId: string | null,
 /**
  * `None` = main conversation, `Some` = the subagent that produced this.
  */
-subagent: Subagent | null, payload: AgentEventPayload, 
-/**
- * `None` on the emitted path — raw lines are archived separately — but
- * always populated for [`AgentEventPayload::Unknown`], which is useless
- * without it.
- */
-raw: JsonValue | null, };
+subagent: Subagent | null, payload: AgentEventPayload, };
 
 /**
  * What happened.
- *
- * Permission request/resolve is deliberately absent: no captured fixture shows
- * their shape, so the variants would be a guess. Add once captured.
  */
 export type AgentEventPayload = { "type": "turn_started" } & SessionInfo | { "type": "turn_completed", status: TurnStatus, stopReason: string | null, finalText: string | null, usage: Usage | null, durationMs: number | null, 
 /**
@@ -169,7 +160,7 @@ head: string | null,
  * as false, which is what a replayed log should say: no child
  * survives a restart, so nothing on disk is still blocked on this.
  */
-authFailed: boolean, } | { "type": "settings_changed" } & Settings | { "type": "user_message", text: string, images: Array<ImageRef>, 
+authFailed: boolean, } | { "type": "user_message", text: string, images: Array<ImageRef>, 
 /**
  * The issues this prompt was tagged with, resolved against the tracker
  * as it was sent.
@@ -351,7 +342,7 @@ label: string,
  * True when the app answered on its own — an unsupported request
  * subtype, or a shutdown clearing what it could not ask about.
  */
-automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUseId: string, message: string, } | { "type": "fast_mode_notice", text: string, } | { "type": "hook", name: string, event: string, phase: HookPhase, exitCode: number | null, outcome: string | null, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUseId: string, message: string, } | { "type": "fast_mode_notice", text: string, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -366,7 +357,7 @@ reason: string | null, } | { "type": "context_compacted",
 /**
  * `manual` or `auto`.
  */
-trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unknown", harnessType: string, } | { "type": "unrecognized" };
+trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unrecognized" };
 
 export type AgentUpdate = { harness: Harness, label: string, current: string, latest: string, };
 
@@ -455,7 +446,7 @@ preview: string | null, };
  */
 export type AuthOption = { 
 /**
- * Closed per harness — `add_account` matches on it and refuses anything
+ * Closed per harness — `add_agent_account` matches on it and refuses anything
  * else, which is what keeps a frontend string out of a command line.
  */
 id: string, label: string, 
@@ -763,8 +754,6 @@ unreadable: Unreadable | null, };
  */
 export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok";
 
-export type HookPhase = "started" | "finished";
-
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
 
 /**
@@ -949,6 +938,8 @@ avatar: string | null, };
 /**
  * Linear's five levels, by name rather than by its `0..4` integer — where `0`
  * is *no* priority and therefore sorts nothing like a number.
+ *
+ * Declaration order is the sort order, urgent first and unprioritized last.
  */
 export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 
@@ -1041,6 +1032,10 @@ color: string, };
  * Linear reports a workflow state's `type`, which is this set exactly — the
  * state's *name* is per-team prose ("In Review", "Shipping") and belongs on
  * screen, not in a match arm.
+ *
+ * Declaration order is the sort order: the workflow's, so a status menu reads
+ * the way work moves. Linear orders states by type first and by `position`
+ * only *within* one, so position alone puts "Done" above "Todo".
  */
 export type IssueStateKind = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "other";
 
@@ -1497,12 +1492,6 @@ from: MessageSender | null,
  */
 issues: Array<IssueRef>, };
 
-export type RateLimit = { usedPercent: number | null, windowMinutes: number | null, 
-/**
- * RFC3339, normalized from whatever the harness reports.
- */
-resetsAt: string | null, planType: string | null, };
-
 /**
  * What a save did. `Stale` is not an error: the file moved under the reader,
  * so their text is still in the editor and theirs to force through.
@@ -1782,8 +1771,7 @@ modified: string | null, };
 export type SessionTitleEvent = { sessionId: string, title: string, };
 
 /**
- * Settings that can change mid-session, so they arrive as events rather than
- * living only on [`SessionInfo`].
+ * The settings a turn was configured with, carried on [`SessionInfo`].
  */
 export type Settings = { model: string | null, 
 /**
@@ -2042,7 +2030,7 @@ export type Usage = { inputTokens: number | null, outputTokens: number | null, c
  * Broken out only by harnesses that report it separately; others fold
  * thinking tokens into `output_tokens`.
  */
-reasoningTokens: number | null, totalTokens: number | null, costUsd: number | null, contextWindow: ContextWindow | null, rateLimit: RateLimit | null, model: string | null, 
+reasoningTokens: number | null, totalTokens: number | null, costUsd: number | null, contextWindow: ContextWindow | null, model: string | null, 
 /**
  * Session-cumulative consumption, split by model. Empty on every harness
  * and every event that doesn't report one. See [`ModelUsage`].
@@ -2053,9 +2041,9 @@ perModel: Array<ModelUsage>, };
  * What the composer's action row needs to decide which buttons it has, in one
  * read.
  *
- * A superset of [`SyncStatus`] rather than three calls stitched together in
- * the frontend: every field here answers the same question — "what is there
- * left to do with this work" — and reading them separately would let the row
+ * One read rather than several stitched together in the frontend: every
+ * field here answers the same question — "what is there left to do with this
+ * work" — and reading them separately would let the row
  * draw a Commit button from one snapshot beside a Push count from another.
  */
 export type WorkStatus = { 
@@ -2072,7 +2060,12 @@ branch: string | null,
 /**
  * `None` for a branch never pushed — the "publish" case.
  */
-upstream: string | null, ahead: number, 
+upstream: string | null, 
+/**
+ * Commits the upstream doesn't have, zero where there is none. Counted
+ * against the *last known* upstream: nothing here fetches.
+ */
+ahead: number, 
 /**
  * The branch this work would land on, short of its remote (`main`, not
  * `origin/main`). Stripped here rather than in the row, so "am I on the

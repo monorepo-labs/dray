@@ -14,10 +14,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
+use crate::git::resolved;
 use crate::session::SessionManager;
 use crate::store::get_session_index_item;
 
-#[derive(Clone, Serialize, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalServer {
     pub port: u16,
@@ -47,11 +48,11 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
     let cwds = cwd_of(listeners.iter().map(|(pid, _, _)| *pid).collect());
     // lsof reports resolved paths, so a checkout reached through a symlink
     // never matched its own servers until the tree was resolved too.
-    let tree = tree.map(|t| std::fs::canonicalize(t).unwrap_or_else(|_| t.to_path_buf()));
+    let tree = tree.map(resolved);
     let in_tree = |pid: u32| {
         tree.as_deref()
             .zip(cwds.get(&pid))
-            .map(|(tree, cwd)| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.clone()).starts_with(tree))
+            .map(|(tree, cwd)| resolved(cwd).starts_with(tree))
             .unwrap_or(false)
     };
     // Dray's own DevTools port lists otherwise: a dev build runs from the tree.
