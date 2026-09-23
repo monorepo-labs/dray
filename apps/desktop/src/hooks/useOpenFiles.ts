@@ -3,6 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { channel } from "@/lib/channel";
 import type { FileBody } from "@/types/events";
 
 /// A tagged union over the read, so there is no state in which a body exists
@@ -53,11 +54,11 @@ let opened = 0;
 /// id it passed in.
 let version = 0;
 
-const listeners = new Set<() => void>();
+const changed = channel<void>();
 
 function emit() {
   version += 1;
-  for (const listener of listeners) listener();
+  changed.emit();
 }
 
 /// Bumped whenever a read is issued for a path, and whenever the path is
@@ -177,13 +178,6 @@ export function refreshOpenFiles(sid: string | null) {
   for (const file of state(sid).open) read(sid, file.path);
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
 function getVersion() {
   return version;
 }
@@ -198,7 +192,7 @@ export function openFilesFor(sid: string | null): FilesSnapshot {
 
 /// A session's open files, and which one its viewer is showing.
 export function useOpenFiles(sid: string | null): FilesSnapshot {
-  useSyncExternalStore(subscribe, getVersion, getVersion);
+  useSyncExternalStore(changed.subscribe, getVersion, getVersion);
   return openFilesFor(sid);
 }
 

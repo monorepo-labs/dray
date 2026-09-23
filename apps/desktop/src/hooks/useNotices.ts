@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
+
 /// What the notice is about. It picks the action label and how long the card
 /// stays: `completed` is news that will keep, while `asking` is an agent
 /// standing still until the reader answers, so it is given twice as long to be
@@ -122,11 +124,7 @@ export type Notice = {
 /// step. It also means a card cannot expire while the window is occluded and the
 /// animation is throttled, which is the behaviour we want anyway.
 let notices: Notice[] = [];
-const listeners = new Set<() => void>();
-
-function emit() {
-  for (const listener of listeners) listener();
-}
+const { emit, subscribe } = channel<void>();
 
 /// A card's identity, and its React key: the session it is about and what it
 /// says about it.
@@ -184,13 +182,6 @@ export const ANSWERED_BY_OPENING: NoticeKind[] = [
   "worktree",
   "worktree-failed",
 ];
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
 
 /// The live notice stack.
 export function useNotices(): Notice[] {

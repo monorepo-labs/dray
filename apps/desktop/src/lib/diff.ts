@@ -1,5 +1,6 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 
+import { basename } from "@/lib/format";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
 /// The two sides a `file_edit` call renders as a diff, already resolved to the
@@ -81,13 +82,6 @@ export function editSides(input: JsonValue): EditSides | null {
   return null;
 }
 
-/// The basename, which is what the diff header shows. The library infers the
-/// syntax-highlighting language from this, so the extension has to survive.
-export function fileName(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
-
 /// FNV-1a over the text, hex. Content identity, not a cryptographic hash: a
 /// collision here costs one mis-coloured diff.
 function fnv1a(text: string): string {
@@ -110,7 +104,9 @@ function fnv1a(text: string): string {
 /// only ever miss the cache, never hit a stale entry.
 export function diffSide(path: string, contents: string) {
   return {
-    name: fileName(path),
+    // The library infers the syntax-highlighting language from the name, so
+    // the extension has to survive.
+    name: basename(path),
     contents,
     cacheKey: `${path}#${contents.length}:${fnv1a(contents)}`,
   };

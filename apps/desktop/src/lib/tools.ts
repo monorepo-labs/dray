@@ -405,16 +405,6 @@ export function fileTarget(toolType: ToolType, input: JsonValue): string | null 
   return path?.startsWith("/") ? path : null;
 }
 
-/// The last segment of a path: the part that identifies the file to a reader.
-///
-/// A row is one line and a path is mostly directory, so the name leads and the
-/// rest is a click away. Falls back to the whole string for anything that does
-/// not look like a path, which keeps this safe on input it was not given.
-export function fileName(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts.at(-1) ?? path;
-}
-
 export function shortenPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
   if (parts.length <= 2) return path;

@@ -5,7 +5,8 @@ import { File, Virtualizer } from "@pierre/diffs/react";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
-import { diffSide, fileName } from "@/lib/diff";
+import { diffSide } from "@/lib/diff";
+import { basename } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
@@ -38,7 +39,7 @@ export default function FileViewer({
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
   const path = file?.path ?? "";
-  const name = fileName(path);
+  const name = basename(path);
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
   // Which reveal this pane has already scrolled for. Held in a ref rather than

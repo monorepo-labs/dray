@@ -201,19 +201,6 @@ export function trackerOf(identifier: string): IssueTracker {
   return identifier.includes("#") ? "github" : "linear";
 }
 
-/// Where an identifier points, from the links a message carries.
-///
-/// `null` for a tag whose issue was never resolved — an unreachable tracker at
-/// send time, or a tag naming an issue that does not exist. Those stay drawn as
-/// plain coloured text rather than becoming a link to nowhere.
-export function issueUrl(issues: IssueRef[], identifier: string): string | null {
-  // An empty URL is as good as none, and reaches here whenever a link was made
-  // by `dray issue link` with no `--url`: the app writes down what the caller
-  // gave it and asks the tracker nothing, so the field can simply be blank.
-  // Left unchecked, the tag becomes a button that opens nowhere.
-  return issues.find((issue) => issue.identifier === identifier)?.url || null;
-}
-
 /// The status buckets the issues page draws, in the order it draws them.
 ///
 /// Keyed on the state's *kind* rather than its name: a name is per-team prose

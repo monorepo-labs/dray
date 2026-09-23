@@ -7,12 +7,11 @@ import CodeView from "@/components/chat/CodeView";
 import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
 import TodoList from "@/components/chat/TodoList";
-import { truncate } from "@/lib/format";
+import { basename, truncate } from "@/lib/format";
 import { isTodoCall, todoList } from "@/lib/todos";
 import { cn } from "@/lib/utils";
 import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
 import {
-  fileName,
   fileTarget,
   formatToolInput,
   mcpCall,
@@ -435,7 +434,7 @@ export default function ToolCall({
                   opening anything. `stopPropagation` is what keeps the two
                   apart. */}
               {target ? (
-                <FileLink path={target}>{fileName(target)}</FileLink>
+                <FileLink path={target}>{basename(target)}</FileLink>
               ) : qualified ? (
                 <>
                   {/* Dimmer than the method beside it: the server is *where*

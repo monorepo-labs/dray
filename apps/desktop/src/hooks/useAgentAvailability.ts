@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { channel } from "@/lib/channel";
 import type { AgentAvailability, Harness } from "@/types/events";
 
 /// Which agents have a CLI behind them on this machine.
@@ -14,19 +15,15 @@ import type { AgentAvailability, Harness } from "@/types/events";
 /// would spend a login shell to be told the same thing.
 let answers: AgentAvailability[] | null = null;
 let inFlight: Promise<void> | null = null;
-const listeners = new Set<() => void>();
-
-function emit() {
-  for (const listener of listeners) listener();
-}
+const changed = channel<void>();
 
 function subscribe(listener: () => void) {
-  listeners.add(listener);
+  const unsubscribe = changed.subscribe(listener);
   if (!answers && !inFlight) {
     inFlight = invoke<AgentAvailability[]>("agent_availability")
       .then((next) => {
         answers = next;
-        emit();
+        changed.emit();
       })
       // Silent, and deliberately: this decides whether to *warn*, so a failed
       // read must leave every agent offerable rather than mark them all
@@ -36,9 +33,7 @@ function subscribe(listener: () => void) {
         inFlight = null;
       });
   }
-  return () => {
-    listeners.delete(listener);
-  };
+  return unsubscribe;
 }
 
 function snapshot() {

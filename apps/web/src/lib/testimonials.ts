@@ -43,17 +43,6 @@ export type Testimonial = {
   verified?: boolean;
 };
 
-/// Looked up by handle, because that is what [`Feature.quotes`] names: a
-/// feature points at the reaction it wants under it, and a handle is the one
-/// thing about a post that is both stable and readable in the feature list.
-///
-/// A handle no entry carries answers `undefined` and draws nothing, which is
-/// the right failure — deleting a quote from the list below must not be able
-/// to take the page down with it.
-export function byHandle(handle: string): Testimonial | undefined {
-  return TESTIMONIALS.find((t) => t.handle === handle);
-}
-
 export const TESTIMONIALS: Testimonial[] = [
   {
     name: "Sourabh",

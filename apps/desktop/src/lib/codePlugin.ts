@@ -1,8 +1,10 @@
 import { getHighlighterIfLoaded, preloadHighlighter } from "@pierre/diffs";
-import type { CodeHighlighterPlugin, HighlightOptions, HighlightResult } from "@streamdown/code";
+import type { CodeHighlighterPlugin, HighlightOptions } from "streamdown";
 
 import { HIGHLIGHT_ENGINE } from "@/hooks/useHighlighter";
 import type { CodeThemePair } from "@/lib/codeTheme";
+
+type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
 
 /// A Streamdown code-highlighter backed by the same highlighter `@pierre/diffs`
 /// uses, replacing `@streamdown/code`'s own.

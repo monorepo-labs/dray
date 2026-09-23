@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 
+import { channel } from "@/lib/channel";
 import type { ChromiumStatus } from "@/types/events";
 
 /// The in-app browser's frontend half: tabs per session as the backend
@@ -31,17 +32,8 @@ export type BrowserTab = {
 const EMPTY: BrowserTab[] = [];
 const tabsBySession = new Map<string, BrowserTab[]>();
 const fetched = new Set<string>();
-const listeners = new Set<() => void>();
+const { emit: notify, subscribe } = channel<void>();
 let started = false;
-
-function notify() {
-  for (const l of listeners) l();
-}
-
-function subscribe(l: () => void) {
-  listeners.add(l);
-  return () => void listeners.delete(l);
-}
 
 function start() {
   if (started) return;

@@ -103,10 +103,6 @@ export function chordFor(id: ShortcutId): Chord | null {
   return id in held ? (held[id] ?? null) : defaultChord(id);
 }
 
-export function isOverridden(id: ShortcutId): boolean {
-  return id in store();
-}
-
 /// Which other shortcut already holds this chord, if any.
 export function holderOf(chord: Chord, except?: ShortcutId): ShortcutId | null {
   const hit = SHORTCUTS.find((s) => {

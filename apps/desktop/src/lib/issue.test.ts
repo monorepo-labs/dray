@@ -7,20 +7,11 @@ import {
   groupLabel,
   issueSpan,
   issueTag,
-  issueUrl,
   parseIdentifier,
   shortIdentifier,
   trackerOf,
 } from "@/lib/issue";
-import type { Issue, IssueRef, IssueStateKind } from "@/types/events";
-
-const ref = (identifier: string, title: string): IssueRef => ({
-  tracker: "linear",
-  id: `uuid-${identifier}`,
-  identifier,
-  title,
-  url: `https://linear.app/x/issue/${identifier}`,
-});
+import type { Issue, IssueStateKind } from "@/types/events";
 
 describe("issueSpan", () => {
   it("opens on a tag the caret is inside", () => {
@@ -134,21 +125,6 @@ describe("shortIdentifier", () => {
     expect(shortIdentifier("monorepo-labs/dray#121")).toBe("#121");
     // A Linear identifier has no slug to drop and is left exactly as it is.
     expect(shortIdentifier("DRA-53")).toBe("DRA-53");
-  });
-});
-
-describe("issueUrl", () => {
-  it("finds where a tag points", () => {
-    const issues = [ref("DRA-53", "One"), ref("DRA-9", "Two")];
-
-    expect(issueUrl(issues, "DRA-9")).toBe("https://linear.app/x/issue/DRA-9");
-  });
-
-  /// A tag whose issue never resolved — the tracker was unreachable when the
-  /// prompt was sent — stays plain text rather than becoming a dead link.
-  it("is null for a tag nothing was linked for", () => {
-    expect(issueUrl([], "DRA-53")).toBeNull();
-    expect(issueUrl([ref("DRA-53", "One")], "DRA-9")).toBeNull();
   });
 });
 
