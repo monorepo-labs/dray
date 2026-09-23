@@ -1,4 +1,13 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  BoltIcon,
+  InformationCircleIcon,
+  MicrophoneIcon,
+  PuzzlePieceIcon,
+  Square3Stack3DIcon,
+  PaintBrushIcon,
+  KeyIcon,
+} from "@heroicons/react/16/solid";
 import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1179,6 +1188,18 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   about: "About",
 };
 
+/// Heroicons' filled 16px set, drawn for small sizes,
+/// at the sidebar rows' own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
+const TAB_ICONS: Record<SettingsTab, typeof BoltIcon> = {
+  appearance: PaintBrushIcon,
+  spaces: Square3Stack3DIcon,
+  accounts: KeyIcon,
+  transcription: MicrophoneIcon,
+  integrations: PuzzlePieceIcon,
+  shortcuts: BoltIcon,
+  about: InformationCircleIcon,
+};
+
 /// The page's groups as a list down the left, standing where the sidebar
 /// stands, with the picked group filling the rest of the window.
 ///
@@ -1286,8 +1307,12 @@ function SettingsTabs({
                 tabIndex={tab === value ? 0 : -1}
                 active={tab === value}
                 onClick={() => setTab(value)}
-                className="h-7 cursor-pointer px-1.5 text-left"
+                className="flex h-7 cursor-pointer items-center gap-1.5 px-1.5 text-left"
               >
+                {(() => {
+                  const Icon = TAB_ICONS[value];
+                  return <Icon className="size-3.5 shrink-0" />;
+                })()}
                 {TAB_LABELS[value]}
               </TabButton>
             ))}
