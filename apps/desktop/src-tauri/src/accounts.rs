@@ -1095,8 +1095,6 @@ struct GrokCredential {
     /// `oidc` for the browser and device flows alike.
     #[serde(default)]
     auth_mode: Option<String>,
-    #[serde(default)]
-    team_id: Option<String>,
 }
 
 /// grok, read off its own credential file rather than asked.
@@ -1160,9 +1158,9 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
         }]);
     };
 
-    // Email first, then the name, then the team — the reader asking this is
-    // nearly always checking they are not on the other account.
-    let detail = [credential.email, credential.first_name, credential.team_id]
+    // Email first, then the name — the reader asking this is nearly always
+    // checking they are not on the other account.
+    let detail = [credential.email, credential.first_name]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
