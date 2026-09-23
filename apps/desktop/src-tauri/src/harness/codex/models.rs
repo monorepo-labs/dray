@@ -31,9 +31,9 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 /// models".
 ///
 /// Also exactly what Shift+Tab cycles, so it is a budget rather than a taste:
-/// the chord is only worth pressing while the list it walks is short. Taken by
-/// position, over the order [`fold`] ranks — never the wire's, which is Codex's
-/// own recommendation rather than its newest.
+/// the chord is only worth pressing while the list it walks is short. A cap, not
+/// a quota: [`fold`] fills it only with rows the table puts at the top level or
+/// has never heard of, so a Codex missing one of the table's two draws one.
 const TOP_LEVEL: usize = 2;
 
 /// Every model Codex reports, newest answer or a cached one.
@@ -102,7 +102,8 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
 }
 
 /// The model a Codex session starts on when nobody picked one: the table's
-/// default where the installed Codex lists it, its first row otherwise.
+/// default where the installed Codex lists it, the table's other top-level row
+/// next, the list's first row last.
 ///
 /// **Named, then checked — never the list's first row alone.** It was that row,
 /// and reading it survived only while the list arrived in the wire's order:
@@ -115,14 +116,22 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
 /// table's default is a model this build knows and the *installed* Codex may
 /// not, and one it does not list is a create that fails at the spawn for a
 /// choice nobody made. So it is taken only where Codex answers for it, and the
-/// list's own first row stands in otherwise — a probe that cannot run falls
-/// back to the table through [`list`], so the old answer is still the answer
-/// where there is nothing better.
+/// table's own top level stands in otherwise — GPT-6 Sol is the default, and a
+/// Codex not yet updated to list it lands on 5.6 Sol rather than on whatever
+/// [`fold`] draws first. A probe that cannot run falls back to the table
+/// through [`list`], so the old answer is still the answer where there is
+/// nothing better.
 pub async fn default_model() -> ModelId {
-    let models = list().await;
+    pick_default(&list().await)
+}
+
+fn pick_default(models: &[Model]) -> ModelId {
+    let listed = |id: &ModelId| models.iter().any(|m| &m.id == id);
 
     default_model_for(Harness::Codex)
-        .filter(|id| models.iter().any(|m| &m.id == id))
+        .into_iter()
+        .chain(codex_models().into_iter().filter(|m| !m.secondary).map(|m| m.id))
+        .find(|id| listed(id))
         .or_else(|| models.first().map(|m| m.id.clone()))
         .unwrap_or_default()
 }
@@ -289,8 +298,19 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
         }
     });
 
-    for (at, model) in models.iter_mut().enumerate() {
-        model.secondary = at >= TOP_LEVEL;
+    // A row the table names takes the table's tier, so an older Codex that
+    // lists no GPT-6 Sol does not promote 6 Astra into its slot. One it has
+    // never heard of is the new flagship and competes for the top level.
+    let mut top = 0;
+    for model in &mut models {
+        let wants_top = match table.iter().find(|known| known.id == model.id) {
+            Some(known) => !known.secondary,
+            None => !every_codex_model().iter().any(|m| m.id == model.id),
+        };
+        model.secondary = !wants_top || top >= TOP_LEVEL;
+        if !model.secondary {
+            top += 1;
+        }
     }
 
     models
@@ -413,15 +433,48 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/model_list.json")).expect("fixture json")
     }
 
-    /// The whole argument for asking: GPT-6-Astra is in the capture, and no
-    /// table in this repo could have named it before it shipped.
+    /// The same answer off `codex-cli 0.156.1`, the first to list GPT-6 Sol.
+    /// `captured` is now what a reader who has not updated Codex sees.
+    fn captured_gpt6() -> Value {
+        serde_json::from_str(include_str!("fixtures/model_list_gpt6.json")).expect("fixture json")
+    }
+
+    fn cycled(models: &[Model]) -> Vec<&str> {
+        models
+            .iter()
+            .filter(|m| !m.secondary)
+            .map(|m| m.label.as_str())
+            .collect()
+    }
+
     #[test]
     fn the_captured_list_is_read_whole() {
-        let models = read_rows(&captured());
+        let models = read_rows(&captured_gpt6());
 
         let labels: Vec<&str> = models.iter().map(|m| m.label.as_str()).collect();
-        assert_eq!(labels, ["Astra", "Sol", "Terra", "Luna", "GPT-5.5"]);
+        assert_eq!(
+            labels,
+            ["6 Sol", "5.6 Sol", "6 Astra", "6 Luna", "5.6 Terra", "5.6 Luna", "GPT-5.5"]
+        );
         assert!(models.iter().all(|m| m.accepts_images));
+    }
+
+    /// A Codex not yet updated lists no GPT-6 Sol, so the picker draws no row
+    /// for it and does not promote 6 Astra into its slot.
+    #[test]
+    fn an_older_codex_draws_no_6_sol() {
+        let models = read_rows(&captured());
+
+        assert!(!models.iter().any(|m| m.arg == "gpt-6-sol"));
+        assert_eq!(cycled(&models), ["5.6 Sol"]);
+    }
+
+    /// The default is GPT-6 Sol only where Codex lists it; an older one lands
+    /// on 5.6 Sol, never on a model it cannot run.
+    #[test]
+    fn the_default_is_a_model_the_installed_codex_lists() {
+        assert_eq!(pick_default(&read_rows(&captured_gpt6())).as_str(), "gpt-6-sol");
+        assert_eq!(pick_default(&read_rows(&captured())).as_str(), "gpt56_sol");
     }
 
     /// Internal rows are not models anybody picked, and the capture carries two.
@@ -472,43 +525,39 @@ mod tests {
     /// else folds into "More models" — including a generation the hand-written
     /// list had retired outright.
     #[test]
-    fn the_first_two_rows_are_the_cycle() {
-        let models = read_rows(&captured());
+    fn the_two_sols_are_the_cycle() {
+        let models = read_rows(&captured_gpt6());
 
-        let cycled: Vec<&str> = models
-            .iter()
-            .filter(|m| !m.secondary)
-            .map(|m| m.label.as_str())
-            .collect();
-
-        assert_eq!(cycled, ["Astra", "Sol"]);
+        assert_eq!(cycled(&models), ["6 Sol", "5.6 Sol"]);
         assert!(models.iter().filter(|m| m.secondary).count() >= 2);
     }
 
-    /// The wire's order is Codex's own recommendation, measured: `model/list`
-    /// answers Sol ahead of Astra. Read as rank it put last generation's
-    /// flagship at the top of the picker and of ⇧⇥'s cycle, so the order is
-    /// this build's — except for a model it has never heard of, which is the
-    /// new one and leads, and a generation the picker retired, which sinks.
+    /// The wire's order is Codex's own recommendation, not the tier, so the
+    /// order is this build's — except for a model it has never heard of, which
+    /// is the new one and leads, and a generation the picker retired, which
+    /// sinks.
     #[test]
     fn the_order_is_drays_own_and_a_new_model_still_leads() {
         let wire = json!({"data": [
             {"id": "gpt-5.6-sol"},
             {"id": "gpt-5.5"},
             {"id": "gpt-6-astra"},
+            {"id": "gpt-6-sol"},
             {"id": "gpt-7-nova"},
         ]});
 
-        let labels: Vec<String> = read_rows(&wire).into_iter().map(|m| m.label).collect();
+        let models = read_rows(&wire);
+        let labels: Vec<&str> = models.iter().map(|m| m.label.as_str()).collect();
 
-        assert_eq!(labels, ["gpt-7-nova", "Astra", "Sol", "GPT-5.5"]);
+        assert_eq!(labels, ["gpt-7-nova", "6 Sol", "5.6 Sol", "6 Astra", "GPT-5.5"]);
+        assert_eq!(cycled(&models), ["gpt-7-nova", "6 Sol"]);
     }
 
     /// `ultra` is per model and Codex says which: Sol reports it, Luna stops at
     /// `max`. Reading the family would put a level on the wire Luna refuses.
     #[test]
     fn the_ladder_is_the_rows_own() {
-        let models = read_rows(&captured());
+        let models = read_rows(&captured_gpt6());
         let ladder = |arg: &str| {
             models
                 .iter()
@@ -518,6 +567,8 @@ mod tests {
         };
 
         assert_eq!(ladder("gpt-6-astra").last(), Some(&Effort::Ultra));
+        assert_eq!(ladder("gpt-6-sol").last(), Some(&Effort::Ultra));
+        assert_eq!(ladder("gpt-6-luna").last(), Some(&Effort::Max));
         assert_eq!(ladder("gpt-5.6-luna").last(), Some(&Effort::Max));
         assert_eq!(
             ladder("gpt-5.5"),

@@ -146,7 +146,7 @@ impl<'de> Deserialize<'de> for ModelId {
 pub fn default_model_for(harness: Harness) -> Option<ModelId> {
     match harness {
         Harness::ClaudeCode => Some(ModelId::new("opus")),
-        Harness::Codex => Some(ModelId::new("gpt56_sol")),
+        Harness::Codex => Some(ModelId::new("gpt-6-sol")),
         // Multi-provider, both of them, so any constant here might name a model
         // the reader has no key for. Their own settings already say.
         Harness::Pi | Harness::Fx => None,
@@ -331,11 +331,17 @@ pub fn codex_models() -> Vec<Model> {
     // `serviceTiers: [{id: "priority", name: "Fast", …}]`, Luna and the hidden
     // rows included. This table is only what a missing or broken `codex` leaves
     // the picker drawing; a real read overwrites it row by row.
+    //
+    // **Labels carry the generation** now that two Sols sit side by side. The
+    // GPT-6 rows are keyed by their wire id rather than an `gpt6_*` spelling:
+    // a Codex that listed them before this build named them was already minted
+    // under the wire id, so sessions on disk hold `gpt-6-sol` and must keep
+    // finding their row.
     vec![
         Model::new(
-            "gpt6_astra",
-            "gpt-6-astra",
-            "Astra",
+            "gpt-6-sol",
+            "gpt-6-sol",
+            "6 Sol",
             with_ultra.clone(),
             Some(Medium),
         )
@@ -343,21 +349,39 @@ pub fn codex_models() -> Vec<Model> {
         Model::new(
             "gpt56_sol",
             "gpt-5.6-sol",
-            "Sol",
+            "5.6 Sol",
             with_ultra.clone(),
             Some(Medium),
         )
         .with_fast(),
         Model::new(
+            "gpt6_astra",
+            "gpt-6-astra",
+            "6 Astra",
+            with_ultra.clone(),
+            Some(Medium),
+        )
+        .with_fast()
+        .under_more(),
+        Model::new(
+            "gpt-6-luna",
+            "gpt-6-luna",
+            "6 Luna",
+            all.clone(),
+            Some(Medium),
+        )
+        .with_fast()
+        .under_more(),
+        Model::new(
             "gpt56_terra",
             "gpt-5.6-terra",
-            "Terra",
+            "5.6 Terra",
             with_ultra,
             Some(Medium),
         )
         .with_fast()
         .under_more(),
-        Model::new("gpt56_luna", "gpt-5.6-luna", "Luna", all, Some(Medium))
+        Model::new("gpt56_luna", "gpt-5.6-luna", "5.6 Luna", all, Some(Medium))
             .with_fast()
             .under_more(),
     ]
@@ -524,7 +548,7 @@ mod tests {
 
         assert_eq!(
             offered.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
-            ["Astra", "Sol", "Terra", "Luna"]
+            ["6 Sol", "5.6 Sol", "6 Astra", "6 Luna", "5.6 Terra", "5.6 Luna"]
         );
         // Medium, where Claude's default is High. Cheap to state, and the one
         // number a reader would otherwise have to open the picker to learn.
@@ -538,7 +562,7 @@ mod tests {
             .filter(|m| !m.secondary)
             .map(|m| m.label.as_str())
             .collect();
-        assert_eq!(cycled, ["Astra", "Sol"]);
+        assert_eq!(cycled, ["6 Sol", "5.6 Sol"]);
     }
 
     /// `ultra` is per model, not per family — Codex reports it on Sol and Terra
@@ -558,10 +582,12 @@ mod tests {
         assert_eq!(
             tops,
             [
-                ("Astra".to_string(), Some(Effort::Ultra)),
-                ("Sol".to_string(), Some(Effort::Ultra)),
-                ("Terra".to_string(), Some(Effort::Ultra)),
-                ("Luna".to_string(), Some(Effort::Max)),
+                ("6 Sol".to_string(), Some(Effort::Ultra)),
+                ("5.6 Sol".to_string(), Some(Effort::Ultra)),
+                ("6 Astra".to_string(), Some(Effort::Ultra)),
+                ("6 Luna".to_string(), Some(Effort::Max)),
+                ("5.6 Terra".to_string(), Some(Effort::Ultra)),
+                ("5.6 Luna".to_string(), Some(Effort::Max)),
             ]
         );
 
@@ -683,6 +709,8 @@ mod tests {
             "fable",
             "haiku",
             "gpt6_astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt56_sol",
             "gpt56_terra",
             "gpt56_luna",
@@ -762,7 +790,7 @@ mod tests {
     #[test]
     fn only_the_multi_provider_harnesses_have_no_default_model() {
         assert_eq!(default_model_for(Harness::ClaudeCode), Some(id("opus")));
-        assert_eq!(default_model_for(Harness::Codex), Some(id("gpt56_sol")));
+        assert_eq!(default_model_for(Harness::Codex), Some(id("gpt-6-sol")));
         assert_eq!(default_model_for(Harness::Grok), Some(id("grok-4.7")));
         assert_eq!(default_model_for(Harness::Pi), None);
         assert_eq!(default_model_for(Harness::Fx), None);

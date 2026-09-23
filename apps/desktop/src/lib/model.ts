@@ -29,7 +29,7 @@ export function isUnsetModel(id: ModelId): boolean {
 /// composer reads that back instead of seeding it.
 export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   claude_code: "opus",
-  codex: "gpt56_sol",
+  codex: "gpt-6-sol",
   pi: UNSET_MODEL,
   // Multi-provider like pi, and its settings file already names a model.
   fx: UNSET_MODEL,
