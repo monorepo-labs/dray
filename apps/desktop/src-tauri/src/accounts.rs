@@ -473,7 +473,9 @@ async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said>
     command
         .args(args)
         .env("PATH", agent_path(&bin))
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        // A timeout drops the future, and without this the child outlives it.
+        .kill_on_drop(true);
 
     // Only where it is still there. A session whose worktree was removed keeps
     // its recorded `cwd`, and spawning into a directory that no longer exists
