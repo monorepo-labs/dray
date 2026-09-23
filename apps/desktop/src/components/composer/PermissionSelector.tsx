@@ -68,10 +68,13 @@ export default function PermissionSelector({
   // underneath a trigger that just named a stance.
   const stance = stanceFor(harness, value);
   const [open, setOpen] = useState(false);
+  // Closed for good rather than hidden, or it reopens by itself when the turn
+  // ends and the lock lifts.
+  if (locked && open) setOpen(false);
   const selected = MODES.find((m) => m.id === stance);
 
   return (
-    <DropdownMenu open={open && !locked} onOpenChange={(next) => setOpen(next && !locked)}>
+    <DropdownMenu open={open} onOpenChange={(next) => setOpen(next && !locked)}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>

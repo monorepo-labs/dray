@@ -383,6 +383,9 @@ export default function ModelSelector({
   // sent next — see `lockedMidTurn`. The menu goes whole with the model, since
   // no harness takes an effort mid-turn and not a model.
   const modelLocked = lockedMidTurn(harness, "model", busy);
+  // A menu already open when the turn starts closes, or its rows would take
+  // the very pick the lock is refusing.
+  if (modelLocked && open) setOpen(false);
   const effortLocked = lockedMidTurn(harness, "effort", busy);
   const fastLocked = lockedMidTurn(harness, "fast", busy);
 
