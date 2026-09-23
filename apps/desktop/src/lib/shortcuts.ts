@@ -107,6 +107,9 @@ export const SHORTCUTS = [
 
   { id: "settings", label: "Settings", group: "General", chord: k(",") },
   { id: "theme.next", label: "Next theme", group: "General", chord: k("t", { alt: true }) },
+  { id: "zoom.in", label: "Zoom in", group: "General", chord: k("=") },
+  { id: "zoom.out", label: "Zoom out", group: "General", chord: k("-") },
+  { id: "zoom.reset", label: "Actual size", group: "General", chord: k("0") },
 ] as const satisfies readonly { id: string; label: string; group: ShortcutGroup; chord: Chord }[];
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];

@@ -93,6 +93,7 @@ import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { setHotkeysSuspended, useHotkey } from "@/hooks/useHotkey";
+import { stepZoom } from "@/lib/zoom";
 import { cycleTheme } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
@@ -1998,6 +1999,9 @@ function App() {
   useHotkey("settings", () => setSettingsOpen(true));
   // No notice on landing: the whole window changing is the answer.
   useHotkey("theme.next", cycleTheme);
+  useHotkey("zoom.in", () => stepZoom(1));
+  useHotkey("zoom.out", () => stepZoom(-1));
+  useHotkey("zoom.reset", () => stepZoom(0));
   // Both only mean anything before a session exists — the agent *is* the child
   // process and the worktree is where it starts — so they are unregistered
   // rather than no-ops there. `useHotkey` claims every chord it matches, and

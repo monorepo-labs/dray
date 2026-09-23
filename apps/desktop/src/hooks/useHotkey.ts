@@ -31,7 +31,13 @@ type HotkeyOptions = {
 
 /// Chords that still fire while the shell is suspended: they act on the app as
 /// a whole, where everything else acts on a session, a view or the composer.
-const APP_WIDE: ReadonlySet<ShortcutId> = new Set(["settings", "theme.next"]);
+const APP_WIDE: ReadonlySet<ShortcutId> = new Set([
+  "settings",
+  "theme.next",
+  "zoom.in",
+  "zoom.out",
+  "zoom.reset",
+]);
 
 let suspended = false;
 
