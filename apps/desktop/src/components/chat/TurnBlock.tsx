@@ -197,6 +197,7 @@ function renderItem(
       key={item.id}
       event={item}
       resultByCallId={resultByCallId}
+      editsByCallId={editsByCallId}
       onOpenSession={onOpenSession}
     />
   );
