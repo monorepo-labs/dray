@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
 
-use crate::analytics;
+use crate::{analytics, binpath, settings};
 
 const STABLE_MANIFEST: &str = "https://monorepo-labs.github.io/dray/stable.json";
 const BETA_MANIFEST: &str = "https://monorepo-labs.github.io/dray/beta.json";
@@ -298,6 +298,49 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
     exe.ancestors()
         .nth(3)
         .filter(|p| p.extension().is_some_and(|e| e == "app"))
+}
+
+/// Runs the installed CLI's own `dray update` on the first launch of a new app
+/// version, so an app that bumped `PROTOCOL_VERSION` does not leave every
+/// agent's `dray` call refused until somebody updates it by hand.
+///
+/// `dray update` decides whether anything is newer, so nothing here compares
+/// versions. Only a CLI already installed is touched: the app still installs
+/// nothing. Dev and debug builds skip it, since the CLI on disk belongs to the
+/// release app. The version is recorded only once that is answered, so a launch
+/// with no network tries again next time.
+pub async fn sync_cli() {
+    if tauri::is_dev() || cfg!(debug_assertions) {
+        return;
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    if settings::read().await.cli_synced_for.as_deref() == Some(version) {
+        return;
+    }
+
+    if let Some(dray) = binpath::dray().await {
+        let out = tokio::process::Command::new(&dray)
+            .arg("update")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await;
+        match out {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let why = String::from_utf8_lossy(&out.stderr);
+                eprintln!("[cli sync] dray update failed ({}): {}", out.status, why.trim());
+                return;
+            }
+            Err(e) => {
+                eprintln!("[cli sync] could not run {}: {e}", dray.display());
+                return;
+            }
+        }
+    }
+
+    if let Err(e) = settings::update(|s| s.cli_synced_for = Some(version.into())).await {
+        eprintln!("[cli sync] could not record the version: {e:#}");
+    }
 }
 
 fn emit_status(app: &AppHandle, status: UpdateStatus) {

@@ -689,6 +689,8 @@ pub fn run() {
                 transcription::recordings::prune().await;
             });
 
+            tauri::async_runtime::spawn(updater::sync_cli());
+
             // Orchestration is a side channel: a socket that won't bind must
             // cost the feature, never the app. Logged and dropped for that
             // reason — there is nothing the reader could act on either.

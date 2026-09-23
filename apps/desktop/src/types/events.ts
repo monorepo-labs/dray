@@ -402,7 +402,13 @@ linearAccount: TrackerAccount | null,
  * ask the frontend for is a value that can be missing when a keypress
  * needs it.
  */
-transcription: TranscriptionSettings, };
+transcription: TranscriptionSettings, 
+/**
+ * The app version whose launch last brought the `dray` CLI up to date —
+ * see [`crate::updater::sync_cli`]. `None` reads as never synced, so the
+ * first launch of the build carrying this field runs once too.
+ */
+cliSyncedFor: string | null, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
