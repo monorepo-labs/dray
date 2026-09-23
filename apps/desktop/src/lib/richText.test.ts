@@ -36,6 +36,12 @@ describe("chipLabel", () => {
     expect(chipLabel(segment)).toBe("#DRA-269");
   });
 
+  it("elides a filename too long to fit the box", () => {
+    const [segment] = highlightSegments(`@src/${"a".repeat(60)}.ts`);
+    expect(chipLabel(segment)).toHaveLength(40);
+    expect(chipLabel(segment)!.endsWith("…")).toBe(true);
+  });
+
   it("refuses a command, a url and plain prose", () => {
     expect(highlightSegments("/caveman").map(chipLabel)).toEqual([null]);
     expect(highlightSegments("https://drayhq.com").map(chipLabel)).toEqual([null]);

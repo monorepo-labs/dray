@@ -47,12 +47,16 @@ const CHIP_KINDS = new Set<Segment["kind"]>(["mention", "session", "issue"]);
 
 /// How much of an issue's title a chip shows before it gives up and elides.
 ///
-/// A title is somebody else's sentence and can be any length, where the other
-/// two faces are bounded by what they name — a filename, a session title the
-/// reader chose. Elided in code rather than by `truncate`, because CSS
+/// A title is somebody else's sentence and can be any length, so it takes the
+/// tighter cap. Elided in code rather than by `truncate`, because CSS
 /// truncation needs `overflow: hidden`, and that moves an inline-block's
 /// baseline to its bottom edge and drops the chip below the line it sits on.
 const ISSUE_LABEL_MAX = 28;
+
+/// The cap on a filename or session title. A chip never wraps, and the box
+/// hides x-overflow rather than scrolling it, so an unbounded face wider than
+/// the composer would be cut off with no way to read the rest.
+const LABEL_MAX = 40;
 
 function elide(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
@@ -76,12 +80,12 @@ export function chipLabel(segment: Segment): string | null {
 
   switch (segment.kind) {
     case "mention":
-      return splitMention(segment.text).name;
+      return elide(splitMention(segment.text).name, LABEL_MAX);
     // `inner` is the sigil-and-identifier half on both of these, so the split
     // is made once by whoever built the segment rather than the parser being
     // asked for a third spelling of the same tag.
     case "session":
-      return segment.inner ? segment.inner.slice(1) : segment.text.slice(1);
+      return elide(segment.inner ? segment.inner.slice(1) : segment.text.slice(1), LABEL_MAX);
     default:
       return elide(issueFace(segment), ISSUE_LABEL_MAX + 1);
   }
