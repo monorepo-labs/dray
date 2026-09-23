@@ -201,7 +201,10 @@ export function readStoredTheme(): { name: ThemeName; mode: ThemeMode } {
       stored === "light" || stored === "dark" || stored === "system"
         ? stored
         : DEFAULT_MODE;
-    return { name, mode: modeFor(name, mode) };
+    // As stored, never through `modeFor`: this feeds `applyTheme`, which writes it
+    // back, so forcing it here would overwrite a light reader's mode on every
+    // launch into a dark-only theme.
+    return { name, mode };
   } catch {
     return { name: DEFAULT_THEME, mode: DEFAULT_MODE };
   }

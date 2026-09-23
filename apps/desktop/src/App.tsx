@@ -92,7 +92,7 @@ import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
-import { useHotkey } from "@/hooks/useHotkey";
+import { setHotkeysSuspended, useHotkey } from "@/hooks/useHotkey";
 import { cycleTheme } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
@@ -381,6 +381,9 @@ function App() {
     setSettingsTab("appearance");
     setNamingSpace(false);
   }, []);
+  // Layout, not ordinary: the switch must be down before the page paints, or a
+  // keystroke in that frame reaches a shell nobody can see.
+  useLayoutEffect(() => setHotkeysSuspended(settingsOpen), [settingsOpen]);
 
   // Dictation writes into the composer's draft through the module-level store,
   // not through a prop: the controls reach `ChatInput` as an opaque node, so

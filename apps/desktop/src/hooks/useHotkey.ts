@@ -29,6 +29,21 @@ type HotkeyOptions = {
   platformOnly?: boolean;
 };
 
+/// Chords that still fire while the shell is suspended: they act on the app as
+/// a whole, where everything else acts on a session, a view or the composer.
+const APP_WIDE: ReadonlySet<ShortcutId> = new Set(["settings", "theme.next"]);
+
+let suspended = false;
+
+/// Silences every shell chord but `APP_WIDE` while a full-window page covers
+/// the shell. Settings hides `AppShell` rather than unmounting it, so its
+/// bindings stay registered — and each one would claim its key (⇧Tab, ⌘I) and
+/// act on a session the reader cannot see. Read at the keystroke, so no
+/// listener re-registers and a binding needs no `enabled` gate of its own.
+export function setHotkeysSuspended(on: boolean) {
+  suspended = on;
+}
+
 /// Stands in for a row the reader unbound. The empty key matches no keystroke,
 /// and `useHotkey` registers no listener at all for it.
 const UNBOUND = { key: "", meta: false, shift: false, alt: false, code: undefined };
@@ -59,6 +74,8 @@ export function useHotkey(
   useEffect(() => {
     if (!enabled || !key) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      // Before matching, so a suspended chord is left to the page entirely.
+      if (suspended && !APP_WIDE.has(id)) return;
       // `code` is only consulted for an Option chord, and only for a letter.
       // macOS applies the Option layout to `key` — ⌥O can arrive as "ø" — so a
       // binding that reads `key` alone silently never fires. The narrowness is
@@ -91,7 +108,7 @@ export function useHotkey(
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [key, meta, shift, alt, code, enabled, platformOnly, skipInTextField]);
+  }, [id, key, meta, shift, alt, code, enabled, platformOnly, skipInTextField]);
 }
 
 /// Somewhere a caret can be, and therefore somewhere the platform's own text

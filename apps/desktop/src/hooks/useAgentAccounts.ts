@@ -6,6 +6,9 @@ import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 /// The last good read per directory, for the life of the process. A failed
 /// read writes nothing, so what is drawn is always something an agent said.
 const lastRead = new Map<string, AgentAccounts[]>();
+/// Which read each `lastRead` entry came from, numbered by when it was *issued*.
+const cachedAt = new Map<string, number>();
+let issuedSeq = 0;
 
 /// Who each agent CLI is signed in as, and the two writes that move it.
 ///
@@ -42,10 +45,16 @@ export function useAgentAccounts(cwd: string) {
 
   const load = useCallback(async () => {
     const mine = ++generation.current;
+    const issued = ++issuedSeq;
     setBusy(true);
     try {
       const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd });
-      lastRead.set(cwd, next);
+      // Newest-issued wins, across mounts: the per-hook `generation` cannot see
+      // a read left running by a tab that has since unmounted.
+      if ((cachedAt.get(cwd) ?? 0) < issued) {
+        lastRead.set(cwd, next);
+        cachedAt.set(cwd, issued);
+      }
       if (mine !== generation.current) return;
       setAgents(next);
       // A read that worked describes the page now, so whatever failed before it
