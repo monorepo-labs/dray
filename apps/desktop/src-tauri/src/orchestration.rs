@@ -627,7 +627,7 @@ fn resolve_effort(
 ) -> Result<Option<Effort>> {
     if let Some(alias) = requested {
         return Ok(Some(Effort::from_arg(alias).with_context(|| {
-            format!("unknown effort {alias:?} — try low, medium, high, xhigh or max")
+            format!("unknown effort {alias:?} — try low, medium, high, xhigh, max or ultra")
         })?));
     }
 
