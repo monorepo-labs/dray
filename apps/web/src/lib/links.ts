@@ -1,10 +1,10 @@
 export const REPO = "https://github.com/monorepo-labs/dray";
 
-/// `/releases/latest` redirects to whatever the newest stable release is, so
-/// the button needs no build-time lookup and can never point at a version that
-/// has been superseded. It skips prereleases, which is right here — the beta
-/// channel is the updater's, not the download page's.
-export const DOWNLOAD = `${REPO}/releases/latest`;
+/// The newest stable dmg, off the R2 mirror rather than GitHub, whose release
+/// CDN has had 42MB take 45 minutes. release.yml overwrites this one key on
+/// every stable release, so the button needs no build-time lookup; betas leave
+/// it alone, the beta channel being the updater's and not this page's.
+export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 
 /// The person who builds it, on X — the nav's "Feedback" link and the
 /// footer's mark both. Most visitors arrive from a tweet, so this is the

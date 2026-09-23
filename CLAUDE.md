@@ -778,6 +778,8 @@ The asymmetry is the point: appending to a private file is atomic, rewriting a s
 
 **Manifests only ever move forward** (`promote` in [release.yml](.github/workflows/release.yml)). The beta line run *ahead* of stable for its whole life, so an unconditional `cp` let a stable hotfix overwrite `beta.json` with an older version. The guard is the same semver comparison the plugin makes, prerelease rules included, in inline node — **not `sort -V`**, which put `0.9.4-beta.2` *above* `0.9.4`. Equal versions rewrite; a missing manifest is written, never an error; a release moving nothing skip the commit.
 
+**Bytes come from R2, never GitHub's release CDN**, which has had a 42MB dmg take 45 minutes. `release.yml` uploads each build under `<tag>/` and rewrites the manifest's URLs onto `vars.DOWNLOADS_URL` (the signature covers bytes, not the URL); a stable release also overwrites the root `Dray_universal.dmg`, which is the site's download button. The GitHub release still carries every asset, it just serves none of them.
+
 **The channel is chosen per check, in Rust** ([updater.rs](apps/desktop/src-tauri/src/updater.rs)), so switching channels need no rebuild. It is owned by [useUpdater](apps/desktop/src/hooks/useUpdater.ts) and handed down as a prop — `useLocalStorage` is per-component, so a second copy in the dialog write a value the hook never sees, and `channel` is what re-arm the checking effect.
 
 **Install is blocked while any session is mid-turn**, and the button waits rather than warning, since swapping the bundle relaunch the app. The check is `statusBySession` and is complete on its own, as no child survive a restart. It lives at the button, not in `install_update`.
