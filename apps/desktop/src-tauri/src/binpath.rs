@@ -349,7 +349,12 @@ pub fn known_dirs() -> Vec<PathBuf> {
         // and mise's do not — one is a script calling `asdf`, the other refuses
         // a tool pinned in no config — so those are globbed by install below.
         home.join(".volta/bin"),
+        // pnpm 11 moved global bins into `bin` under PNPM_HOME; older ones
+        // sit flat in it. `pnpm setup` exports PNPM_HOME from `.zshrc`, which
+        // the login-shell fallback never reads, so both have to be here.
+        home.join("Library/pnpm/bin"),
         home.join("Library/pnpm"),
+        home.join(".local/share/pnpm/bin"),
         home.join(".local/share/pnpm"),
         home.join(".yarn/bin"),
         home.join(".n/bin"),
