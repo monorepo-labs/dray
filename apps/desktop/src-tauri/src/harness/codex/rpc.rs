@@ -256,6 +256,22 @@ mod tests {
         assert!(client.pending.is_empty());
     }
 
+    /// A line that was never written can never be answered, so its slot has
+    /// to go back or a dead pipe leaks one entry per attempt.
+    #[tokio::test]
+    async fn a_failed_write_leaves_no_slot_behind() {
+        let (tx, rx) = mpsc::unbounded_channel::<Outbound>();
+        drop(rx);
+        let client = RpcClient::over(tx);
+
+        client
+            .request("turn/start", json!({}))
+            .await
+            .expect_err("the pipe is closed");
+
+        assert!(client.pending.is_empty());
+    }
+
     /// The three shapes are told apart structurally, and getting this wrong is
     /// not a visible failure — a request read as a notification is simply never
     /// answered, and the turn hangs with nothing on screen saying why.
