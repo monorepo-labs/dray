@@ -131,6 +131,9 @@ type ChatInputProps = {
   /// Drawn under the new-task composer, below the send hint. Informational
   /// only, unlike `notice`: it never blocks sending.
   agentUpdate?: ReactNode;
+  /// Why sending is held, or `null`. Blocks like `notice` but is no failure:
+  /// the agent's CLI is updating, and a session should start on the new one.
+  held?: string | null;
   /// Whether the picked model can be handed an image at all.
   ///
   /// `true` where nothing says otherwise, which covers the model list not
@@ -249,6 +252,7 @@ export default function ChatInput({
   dictating = false,
   notice,
   agentUpdate,
+  held = null,
   modelTakesImages = true,
   handoff,
   busy = false,
@@ -596,7 +600,7 @@ export default function ChatInput({
   // A notice does gate it. Backend refuses the same send anyway, so this is not
   // the guard — it is what stops the reader finding that out by writing a
   // prompt and pressing a button that was never going to work.
-  const canSend = !notice && (message.trim().length > 0 || attachments.length > 0);
+  const canSend = !notice && !held && (message.trim().length > 0 || attachments.length > 0);
 
   /// Dictation and Send, drawn in exactly one of two places.
   ///
@@ -628,7 +632,7 @@ export default function ChatInput({
               size="icon-sm"
               disabled={stopping ? !onStop : !canSend}
               onClick={stopping ? onStop : undefined}
-              title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
+              title={stopping ? "Stop" : held ? held : busy ? "Send — queued onto this turn" : "Send"}
               // The one filled button that keeps `--primary`. Everywhere but
               // Default light the two tokens are the same value, so this says
               // nothing there; on that palette it is what makes Send the
@@ -673,7 +677,7 @@ export default function ChatInput({
     // Enter has its own path into here, so the disabled button is not the
     // guard — without this, the one route that never touches the button still
     // sends.
-    if (notice) return;
+    if (notice || held) return;
 
     const trimmed = message.trim();
     // An attachment on its own is a real prompt — dropping a screenshot and
@@ -1074,7 +1078,11 @@ export default function ChatInput({
           !menuOpen && (
             <div className="flex items-center justify-between gap-3 pt-2">
               <div className="flex shrink-0 items-center gap-1 text-ui text-muted-foreground/60">
-                Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+                {held ?? (
+                  <>
+                    Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+                  </>
+                )}
               </div>
               {agentUpdate}
             </div>

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import type { AgentUpdate, Harness } from "@/types/events";
+import type { AgentCheck, AgentUpdate, Harness } from "@/types/events";
 
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const DONE_MS = 4000;
@@ -24,9 +24,22 @@ function set(patch: Partial<State>) {
   for (const listener of listeners) listener();
 }
 
+/// Bumped as an update starts and as it ends. A check spanning either read a
+/// binary the update was replacing, and landing after it would bring back the
+/// update the reader just installed.
+let generation = 0;
+
 async function check() {
+  const asked = generation;
   try {
-    const updates = await invoke<AgentUpdate[]>("check_agent_updates");
+    const checks = await invoke<AgentCheck[]>("check_agent_updates");
+    if (asked !== generation) return;
+    // An agent missing from the answer could not be asked, so its last known
+    // state stands rather than reading as current.
+    const answered = new Set(checks.map((c) => c.harness));
+    const updates = state.updates
+      .filter((u) => !answered.has(u.harness))
+      .concat(checks.flatMap((c) => (c.update ? [c.update] : [])));
     set({ updates });
   } catch {
     // Silent: a failed check keeps the last answer rather than drawing one.
@@ -44,9 +57,12 @@ export function startAgentUpdateChecks() {
 }
 
 export async function updateAgent(harness: Harness) {
+  generation++;
   set({ running: harness, failed: null });
   try {
-    const still = await invoke<AgentUpdate | null>("update_agent", { harness });
+    const still = await invoke<AgentUpdate | null>("update_agent", { harness }).finally(
+      () => generation++,
+    );
     const updates = state.updates.filter((u) => u.harness !== harness);
     if (still) {
       // The updater exited cleanly and the version did not move. Drawn as a

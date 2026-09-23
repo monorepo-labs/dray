@@ -36,7 +36,7 @@ static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// machine with that app and no separate install it is the only `codex` there
 /// is, and telling a reader who plainly has Codex that we cannot find it is the
 /// worse answer of the two.
-const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/codex";
+pub(crate) const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 /// The absolute path to `claude`, or the bare name as a last resort.
 ///

@@ -35,16 +35,24 @@ pub struct AgentUpdate {
     latest: String,
 }
 
-/// Every installed agent that is behind. Agents that are current, missing, or
-/// could not be asked are simply absent — a failed check must never draw an
-/// update that isn't there.
+/// One agent's answer. `update` is `None` where it is current or not installed.
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+pub struct AgentCheck {
+    harness: Harness,
+    update: Option<AgentUpdate>,
+}
+
+/// Every agent that could be asked. One that could not is **absent**, never
+/// "current": the caller keeps its last answer for it, so a flaky endpoint
+/// neither hides a known update nor invents one.
 #[tauri::command]
-pub async fn check_agent_updates() -> Vec<AgentUpdate> {
-    let checks = Harness::ALL.map(|harness| tokio::spawn(check(harness)));
+pub async fn check_agent_updates() -> Vec<AgentCheck> {
+    let checks = Harness::ALL.map(|harness| (harness, tokio::spawn(check(harness))));
     let mut out = Vec::new();
-    for check in checks {
-        if let Ok(Some(update)) = check.await {
-            out.push(update);
+    for (harness, check) in checks {
+        if let Ok(Ok(update)) = check.await {
+            out.push(AgentCheck { harness, update });
         }
     }
     out
@@ -81,7 +89,11 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
         let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
         return Err(said.map_or_else(|| format!("{} update failed", harness.label()), String::from));
     }
-    Ok(check(harness).await)
+    // "Updated" is read back, never assumed, so a recheck that cannot answer
+    // is a failure rather than the success its silence would look like.
+    check(harness)
+        .await
+        .map_err(|()| format!("{} updated, but its new version could not be read", harness.label()))
 }
 
 /// The same updater, in Terminal, for when the in-app run failed and the reader
@@ -89,7 +101,13 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
 #[tauri::command]
 pub async fn update_agent_in_terminal(harness: Harness) -> Result<(), String> {
     let bin = binpath::agent_binary(harness).await;
-    let mut line = crate::apps::sh_quote(&bin.to_string_lossy());
+    // The enriched `PATH` rides the line: Terminal inherits launchd's when Dray
+    // was opened from the Dock, where pi's `env node` and npm are not found.
+    let mut line = format!(
+        "PATH={} {}",
+        crate::apps::sh_quote(&agent_path(&bin)),
+        crate::apps::sh_quote(&bin.to_string_lossy())
+    );
     for arg in update_args(harness) {
         line.push(' ');
         line.push_str(arg);
@@ -119,25 +137,29 @@ fn command(bin: &std::path::Path) -> Command {
     command
 }
 
-async fn check(harness: Harness) -> Option<AgentUpdate> {
+/// `Err` where the answer could not be read; `Ok(None)` where the agent is
+/// current, not installed, or not Dray's to update.
+async fn check(harness: Harness) -> Result<Option<AgentUpdate>, ()> {
     if !binpath::agent_installed(harness).await {
-        return None;
+        return Ok(None);
     }
     let bin = binpath::agent_binary(harness).await;
     // The copy inside ChatGPT.app is updated by that app, and `codex update`
     // would install a second one beside it rather than touch it.
-    if bin.starts_with("/Applications") {
-        return None;
+    if bin == std::path::Path::new(binpath::CHATGPT_APP_CODEX) {
+        return Ok(None);
     }
     let (current, latest) = tokio::time::timeout(CHECK_TIMEOUT, versions(harness, &bin))
         .await
-        .ok()??;
-    newer(&latest, &current).then(|| AgentUpdate {
+        .ok()
+        .flatten()
+        .ok_or(())?;
+    Ok(newer(&latest, &current).then(|| AgentUpdate {
         harness,
         label: harness.label().to_string(),
         current,
         latest,
-    })
+    }))
 }
 
 /// Installed and latest, or `None` where either could not be read.
@@ -256,8 +278,11 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn what_the_installed_agents_answer() {
-        for update in check_agent_updates().await {
-            println!("{}: {} -> {}", update.label, update.current, update.latest);
+        for check in check_agent_updates().await {
+            match check.update {
+                Some(u) => println!("{}: {} -> {}", u.label, u.current, u.latest),
+                None => println!("{}: current", check.harness.label()),
+            }
         }
     }
 }
