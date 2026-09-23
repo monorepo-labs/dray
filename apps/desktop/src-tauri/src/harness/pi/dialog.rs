@@ -175,7 +175,7 @@ pub fn for_request(event: &PiEvent) -> Option<(String, PendingRequest, Vec<Quest
 /// and `select` would hand its extension as a choice nobody made.
 pub fn response(method: &str, id: &str, answers: &HashMap<String, String>) -> Value {
     let Some(answer) = answers.values().next() else {
-        return json!({"type": "extension_ui_response", "id": id, "cancelled": true});
+        return cancel(id);
     };
 
     match method {
@@ -186,6 +186,12 @@ pub fn response(method: &str, id: &str, answers: &HashMap<String, String>) -> Va
         }),
         _ => json!({"type": "extension_ui_response", "id": id, "value": answer}),
     }
+}
+
+/// The `cancelled` answer, which every dialog understands and resolves to the
+/// default it was built with.
+pub fn cancel(id: &str) -> Value {
+    json!({"type": "extension_ui_response", "id": id, "cancelled": true})
 }
 
 #[cfg(test)]

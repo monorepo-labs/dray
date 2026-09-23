@@ -110,7 +110,7 @@ async fn all() -> Vec<Model> {
 /// reader's manual Refresh: they want fx asked again, worth its ~2s startup,
 /// even for codex or grok.
 pub async fn refresh() {
-    forget();
+    CACHE.forget();
     // The catalog goes with it. Refresh is the reader saying a list on screen
     // is behind the world, and a model too new for [`catalog`]'s floor is one
     // of the two things they could mean by that.
@@ -184,11 +184,6 @@ pub async fn find(id: &ModelId) -> Option<Model> {
     all().await.into_iter().find(|m| &m.id == id)
 }
 
-/// Drops the cached answer, so the next read asks fx again.
-pub fn forget() {
-    CACHE.forget();
-}
-
 /// Moves fx onto another provider — fx's global setting, held in the `provider`
 /// field of `~/.fx/settings.json`. The composer says so out loud.
 ///
@@ -208,7 +203,7 @@ pub async fn set_provider(provider: &str) -> Result<()> {
         set_provider_via_cli(provider).await?;
     }
 
-    // No `forget()`: the cache is keyed by provider, so the list this switch
+    // No `CACHE.forget()`: the cache is keyed by provider, so the list this switch
     // moves *to* is read under its own key — cached from a previous visit or
     // probed once — and the list it moves *from* stays warm for the trip back.
     Ok(())

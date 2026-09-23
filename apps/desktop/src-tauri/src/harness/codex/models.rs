@@ -180,8 +180,8 @@ async fn probe() -> Result<Vec<Model>> {
         let answer = probe::ask(None, "model/list", params).await?;
         let Some(page) = read_page(&answer) else { break };
 
-        rows.extend(page.rows);
-        match page.next {
+        rows.extend(page.data);
+        match page.next_cursor {
             Some(next) => cursor = Some(next),
             None => break,
         }
@@ -246,23 +246,13 @@ struct ModelList {
     next_cursor: Option<Value>,
 }
 
-struct Page {
-    rows: Vec<Row>,
-    next: Option<Value>,
-}
-
 /// One page of `model/list`, or `None` where this build cannot read the shape.
 ///
 /// Read leniently for `map_model_usage`'s reason: a field Codex adds later must
 /// cost nothing, and a shape it changes must cost the *list* rather than the
 /// app — the caller reads no rows as "use the table".
-fn read_page(answer: &Value) -> Option<Page> {
-    let list = serde_json::from_value::<ModelList>(answer.clone()).ok()?;
-
-    Some(Page {
-        rows: list.data,
-        next: list.next_cursor.filter(|next| !next.is_null()),
-    })
+fn read_page(answer: &Value) -> Option<ModelList> {
+    serde_json::from_value(answer.clone()).ok()
 }
 
 /// Every page's rows folded into the picker's list.
@@ -319,7 +309,7 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
 /// One page, for a caller that has the whole answer in hand — the tests.
 #[cfg(test)]
 fn read_rows(answer: &Value) -> Vec<Model> {
-    read_page(answer).map(|page| fold(page.rows)).unwrap_or_default()
+    read_page(answer).map(|page| fold(page.data)).unwrap_or_default()
 }
 
 /// Reads one row, keeping the id this app has always persisted for it.
@@ -667,11 +657,11 @@ mod tests {
         let first = read_page(&page_one).unwrap();
         let second = read_page(&page_two).unwrap();
 
-        assert_eq!(first.next, Some(json!(2)));
-        assert_eq!(second.next, None);
+        assert_eq!(first.next_cursor, Some(json!(2)));
+        assert_eq!(second.next_cursor, None);
 
-        let mut rows = first.rows;
-        rows.extend(second.rows);
+        let mut rows = first.data;
+        rows.extend(second.data);
         let models = fold(rows);
 
         let tiers: Vec<(&str, bool)> = models
@@ -684,7 +674,7 @@ mod tests {
     /// The capture's own cursor is null, which is what one page looks like.
     #[test]
     fn a_single_page_answers_no_cursor() {
-        assert_eq!(read_page(&captured()).unwrap().next, None);
+        assert_eq!(read_page(&captured()).unwrap().next_cursor, None);
     }
 
     /// Discovered first, then the table for a generation the picker retired.

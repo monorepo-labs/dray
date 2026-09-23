@@ -9,9 +9,9 @@
 //! non-thought update.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent,
-    SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
+use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -38,14 +38,6 @@ const LOGIN_NEEDLES: &[&str] = &["login", "log in", "sign in", "not authenticate
 fn is_fx_diagnostic(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("[context]") || t.starts_with("skill discovery warning:")
-}
-
-/// A streamed block still open, and the text it has accumulated so far — the
-/// committed event supersedes the deltas, so the whole text is kept.
-struct OpenBlock {
-    id: String,
-    kind: BlockType,
-    text: String,
 }
 
 /// Per-session state the mapping needs across lines.
@@ -163,7 +155,7 @@ impl Mapper {
             } => {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
-                let name = name.unwrap_or_else(|| kind_name(kind).to_string());
+                let name = name.unwrap_or_else(|| kind.name().to_string());
                 let tool_type = tool_type(kind, &name);
                 let input = tool_input(kind, raw_input);
                 let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
@@ -285,11 +277,9 @@ impl Mapper {
                 }))]
             }
 
-            // Read by the read loop off the parsed update, not mapped: a title
-            // is a fact about the index row, not a transcript event.
-            SessionUpdate::SessionInfoUpdate { .. } => Vec::new(),
-
-            SessionUpdate::AvailableCommandsUpdate
+            // fx's own title, dropped: Dray titles fx sessions itself.
+            SessionUpdate::SessionInfoUpdate
+            | SessionUpdate::AvailableCommandsUpdate
             | SessionUpdate::UserMessageChunk
             | SessionUpdate::CurrentModeUpdate
             | SessionUpdate::Plan
@@ -395,15 +385,7 @@ impl Mapper {
         }
         self.turn_open = true;
         vec![
-            self.event(AgentEventPayload::TurnStarted(SessionInfo {
-                cwd: None,
-                model: None,
-                harness_version: None,
-                tools: Vec::new(),
-                mcp_servers: Vec::new(),
-                subagent_types: Vec::new(),
-                settings: None,
-            })),
+            self.event(AgentEventPayload::TurnStarted(SessionInfo::default())),
             self.event(AgentEventPayload::ModelRequestStarted),
         ]
     }
@@ -438,27 +420,11 @@ impl Mapper {
         out
     }
 
-    /// Closes the streaming block, committing its whole text: the deltas were
-    /// a preview and this is what the transcript keeps.
     fn close_open(&mut self) -> Vec<AgentEvent> {
-        let Some(block) = self.open.take() else {
-            return Vec::new();
-        };
-        let stop = self.event(AgentEventPayload::Delta(DeltaEvent::BlockStop {
-            block: block_ref(&block.id),
-        }));
-        let committed = match block.kind {
-            BlockType::Thinking => self.event(AgentEventPayload::Reasoning {
-                block: Some(block_ref(&block.id)),
-                encrypted: block.text.is_empty(),
-                text: block.text,
-            }),
-            _ => self.event(AgentEventPayload::AssistantText {
-                block: Some(block_ref(&block.id)),
-                text: block.text,
-            }),
-        };
-        vec![stop, committed]
+        match self.open.take() {
+            Some(block) => acp::commit(block, |payload| self.event(payload)),
+            None => Vec::new(),
+        }
     }
 
     /// Mints an event the read loop needs but no update carried — a permission
@@ -493,15 +459,6 @@ impl Mapper {
     }
 }
 
-/// fx has no message/block split — one message id is one block — so the index
-/// is always zero.
-fn block_ref(id: &str) -> BlockRef {
-    BlockRef {
-        message_id: id.to_string(),
-        index: 0,
-    }
-}
-
 /// ACP's kind onto Dray's, which is what lets a tool fx renames tomorrow still
 /// draw as what it is.
 ///
@@ -523,14 +480,7 @@ fn tool_type(kind: ToolKind, name: &str) -> ToolType {
         "glob_files" => return ToolType::Search,
         _ => {}
     }
-    match kind {
-        ToolKind::Read => ToolType::FileRead,
-        ToolKind::Edit | ToolKind::Delete | ToolKind::Move => ToolType::FileEdit,
-        ToolKind::Search => ToolType::Search,
-        ToolKind::Execute => ToolType::Shell,
-        ToolKind::Fetch => ToolType::Web,
-        ToolKind::Think | ToolKind::SwitchMode | ToolKind::Other => ToolType::Other,
-    }
+    kind.tool_type()
 }
 
 /// What a delegated run is called where a label is wanted. fx names its tool
@@ -551,23 +501,6 @@ fn status_word(status: ToolStatus) -> &'static str {
         "failed"
     } else {
         "completed"
-    }
-}
-
-/// A name for a call that arrived without one — fx sends one on every capture,
-/// so this is the line-survives-anything fallback.
-fn kind_name(kind: ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Read => "read",
-        ToolKind::Edit => "edit",
-        ToolKind::Delete => "delete",
-        ToolKind::Move => "move",
-        ToolKind::Search => "search",
-        ToolKind::Execute => "shell",
-        ToolKind::Fetch => "fetch",
-        ToolKind::Think => "think",
-        ToolKind::SwitchMode => "switch_mode",
-        ToolKind::Other => "tool",
     }
 }
 

@@ -9,9 +9,9 @@
 //! block runs until an update of another kind arrives.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BackgroundTask, BlockRef, BlockType,
-    DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BackgroundTask, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
+use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -33,14 +33,6 @@ const LOGIN_NEEDLES: &[&str] = &["authentication required", "not authenticated",
 /// on `subagent_spawned` (`general-purpose`), so this is the fallback alone.
 const SUBAGENT_LABEL: &str = "Subagent";
 
-/// A streamed block still open, and the text it has accumulated — the committed
-/// event supersedes the deltas, so the whole text is kept.
-struct OpenBlock {
-    id: String,
-    kind: BlockType,
-    text: String,
-}
-
 /// Per-session state the mapping needs across lines.
 pub struct Mapper {
     /// Dray's own id, which for grok is also grok's: `_meta.sessionId` on
@@ -61,10 +53,6 @@ pub struct Mapper {
     window: u64,
     /// Text a running call has streamed, by call id.
     outputs: HashMap<String, String>,
-    /// The display title a call's first update carried, so the closing event can
-    /// still be joined to a name — the opening `tool_call` has only the bare
-    /// tool name on it.
-    names: HashMap<String, String>,
     /// `spawn_subagent` calls that have opened and not yet been claimed by a
     /// `subagent_spawned`, with the brief each carried, newest last.
     ///
@@ -92,7 +80,6 @@ impl Mapper {
             occupancy: None,
             window,
             outputs: HashMap::new(),
-            names: HashMap::new(),
             pending_spawns: Vec::new(),
             runs: HashMap::new(),
             tasks: HashSet::new(),
@@ -155,10 +142,9 @@ impl Mapper {
                 let name = meta
                     .name()
                     .map(str::to_string)
-                    .unwrap_or_else(|| kind_name(kind).to_string());
+                    .unwrap_or_else(|| kind.name().to_string());
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
-                self.names.insert(tool_call_id.clone(), name.clone());
                 let call_type = tool_type(meta.kind(), &name, kind);
                 if call_type == ToolType::SubagentSpawn {
                     // The brief is on this line and on the notification behind
@@ -201,10 +187,7 @@ impl Mapper {
                         _ => None,
                     })
                     .collect();
-                let diffs: Vec<&ToolContent> = content
-                    .iter()
-                    .filter(|c| matches!(c, ToolContent::Diff { .. }))
-                    .collect();
+                let has_diff = content.iter().any(|c| matches!(c, ToolContent::Diff));
 
                 let Some(status) = status.filter(|s| s.is_final()) else {
                     // Streamed output, kept for the result rather than drawn.
@@ -225,7 +208,7 @@ impl Mapper {
 
                 let streamed = self.outputs.remove(&tool_call_id).unwrap_or_default();
                 let result = ToolResult {
-                    text: result_text(&raw_output, streamed, text, &diffs),
+                    text: result_text(&raw_output, streamed, text, has_diff),
                     is_error: status == ToolStatus::Failed,
                     structured: None,
                     exit_code: raw_output
@@ -238,7 +221,6 @@ impl Mapper {
                     images: Vec::new(),
                 };
 
-                self.names.remove(&tool_call_id);
                 vec![
                     self.event(AgentEventPayload::ToolCallCompleted {
                         call_id: tool_call_id,
@@ -324,7 +306,7 @@ impl Mapper {
             // about what the child is doing, which is the one field the panel's
             // live status line draws. Dropped rather than drawn as a row that
             // says the same thing every few seconds.
-            GrokUpdate::SubagentProgress(_) => Vec::new(),
+            GrokUpdate::SubagentProgress => Vec::new(),
 
             GrokUpdate::AutoCompactCompleted {
                 tokens_before,
@@ -465,7 +447,6 @@ impl Mapper {
         });
         self.turn_open = false;
         self.outputs.clear();
-        self.names.clear();
         // A spawn whose child never reported — a call that failed outright —
         // would otherwise be claimed by the next turn's first subagent and hang
         // that run off a row from the turn before.
@@ -482,15 +463,7 @@ impl Mapper {
         }
         self.turn_open = true;
         vec![
-            self.event(AgentEventPayload::TurnStarted(SessionInfo {
-                cwd: None,
-                model: None,
-                harness_version: None,
-                tools: Vec::new(),
-                mcp_servers: Vec::new(),
-                subagent_types: Vec::new(),
-                settings: None,
-            })),
+            self.event(AgentEventPayload::TurnStarted(SessionInfo::default())),
             self.event(AgentEventPayload::ModelRequestStarted),
         ]
     }
@@ -527,27 +500,11 @@ impl Mapper {
         out
     }
 
-    /// Closes the streaming block, committing its whole text: the deltas were a
-    /// preview and this is what the transcript keeps.
     fn close_open(&mut self) -> Vec<AgentEvent> {
-        let Some(block) = self.open.take() else {
-            return Vec::new();
-        };
-        let stop = self.event(AgentEventPayload::Delta(DeltaEvent::BlockStop {
-            block: block_ref(&block.id),
-        }));
-        let committed = match block.kind {
-            BlockType::Thinking => self.event(AgentEventPayload::Reasoning {
-                block: Some(block_ref(&block.id)),
-                encrypted: block.text.is_empty(),
-                text: block.text,
-            }),
-            _ => self.event(AgentEventPayload::AssistantText {
-                block: Some(block_ref(&block.id)),
-                text: block.text,
-            }),
-        };
-        vec![stop, committed]
+        match self.open.take() {
+            Some(block) => acp::commit(block, |payload| self.event(payload)),
+            None => Vec::new(),
+        }
     }
 
     /// The spawning call this child belongs to, by brief where one matches and
@@ -666,15 +623,6 @@ impl Mapper {
     }
 }
 
-/// grok has no message/block split — one run of chunks is one block — so the
-/// index is always zero.
-fn block_ref(id: &str) -> BlockRef {
-    BlockRef {
-        message_id: id.to_string(),
-        index: 0,
-    }
-}
-
 /// grok's own tool class onto Dray's, with ACP's as the fallback.
 ///
 /// grok's `_meta["x.ai/tool"].kind` is preferred because it is on the **opening**
@@ -701,31 +649,7 @@ fn tool_type(xai_kind: Option<&str>, name: &str, acp: ToolKind) -> ToolType {
         "write" | "search_replace" => return ToolType::FileEdit,
         _ => {}
     }
-    match acp {
-        ToolKind::Read => ToolType::FileRead,
-        ToolKind::Edit | ToolKind::Delete | ToolKind::Move => ToolType::FileEdit,
-        ToolKind::Search => ToolType::Search,
-        ToolKind::Execute => ToolType::Shell,
-        ToolKind::Fetch => ToolType::Web,
-        ToolKind::Think | ToolKind::SwitchMode | ToolKind::Other => ToolType::Other,
-    }
-}
-
-/// A name for a call that arrived without one — grok names every one on every
-/// capture, so this is the line-survives-anything fallback.
-fn kind_name(kind: ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Read => "read",
-        ToolKind::Edit => "edit",
-        ToolKind::Delete => "delete",
-        ToolKind::Move => "move",
-        ToolKind::Search => "search",
-        ToolKind::Execute => "shell",
-        ToolKind::Fetch => "fetch",
-        ToolKind::Think => "think",
-        ToolKind::SwitchMode => "switch_mode",
-        ToolKind::Other => "tool",
-    }
+    acp.tool_type()
 }
 
 /// The call's arguments as the row draws them. Always an object.
@@ -765,14 +689,14 @@ fn result_text(
     raw_output: &Option<super::parser::RawOutput>,
     streamed: String,
     closing: String,
-    diffs: &[&ToolContent],
+    has_diff: bool,
 ) -> String {
     if let Some(output) = raw_output.as_ref().and_then(|r| r.output_for_prompt.as_ref()) {
         if !output.is_empty() {
             return strip_exit_line(output).to_string();
         }
     }
-    if !diffs.is_empty() {
+    if has_diff {
         return String::new();
     }
     if !closing.is_empty() {

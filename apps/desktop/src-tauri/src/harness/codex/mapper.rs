@@ -130,15 +130,7 @@ impl Mapper {
         self.turn_id = Some(turn.turn.id.clone());
 
         vec![
-            self.event(AgentEventPayload::TurnStarted(SessionInfo {
-                cwd: None,
-                model: None,
-                harness_version: None,
-                tools: Vec::new(),
-                mcp_servers: Vec::new(),
-                subagent_types: Vec::new(),
-                settings: None,
-            })),
+            self.event(AgentEventPayload::TurnStarted(SessionInfo::default())),
             // Codex has no `status: requesting`. Without one minted here the
             // working indicator would fire once and never again, which is the
             // exact bug CLAUDE.md describes fixing for Claude: an indicator
@@ -197,12 +189,6 @@ impl Mapper {
 
     fn item_started(&mut self, started: ItemNotification) -> Vec<AgentEvent> {
         match started.item {
-            // Dropped, and this is the one mapping that would double something
-            // visible. Codex echoes our prompt back as an item; Dray already
-            // minted its own carrying the tree baseline, the images and the
-            // issue links, none of which the echo has.
-            ThreadItem::UserMessage { .. } => Vec::new(),
-
             ThreadItem::AgentMessage { id, .. } => {
                 self.open_blocks.insert(id.clone());
                 vec![self.event(AgentEventPayload::Delta(DeltaEvent::BlockStart {
@@ -379,6 +365,7 @@ impl Mapper {
                 vec![self.event(AgentEventPayload::ContextCompactionStarted)]
             }
 
+            // `Other` includes Codex's echo of our prompt, which Dray already minted.
             ThreadItem::Extension { .. } | ThreadItem::Other => Vec::new(),
         }
     }
@@ -398,7 +385,7 @@ impl Mapper {
 
     fn item_completed(&mut self, done: ItemNotification) -> Vec<AgentEvent> {
         match done.item {
-            ThreadItem::UserMessage { .. } | ThreadItem::Other => Vec::new(),
+            ThreadItem::Other => Vec::new(),
 
             ThreadItem::AgentMessage { id, text, .. } => {
                 let mut out = self.close_block(&id);

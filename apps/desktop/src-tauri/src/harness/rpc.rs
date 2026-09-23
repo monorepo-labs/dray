@@ -26,7 +26,7 @@ use tokio::{
 ///
 /// `Close` exists because dropping a client cannot close stdin: every clone
 /// holds a sender, and the read loop holds one for the life of the session. So
-/// the only way to hand the child an EOF is to say so. Codex never does.
+/// the only way to hand the child an EOF is to say so.
 pub enum Outbound {
     Line(String),
     Close,

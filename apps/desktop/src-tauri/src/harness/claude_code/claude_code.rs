@@ -181,17 +181,10 @@ pub async fn init(
     };
 
     let seq = Arc::new(AtomicU64::new(seq_start));
-    // Two handles on purpose: the mapper takes ownership of one to number the
-    // events it builds, and the flush needs its own to number the prompts it
-    // delivers through the same counter — `seq` is the ordering key, so a
-    // second counter would put gaps in it.
     let stdout_seq = seq.clone();
-    let flush_seq = seq.clone();
 
     let queued: QueuedMessages = Arc::new(Mutex::new(Vec::new()));
     let stdout_queued = queued.clone();
-    let flush_events = events.clone();
-    let flush_stdin = stdin.clone();
 
     let stdout_session_id = session_id.to_string();
     let stdout_cwd = session_cwd.to_string();
@@ -209,9 +202,6 @@ pub async fn init(
             stdout_pending,
             stdout_stdin,
             stdout_queued,
-            flush_seq,
-            flush_events,
-            flush_stdin,
             &app,
         )
         .await
@@ -250,21 +240,20 @@ async fn read_stdout(
     session_id: &str,
     session_cwd: &str,
     events: Arc<Mutex<Vec<AgentEvent>>>,
-    stdout_seq: Arc<AtomicU64>,
+    seq: Arc<AtomicU64>,
     status: Arc<Mutex<StatusTracker>>,
     pending_permissions: PendingPermissions,
     stdin: Arc<Mutex<ChildStdin>>,
     queued: QueuedMessages,
-    flush_seq: Arc<AtomicU64>,
-    flush_events: Arc<Mutex<Vec<AgentEvent>>>,
-    flush_stdin: Arc<Mutex<ChildStdin>>,
     app: &AppHandle,
 ) -> Result<()> {
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();
     // One mapper per session: it carries state across lines (the open message
-    // id, the seq counter), so it must outlive the loop body.
-    let mut mapper = claude_code::mapper::Mapper::new(stdout_seq, pending_permissions);
+    // id, the seq counter), so it must outlive the loop body. It shares `seq`
+    // with the flush, which numbers the prompts it delivers through the same
+    // counter — a second counter would put gaps in the ordering key.
+    let mut mapper = claude_code::mapper::Mapper::new(seq.clone(), pending_permissions);
 
     // Everything past the mapper is Dray's, not Claude's, and lives in
     // `session` so a second harness cannot grow its own persistence rules.
@@ -275,9 +264,9 @@ async fn read_stdout(
         events: &events,
         status: &status,
         queued: &queued,
-        flush_seq: &flush_seq,
-        flush_events: &flush_events,
-        flush_transport: &crate::session::Transport::Lines(flush_stdin.clone()),
+        flush_seq: &seq,
+        flush_events: &events,
+        flush_transport: &crate::session::Transport::Lines(stdin.clone()),
     };
 
     while let Some(line) = lines.next_line().await? {

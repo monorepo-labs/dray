@@ -15,13 +15,10 @@ use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
-use super::rpc::{Incoming, PiClient, HANDSHAKE_TIMEOUT};
+use super::rpc::{PiClient, HANDSHAKE_TIMEOUT};
 
 /// How long a cached answer stands.
 ///
@@ -71,40 +68,7 @@ pub fn forget() {
 
 /// Spawns a throwaway pi, asks it, kills it.
 async fn probe() -> Result<Vec<Model>> {
-    let bin = crate::binpath::pi().await;
-    let mut child = Command::new(&bin)
-        .args([
-            "--mode",
-            "rpc",
-            // Mandatory, not tidiness: without it every probe writes a session
-            // file into the reader's own `~/.pi/agent/sessions/`, and their
-            // session list fills with empty runs Dray started.
-            "--no-session",
-        ])
-        .env("PATH", crate::harness::agent_path(&bin))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("couldn't start pi to ask for its models")?;
-
-    let stdin = child.stdin.take().context("failed to take stdin")?;
-    let stdout = child.stdout.take().context("failed to take stdout")?;
-    let client = PiClient::new(stdin);
-
-    tokio::spawn({
-        let client = client.clone();
-        async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                // Only answers matter here. The probe sends no prompt, so
-                // anything else pi says is not about us.
-                if let Incoming::Malformed = client.accept(&line).await {
-                    continue;
-                }
-            }
-        }
-    });
+    let (mut child, client) = super::spawn_probe(None, "models").await?;
 
     let listed = client
         .request_within("get_available_models", Value::Null, HANDSHAKE_TIMEOUT)
@@ -250,15 +214,7 @@ fn efforts_from_levels(levels: &Value) -> Vec<Effort> {
     names
         .iter()
         .filter_map(Value::as_str)
-        .filter_map(|name| match name {
-            "low" => Some(Effort::Low),
-            "medium" => Some(Effort::Medium),
-            "high" => Some(Effort::High),
-            "xhigh" => Some(Effort::Xhigh),
-            "max" => Some(Effort::Max),
-            "ultra" => Some(Effort::Ultra),
-            _ => None,
-        })
+        .filter_map(Effort::from_arg)
         .collect()
 }
 

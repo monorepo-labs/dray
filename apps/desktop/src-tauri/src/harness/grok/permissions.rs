@@ -4,10 +4,8 @@
 //! something replies, so silence stalls the session exactly as an unanswered
 //! `can_use_tool` does. What differs is what the reader is shown:
 //!
-//! - `session/request_permission` is a consent card, and **the options are
-//!   grok's own** — it names each with an `optionId` and a `kind`, and the
-//!   button carries the id back untouched inside the outcome envelope, so a
-//!   decision Dray never composes is one it can never compose wrongly.
+//! - `session/request_permission` is a consent card whose options are grok's
+//!   own, built by [`acp::pending_for`].
 //! - `_x.ai/ask_user_question` is a *question*, not a consent: the call may
 //!   always run and the answer **is** the reply. Drawn as the form Claude
 //!   Code's `AskUserQuestion` already draws.
@@ -17,6 +15,7 @@
 use crate::events::{
     PermissionBehavior, PermissionOption, PermissionOptionKind, Question, QuestionOption,
 };
+use crate::harness::acp;
 use crate::harness::claude_code::permissions::{PendingRequest, Reply, ResolvedOption};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -28,89 +27,8 @@ pub fn pending_for(
     request: &PermissionRequest,
     rpc_id: i64,
 ) -> (PendingRequest, Vec<PermissionOption>) {
-    let resolved = build_options(request);
-    let offered = resolved.iter().map(|r| r.option.clone()).collect();
-
-    let pending = PendingRequest {
-        tool_use_id: request.tool_call.tool_call_id.clone(),
-        tool_name: request
-            .tool_call
-            .meta
-            .name()
-            .unwrap_or("tool")
-            .to_string(),
-        // grok rebuilds nothing from the answer — it is the option alone.
-        input: Value::Null,
-        options: resolved
-            .into_iter()
-            .map(|r| (r.option.id.clone(), r))
-            .collect(),
-        reply: Reply::Rpc(rpc_id),
-    };
-
-    (pending, offered)
-}
-
-/// The reply `session/request_permission` wants for a picked option.
-fn selected(option_id: &str) -> Value {
-    json!({"outcome": {"outcome": "selected", "optionId": option_id}})
-}
-
-/// One button per option grok offered, in the order the card reads: allow
-/// first, standing grants in the middle, refusal last. A kind this build cannot
-/// spell is dropped rather than drawn generically.
-fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
-    use PermissionBehavior::{Allow, Deny};
-    use PermissionOptionKind as Kind;
-
-    let mut options: Vec<ResolvedOption> = request
-        .options
-        .iter()
-        .filter_map(|choice| {
-            let (kind, behavior) = match choice.kind.as_str() {
-                "allow_once" => (Kind::Once, Allow),
-                "allow_always" => (Kind::AlwaysRule, Allow),
-                "reject_once" | "reject_always" => (Kind::Deny, Deny),
-                _ => return None,
-            };
-            Some(ResolvedOption {
-                option: PermissionOption {
-                    id: format!("grok-{}", choice.option_id),
-                    // grok's own words, which say what the grant covers: "Yes,
-                    // and don't ask again for bash commands", "Yes, allow all
-                    // edits during this session".
-                    label: choice.name.clone(),
-                    kind,
-                    behavior,
-                },
-                updates: Vec::new(),
-                decision: Some(selected(&choice.option_id)),
-            })
-        })
-        .collect();
-
-    options.sort_by_key(|o| match o.option.kind {
-        Kind::Once => 0,
-        Kind::AlwaysRule | Kind::AlwaysDirectory | Kind::SwitchMode => 1,
-        Kind::Deny => 2,
-    });
-
-    // A card with no way to say no cannot be answered honestly. ACP's
-    // `cancelled` outcome is always a legal answer, whatever was offered.
-    if !options.iter().any(|o| o.option.behavior == Deny) {
-        options.push(ResolvedOption {
-            option: PermissionOption {
-                id: "grok-cancelled".to_string(),
-                label: "Deny".to_string(),
-                kind: Kind::Deny,
-                behavior: Deny,
-            },
-            updates: Vec::new(),
-            decision: Some(json!({"outcome": {"outcome": "cancelled"}})),
-        });
-    }
-
-    options
+    let call = &request.tool_call;
+    acp::pending_for("grok", &call.tool_call_id, call.meta.name().unwrap_or("tool"), &request.options, rpc_id)
 }
 
 /// A plan approval, held like any other request but drawn with two buttons.
@@ -254,7 +172,6 @@ mod tests {
 
     fn request(kinds: &[(&str, &str)]) -> PermissionRequest {
         PermissionRequest {
-            session_id: "s".into(),
             tool_call: ToolCallRef {
                 tool_call_id: "call-1".into(),
                 ..Default::default()

@@ -24,8 +24,6 @@ export type BrowserTab = {
   canGoForward: boolean;
   /// The main frame's last load failure, from Chromium's own words.
   error: string | null;
-  /// CEF's level: 0 is 100%, a step is ×1.2.
-  zoom: number;
 };
 
 const EMPTY: BrowserTab[] = [];
@@ -219,10 +217,6 @@ export function closeTab(sessionId: string, id: number) {
 
 export function navigate(sessionId: string, action: "back" | "forward" | "reload" | "stop" | "hard_reload") {
   return invoke("browser_nav", { sessionId, action });
-}
-
-export function zoom(sessionId: string, action: "in" | "out" | "reset") {
-  return invoke("browser_zoom", { sessionId, action });
 }
 
 export function openDevTools(sessionId: string) {
