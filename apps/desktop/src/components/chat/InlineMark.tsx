@@ -2,7 +2,6 @@ import type { ReactElement } from "react";
 
 import type { Segment } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
-import { cn } from "@/lib/utils";
 
 /// The inline marks a prompt bubble draws, or `null` for a segment that is not
 /// one.
@@ -61,10 +60,7 @@ export function inlineMark(segment: Segment, key: number): ReactElement | null {
           key={key}
           type="button"
           title={segment.href}
-          className={cn(
-            "cursor-pointer underline decoration-current/60 underline-offset-2",
-            "hover:decoration-current",
-          )}
+          className="cursor-pointer font-medium underline decoration-current/60 underline-offset-2"
           onClick={(e) => segment.href && openLink(segment.href, e)}
         >
           {inner}

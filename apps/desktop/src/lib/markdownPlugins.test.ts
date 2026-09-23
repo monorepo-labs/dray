@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
-  findBareUrls,
   linkBareUrls,
   REHYPE_PLUGINS,
   TABLE_CELL_CLASS,
   walk,
   wrapCells,
 } from "./markdownPlugins";
+import { findBareUrls } from "./highlight";
 import { isRelativePath } from "./filePath";
 
 type Hast = {

@@ -39,7 +39,8 @@ export type Segment = {
   /// the mark rather than the markup. `text` keeps the delimiters, which is what
   /// preserves the round trip the composer's overlay is laid out by.
   inner?: string;
-  /// Where a markdown link points. `http(s)` only, the same bar `urlAt` takes.
+  /// Where a markdown link or a URL points — a bare host's carries the scheme
+  /// its text leaves out.
   href?: string;
   /// The line a path's locator names. Only on a `path`, whose `inner` is the
   /// file without it and whose `text` keeps it, so the whole reference is one
@@ -86,19 +87,59 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
 /// only where the URL opened one, as Wikipedia's do.
 const URL_TAIL = /[.,;:!?'"»›]+$/;
 
-/// The URL a run of non-space characters starting at `text[i]` holds, or
-/// `null`. Only `http(s)://` — a bare `example.com` is a word until proven
-/// otherwise, and the cost of a miss is one un-clickable link.
-function urlAt(text: string, i: number): string | null {
-  if (!/^https?:\/\/\S/i.test(text.slice(i, i + 9))) return null;
-  let end = i;
-  while (end < text.length && !SPACE.test(text[end])) end += 1;
-  return trimUrlTail(text.slice(i, end));
+/// A bare host in prose — `drayhq.com/docs`, `localhost:3000` — with no scheme
+/// in front of it.
+///
+/// The TLD list is the guess, and it is short on purpose: a file name is the
+/// false positive, so every TLD that is also a common extension is left out
+/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`). A miss costs one plain
+/// word; a hit on `README.md` costs a link to a stranger's site. Localhost and
+/// a bare IP need a port, or the word "localhost" in a sentence would link.
+/// Not after `/`, `@`, `.` or a word character, so a path segment or an email
+/// is never cut in half — and not before `.` and a word character either, or
+/// `config.dev.ts` links its first half.
+const BARE_URL =
+  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:\/[^\s<>]*)?/gi;
+
+/// The same rule anchored at one index, for the scanner below.
+const BARE_URL_AT = new RegExp(BARE_URL.source, "iy");
+
+type Url = { text: string; href: string };
+
+/// A bare host with the scheme it opens under: `http` for a local address,
+/// which serves none of them over TLS, `https` for the rest.
+function bareUrl(match: string): Url {
+  const text = trimUrlTail(match);
+  return { text, href: `${/^(localhost|\d)/i.test(text) ? "http" : "https"}://${text}` };
+}
+
+export type BareUrl = { start: number; end: number; href: string };
+
+/// Every bare host in `text`.
+export function findBareUrls(text: string): BareUrl[] {
+  return [...text.matchAll(BARE_URL)].map((m) => {
+    const { text: url, href } = bareUrl(m[0]);
+    return { start: m.index, end: m.index + url.length, href };
+  });
+}
+
+/// The URL a run starting at `text[i]` holds, or `null`: an `http(s)://` one
+/// read to the next space, or a bare host by [BARE_URL]'s rule.
+function urlAt(text: string, i: number): Url | null {
+  if (/^https?:\/\/\S/i.test(text.slice(i, i + 9))) {
+    let end = i;
+    while (end < text.length && !SPACE.test(text[end])) end += 1;
+    const url = trimUrlTail(text.slice(i, end));
+    return { text: url, href: url };
+  }
+  BARE_URL_AT.lastIndex = i;
+  const match = BARE_URL_AT.exec(text);
+  return match ? bareUrl(match[0]) : null;
 }
 
 /// `url` without the sentence punctuation after it, and without a closing paren
 /// it never opened.
-export function trimUrlTail(url: string): string {
+function trimUrlTail(url: string): string {
   let out = url.replace(URL_TAIL, "");
   while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
     out = out.slice(0, -1);
@@ -459,12 +500,14 @@ export function highlightSegments(text: string): Segment[] {
 
   for (; i < text.length; i += 1) {
     const opener = text[i];
-    if (opener === "h" && (i === 0 || SPACE.test(text[i - 1]) || OPENERS.includes(text[i - 1]))) {
-      const url = urlAt(text, i);
-      if (!url) continue;
+    const url =
+      /[a-z0-9]/i.test(opener) && (i === 0 || SPACE.test(text[i - 1]) || OPENERS.includes(text[i - 1]))
+        ? urlAt(text, i)
+        : null;
+    if (url) {
       if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
-      segments.push({ kind: "url", text: url });
-      plainFrom = i + url.length;
+      segments.push({ kind: "url", text: url.text, href: url.href });
+      plainFrom = i + url.text.length;
       i = plainFrom - 1;
       continue;
     }

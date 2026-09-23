@@ -120,15 +120,28 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  it("marks a bare host and gives it a scheme to open under", () => {
+    expect(highlightSegments("try drayhq.com/docs, or localhost:3000.")).toEqual([
+      { kind: "text", text: "try " },
+      { kind: "url", text: "drayhq.com/docs", href: "https://drayhq.com/docs" },
+      { kind: "text", text: ", or " },
+      { kind: "url", text: "localhost:3000", href: "http://localhost:3000" },
+      { kind: "text", text: "." },
+    ]);
+    expect(highlightSegments("edit README.md, src/foo.com, me@x.com")).toEqual([
+      { kind: "text", text: "edit README.md, src/foo.com, me@x.com" },
+    ]);
+  });
+
   it("marks an http(s) URL and leaves the sentence's punctuation outside it", () => {
     expect(highlightSegments("see https://example.com/a?b=1). ok")).toEqual([
       { kind: "text", text: "see " },
-      { kind: "url", text: "https://example.com/a?b=1" },
+      { kind: "url", text: "https://example.com/a?b=1", href: "https://example.com/a?b=1" },
       { kind: "text", text: "). ok" },
     ]);
     expect(highlightSegments("(https://en.wikipedia.org/wiki/Foo_(bar))")).toEqual([
       { kind: "text", text: "(" },
-      { kind: "url", text: "https://en.wikipedia.org/wiki/Foo_(bar)" },
+      { kind: "url", text: "https://en.wikipedia.org/wiki/Foo_(bar)", href: "https://en.wikipedia.org/wiki/Foo_(bar)" },
       { kind: "text", text: ")" },
     ]);
     expect(highlightSegments("nothttps://x.y and http:// alone")).toEqual([
@@ -306,7 +319,7 @@ describe("highlightSegments", () => {
     // URL — that rule is older than this one and unchanged by it.
     expect(highlightSegments("[label] (https://example.com)")).toEqual([
       { kind: "text", text: "[label] (" },
-      { kind: "url", text: "https://example.com" },
+      { kind: "url", text: "https://example.com", href: "https://example.com" },
       { kind: "text", text: ")" },
     ]);
   });
