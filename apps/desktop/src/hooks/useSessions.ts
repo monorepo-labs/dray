@@ -201,7 +201,7 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
 
 /// A composer pick made on a session and not yet sent — see `unsentPicks`.
 type UnsentPick = Partial<Pick<SessionIndexItem, "model" | "effort" | "permissionMode" | "fast">> & {
-  efforts?: Partial<Record<ModelId, Effort>>;
+  efforts?: EffortByModel;
 };
 
 export function useSessions() {
@@ -337,18 +337,13 @@ export function useSessions() {
     // pick only at the send, so restoring from it alone put the old model back
     // over one the reader had just chosen. Cleared once a send records it.
     //
-    // `efforts` holds every level picked in the session, per model: the index
+    // `efforts` is a snapshot of the session's whole per-model map: the index
     // keeps one model/effort pair, so a level set on a model the reader then
     // switched away from would otherwise be gone on the way back.
     const unsentPicks = useRef(new Map<string, UnsentPick>());
     const rememberPick = (pick: UnsentPick) => {
       if (!selectedSessionId) return;
-      const prev = unsentPicks.current.get(selectedSessionId);
-      unsentPicks.current.set(selectedSessionId, {
-        ...prev,
-        ...pick,
-        efforts: { ...prev?.efforts, ...pick.efforts },
-      });
+      unsentPicks.current.set(selectedSessionId, { ...unsentPicks.current.get(selectedSessionId), ...pick });
     };
     /// A catch handler for a *session-scoped* action starting now. Reports into
     /// the slot only while the reader has not navigated since — taken at the
@@ -411,19 +406,15 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
   // is running: taking the new model's own would reach the index and the
   // picker but not the prompt queued behind this turn.
   const carried = !nextEffort && lockedMidTurn(harness, "effort", busy) ? effort : null;
-  if (carried) setEffortByModel((prev) => ({ ...prev, [nextModelId]: carried }));
-  // A null effort still overwrites: the index's level belongs to the old model.
   const level = nextEffort ?? carried;
-  rememberPick({
-    model: nextModelId,
-    effort: level,
-    efforts: level ? { [nextModelId]: level } : undefined,
-  });
+  const efforts = level ? { ...effortByModel, [nextModelId]: level } : effortByModel;
+  if (level) setEffortByModel(efforts);
+  // A null effort still overwrites: the index's level belongs to the old model.
+  rememberPick({ model: nextModelId, effort: level, efforts });
   // fx's list is per-provider, so a pick also belongs to the provider on screen
   // — remembered under it so a round trip through another provider comes back
   // to this model rather than to "let fx decide".
   if (harness === "fx") recordFxPick(models[0]?.provider, nextModelId);
-  if (nextEffort) setEffortByModel({ ...effortByModel, [nextModelId]: nextEffort });
   if (selectedSessionId) return;
   // Filed under the harness on screen, which is the only one that could have
   // offered this model — so coming back to that agent finds this pick rather
@@ -1134,11 +1125,8 @@ const restoreSessionControls = (indexed: SessionIndexItem) => {
   // entry; the rest comes from the reader's defaults. Rebuilt from prefs rather
   // than merged into the live map, or one session's level leaks into the next
   // session's model switch.
-  setEffortByModel({
-    ...prefs.effortByModel,
-    ...pick?.efforts,
-    ...(item.effort ? { [restored]: item.effort } : {}),
-  });
+  const efforts = pick?.efforts ?? prefs.effortByModel;
+  setEffortByModel(item.effort ? { ...efforts, [restored]: item.effort } : efforts);
   setPermissionModeState(item.permissionMode);
   setFastState(item.fast);
 };

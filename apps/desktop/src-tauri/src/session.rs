@@ -964,8 +964,7 @@ impl SessionManager {
                         fx.defer_controls(DeferredControls {
                             model: model_spec.clone(),
                             effort,
-                            effort_before: s.effort,
-                            mode: Some(permission_mode),
+                            mode: permission_mode,
                         });
                     }
                     if let Some(queued) = s
@@ -2801,7 +2800,9 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     // Spawned rather than made fire-and-forget so the send still reports its own
     // failure. Ordering is unaffected — the queue was drained under one lock, and
     // `flush_queued` already logs rather than propagates.
-    if matches!(ctx.flush_transport, Transport::Rpc(_)) {
+    // fx for the same reason: its deferred settings are requests too, applied
+    // at the flush before the queued prompt opens.
+    if matches!(ctx.flush_transport, Transport::Rpc(_) | Transport::Fx(_)) {
         let session_id = ctx.session_id.to_string();
         let harness = ctx.harness;
         let queued = ctx.queued.clone();
@@ -2848,15 +2849,9 @@ async fn apply_live_controls(
     fast: bool,
     app: &AppHandle,
 ) -> Result<()> {
-    // The other side of the respawn rule above, and read off the same
-    // table so the two cannot disagree. They were two equality tests
-    // against two different harnesses, which is one edit away from a
-    // pick that neither respawns for nor applies — recorded in the
-    // index and never reaching the child.
-    //
-    // Reaching here with a changed pick at all means the respawn was
-    // skipped because work was outstanding. The index still records it,
-    // so the next idle send applies it.
+    // The other side of `send_msg`'s respawn rule, read off the same table so
+    // the two cannot disagree: a pick neither respawns for nor applies would
+    // be recorded in the index and never reach the child.
     let caps = s.harness.caps();
 
     if caps.applies_model_in_place && s.model != *model {
@@ -2870,23 +2865,13 @@ async fn apply_live_controls(
                     // The send still fails — the reader asked for a
                     // model they are not getting, and their prompt is
                     // better kept in the composer than run on another
-                    // one. What must not survive it is the optimistic
-                    // touch above: fx moves the provider ahead of a
-                    // cross-provider model, so a refusal here can leave
-                    // the child on a model neither side picked, and an
-                    // index still naming the asked-for one sends every
-                    // later prompt back into the same refusal.
-                    // `set_model` has already adopted what fx answered.
-                    //
-                    // **Every field is the session's own here, which is
-                    // what makes this different from the effort arm
-                    // below.** That one records `s.effort` beside the
-                    // *requested* mode and fast, because the blocks
-                    // applying those still run after it. This returns,
-                    // so none of them do — the child is on none of what
-                    // was asked for, and an index naming any of it
-                    // would be describing a session that does not
-                    // exist.
+                    // one. What must not survive it is `send_msg`'s
+                    // optimistic index touch: fx moves the provider ahead of
+                    // a cross-provider model, so a refusal can leave the child
+                    // on a model neither side picked. `set_model` has already
+                    // adopted what fx answered, and every field written back
+                    // is the session's own, since this returns before the
+                    // effort, stance and fast arms run.
                     touch_session_index_item(
                         session_id,
                         s.model.clone(),
@@ -2983,40 +2968,12 @@ async fn apply_deferred(
             }
             Err(err) => {
                 report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await;
-                // The send recorded the refused level; put the index back on the
-                // one still running, as `apply_live_controls` does on this refusal
-                // — fx's own last report, since a flush may have moved it since
-                // the send. Only while the index still names the refused level:
-                // a later send queued meanwhile has written its own pick there,
-                // and that one is not this refusal's to undo.
-                // ponytail: read-then-write, not atomic against a send landing
-                // between the two; a store-side compare-and-set if that bites.
-                let running = fx.effort_now().unwrap_or(controls.effort_before);
-                if let Ok(Some(item)) = get_session_index_item(session_id).await {
-                    if item.effort == Some(effort) {
-                        if let Err(err) = touch_session_index_item(
-                            session_id,
-                            item.model,
-                            running,
-                            item.permission_mode,
-                            item.fast,
-                        )
-                        .await
-                        {
-                            eprintln!("[fx deferred] could not correct the index: {err:#}");
-                        }
-                    }
-                }
             }
         }
     }
-    if let Some(mode) = controls.mode {
-        match fx::set_mode(fx, mode).await {
-            Ok(()) => landed.mode = Some(mode),
-            Err(err) => {
-                report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await
-            }
-        }
+    match fx::set_mode(fx, controls.mode).await {
+        Ok(()) => landed.mode = Some(controls.mode),
+        Err(err) => report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await,
     }
 
     fx.record_applied(landed);
@@ -3051,26 +3008,6 @@ pub async fn flush_queued(
     // release is a two-lock affair the batch model has no answer to. Its own
     // path.
     if transport.one_prompt_per_turn() {
-        // fx's deferred settings are requests, answered only through the read
-        // loop this runs on, so its flush always moves off it — Codex's does
-        // the same for its own awaited request. Always, not only when something
-        // is deferred: a send can defer between that check and the drain.
-        if matches!(transport, Transport::Fx(_)) {
-            let session_id = session_id.to_string();
-            let queued = queued.clone();
-            let seq = seq.clone();
-            let events = events.clone();
-            let transport = transport.clone();
-            let status = status.clone();
-            let app = app.clone();
-            tokio::spawn(async move {
-                flush_one_per_turn(
-                    &session_id, harness, &queued, &seq, &events, &transport, &status, &app,
-                )
-                .await;
-            });
-            return;
-        }
         flush_one_per_turn(session_id, harness, queued, seq, events, transport, status, app).await;
         return;
     }
@@ -3169,7 +3106,7 @@ async fn flush_one_per_turn(
             (batch, deferred)
         };
 
-        // Off the read loop by construction — see `flush_queued`.
+        // Off the read loop: `ingest` spawns every fx flush.
         if let (Some(controls), Transport::Fx(fx)) = (deferred, transport) {
             apply_deferred(fx, controls, session_id, harness, seq, events, app).await;
         }

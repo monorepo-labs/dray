@@ -129,22 +129,14 @@ pub struct FxSession {
     /// comparing anything against it — or a later pick matching the stale
     /// record would be skipped as no change.
     applied: Arc<std::sync::Mutex<Option<AppliedControls>>>,
-    /// The effort fx last reported the session on, off every reply stating
-    /// its settings. `None` until one does; `Some(None)` is fx's `auto`. What a
-    /// refused deferred level falls back to — the child's own answer, not a
-    /// reading taken at a send a flush may since have moved past.
-    effort_now: Arc<std::sync::Mutex<Option<Option<Effort>>>>,
 }
 
-/// What a mid-turn send asked for, each field `None` where it named nothing.
+/// What a mid-turn send asked for; `None` where it named no model or level.
 #[derive(Clone, Debug, Default)]
 pub struct DeferredControls {
     pub model: Option<Model>,
     pub effort: Option<Effort>,
-    /// The level the child was on when the pick was deferred — the fallback
-    /// for a refusal where fx has never reported one.
-    pub effort_before: Option<Effort>,
-    pub mode: Option<ApprovalPolicy>,
+    pub mode: ApprovalPolicy,
 }
 
 /// What a deferred apply left the child on, each field `None` where it was not
@@ -177,11 +169,6 @@ impl FxSession {
             effort: landed.effort.or(prev.effort),
             mode: landed.mode.or(prev.mode),
         });
-    }
-
-    /// The effort fx last said it is on — see `effort_now`.
-    pub fn effort_now(&self) -> Option<Option<Effort>> {
-        *self.effort_now.lock().expect("fx effort poisoned")
     }
 
     /// Takes the record for the `Session` to catch up on.
@@ -367,7 +354,6 @@ pub async fn init(
         preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
         deferred: Arc::default(),
         applied: Arc::default(),
-        effort_now: Arc::default(),
     };
     note_config(&session, &config, None, app);
 
@@ -583,14 +569,6 @@ fn note_config(
     }
     if let Some(model) = config.model() {
         *session.model.lock().expect("fx model poisoned") = Some(model.to_string());
-    }
-    // `auto` is the one word here with no `Effort`; any other unknown word
-    // leaves the last reading standing rather than claiming a level.
-    if let Some(level) = config.current_effort() {
-        let reading = if level == "auto" { Some(None) } else { Effort::from_arg(level).map(Some) };
-        if let Some(reading) = reading {
-            *session.effort_now.lock().expect("fx effort poisoned") = Some(reading);
-        }
     }
 
     // The model list outlives this session, so it only takes the part of that
@@ -1427,8 +1405,7 @@ mod tests {
                 preamble: Arc::new(AtomicBool::new(false)),
                 deferred: Arc::default(),
                 applied: Arc::default(),
-                effort_now: Arc::default(),
-            },
+                    },
             rx,
         )
     }
