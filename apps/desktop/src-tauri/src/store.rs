@@ -344,16 +344,17 @@ pub async fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) ->
 /// under a std lock; the files are a few hundred bytes.
 pub fn write_private_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
 
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".dray-{}", uuid::Uuid::now_v7()));
     let tmp = path.with_file_name(name);
 
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+
+    let written = options
         .open(&tmp)
         .and_then(|mut file| {
             file.write_all(contents)?;
