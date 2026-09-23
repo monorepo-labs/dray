@@ -227,6 +227,11 @@ export default function ToolCall({
   const delegated = toolType === "subagent_spawn" && !rawInput ? subagentBrief(input) : null;
   const brief = skill;
 
+  // A shell row's command is its summary, and the body omits it for that
+  // reason — so opening the row draws it whole in a box of its own, or a long
+  // or multi-line command is never readable anywhere.
+  const command = toolType === "shell" ? summary : null;
+
   // The agent's task list, drawn as a checklist rather than as its arguments —
   // it is the one tool body that is a progress report, so it reads the way the
   // agent means it and not as JSON.
@@ -325,6 +330,7 @@ export default function ToolCall({
     // revealed — the report is the agent's to relay — so this is the one row
     // whose expander changes the row rather than adding anything under it.
     delegated !== null ||
+    Boolean(command) ||
     sides !== null ||
     range !== null ||
     Boolean(edits?.length);
@@ -507,6 +513,12 @@ export default function ToolCall({
           sentence somebody wrote, and a code box frames prose as output. */}
       {open && brief && (
         <p className="whitespace-pre-wrap text-chat text-foreground/90">{brief}</p>
+      )}
+
+      {open && command && (
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-surface-raised px-2.5 py-2 font-mono text-tool text-muted-foreground">
+          {command}
+        </pre>
       )}
 
       {open && body && (
