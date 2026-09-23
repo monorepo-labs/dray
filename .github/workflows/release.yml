@@ -21,6 +21,7 @@ jobs:
     runs-on: macos-latest
     outputs:
       channel: ${{ steps.channel.outputs.channel }}
+      dmg: ${{ steps.mirror.outputs.dmg }}
     steps:
       - uses: actions/checkout@v4
 
@@ -157,11 +158,12 @@ jobs:
 
       # Downloads are served from R2, not the release: GitHub's asset CDN has
       # had whole afternoons of a 42MB dmg taking 45 minutes. Versioned keys
-      # are immutable and back the updater manifest; the versionless dmg at the
-      # root is the site's download button, so only a stable release moves it.
-      # A missing secret fails the release rather than shipping a manifest
-      # whose URLs point at nothing.
+      # are immutable and back the updater manifest; the site's versionless
+      # dmg is moved by the manifest job, behind its semver guard. A missing
+      # secret fails the release rather than shipping a manifest whose URLs
+      # point at nothing.
       - name: Mirror to R2
+        id: mirror
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -178,16 +180,14 @@ jobs:
           put() {
             aws s3 cp "$1" "s3://${R2_BUCKET}/$2" \
               --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-              --cache-control "$3"
+              --cache-control "public, max-age=31536000, immutable"
           }
           DMG="$(ls "$BUNDLE"/dmg/*.dmg)"
-          put "$DMG" "${GITHUB_REF_NAME}/$(basename "$DMG")" "public, max-age=31536000, immutable"
+          put "$DMG" "${GITHUB_REF_NAME}/$(basename "$DMG")"
           # The bundler writes `Dray.app.tar.gz`; tauri-action renames it on
           # upload, and the manifest names the renamed one.
-          put "$(ls "$BUNDLE"/macos/*.app.tar.gz)" "${GITHUB_REF_NAME}/Dray_universal.app.tar.gz" "public, max-age=31536000, immutable"
-          if [ "${{ steps.channel.outputs.channel }}" = "stable" ]; then
-            put "$DMG" "Dray_universal.dmg" "public, max-age=300"
-          fi
+          put "$(ls "$BUNDLE"/macos/*.app.tar.gz)" "${GITHUB_REF_NAME}/Dray_universal.app.tar.gz"
+          echo "dmg=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
 
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.
@@ -205,9 +205,17 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          DMG: ${{ needs.build.outputs.dmg }}
         run: |
           set -euo pipefail
-          : "${DOWNLOADS_URL:?}"
+          : "${DOWNLOADS_URL:?}" "${DMG:?}"
           gh release download "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern latest.json --output release.json --clobber
@@ -270,3 +278,16 @@ jobs:
             git commit -m "release ${GITHUB_REF_NAME}"
             git push
           }
+
+          # The site's download button follows stable.json, so the same guard
+          # that keeps the manifest from moving backwards keeps it too — and
+          # only after the push landed, since a push lost to a concurrent
+          # release means this one did not win. A server-side copy of the key
+          # the build job uploaded; nothing is re-sent.
+          if [ "$(jq -r '.version // empty' stable.json 2>/dev/null)" = "$NEW" ]; then
+            aws s3 cp "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/${DMG}" "s3://${R2_BUCKET}/Dray_universal.dmg" \
+              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+              --metadata-directive REPLACE \
+              --content-type application/x-apple-diskimage \
+              --cache-control "public, max-age=300"
+          fi
