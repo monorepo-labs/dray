@@ -339,6 +339,14 @@ pub fn codex_models() -> Vec<Model> {
     // finding their row.
     vec![
         Model::new(
+            "gpt6_astra",
+            "gpt-6-astra",
+            "6 Astra",
+            with_ultra.clone(),
+            Some(Medium),
+        )
+        .with_fast(),
+        Model::new(
             "gpt-6-sol",
             "gpt-6-sol",
             "6 Sol",
@@ -354,15 +362,6 @@ pub fn codex_models() -> Vec<Model> {
             Some(Medium),
         )
         .with_fast(),
-        Model::new(
-            "gpt6_astra",
-            "gpt-6-astra",
-            "6 Astra",
-            with_ultra.clone(),
-            Some(Medium),
-        )
-        .with_fast()
-        .under_more(),
         Model::new(
             "gpt-6-luna",
             "gpt-6-luna",
@@ -548,7 +547,7 @@ mod tests {
 
         assert_eq!(
             offered.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
-            ["6 Sol", "5.6 Sol", "6 Astra", "6 Luna", "5.6 Terra", "5.6 Luna"]
+            ["6 Astra", "6 Sol", "5.6 Sol", "6 Luna", "5.6 Terra", "5.6 Luna"]
         );
         // Medium, where Claude's default is High. Cheap to state, and the one
         // number a reader would otherwise have to open the picker to learn.
@@ -556,13 +555,13 @@ mod tests {
             .iter()
             .all(|m| m.default_effort == Some(Effort::Medium)));
 
-        // Shift+Tab cycles the top level, so two is the budget here as well.
+        // Shift+Tab cycles the top level, so three is the budget here as well.
         let cycled: Vec<&str> = offered
             .iter()
             .filter(|m| !m.secondary)
             .map(|m| m.label.as_str())
             .collect();
-        assert_eq!(cycled, ["6 Sol", "5.6 Sol"]);
+        assert_eq!(cycled, ["6 Astra", "6 Sol", "5.6 Sol"]);
     }
 
     /// `ultra` is per model, not per family — Codex reports it on Sol and Terra
@@ -582,9 +581,9 @@ mod tests {
         assert_eq!(
             tops,
             [
+                ("6 Astra".to_string(), Some(Effort::Ultra)),
                 ("6 Sol".to_string(), Some(Effort::Ultra)),
                 ("5.6 Sol".to_string(), Some(Effort::Ultra)),
-                ("6 Astra".to_string(), Some(Effort::Ultra)),
                 ("6 Luna".to_string(), Some(Effort::Max)),
                 ("5.6 Terra".to_string(), Some(Effort::Ultra)),
                 ("5.6 Luna".to_string(), Some(Effort::Max)),

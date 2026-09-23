@@ -34,7 +34,7 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 /// the chord is only worth pressing while the list it walks is short. A cap, not
 /// a quota: [`fold`] fills it only with rows the table puts at the top level or
 /// has never heard of, so a Codex missing one of the table's two draws one.
-const TOP_LEVEL: usize = 2;
+const TOP_LEVEL: usize = 3;
 
 /// Every model Codex reports, newest answer or a cached one.
 pub async fn list() -> Vec<Model> {
@@ -117,8 +117,8 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
 /// not, and one it does not list is a create that fails at the spawn for a
 /// choice nobody made. So it is taken only where Codex answers for it, and the
 /// table's own top level stands in otherwise — GPT-6 Sol is the default, and a
-/// Codex not yet updated to list it lands on 5.6 Sol rather than on whatever
-/// [`fold`] draws first. A probe that cannot run falls back to the table
+/// Codex not yet updated to list it lands on 6 Astra rather than on whatever
+/// [`fold`] draws first, which may be a model this build has never heard of. A probe that cannot run falls back to the table
 /// through [`list`], so the old answer is still the answer where there is
 /// nothing better.
 pub async fn default_model() -> ModelId {
@@ -268,7 +268,7 @@ fn read_page(answer: &Value) -> Option<Page> {
 /// Every page's rows folded into the picker's list.
 ///
 /// Tier is counted across the whole list rather than per page, or a second page
-/// would start its own top level and put four rows in a two-row cycle.
+/// would start its own top level and put six rows in a three-row cycle.
 ///
 /// **The wire's order is not the tier, measured.** Codex answers `gpt-5.6-sol`
 /// ahead of `gpt-6-astra` — its own recommendation first, not its newest — so
@@ -299,7 +299,7 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
     });
 
     // A row the table names takes the table's tier, so an older Codex that
-    // lists no GPT-6 Sol does not promote 6 Astra into its slot. One it has
+    // lists no GPT-6 Sol does not promote 6 Luna into its slot. One it has
     // never heard of is the new flagship and competes for the top level.
     let mut top = 0;
     for model in &mut models {
@@ -454,27 +454,27 @@ mod tests {
         let labels: Vec<&str> = models.iter().map(|m| m.label.as_str()).collect();
         assert_eq!(
             labels,
-            ["6 Sol", "5.6 Sol", "6 Astra", "6 Luna", "5.6 Terra", "5.6 Luna", "GPT-5.5"]
+            ["6 Astra", "6 Sol", "5.6 Sol", "6 Luna", "5.6 Terra", "5.6 Luna", "GPT-5.5"]
         );
         assert!(models.iter().all(|m| m.accepts_images));
     }
 
     /// A Codex not yet updated lists no GPT-6 Sol, so the picker draws no row
-    /// for it and does not promote 6 Astra into its slot.
+    /// for it and does not promote 6 Luna into its slot.
     #[test]
     fn an_older_codex_draws_no_6_sol() {
         let models = read_rows(&captured());
 
         assert!(!models.iter().any(|m| m.arg == "gpt-6-sol"));
-        assert_eq!(cycled(&models), ["5.6 Sol"]);
+        assert_eq!(cycled(&models), ["6 Astra", "5.6 Sol"]);
     }
 
     /// The default is GPT-6 Sol only where Codex lists it; an older one lands
-    /// on 5.6 Sol, never on a model it cannot run.
+    /// on the table's next top-level row, never on a model it cannot run.
     #[test]
     fn the_default_is_a_model_the_installed_codex_lists() {
         assert_eq!(pick_default(&read_rows(&captured_gpt6())).as_str(), "gpt-6-sol");
-        assert_eq!(pick_default(&read_rows(&captured())).as_str(), "gpt56_sol");
+        assert_eq!(pick_default(&read_rows(&captured())).as_str(), "gpt6_astra");
     }
 
     /// Internal rows are not models anybody picked, and the capture carries two.
@@ -521,14 +521,14 @@ mod tests {
         assert_eq!(models[0].efforts, vec![Effort::High]);
     }
 
-    /// Shift+Tab cycles the top level, so two rows is the budget and everything
+    /// Shift+Tab cycles the top level, so three rows is the budget and everything
     /// else folds into "More models" — including a generation the hand-written
     /// list had retired outright.
     #[test]
-    fn the_two_sols_are_the_cycle() {
+    fn astra_and_the_two_sols_are_the_cycle() {
         let models = read_rows(&captured_gpt6());
 
-        assert_eq!(cycled(&models), ["6 Sol", "5.6 Sol"]);
+        assert_eq!(cycled(&models), ["6 Astra", "6 Sol", "5.6 Sol"]);
         assert!(models.iter().filter(|m| m.secondary).count() >= 2);
     }
 
@@ -549,8 +549,8 @@ mod tests {
         let models = read_rows(&wire);
         let labels: Vec<&str> = models.iter().map(|m| m.label.as_str()).collect();
 
-        assert_eq!(labels, ["gpt-7-nova", "6 Sol", "5.6 Sol", "6 Astra", "GPT-5.5"]);
-        assert_eq!(cycled(&models), ["gpt-7-nova", "6 Sol"]);
+        assert_eq!(labels, ["gpt-7-nova", "6 Astra", "6 Sol", "5.6 Sol", "GPT-5.5"]);
+        assert_eq!(cycled(&models), ["gpt-7-nova", "6 Astra", "6 Sol"]);
     }
 
     /// `ultra` is per model and Codex says which: Sol reports it, Luna stops at
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn a_second_page_is_read_and_tiered_with_the_first() {
         let page_one = json!({"data": [{"id": "a"}, {"id": "b"}], "nextCursor": 2});
-        let page_two = json!({"data": [{"id": "c"}], "nextCursor": null});
+        let page_two = json!({"data": [{"id": "c"}, {"id": "d"}], "nextCursor": null});
 
         let first = read_page(&page_one).unwrap();
         let second = read_page(&page_two).unwrap();
@@ -678,7 +678,7 @@ mod tests {
             .iter()
             .map(|m| (m.arg.as_str(), m.secondary))
             .collect();
-        assert_eq!(tiers, [("a", false), ("b", false), ("c", true)]);
+        assert_eq!(tiers, [("a", false), ("b", false), ("c", false), ("d", true)]);
     }
 
     /// The capture's own cursor is null, which is what one page looks like.

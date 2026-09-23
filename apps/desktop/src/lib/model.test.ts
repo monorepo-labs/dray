@@ -39,10 +39,10 @@ describe("usableModel", () => {
   });
 
   /// A Codex not yet updated lists no GPT-6 Sol, so the default it cannot run
-  /// gives way to the list's head, which the backend ranks 5.6 Sol.
+  /// gives way to the list's head, which the backend ranks 6 Astra.
   it("does not default a Codex to a model it does not list", () => {
-    const older = [model("gpt56_sol"), model("gpt6_astra")];
-    expect(usableModel(older, "gpt-6-sol" as never, "codex")).toBe("gpt56_sol");
+    const older = [model("gpt6_astra"), model("gpt56_sol")];
+    expect(usableModel(older, "gpt-6-sol" as never, "codex")).toBe("gpt6_astra");
   });
 
   /// The list arrives a beat after the harness does, and blanking the pick in
