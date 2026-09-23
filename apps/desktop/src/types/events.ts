@@ -363,6 +363,8 @@ reason: string | null, } | { "type": "context_compacted",
  */
 trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unknown", harnessType: string, } | { "type": "unrecognized" };
 
+export type AgentUpdate = { harness: Harness, label: string, current: string, latest: string, };
+
 /**
  * What is on disk.
  */

@@ -18,6 +18,7 @@ macro_rules! fail {
 }
 
 pub mod accounts;
+pub mod agent_updates;
 pub mod analytics;
 pub mod apps;
 pub mod attachments;
@@ -819,6 +820,9 @@ pub fn run() {
             accounts::add_agent_account,
             accounts::sign_out_agent,
             accounts::run_agent_login,
+            agent_updates::check_agent_updates,
+            agent_updates::update_agent,
+            agent_updates::update_agent_in_terminal,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,

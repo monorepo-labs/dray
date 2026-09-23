@@ -100,6 +100,7 @@ import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
+import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import type { IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
@@ -2433,6 +2434,22 @@ function App() {
                 onHandled={() => setLoginHandled(authTurn)}
               />
             ) : null
+          }
+          agentUpdate={
+            !selectedSessionId && (
+              <AgentUpdateLine
+                harness={harness}
+                // pi and fx overwrite files a live child reads; the other three
+                // install beside it, so only these two wait on a running turn.
+                waiting={
+                  (harness === "pi" || harness === "fx") &&
+                  sessionIndexItems.some(
+                    (s) =>
+                      s.harness === harness && statusBySession[s.sessionId] === "in_progress",
+                  )
+                }
+              />
+            )
           }
           toolbar={
             <ComposerToolbar

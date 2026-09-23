@@ -128,6 +128,9 @@ type ChatInputProps = {
   /// failed, this reports that nothing can be attempted yet. Only the second
   /// kind has a cure to offer, which is why it is a node and not a string.
   notice?: ReactNode;
+  /// Drawn under the new-task composer, below the send hint. Informational
+  /// only, unlike `notice`: it never blocks sending.
+  agentUpdate?: ReactNode;
   /// Whether the picked model can be handed an image at all.
   ///
   /// `true` where nothing says otherwise, which covers the model list not
@@ -245,6 +248,7 @@ export default function ChatInput({
   dictation,
   dictating = false,
   notice,
+  agentUpdate,
   modelTakesImages = true,
   handoff,
   busy = false,
@@ -1068,8 +1072,11 @@ export default function ChatInput({
           // hint costs less than drawing one that looks like it means the row
           // above it.
           !menuOpen && (
-            <div className="flex items-center gap-1 pt-2 text-ui text-muted-foreground/60">
-              Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <div className="flex shrink-0 items-center gap-1 text-ui text-muted-foreground/60">
+                Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+              </div>
+              {agentUpdate}
             </div>
           )
         ) : (

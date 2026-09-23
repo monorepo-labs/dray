@@ -367,7 +367,8 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
 ///
 /// **The caller owns what is in that line**, and every one of them composes it
 /// from a closed set — this harness's [`Harness::login_args`], or an
-/// [`crate::accounts::AuthOption`] whose command is a literal in that table.
+/// [`crate::accounts::AuthOption`] whose command is a literal in that table,
+/// or an agent's own updater from `agent_updates::update_args`.
 /// Nothing a frontend typed may reach here: the string is written into a shell
 /// script, so the safety is in where it came from and not in any escaping this
 /// could do to it.
@@ -454,7 +455,7 @@ fn write_script(path: &Path, body: &str) -> std::io::Result<()> {
 /// dollar sign, and it is being written into a file that gets executed — so
 /// single quotes, with the only character they cannot carry spliced in from
 /// outside them.
-fn sh_quote(word: &str) -> String {
+pub(crate) fn sh_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
