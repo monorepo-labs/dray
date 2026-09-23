@@ -89,3 +89,21 @@ pub async fn download_verified(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pinned hashes are compared against this spelling, so a hex that
+    /// stopped zero-padding would fail every download silently.
+    #[test]
+    fn a_digest_prints_as_the_pinned_spelling() {
+        let digest = format!("{:x}", Sha256::digest(b""));
+
+        assert_eq!(
+            digest,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(digest.len(), 64);
+    }
+}

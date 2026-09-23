@@ -264,4 +264,11 @@ mod tests {
         assert_eq!(normalize_space(Some("  ".into())), None);
         assert_eq!(normalize_space(Some(" Work ".into())), Some("Work".into()));
     }
+
+    #[test]
+    fn basename_handles_trailing_slash_and_root() {
+        assert_eq!(basename("/Users/y/proj"), "proj");
+        assert_eq!(basename("/Users/y/proj/"), "proj");
+        assert_eq!(basename("/"), "/");
+    }
 }
