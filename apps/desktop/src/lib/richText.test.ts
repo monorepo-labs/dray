@@ -42,6 +42,11 @@ describe("chipLabel", () => {
     expect(chipLabel(segment)!.endsWith("…")).toBe(true);
   });
 
+  it("never cuts an emoji in half", () => {
+    const [segment] = highlightSegments(`@src/${"😀".repeat(60)}.ts`);
+    expect(chipLabel(segment)).toBe(`${"😀".repeat(39)}…`);
+  });
+
   it("refuses a command, a url and plain prose", () => {
     expect(highlightSegments("/caveman").map(chipLabel)).toEqual([null]);
     expect(highlightSegments("https://drayhq.com").map(chipLabel)).toEqual([null]);

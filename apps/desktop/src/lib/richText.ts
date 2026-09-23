@@ -58,8 +58,10 @@ const ISSUE_LABEL_MAX = 28;
 /// the composer would be cut off with no way to read the rest.
 const LABEL_MAX = 40;
 
+/// Counts code points, not UTF-16 units, so a cut never splits an emoji.
 function elide(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  const chars = Array.from(text);
+  return chars.length > max ? `${chars.slice(0, max - 1).join("").trimEnd()}…` : text;
 }
 
 /// What a chip says on its face, or `null` where the segment is not one.
