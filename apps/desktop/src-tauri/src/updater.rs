@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use ts_rs::TS;
 
 use crate::{analytics, binpath, store::get_home_app_dir};
@@ -235,6 +236,11 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
     update
         .install(bytes)
         .map_err(|e| InstallError::install(e.to_string()))?;
+    // The plugin's own save runs on exit, after the new instance has already
+    // read the file, so the relaunch would open at the previous quit's size.
+    if let Err(e) = app.save_window_state(StateFlags::all()) {
+        eprintln!("[window state save err] {e}");
+    }
     relaunch(&app).map_err(|message| InstallError::Relaunch { message })?;
     app.exit(0);
     Ok(())
