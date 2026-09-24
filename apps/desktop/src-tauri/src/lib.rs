@@ -578,6 +578,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Saves on `RunEvent::Exit`, which plugins see before the callback
+        // below ends the process with `_exit`.
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .manage(SessionManager::default())
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
