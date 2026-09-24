@@ -396,20 +396,44 @@ pub async fn publish_status(session_id: &str, status: SessionStatus, app: &AppHa
     }
 }
 
+/// One session's child, or `None` while it has none. The lock is what orders
+/// that session's own sends, stops and replies against each other.
+type Slot = Arc<Mutex<Option<Session>>>;
+
+/// **The map's lock is held only to find a slot, never across work.** A send
+/// can kill a child, spawn and handshake a new one and run git, which takes
+/// seconds — and under one lock for every session, a respawn in one froze Stop,
+/// sends and permission replies in all the others for that long.
 #[derive(Debug, Default)]
 pub struct SessionManager {
-    pub sessions: Mutex<HashMap<String, Session>>,
+    sessions: Mutex<HashMap<String, Slot>>,
 }
 
-/// The live session under `id`, or the error every caller answers a dead child
-/// with.
-fn live<'a>(guard: &'a mut HashMap<String, Session>, id: &str) -> Result<&'a mut Session> {
-    guard
-        .get_mut(id)
-        .with_context(|| format!("no running session {id}"))
+/// The live session in a locked slot, or the error every caller answers a dead
+/// child with.
+fn live<'a>(slot: &'a mut Option<Session>, id: &str) -> Result<&'a mut Session> {
+    slot.as_mut().with_context(|| format!("no running session {id}"))
 }
 
 impl SessionManager {
+    /// This session's slot, made on first use. Slots are never removed: one is
+    /// a few words, and removing it under a send still holding it would strand
+    /// the child that send puts back.
+    async fn slot(&self, id: &str) -> Slot {
+        self.sessions.lock().await.entry(id.to_string()).or_default().clone()
+    }
+
+    /// The slot only where one exists, so a read of a session never touched
+    /// allocates nothing.
+    async fn existing(&self, id: &str) -> Option<Slot> {
+        self.sessions.lock().await.get(id).cloned()
+    }
+
+    /// Takes the live child out, leaving the slot empty for the next send.
+    async fn take(&self, id: &str) -> Option<Session> {
+        self.existing(id).await?.lock().await.take()
+    }
+
     /// Routes a prompt to a session: spawns a new child, reuses a live one, or
     /// respawns via `--resume` when the id is known but its process is gone.
     pub async fn send_msg(
@@ -762,10 +786,7 @@ impl SessionManager {
             // back rather than returning empty — otherwise the frontend's first
             // render drops the user's own message.
             let events = list_session_events(session_id).await?;
-            self.sessions
-                .lock()
-                .await
-                .insert(session_id.to_string(), session);
+            *self.slot(session_id).await.lock().await = Some(session);
 
             // Returned so the frontend learns the resolved worktree name and
             // the backend-truncated title rather than guessing either.
@@ -774,12 +795,17 @@ impl SessionManager {
                 snapshot: Some(SessionSnapshot {
                     index_item: item,
                     events,
+                    older_before: None,
                 }),
                 queued: None,
             });
         }
 
-        let mut sessions_guard = self.sessions.lock().await;
+        // This session's lock alone, held across the kill, spawn and git below
+        // so two sends to one session cannot both respawn it — while every other
+        // session's Stop and send carry on.
+        let slot = self.slot(session_id).await;
+        let mut slot_guard = slot.lock().await;
 
         // Decided here rather than by the caller: the frontend's own `busy` is
         // optimistic, and this is the only reading taken on the same lock the
@@ -789,7 +815,7 @@ impl SessionManager {
         // replaced, while only an open model call means this prompt has a turn
         // to be folded into.
         let (busy, turn_in_flight, tool_in_flight, auth_failed) =
-            match sessions_guard.get(session_id) {
+            match slot_guard.as_ref() {
                 Some(s) => {
                     let tracker = s.status.lock().await;
                     (
@@ -823,7 +849,7 @@ impl SessionManager {
         //
         // A login that ran out is the other reason, and it is not a setting at
         // all — see [`respawn_needed`], which is where the two part company.
-        let settings_changed = sessions_guard.get(session_id).is_some_and(|s| {
+        let settings_changed = slot_guard.as_ref().is_some_and(|s| {
             let caps = s.harness.caps();
 
             (s.effort != effort && !caps.applies_effort_in_place)
@@ -839,7 +865,7 @@ impl SessionManager {
         });
 
         if respawn_needed(auth_failed, turn_in_flight, busy, settings_changed) {
-            if let Some(s) = sessions_guard.remove(session_id) {
+            if let Some(s) = slot_guard.take() {
                 s.kill().await?;
             }
         }
@@ -877,7 +903,7 @@ impl SessionManager {
             }
         }
 
-        if let Some(s) = sessions_guard.get_mut(session_id) {
+        if let Some(s) = slot_guard.as_mut() {
             // A turn-end flush may have moved an fx child off the settings this
             // record holds; catch up before anything is compared against it.
             if let Transport::Fx(fx) = &s.stdin {
@@ -1120,7 +1146,7 @@ impl SessionManager {
             let _ = session.kill().await;
             return Err(error);
         }
-        sessions_guard.insert(session_id.to_string(), session);
+        *slot_guard = Some(session);
         Ok(SendOutcome {
             issues: linked,
             ..Default::default()
@@ -1179,9 +1205,11 @@ impl SessionManager {
             );
         }
 
-        if let Some(s) = self.sessions.lock().await.get(session_id) {
-            if s.status.lock().await.turn_in_flight() {
-                bail!("wait for the turn to finish before forking it");
+        if let Some(slot) = self.existing(session_id).await {
+            if let Some(s) = slot.lock().await.as_ref() {
+                if s.status.lock().await.turn_in_flight() {
+                    bail!("wait for the turn to finish before forking it");
+                }
             }
         }
 
@@ -1263,6 +1291,7 @@ impl SessionManager {
         Ok(SessionSnapshot {
             index_item: item,
             events,
+            older_before: None,
         })
     }
 
@@ -1286,15 +1315,17 @@ impl SessionManager {
             return desk.stop(app).await;
         }
 
-        let mut sessions_guard = self.sessions.lock().await;
-        live(&mut sessions_guard, session_id)?.interrupt().await
+        let slot = self.slot(session_id).await;
+        let mut guard = slot.lock().await;
+        live(&mut guard, session_id)?.interrupt().await
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
     /// the rest of these: the task ran inside that process and died with it.
     pub async fn stop_task(&self, session_id: &str, task_id: &str) -> Result<()> {
-        let mut sessions_guard = self.sessions.lock().await;
-        live(&mut sessions_guard, session_id)?.stop_task(task_id).await
+        let slot = self.slot(session_id).await;
+        let mut guard = slot.lock().await;
+        live(&mut guard, session_id)?.stop_task(task_id).await
     }
 
     /// Takes back the newest prompt still waiting on a boundary, returning it
@@ -1304,9 +1335,9 @@ impl SessionManager {
     /// queue died with the process, which is the same "nothing to take back"
     /// the frontend already handles.
     pub async fn cancel_queued(&self, session_id: &str) -> Option<QueuedMessage> {
-        let sessions_guard = self.sessions.lock().await;
-        let session = sessions_guard.get(session_id)?;
-        session.cancel_queued().await
+        let slot = self.existing(session_id).await?;
+        let guard = slot.lock().await;
+        guard.as_ref()?.cancel_queued().await
     }
 
     /// Answers a permission request. Errors when the session has no live child:
@@ -1318,8 +1349,9 @@ impl SessionManager {
         option_id: &str,
         app: &AppHandle,
     ) -> Result<()> {
-        let mut sessions_guard = self.sessions.lock().await;
-        live(&mut sessions_guard, session_id)?
+        let slot = self.slot(session_id).await;
+        let mut guard = slot.lock().await;
+        live(&mut guard, session_id)?
             .respond_permission(request_id, option_id, app)
             .await
     }
@@ -1343,8 +1375,9 @@ impl SessionManager {
             return desk.answer(request_id, &answers, app);
         }
 
-        let mut sessions_guard = self.sessions.lock().await;
-        live(&mut sessions_guard, session_id)?
+        let slot = self.slot(session_id).await;
+        let mut guard = slot.lock().await;
+        live(&mut guard, session_id)?
             .answer_questions(request_id, answers, app)
             .await
     }
@@ -1371,7 +1404,7 @@ impl SessionManager {
             bail!("that session is not running in a worktree");
         }
 
-        if let Some(session) = self.sessions.lock().await.remove(session_id) {
+        if let Some(session) = self.take(session_id).await {
             session.kill().await?;
         }
 
@@ -1395,7 +1428,9 @@ impl SessionManager {
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
-        self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
+        let slot = self.existing(session_id).await?;
+        let guard = slot.lock().await;
+        guard.as_ref()?.child.id()
     }
 
     /// Stops what a session has running and nothing else: the child with
@@ -1405,7 +1440,7 @@ impl SessionManager {
     /// and a child left running behind a settled row was a dev server and a
     /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
-        let running = self.sessions.lock().await.remove(session_id);
+        let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already
         // out of the map, so nothing would come back to close them.
         let killed = match running {
@@ -1477,16 +1512,16 @@ impl SessionManager {
         } else {
             (SessionStatus::Idle, SessionStatus::Completed)
         };
-        let sessions_guard = self.sessions.lock().await;
-
-        if let Some(session) = sessions_guard.get(session_id) {
-            let Some(next) = session.status.lock().await.mark_read(read) else {
-                return Ok(None);
-            };
-            set_session_status(session_id, next).await?;
-            return Ok(Some(next));
+        if let Some(slot) = self.existing(session_id).await {
+            let guard = slot.lock().await;
+            if let Some(session) = guard.as_ref() {
+                let Some(next) = session.status.lock().await.mark_read(read) else {
+                    return Ok(None);
+                };
+                set_session_status(session_id, next).await?;
+                return Ok(Some(next));
+            }
         }
-        drop(sessions_guard);
 
         match get_session_index_item(session_id).await? {
             Some(item) if item.status == from => {
@@ -1594,7 +1629,6 @@ pub struct Session {
     /// which nothing can move after. Compared against the composer's pick to
     /// decide whether anything has to happen at all.
     pub fast: bool,
-    pub events: Arc<Mutex<Vec<AgentEvent>>>,
     pub seq: Arc<AtomicU64>,
     /// Shared with the stdout task: sends flip it here, `result` and
     /// `background_tasks_changed` flip it there.
@@ -1799,7 +1833,6 @@ impl Session {
             true,
             from,
             &self.seq,
-            &self.events,
             &self.stdin,
             app,
         )
@@ -1917,7 +1950,6 @@ impl Session {
             true,
             from,
             &self.seq,
-            &self.events,
             &self.stdin,
             app,
         )
@@ -1944,7 +1976,6 @@ impl Session {
             self.harness,
             &self.queued,
             &self.seq,
-            &self.events,
             &self.stdin,
             &self.status,
             app,
@@ -2489,7 +2520,6 @@ async fn deliver_prompt(
     send: bool,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     app: &AppHandle,
 ) -> Result<String> {
@@ -2504,7 +2534,7 @@ async fn deliver_prompt(
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
     // child, which can go unanswered — and everything below this line is
-    // irreversible: the event is emitted, held in memory and appended to a log
+    // irreversible: the event is emitted and appended to a log
     // that only grows. Failing after it leaves a bubble with no turn behind it,
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
@@ -2537,10 +2567,6 @@ async fn deliver_prompt(
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
 
     app.emit("agent_event", &agent_event)?;
-
-    let mut events_guard = events.lock().await;
-    events_guard.push(agent_event.clone());
-    drop(events_guard);
 
     append_session_event(session_id, agent_event).await?;
 
@@ -2612,11 +2638,9 @@ pub struct Ingest<'a> {
     /// The session's own tree, for the turn-end snapshot. Differs from the
     /// spawn directory on a worktree creation.
     pub session_cwd: &'a str,
-    pub events: &'a Arc<Mutex<Vec<AgentEvent>>>,
     pub status: &'a Arc<Mutex<StatusTracker>>,
     pub queued: &'a QueuedMessages,
     pub flush_seq: &'a Arc<AtomicU64>,
-    pub flush_events: &'a Arc<Mutex<Vec<AgentEvent>>>,
     pub flush_transport: &'a Transport,
 }
 
@@ -2758,7 +2782,7 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
     }
 
     // The data: URL a failed archive leaves behind must not reach the
-    // retained copies: it is the whole image as base64, in a log read whole
+    // log: it is the whole image as base64, in a log read whole
     // on every open — the exact cost archiving exists to avoid. Stripped
     // here rather than in the archiver because the emit above must keep it:
     // the live transcript draws the picture either way, and only a reload
@@ -2768,8 +2792,6 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
             image.url = None;
         }
     }
-
-    ctx.events.lock().await.push(agent_event.clone());
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
@@ -2807,14 +2829,13 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
         let harness = ctx.harness;
         let queued = ctx.queued.clone();
         let seq = ctx.flush_seq.clone();
-        let events = ctx.flush_events.clone();
         let transport = ctx.flush_transport.clone();
         let status = ctx.status.clone();
         let app = app.clone();
 
         tokio::spawn(async move {
             flush_queued(
-                &session_id, harness, &queued, &seq, &events, &transport, &status, &app,
+                &session_id, harness, &queued, &seq, &transport, &status, &app,
             )
             .await;
         });
@@ -2826,7 +2847,6 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHand
         ctx.harness,
         ctx.queued,
         ctx.flush_seq,
-        ctx.flush_events,
         ctx.flush_transport,
         ctx.status,
         app,
@@ -2901,7 +2921,6 @@ async fn apply_live_controls(
                 s.harness,
                 &format!("{err:#}"),
                 &s.seq,
-                &s.events,
                 app,
             )
             .await;
@@ -2940,7 +2959,6 @@ async fn apply_deferred(
     session_id: &str,
     harness: Harness,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
     use crate::harness::fx;
@@ -2956,7 +2974,7 @@ async fn apply_deferred(
                 // A cross-provider switch can land on neither model, so what
                 // fx says it is on is the record, not what was asked.
                 landed.model = fx::landed_model(fx);
-                report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await;
+                report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await;
             }
         }
     }
@@ -2967,13 +2985,13 @@ async fn apply_deferred(
                 landed.effort = Some(effort);
             }
             Err(err) => {
-                report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await;
+                report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await;
             }
         }
     }
     match fx::set_mode(fx, controls.mode).await {
         Ok(()) => landed.mode = Some(controls.mode),
-        Err(err) => report_session_error(session_id, harness, &format!("{err:#}"), seq, events, app).await,
+        Err(err) => report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await,
     }
 
     fx.record_applied(landed);
@@ -2999,7 +3017,6 @@ pub async fn flush_queued(
     harness: Harness,
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     status: &Arc<Mutex<StatusTracker>>,
     app: &AppHandle,
@@ -3008,7 +3025,7 @@ pub async fn flush_queued(
     // release is a two-lock affair the batch model has no answer to. Its own
     // path.
     if transport.one_prompt_per_turn() {
-        flush_one_per_turn(session_id, harness, queued, seq, events, transport, status, app).await;
+        flush_one_per_turn(session_id, harness, queued, seq, transport, status, app).await;
         return;
     }
 
@@ -3022,7 +3039,7 @@ pub async fn flush_queued(
 
     let mut delivered = 0;
     deliver_batch(
-        batch, session_id, harness, seq, events, transport, app, &mut delivered,
+        batch, session_id, harness, seq, transport, app, &mut delivered,
     )
     .await;
 
@@ -3073,7 +3090,6 @@ async fn flush_one_per_turn(
     harness: Harness,
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     status: &Arc<Mutex<StatusTracker>>,
     app: &AppHandle,
@@ -3108,7 +3124,7 @@ async fn flush_one_per_turn(
 
         // Off the read loop: `ingest` spawns every fx flush.
         if let (Some(controls), Transport::Fx(fx)) = (deferred, transport) {
-            apply_deferred(fx, controls, session_id, harness, seq, events, app).await;
+            apply_deferred(fx, controls, session_id, harness, seq, app).await;
         }
 
         // Logged outside the locks — attachment prep and the log write both
@@ -3131,7 +3147,6 @@ async fn flush_one_per_turn(
                 false,
                 message.from,
                 seq,
-                events,
                 transport,
                 app,
             )
@@ -3140,7 +3155,7 @@ async fn flush_one_per_turn(
                 Ok(text) => texts.push(text),
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
-                    report_send_failure(session_id, harness, &err.to_string(), seq, events, app)
+                    report_send_failure(session_id, harness, &err.to_string(), seq, app)
                         .await;
                 }
             }
@@ -3158,7 +3173,7 @@ async fn flush_one_per_turn(
                 Ok(()) => return,
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
-                    report_send_failure(session_id, harness, &err.to_string(), seq, events, app)
+                    report_send_failure(session_id, harness, &err.to_string(), seq, app)
                         .await;
                 }
             }
@@ -3176,7 +3191,6 @@ async fn deliver_batch(
     session_id: &str,
     harness: Harness,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     app: &AppHandle,
     delivered: &mut usize,
@@ -3200,7 +3214,6 @@ async fn deliver_batch(
             true,
             message.from,
             seq,
-            events,
             transport,
             app,
         )
@@ -3215,7 +3228,7 @@ async fn deliver_batch(
                 // session that will never answer it, with nothing saying why.
                 // It is out of the queue for good: retrying would mean a second
                 // copy of an event already persisted.
-                report_send_failure(session_id, harness, &err.to_string(), seq, events, app).await;
+                report_send_failure(session_id, harness, &err.to_string(), seq, app).await;
             }
         }
     }
@@ -3233,11 +3246,10 @@ async fn report_send_failure(
     harness: Harness,
     message: &str,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
     let message = format!("This message could not be sent: {message}");
-    report_session_error(session_id, harness, &message, seq, events, app).await;
+    report_session_error(session_id, harness, &message, seq, app).await;
 }
 
 /// Files a sentence about the session itself — not about a turn — as a
@@ -3252,7 +3264,6 @@ pub(crate) async fn report_session_error(
     harness: Harness,
     message: &str,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
     let agent_event = AgentEvent::mint(
@@ -3271,7 +3282,6 @@ pub(crate) async fn report_session_error(
     if let Err(err) = app.emit("agent_event", &agent_event) {
         eprintln!("[session error emit err] {err}");
     }
-    events.lock().await.push(agent_event.clone());
     if let Err(err) = append_session_event(session_id, agent_event).await {
         eprintln!("[session error log err] {err}");
     }
@@ -3295,7 +3305,6 @@ pub async fn strand_queue_on_exit(
     harness: Harness,
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
-    events: &Arc<Mutex<Vec<AgentEvent>>>,
     app: &AppHandle,
 ) {
     let stranded: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
@@ -3346,7 +3355,6 @@ pub async fn strand_queue_on_exit(
         if let Err(err) = app.emit("agent_event", &bubble) {
             eprintln!("[fx strand emit err] {err}");
         }
-        events.lock().await.push(bubble.clone());
         if let Err(err) = append_session_event(session_id, bubble).await {
             eprintln!("[fx strand log err] {err}");
         }
@@ -3355,7 +3363,6 @@ pub async fn strand_queue_on_exit(
             harness,
             "the agent exited before this queued message was sent — send it again to retry",
             seq,
-            events,
             app,
         )
         .await;
@@ -3366,6 +3373,26 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    /// A send holding one session's lock across a respawn — seconds of kill,
+    /// spawn and git — must not hold up Stop in another, and must still order
+    /// its own session's calls behind it.
+    #[tokio::test]
+    async fn a_busy_session_holds_up_only_itself() {
+        use std::time::{Duration, Instant};
+
+        let manager = SessionManager::default();
+        let busy = manager.slot("busy").await;
+        let _respawning = busy.lock().await;
+
+        let started = Instant::now();
+        let other = tokio::time::timeout(Duration::from_secs(1), manager.stop_task("other", "t")).await;
+        eprintln!("stop on another session answered in {:?}", started.elapsed());
+        assert!(other.expect("held up by another session's lock").is_err());
+
+        let same = tokio::time::timeout(Duration::from_millis(50), manager.stop_task("busy", "t")).await;
+        assert!(same.is_err(), "ran over its own session's send");
+    }
 
     /// Drives the real capture through the counter that decides whether a
     /// prompt is written now or held. Two things have to hold across it: a call

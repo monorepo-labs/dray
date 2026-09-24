@@ -1112,17 +1112,22 @@ function App() {
   // `todo_write` firing on every tick would yank the pane several times a turn
   // — see `startsNewList`. Held rather than derived, since only the previous
   // reading can say which this is; per session, since each has its own.
-  const seenTodosRef = useRef(new Map<string, Todo[] | null>());
+  const seenTodosRef = useRef(
+    new Map<string, { todos: Todo[] | null; olderBefore: number | null }>(),
+  );
   useEffect(() => {
     // Waiting on the transcript, not just the id: `sessionTodos` reads an empty
     // event list as `null` while one loads, so seeding before it lands would
     // record "no list" and then read the real one as news.
     if (!selectedSession) return;
+    const { sessionId, olderBefore } = selectedSession;
     const seen = seenTodosRef.current;
-    const previous = seen.get(selectedSession.sessionId);
-    seen.set(selectedSession.sessionId, sessionTodos);
-    if (previous === undefined) return;
-    if (sessionTodos && startsNewList(previous, sessionTodos)) showPanel("more");
+    const previous = seen.get(sessionId);
+    seen.set(sessionId, { todos: sessionTodos, olderBefore });
+    // A page of older turns landing is history arriving, not a list being
+    // written, so it re-seeds silently like the first reading does.
+    if (previous === undefined || previous.olderBefore !== olderBefore) return;
+    if (sessionTodos && startsNewList(previous.todos, sessionTodos)) showPanel("more");
   }, [selectedSession, sessionTodos]);
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
@@ -2167,6 +2172,7 @@ function App() {
           // full view was ⌘-clicking it over in the crew, or clicking away to
           // another row and back.
           onSelect={(sessionId) => goToSession(() => void selectAndLeaveCrew(sessionId))}
+          onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
           groups={spaceGroups}
           onDropSession={dropSession}
           splitLearned={splitLearned}

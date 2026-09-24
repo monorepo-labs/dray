@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -179,6 +182,8 @@ pub struct SessionSnapshot {
     #[ts(flatten)]
     pub index_item: SessionIndexItem,
     pub events: Vec<AgentEvent>,
+    /// Where the log's unread older part ends, when `events` is only its tail.
+    pub older_before: Option<u64>,
 }
 
 static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
@@ -186,7 +191,16 @@ static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
 /// `~/.dray`, creating it if this is the first run. If `~/.automedon` exists
 /// from before the app's rename and `~/.dray` doesn't yet, the old directory
 /// is moved into place so a rename never orphans a user's session history.
+///
+/// The migration and chmod run once per process: this ran on every persisted
+/// event. Subdirectories still `create_dir_all` per call, so one deleted while
+/// the app runs comes back on the next write.
 pub async fn get_home_app_dir() -> Result<PathBuf> {
+    static DIR: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
+    DIR.get_or_try_init(make_home_app_dir).await.cloned()
+}
+
+async fn make_home_app_dir() -> Result<PathBuf> {
     let home = std::env::home_dir().context("could not resolve home directory")?;
     let path = home.join(".dray");
 
@@ -311,12 +325,63 @@ pub async fn delete_pi_session_file(session_id: &str) -> Result<()> {
 /// Reads and parses `index.json`. Missing or empty file reads as no sessions,
 /// not an error.
 pub async fn read_index() -> Result<Vec<SessionIndexItem>> {
-    let path = get_sessions_dir().await?.join("index.json");
-    let mut items: Vec<SessionIndexItem> = read_json(&path).await?;
+    Ok(cached_index().await?.as_ref().clone())
+}
+
+/// One version of `index.json`. Every write lands by rename, so each is a new
+/// inode; mtime and length also catch the file edited in place.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct IndexStamp {
+    dev: u64,
+    ino: u64,
+    mtime: std::time::SystemTime,
+    len: u64,
+}
+
+impl IndexStamp {
+    fn of(meta: &std::fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        Some(Self { dev: meta.dev(), ino: meta.ino(), mtime: meta.modified().ok()?, len: meta.len() })
+    }
+}
+
+/// The index as last read or written, beside the stamp of the file it came from.
+static INDEX_CACHE: std::sync::Mutex<Option<(IndexStamp, Arc<Vec<SessionIndexItem>>)>> =
+    std::sync::Mutex::new(None);
+
+/// The parsed index, from memory while the file has not moved.
+///
+/// **A cache of the file, never the truth in its place.** A second Dray build
+/// sharing `~/.dray` writes this file too, and a copy that ignored its writes
+/// would erase them on the next whole-file rewrite here. So every read still
+/// asks the file — one `stat` — and parses only when it changed, which is what
+/// a parse per `get_session_index_item` used to cost on every send and status
+/// change (~600 entries, 370KB).
+async fn cached_index() -> Result<Arc<Vec<SessionIndexItem>>> {
+    cached_index_at(&get_sessions_dir().await?.join("index.json")).await
+}
+
+async fn cached_index_at(path: &Path) -> Result<Arc<Vec<SessionIndexItem>>> {
+    // Stamped before the read, so a file replaced between the two is cached
+    // under the older stamp — which costs a re-read, never a stale answer.
+    let stamp = fs::metadata(path).await.ok().and_then(|m| IndexStamp::of(&m));
+    if let Some(stamp) = stamp {
+        if let Some((cached, items)) = &*INDEX_CACHE.lock().unwrap() {
+            if *cached == stamp {
+                return Ok(items.clone());
+            }
+        }
+    }
+
+    let mut items: Vec<SessionIndexItem> = read_json(path).await?;
     // The one place the on-disk spelling of effort becomes the real one; every
     // reader above this reads `effort` and nothing else.
     items.iter_mut().for_each(decode_effort);
+    let items = Arc::new(items);
 
+    if let Some(stamp) = stamp {
+        *INDEX_CACHE.lock().unwrap() = Some((stamp, items.clone()));
+    }
     Ok(items)
 }
 
@@ -372,11 +437,19 @@ pub fn write_private_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()>
 /// sees a torn file: the index parses as one `Vec`, and a half-written one
 /// reads as no sessions at all.
 pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    write_atomic_stamped(path, contents).await.map(|_| ())
+}
+
+/// [`write_atomic`], answering with the stamp of the file it put in place. Read
+/// off the temp file before the rename, which keeps inode and mtime: stamping
+/// the path afterwards could stamp another build's write that landed between.
+async fn write_atomic_stamped(path: &Path, contents: impl AsRef<[u8]>) -> Result<Option<IndexStamp>> {
     let tmp = path.with_extension("json.tmp");
 
     fs::write(&tmp, contents)
         .await
         .with_context(|| format!("could not write {}", tmp.display()))?;
+    let stamp = fs::metadata(&tmp).await.ok().and_then(|m| IndexStamp::of(&m));
 
     if let Err(e) = fs::rename(&tmp, path).await {
         // Or the next write inherits a stale temp file it never wrote.
@@ -384,7 +457,7 @@ pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()>
         return Err(e).with_context(|| format!("could not replace {}", path.display()));
     }
 
-    Ok(())
+    Ok(stamp)
 }
 
 /// The index filtered to one side of `archived` — the sidebar shows exactly one
@@ -394,8 +467,8 @@ pub async fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()>
 pub async fn list_session_index_items(
     archived: bool,
 ) -> Result<Vec<SessionIndexItem>, Fail> {
-    let items = read_index().await?;
-    Ok(items.into_iter().filter(|i| i.archived == archived).collect())
+    let items = cached_index().await?;
+    Ok(items.iter().filter(|i| i.archived == archived).cloned().collect())
 }
 
 /// The repo root for an entry whose `cwd` is gone, or `None` where none of the
@@ -803,12 +876,12 @@ pub async fn append_session_index_item(session: SessionIndexItem) -> Result<()> 
     let mut sessions = read_index().await?;
     sessions.push(session);
 
-    write_session_index(&sessions).await
+    write_session_index(sessions).await
 }
 
-/// Bumps `modified`, and the settable per-session fields when they changed.
-/// Callers hold the live session's values, so an unchanged send skips the
-/// rewrite entirely — the whole index is serialized on every write.
+/// Records the settable per-session fields, writing only when one changed —
+/// the whole index is serialized on every write, and an unchanged send is the
+/// ordinary case. `modified` is left to the `InProgress` the send publishes.
 pub async fn touch_session_index_item(
     session_id: &str,
     model: ModelId,
@@ -816,8 +889,7 @@ pub async fn touch_session_index_item(
     permission_mode: ApprovalPolicy,
     fast: bool,
 ) -> Result<()> {
-    update_item(session_id, |item| {
-        item.modified = now_rfc3339();
+    edit_item(session_id, |item| {
         // An unset pick means "no explicit model" — the truth for a new session,
         // but touching an existing one it must not *erase* a model already recorded.
         // fx's model list is its active provider's and global, so switching provider
@@ -825,12 +897,16 @@ pub async fn touch_session_index_item(
         // out-of-list pick to the unset sentinel; persisting that here would lose
         // the real model and make a later resume omit `--model` and run the new
         // provider's default. Only a real pick overwrites.
-        if !model.is_unset() {
-            item.model = model;
-        }
+        let model = if model.is_unset() { item.model.clone() } else { model };
+        let changed = item.model != model
+            || item.effort != effort
+            || item.permission_mode != permission_mode
+            || item.fast != fast;
+        item.model = model;
         item.effort = effort;
         item.permission_mode = permission_mode;
         item.fast = fast;
+        ((), changed)
     })
     .await?;
     Ok(())
@@ -973,7 +1049,7 @@ pub async fn delete_session(session_id: &str) -> Result<bool> {
         if sessions.len() == before {
             false
         } else {
-            write_session_index(&sessions).await?;
+            write_session_index(sessions).await?;
             true
         }
     };
@@ -991,16 +1067,16 @@ pub async fn delete_session(session_id: &str) -> Result<bool> {
 /// Sets one entry's status. Returns the entry as written, or `None` if the id
 /// is unknown.
 ///
-/// Only completion bumps `modified`: the field means "last activity", and the
-/// agent finishing is activity. `InProgress` is already covered by the send's
-/// touch, and clearing the unread mark is a read, not activity.
+/// Starting and finishing bump `modified`: the field means "last activity".
+/// Starting is the send's bump too, folded in here so a turn costs one index
+/// write fewer. Clearing the unread mark is a read, not activity.
 pub async fn set_session_status(
     session_id: &str,
     status: SessionStatus,
 ) -> Result<Option<SessionIndexItem>> {
     update_item(session_id, |item| {
         item.status = status;
-        if status == SessionStatus::Completed {
+        if status != SessionStatus::Idle {
             item.modified = now_rfc3339();
         }
         item.clone()
@@ -1089,7 +1165,7 @@ pub async fn backfill_removed_worktrees() -> Result<()> {
     // `cwd` is not would relocate a session whose tree is merely unreachable,
     // costing it the flag below rather than anything destructive.
     if mark_relocated(&mut sessions, |dir| Path::new(dir).is_dir()) {
-        write_session_index(&sessions).await?;
+        write_session_index(sessions).await?;
     }
 
     Ok(())
@@ -1142,7 +1218,7 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
     }
 
     if changed {
-        write_session_index(&sessions).await?;
+        write_session_index(sessions).await?;
     }
 
     Ok(())
@@ -1247,10 +1323,13 @@ fn decode_effort(item: &mut SessionIndexItem) {
 
 /// Caller must hold `INDEX_LOCK`: this rewrites the whole file, so a concurrent
 /// writer would drop the other's entry.
-async fn write_session_index(sessions: &[SessionIndexItem]) -> Result<()> {
+async fn write_session_index(sessions: Vec<SessionIndexItem>) -> Result<()> {
     let path = get_sessions_dir().await?.join("index.json");
     let encoded: Vec<SessionIndexItem> = sessions.iter().map(encode_effort).collect();
-    write_atomic(&path, serde_json::to_string(&encoded)?).await
+    let stamp = write_atomic_stamped(&path, serde_json::to_string(&encoded)?).await?;
+    // What was just written is what the next read would parse back.
+    *INDEX_CACHE.lock().unwrap() = stamp.map(|stamp| (stamp, Arc::new(sessions)));
+    Ok(())
 }
 
 /// Edits one entry under `INDEX_LOCK` and writes the index back. `None` for an
@@ -1259,6 +1338,15 @@ async fn update_item<R>(
     session_id: &str,
     f: impl FnOnce(&mut SessionIndexItem) -> R,
 ) -> Result<Option<R>> {
+    edit_item(session_id, |item| (f(item), true)).await
+}
+
+/// [`update_item`] whose edit also answers whether to write at all, for an
+/// edit that often changes nothing.
+async fn edit_item<R>(
+    session_id: &str,
+    f: impl FnOnce(&mut SessionIndexItem) -> (R, bool),
+) -> Result<Option<R>> {
     let _guard = INDEX_LOCK.lock().await;
 
     let mut sessions = read_index().await?;
@@ -1266,31 +1354,182 @@ async fn update_item<R>(
         return Ok(None);
     };
 
-    let out = f(item);
-    write_session_index(&sessions).await?;
+    let (out, changed) = f(item);
+    if changed {
+        write_session_index(sessions).await?;
+    }
 
     Ok(Some(out))
 }
 
 /// Looks up one session's index entry by id.
 pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>> {
-    let items = read_index().await?;
+    let items = cached_index().await?;
 
-    Ok(items.into_iter().find(|i| i.session_id == session_id))
+    Ok(items.iter().find(|i| i.session_id == session_id).cloned())
 }
 
 /// `None` means the id isn't in the index. An indexed session with no log yet
 /// is normal — it was written before its process spawned — and yields empty
 /// `events` rather than `None`.
+///
+/// `turns` asks for the newest that many turns alone, read off the end of the
+/// log, with `older_before` saying where the rest begins. Opening a long
+/// session is otherwise the whole log parsed twice — here and by the
+/// webview's `JSON.parse`, the dearer half at ~400ms for a 21MB log — for a
+/// transcript that draws its newest eight turns first anyway.
 #[tauri::command]
-pub async fn get_session_by_id(session_id: &str) -> Result<Option<SessionSnapshot>, Fail> {
+pub async fn get_session_by_id(
+    session_id: &str,
+    turns: Option<u32>,
+) -> Result<Option<SessionSnapshot>, Fail> {
     let Some(index_item) = get_session_index_item(session_id).await? else {
         return Ok(None);
     };
 
-    let events = list_session_events(session_id).await?;
+    let page = match turns {
+        Some(turns) => read_session_page(session_id, None, turns).await?,
+        None => SessionPage {
+            events: list_session_events(session_id).await?,
+            older_before: None,
+        },
+    };
 
-    Ok(Some(SessionSnapshot { index_item, events }))
+    Ok(Some(SessionSnapshot {
+        index_item,
+        events: page.events,
+        older_before: page.older_before,
+    }))
+}
+
+/// The `turns` turns written before byte `before`, for paging a transcript
+/// opened with `get_session_by_id`'s `turns` back to its first prompt.
+#[tauri::command]
+pub async fn get_session_page(
+    session_id: &str,
+    before: u64,
+    turns: u32,
+) -> Result<SessionPage, Fail> {
+    Ok(read_session_page(session_id, Some(before), turns).await?)
+}
+
+/// Events from one stretch of a session's log, and the byte offset the
+/// stretch starts at — `None` once it reaches the top. An offset stays valid
+/// for the life of the file, since the log is only ever appended to.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPage {
+    pub events: Vec<AgentEvent>,
+    pub older_before: Option<u64>,
+}
+
+/// Reads the newest `turns` turns ending at byte `end` (the file's end where
+/// `None`), backwards in doubling chunks, so only the lines returned are ever
+/// parsed as events.
+async fn read_session_page(session_id: &str, end: Option<u64>, turns: u32) -> Result<SessionPage> {
+    let path = get_session_path(session_id).await?;
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionPage { events: Vec::new(), older_before: None })
+        }
+        Err(e) => return Err(e).context("could not open session file"),
+    };
+    let len = file.metadata().await?.len();
+
+    read_page(&mut file, end.map_or(len, |end| end.min(len)), turns, 256 * 1024).await
+}
+
+async fn read_page(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    turns: u32,
+    mut chunk: u64,
+) -> Result<SessionPage> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut start = end;
+    let mut buf = Vec::new();
+    let cut = loop {
+        let from = start.saturating_sub(chunk);
+        let mut head = vec![0; (start - from) as usize];
+        file.seek(SeekFrom::Start(from)).await?;
+        file.read_exact(&mut head).await?;
+        head.extend_from_slice(&buf);
+        buf = head;
+        start = from;
+        chunk *= 2;
+        if let Some(cut) = turn_cut(&buf, start == 0, turns.max(1)) {
+            break cut;
+        }
+        if start == 0 {
+            break 0;
+        }
+    };
+
+    let events = std::str::from_utf8(&buf[cut..])
+        .context("malformed session file")?
+        .lines()
+        .map(serde_json::from_str::<AgentEvent>)
+        .collect::<Result<Vec<_>, _>>()
+        .context("malformed session file")?;
+    let begins = start + cut as u64;
+
+    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+}
+
+/// Where in `buf` the `turns`-th newest turn opens, walking lines from the end.
+/// `None` until that many are in hand: the first line is only known whole where
+/// `at_top` says `buf` starts the file.
+fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
+    let mut found = 0;
+    let mut end = buf.len();
+    while end > 0 {
+        let body_end = if buf[end - 1] == b'\n' { end - 1 } else { end };
+        let start = match buf[..body_end].iter().rposition(|&b| b == b'\n') {
+            Some(newline) => newline + 1,
+            None if at_top => 0,
+            None => return None,
+        };
+        if opens_turn(&buf[start..body_end]) {
+            found += 1;
+            if found == turns {
+                return Some(start);
+            }
+        }
+        end = start;
+    }
+    None
+}
+
+/// A main-thread prompt that is not queued — the cut `buildTranscript` makes,
+/// since a queued prompt folds into the turn it was typed into.
+///
+/// The substring test does the work and only a hit is parsed: a quote inside a
+/// JSON string is always escaped, so it can only match the log's own structure.
+fn opens_turn(line: &[u8]) -> bool {
+    #[derive(Deserialize)]
+    struct Line {
+        subagent: Option<serde::de::IgnoredAny>,
+        payload: Payload,
+    }
+    #[derive(Deserialize)]
+    struct Payload {
+        #[serde(rename = "type")]
+        kind: String,
+        #[serde(default)]
+        queued: bool,
+    }
+
+    let Ok(line) = std::str::from_utf8(line) else {
+        return false;
+    };
+    line.contains(r#""type":"user_message""#)
+        && serde_json::from_str::<Line>(line).is_ok_and(|line| {
+            line.subagent.is_none() && line.payload.kind == "user_message" && !line.payload.queued
+        })
 }
 
 /// Replays a session's `.jsonl` log into its full event list. Missing file
@@ -1550,6 +1789,42 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Another build replacing the index must be read back, or the next
+    /// whole-file rewrite here erases what it wrote.
+    #[tokio::test]
+    async fn the_index_cache_sees_a_file_replaced_under_it() {
+        let dir = std::env::temp_dir().join(format!("dray-index-{}", Uuid::now_v7()));
+        fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("index.json");
+        let item = |id: &str| {
+            SessionIndexItem::new(
+                id,
+                Harness::ClaudeCode,
+                "/p",
+                "/p",
+                None,
+                None,
+                "hi",
+                ModelId::new("opus"),
+                None,
+                ApprovalPolicy::Auto,
+                false,
+                None,
+            )
+        };
+
+        write_atomic(&path, serde_json::to_string(&[item("a")]).unwrap()).await.unwrap();
+        let first = cached_index_at(&path).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &cached_index_at(&path).await.unwrap()), "unchanged file re-parsed");
+
+        write_atomic(&path, serde_json::to_string(&[item("a"), item("b")]).unwrap()).await.unwrap();
+        let ids: Vec<String> =
+            cached_index_at(&path).await.unwrap().iter().map(|i| i.session_id.clone()).collect();
+        assert_eq!(ids, ["a", "b"]);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
 
     /// A redraw loop runs inside one millisecond, where v7's counter bytes hold
     /// still — so the name must be drawn from the random tail, or every retry
@@ -2512,6 +2787,7 @@ mod tests {
         let json = serde_json::to_value(SessionSnapshot {
             index_item: item,
             events: vec![],
+            older_before: None,
         })
         .unwrap();
 
@@ -2555,5 +2831,80 @@ mod tests {
         );
 
         assert_eq!(max_seq(""), None);
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    fn line(seq: u64, subagent: bool, payload: Value) -> String {
+        let mut event = serde_json::json!({
+            "id": format!("e{seq}"), "sessionId": "s", "harness": "claude_code",
+            "seq": seq, "ts": "t", "turnId": null, "subagent": null, "payload": payload,
+        });
+        if subagent {
+            event["subagent"] = serde_json::json!({ "id": "call", "label": null });
+        }
+        format!("{event}\n")
+    }
+
+    fn prompt(seq: u64, queued: bool) -> String {
+        line(seq, false, serde_json::json!({
+            "type": "user_message", "text": "hi \"type\":\"user_message\"", "images": [],
+            "issues": [], "baseline": null, "queued": queued, "from": null, "cwd": null,
+        }))
+    }
+
+    fn text(seq: u64, subagent: bool) -> String {
+        line(seq, subagent, serde_json::json!({ "type": "assistant_text", "text": "x".repeat(40) }))
+    }
+
+    /// A queued prompt and a subagent's prompt cut no turn, matching
+    /// `buildTranscript`; neither does a prompt's text quoting the marker.
+    #[test]
+    fn cuts_where_the_transcript_does() {
+        let lines = [
+            prompt(0, false),
+            text(1, false),
+            prompt(2, true),
+            line(3, true, serde_json::from_str::<Value>(&prompt(3, false)).unwrap()["payload"].clone()),
+            prompt(4, false),
+            text(5, false),
+        ];
+        let buf = lines.concat();
+        let at = |i: usize| lines[..i].iter().map(String::len).sum::<usize>();
+
+        assert_eq!(turn_cut(buf.as_bytes(), true, 1), Some(at(4)));
+        assert_eq!(turn_cut(buf.as_bytes(), true, 2), Some(0));
+        assert_eq!(turn_cut(buf.as_bytes(), true, 3), None);
+        // Not the top of the file, so the first line may be a fragment.
+        assert_eq!(turn_cut(&buf.as_bytes()[1..], false, 2), None);
+    }
+
+    /// Pages walked back from the end, through chunks far smaller than a line,
+    /// put the whole log back together in order and stop at the top.
+    #[tokio::test]
+    async fn pages_back_to_the_first_prompt() {
+        let log: String = (0..5u64).flat_map(|t| [prompt(t * 2, false), text(t * 2 + 1, t == 2)]).collect();
+        let mut file = std::io::Cursor::new(log.clone().into_bytes());
+
+        let mut seqs = Vec::new();
+        let mut end = log.len() as u64;
+        let mut pages = 0;
+        loop {
+            let page = read_page(&mut file, end, 2, 7).await.unwrap();
+            pages += 1;
+            let mut these: Vec<u64> = page.events.iter().map(|e| e.seq).collect();
+            these.extend(seqs);
+            seqs = these;
+            match page.older_before {
+                Some(before) => end = before,
+                None => break,
+            }
+        }
+
+        assert_eq!(pages, 3);
+        assert_eq!(seqs, (0..10).collect::<Vec<_>>());
     }
 }

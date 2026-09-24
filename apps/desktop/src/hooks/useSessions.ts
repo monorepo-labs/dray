@@ -6,8 +6,10 @@ import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { appendStreamingText, peekStreamingBlock, retireStreamingBlock, startStreamingBlock, type StreamingBlock } from "@/hooks/useStreamingBlock";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
+import { forgetDocs } from "@/hooks/useDocs";
 import { useDockBadge } from "@/hooks/useDockBadge";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { forgetOpenFiles } from "@/hooks/useOpenFiles";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -20,11 +22,13 @@ import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
+import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { FIRST_MOUNT } from "@/lib/turnWindow";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -637,11 +641,22 @@ const dropProvisional = (sessionId: string, id: string) =>
   );
 
 
+// A tail read landing on a session that already holds older pages keeps them,
+// so the merged log starts wherever the earlier of the two did — or at the top,
+// where either one already reached it.
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
     prev.some((s) => s.sessionId === snapshot.sessionId)
       ? prev.map((s) =>
-          s.sessionId === snapshot.sessionId ? mergeEvents(snapshot, s.events) : s,
+          s.sessionId === snapshot.sessionId
+            ? {
+                ...mergeEvents(snapshot, s.events),
+                olderBefore:
+                  s.olderBefore == null || snapshot.olderBefore == null
+                    ? null
+                    : Math.min(s.olderBefore, snapshot.olderBefore),
+              }
+            : s,
         )
       : [...prev, snapshot],
   );
@@ -748,6 +763,7 @@ const handleSendMsg = async (
   if (isNewSession) {
     const shell: SessionSnapshot = {
       events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
+      olderBefore: null,
       sessionId,
       harness,
       cwd,
@@ -1169,15 +1185,13 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   }
 
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
-    if (snapshot) {
+    if (await loadTail(sessionId)) {
       // Held whoever asked for it — a loaded transcript is worth having and the
       // sweep decides when it stops being. The *answer* is the other question:
       // a click that landed while this read was out has already claimed the
       // request and moved the reader somewhere this read did not put them, so
       // saying it landed would let a caller tear down for a move that is no
       // longer theirs. The rollback below takes the same reading.
-      upsertSession(snapshot);
       return selectionRequestRef.current === sessionId;
     }
 
@@ -1543,6 +1557,9 @@ const deleteSession = async (sessionId: string) => {
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
+  deletedRef.current.add(sessionId);
+  forgetDocs(sessionId);
+  forgetOpenFiles(sessionId);
 
   if (selectedSessionId === sessionId) {
     handleNewSession();
@@ -2057,22 +2074,88 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
-/// Loads a transcript without selecting it, for a split pane. Guarded so the
-/// panes re-rendering mid-read don't issue a second one.
-const loadingRef = useRef(new Set<string>());
+/// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
+/// whether the id resolved to anything. The rest of the log is paged in by
+/// `loadOlder`, which the transcript asks for once it has mounted everything it
+/// holds — a 21MB log is ~1.8MB of tail, and the webview's `JSON.parse` of the
+/// whole was ~400ms before the newest turn could draw.
+///
+/// One read per session however many ask at once, so a hover's prefetch and
+/// the click that follows share it rather than landing twice.
+const tailReads = useRef(new Map<string, Promise<boolean>>());
+const deletedRef = useRef(new Set<string>());
+const loadTail = (sessionId: string): Promise<boolean> => {
+  const running = tailReads.current.get(sessionId);
+  if (running) return running;
+  const read = invoke<SessionSnapshot | null>("get_session_by_id", {
+    sessionId,
+    turns: FIRST_MOUNT,
+  })
+    .then((snapshot) => {
+      if (!snapshot) return false;
+      // A read outlived by a delete must not put the transcript back.
+      if (deletedRef.current.has(sessionId)) return false;
+      // Stamped as touched, so the count cap takes the least recently used
+      // transcript rather than the one a hover just warmed for its click.
+      lastViewedRef.current.set(sessionId, Date.now());
+      upsertSession(snapshot);
+      evictSessionsRef.current();
+      return true;
+    })
+    .finally(() => tailReads.current.delete(sessionId));
+  tailReads.current.set(sessionId, read);
+  return read;
+};
+
+/// Loads a transcript without selecting it — a split pane, or a sidebar row
+/// hovered long enough to be worth warming. Touches no selection ref, so a
+/// prefetch cannot be read as a move the rollback owns.
 const ensureLoaded = async (sessionId: string) => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
-  if (loadingRef.current.has(sessionId)) return;
-  loadingRef.current.add(sessionId);
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
-    if (snapshot) upsertSession(snapshot);
+    await loadTail(sessionId);
   } catch (e) {
-    console.error("failed to load a split pane", e);
-  } finally {
-    loadingRef.current.delete(sessionId);
+    console.error("failed to load a transcript", e);
   }
 };
+
+/// The turns before what a transcript holds, prepended in log order — never
+/// sorted by `seq`, which a Claude Code subagent numbers from 0. Dropped where
+/// the session was evicted or re-read meanwhile, since its `olderBefore` then
+/// no longer names where this page ends.
+///
+/// A failed read is tried again after a pause, a few times, since the
+/// transcript asks only when its window moves and would otherwise sit short of
+/// its first turn for as long as it stays loaded.
+const pageReads = useRef(new Set<string>());
+const loadOlder = async (sessionId: string, attempt = 0) => {
+  const before = sessionsRef.current.find((s) => s.sessionId === sessionId)?.olderBefore;
+  if (before == null || pageReads.current.has(sessionId)) return;
+  pageReads.current.add(sessionId);
+  try {
+    const page = await invoke<SessionPage>("get_session_page", {
+      sessionId,
+      before,
+      turns: OLDER_PAGE_TURNS,
+    });
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.sessionId !== sessionId || s.olderBefore !== before) return s;
+        const held = new Set(s.events.map((e) => e.id));
+        const older = page.events.filter((e) => !held.has(e.id));
+        return { ...s, events: [...older, ...s.events], olderBefore: page.olderBefore };
+      }),
+    );
+  } catch (e) {
+    console.error("failed to load older turns", e);
+    if (attempt < OLDER_PAGE_RETRIES) {
+      setTimeout(() => void loadOlder(sessionId, attempt + 1), 1000 * 2 ** attempt);
+    }
+  } finally {
+    pageReads.current.delete(sessionId);
+  }
+};
+useEffect(() => setOlderLoader((sessionId) => void loadOlder(sessionId)), []);
 
 // When each loaded transcript was last on screen. Stamped on arrival and on
 // leaving, so the idle clock starts the moment the reader looks away.
@@ -2085,8 +2168,18 @@ useEffect(() => {
   };
 }, [selectedSessionId]);
 
+/// Turns per page read above a transcript's tail.
+const OLDER_PAGE_TURNS = 16;
+const OLDER_PAGE_RETRIES = 3;
+
 /// How long a loaded transcript may sit unviewed before it is dropped.
 const IDLE_EVICT_MS = 10 * 60 * 1000;
+
+/// How many transcripts stay loaded however recently they were viewed, least
+/// recently touched going first. Flicking down the sidebar otherwise kept every
+/// one for the whole idle window. What the rules below hold is never dropped
+/// for it, so the count can sit above the cap while they do.
+const LOADED_CAP = 8;
 
 /// Drops idle transcripts from memory. Every transcript opened since launch
 /// stayed resident before this — hundreds of megabytes by the end of a day.
@@ -2105,21 +2198,37 @@ const IDLE_EVICT_MS = 10 * 60 * 1000;
 /// nothing to reload it.
 const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
   const now = Date.now();
+  const viewed = (id: string) => lastViewedRef.current.get(id) ?? 0;
+  // Never the session on screen, one mid-turn (its live events would land in
+  // the early-event hold), or one holding a card only its child can redraw.
+  const held = (s: SessionSnapshot) => {
+    const forced = s.sessionId === force?.sessionId;
+    const status =
+      forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+    return (
+      onScreen(s.sessionId)
+      || s.sessionId === selectionRequestRef.current
+      || status === "in_progress"
+      || (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0
+    );
+  };
   setSessions((prev) => {
-    const kept = prev.filter((s) => {
-      const forced = s.sessionId === force?.sessionId;
-      const selected =
-        onScreen(s.sessionId) || s.sessionId === selectionRequestRef.current;
-      const status =
-        forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
-      const asking = (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0;
-      // Never the session on screen, one mid-turn (its live events would land
-      // in the early-event hold), or one holding a card only its child can redraw.
-      if (selected || status === "in_progress" || asking) return true;
-      if (forced) return false;
+    let kept = prev.filter((s) => {
+      if (held(s)) return true;
+      if (s.sessionId === force?.sessionId) return false;
       // Never viewed since load counts as idle.
-      return now - (lastViewedRef.current.get(s.sessionId) ?? 0) < IDLE_EVICT_MS;
+      return now - viewed(s.sessionId) < IDLE_EVICT_MS;
     });
+    if (kept.length > LOADED_CAP) {
+      const drop = new Set(
+        kept
+          .filter((s) => !held(s))
+          .sort((a, b) => viewed(a.sessionId) - viewed(b.sessionId))
+          .slice(0, kept.length - LOADED_CAP)
+          .map((s) => s.sessionId),
+      );
+      kept = kept.filter((s) => !drop.has(s.sessionId));
+    }
     return kept.length === prev.length ? prev : kept;
   });
 };

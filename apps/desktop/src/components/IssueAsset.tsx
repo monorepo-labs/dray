@@ -36,10 +36,37 @@ type Cached = { generation: number; asset: IssueAsset | null };
 const cache = new Map<string, Cached>();
 const inFlight = new Map<string, Promise<IssueAsset | null>>();
 
-/// The entry for `url` if one was read under the generation now current.
+/// Screenshots are base64 in memory, so the cache is held to a byte budget,
+/// least recently used going first — `useChanges`' bargain. Without it every
+/// generation's reads stayed for the life of the app.
+const ASSET_BYTES_BUDGET = 32 * 1024 * 1024;
+let assetBytes = 0;
+const sizeOf = (entry: Cached) => (entry.asset?.dataUrl.length ?? 0) + 1;
+
+function remember(url: string, entry: Cached) {
+  const prev = cache.get(url);
+  if (prev) {
+    assetBytes -= sizeOf(prev);
+    cache.delete(url);
+  }
+  cache.set(url, entry);
+  assetBytes += sizeOf(entry);
+  while (assetBytes > ASSET_BYTES_BUDGET && cache.size > 1) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    assetBytes -= sizeOf(cache.get(oldest)!);
+    cache.delete(oldest);
+  }
+}
+
+/// The entry for `url` if one was read under the generation now current. A hit
+/// moves it to the back, so the budget drops the least recently *used*.
 function cached(url: string): Cached | undefined {
   const entry = cache.get(url);
-  return entry && entry.generation === issueGeneration() ? entry : undefined;
+  if (!entry || entry.generation !== issueGeneration()) return undefined;
+  cache.delete(url);
+  cache.set(url, entry);
+  return entry;
 }
 
 function load(url: string): Promise<IssueAsset | null> {
@@ -59,7 +86,7 @@ function load(url: string): Promise<IssueAsset | null> {
   const request = invoke<IssueAsset>("fetch_issue_asset", { url })
     .catch(() => null)
     .then((asset) => {
-      cache.set(url, { generation, asset });
+      remember(url, { generation, asset });
       inFlight.delete(url);
       return asset;
     });

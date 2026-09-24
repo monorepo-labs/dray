@@ -698,6 +698,7 @@ pub fn run() {
             files::read_file,
             store::list_session_index_items,
             store::get_session_by_id,
+            store::get_session_page,
             projects::list_projects,
             projects::add_project,
             projects::remove_project,

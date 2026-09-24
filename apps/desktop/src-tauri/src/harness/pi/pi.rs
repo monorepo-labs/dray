@@ -24,7 +24,7 @@ pub mod models;
 pub mod parser;
 pub mod rpc;
 
-use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy, TurnStatus};
+use crate::events::{AgentEventPayload, ApprovalPolicy, TurnStatus};
 use crate::harness::claude_code::permissions::PendingPermissions;
 use crate::harness::{read_stderr, record_failure, Harness::Pi};
 use crate::models::{Effort, Model};
@@ -180,7 +180,6 @@ pub async fn init(
     };
     let seq = Arc::new(AtomicU64::new(seq_start));
 
-    let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
     let queued: QueuedMessages = Arc::new(Mutex::new(Vec::new()));
     // Built here rather than at `Session` construction because the reader is
@@ -210,7 +209,6 @@ pub async fn init(
         let session_id = session_id.to_string();
         let session_cwd = session_cwd.to_string();
         let app = app.clone();
-        let events = events.clone();
         let status = status.clone();
         let queued = queued.clone();
         let seq = seq.clone();
@@ -224,7 +222,6 @@ pub async fn init(
                 client,
                 session_id,
                 session_cwd,
-                events,
                 status,
                 queued,
                 pending,
@@ -310,7 +307,6 @@ pub async fn init(
         // pi has no fast mode to be on, and `Capabilities::fast_mode` says so,
         // so nothing above ever asks this session to change it.
         fast: false,
-        events,
         seq,
         status,
         pending_permissions: pending,
@@ -579,7 +575,6 @@ async fn read_stdout(
     client: PiClient,
     session_id: String,
     session_cwd: String,
-    events: Arc<Mutex<Vec<AgentEvent>>>,
     status: Arc<Mutex<StatusTracker>>,
     queued: QueuedMessages,
     pending: PendingPermissions,
@@ -722,11 +717,9 @@ async fn read_stdout(
             session_id: &session_id,
             harness: Pi,
             session_cwd: &session_cwd,
-            events: &events,
             status: &status,
             queued: &queued,
             flush_seq: &seq,
-            flush_events: &events,
             flush_transport: &transport,
         };
 

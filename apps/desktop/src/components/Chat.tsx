@@ -26,6 +26,7 @@ import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { SessionSnapshot } from "@/types/events";
 
@@ -340,11 +341,14 @@ export default function Chat({
   // effect, so a switch draws the new session's window on its very first
   // commit instead of one full render later.
   //
-  // Held as the index of the oldest mounted turn, so a turn the live session
-  // appends is inside the window without moving it — see `firstMount`.
-  const [mount, setMount] = useState<{ sessionId: string | null; start: number }>({
+  // Held as the key of the oldest mounted turn, so a turn the live session
+  // appends is inside the window without moving it — see `firstMount` — and a
+  // page of older turns landing above it stays unmounted until backfill steps
+  // up to it, where an index would have shifted onto the page and mounted it
+  // whole.
+  const [mount, setMount] = useState<{ sessionId: string | null; key: string | null }>({
     sessionId: null,
-    start: 0,
+    key: null,
   });
   //
   // `tail` replaces the whole arrangement rather than seeding it: a capped
@@ -355,7 +359,7 @@ export default function Chat({
     tail != null
       ? Math.max(0, turns.length - tail)
       : mount.sessionId === session?.sessionId
-        ? mount.start
+        ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
         : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
   const backfilling = tail == null && mounted > 0;
@@ -372,8 +376,16 @@ export default function Chat({
   // One step per macrotask, after the previous one has painted. A single
   // deferred pass would still hold the thread for the whole parse; steps keep
   // the pane responsive while the rest of the transcript fills in.
+  //
+  // With every held turn mounted, the rest of the log is read a page at a time
+  // above it, and each page lands as more to backfill.
+  const olderBefore = session?.olderBefore;
   useEffect(() => {
-    if (!backfilling || !session) return;
+    if (!session) return;
+    if (!backfilling) {
+      if (tail == null && olderBefore != null) loadOlder(session.sessionId);
+      return;
+    }
     const sessionId = session.sessionId;
     const timer = setTimeout(() => {
       const oldest = contentRef.current?.querySelector<HTMLElement>("[data-turn]");
@@ -381,10 +393,10 @@ export default function Chat({
         oldest?.dataset.turn && !followRef.current
           ? { key: oldest.dataset.turn, top: oldest.getBoundingClientRect().top }
           : null;
-      setMount({ sessionId, start: grow(mounted) });
+      setMount({ sessionId, key: turns[grow(mounted)].key });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backfilling, mounted, session?.sessionId]);
+  }, [backfilling, mounted, session?.sessionId, olderBefore]);
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
@@ -463,7 +475,7 @@ export default function Chat({
     if (!node) {
       if (session && backfilling) {
         pendingJump.current = key;
-        setMount({ sessionId: session.sessionId, start: 0 });
+        setMount({ sessionId: session.sessionId, key: turns[0].key });
       }
       return;
     }
