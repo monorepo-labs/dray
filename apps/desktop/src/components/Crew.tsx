@@ -58,6 +58,9 @@ type CrewProps = {
   composing: boolean;
   active: boolean;
   chat: PaneChat;
+  /// Drawn under the transcript rather than beside it — see `crewBeside` in
+  /// `App`. Full width and capped in height, so the transcript keeps the most.
+  stacked?: boolean;
 };
 
 /// The sessions the conversation on the left started, one strip each, with the
@@ -94,6 +97,7 @@ export default function Crew({
   composing,
   active,
   chat,
+  stacked = false,
 }: CrewProps) {
   return (
     // **An edge, not a divider, and the ramp is what makes it one.** A flat
@@ -119,8 +123,13 @@ export default function Crew({
     // scrolls with the list rather than being pinned under it, since it is the
     // end of the list rather than a status bar.
     <div
-      className="flex min-h-0 shrink-0 flex-col overflow-y-auto border-l [border-image:linear-gradient(to_bottom,transparent,var(--border))_1]"
-      style={{ width: CREW_W }}
+      className={cn(
+        "flex min-h-0 shrink-0 flex-col overflow-y-auto",
+        stacked
+          ? "max-h-[40%] border-t border-border"
+          : "border-l [border-image:linear-gradient(to_bottom,transparent,var(--border))_1]",
+      )}
+      style={stacked ? undefined : { width: CREW_W }}
     >
       {/* No heading. The fixed width and the rows' own marks already say this is
           a list rather than a workspace, and a label over five rows that each

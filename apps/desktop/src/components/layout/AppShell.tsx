@@ -15,6 +15,9 @@ type AppShellProps = {
   /// column for the panel's reason: a composer spanning a list of other
   /// conversations does not say which one it talks to.
   crew?: ReactNode;
+  /// The window has no room for the crew beside the chat, so it is drawn
+  /// between the transcript and the composer instead.
+  crewStacked?: boolean;
   /// Holds the composer in the upper middle of the window and drops the
   /// transcript pane. The empty state has no transcript to anchor the composer
   /// against, so pinning it to the bottom leaves the one usable control as far
@@ -36,6 +39,7 @@ export default function AppShell({
   footer,
   panel,
   crew,
+  crewStacked = false,
   centered = false,
   overlay,
   children,
@@ -77,9 +81,10 @@ export default function AppShell({
                   with `flex-1` the way the right panel's do, have a column to
                   grow in. */}
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+              {crewStacked && crew}
               <div className="shrink-0">{footer}</div>
             </div>
-            {crew}
+            {!crewStacked && crew}
           </div>
         )}
       </div>

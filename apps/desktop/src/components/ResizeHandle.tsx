@@ -31,7 +31,7 @@ const subscribeToResize = (fn: () => void) => {
 /// clamp, the keys and the ARIA values all go stale the moment the window is
 /// resized — and the reader resizing the window is exactly when a pane has to
 /// give ground.
-function useViewportWidth(): number {
+export function useViewportWidth(): number {
   return useSyncExternalStore(subscribeToResize, () => window.innerWidth);
 }
 
@@ -51,7 +51,7 @@ const ORDER: readonly Pane[] = ["sidebar", "panel"];
 /// The narrowest the chat column may be squeezed to, whatever the share works
 /// out at. The share alone is a proportion, so on a small window it still hands
 /// the conversation something unreadable; this is the absolute floor under it.
-const CHAT_MIN = 360;
+export const CHAT_MIN = 360;
 
 /// What each side pane is holding, and how much the chat column must keep.
 ///

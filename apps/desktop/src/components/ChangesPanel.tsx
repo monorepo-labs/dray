@@ -87,7 +87,7 @@ export default function ChangesPanel({
 /// bargain — a sentence alone leaves them hunting for the tab.
 function NoChanges({ onOpenRepo }: { onOpenRepo: () => void }) {
   return (
-    <div className="flex flex-1 items-center justify-center p-8 text-ui">
+    <div className="flex flex-1 items-center justify-center p-4 text-ui">
       <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
         {/* The glyph rides the line it labels rather than sitting over it: on
             its own row it reads as an illustration, which is more than a pane
@@ -98,7 +98,7 @@ function NoChanges({ onOpenRepo }: { onOpenRepo: () => void }) {
         </p>
         {/* The chord sits beside the button, not inside it: in there it reads as
             part of the label, and the button already says what it does. */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <Button variant="outline" size="sm" onClick={onOpenRepo}>
             Open Diff view
           </Button>

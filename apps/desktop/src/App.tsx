@@ -46,13 +46,15 @@ import { trackFeature } from "@/lib/analytics";
 import { handoffActions } from "@/lib/handoff";
 import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
+  PANEL_MIN,
   PanelToggle,
   TabBody,
   tabOrder,
   type PanelTab,
 } from "@/components/RightPanel";
-import { useChatColumnFloor } from "@/components/ResizeHandle";
+import { CHAT_MIN, useChatColumnFloor, useViewportWidth } from "@/components/ResizeHandle";
 import Sidebar, {
+  SIDEBAR_MIN,
   SEARCH_INPUT_ID,
   SidebarToggle,
   filterSessions,
@@ -706,8 +708,20 @@ function App() {
   // leaving on the one gesture that is supposed to stay inside it.
   const crewExists = crew.length > 0 && !groupOf(spaceGroups, crewAnchorId);
   const crewAvailable = crewExists && !issuesOpen && viewTab === "chat";
+  // **Beside the chat only where it fits, judged on minimums alone.** The
+  // crew never gives width back, so on a narrow window it crushed the sidebar
+  // to a sliver. Measured off the sidebar's *drawn* width this would chase
+  // itself — the crew's floor is what clamps that width — so it reads the
+  // floor. Where it does not fit it starts hidden and ⌘⇧C stacks it under the
+  // transcript instead; an explicit toggle outranks the default either way.
+  // The panel counts as the crew would leave it — under the anchor's key, see
+  // `panelKey` below — since reading `panelOpen` itself would loop back here.
+  const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
+  const crewBeside =
+    useViewportWidth() >=
+    CHAT_MIN + CREW_W + (collapsed ? 0 : SIDEBAR_MIN) + (crewPanelOpen ? PANEL_MIN : 0);
   const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
-  const crewHidden = !!(crewAnchorId && crewHiddenBy[crewAnchorId]);
+  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewBeside);
   const crewUp = crewExists && !crewHidden;
   const crewDrawn = crewAvailable && !crewHidden;
 
@@ -775,7 +789,7 @@ function App() {
   // What the main column is actually showing. With a crew up that is the
   // anchor, which `crewExists` has already established is in no group.
   const mainGroup = crewUp ? null : activeGroup;
-  useChatColumnFloor(!mainGroup, crewDrawn ? CREW_W : 0);
+  useChatColumnFloor(!mainGroup, crewDrawn && crewBeside ? CREW_W : 0);
 
   const toggleCrew = () => {
     if (crewAnchorId) setCrewHiddenBy((prev) => ({ ...prev, [crewAnchorId]: !crewHidden }));
@@ -2115,9 +2129,11 @@ function App() {
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
       // pane of it would be a third arrangement of the same column.
+      crewStacked={!crewBeside}
       crew={
         crewDrawn ? (
           <Crew
+            stacked={!crewBeside}
             rows={crew}
             open={crewOpen}
             selectedId={selectedSessionId}

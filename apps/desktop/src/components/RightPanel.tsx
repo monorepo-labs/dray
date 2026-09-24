@@ -279,6 +279,10 @@ export function TabBody({ active, children }: { active: boolean; children: React
 /// No titlebar spacer either, unlike the main column. This pane reaches the top
 /// of the window and its tab row is what sits there; the traffic lights are on
 /// the far side, so nothing needs clearing.
+/// The panel's floor, and what the crew counts on it holding when it judges
+/// whether there is room to stand beside the chat.
+export const PANEL_MIN = 320;
+
 export default function RightPanel({
   open,
   tab,
@@ -295,7 +299,7 @@ export default function RightPanel({
   const { style, handle } = useResizable({
     storageKey: "ade.rightPanelWidth",
     initial: 512,
-    min: 320,
+    min: PANEL_MIN,
     edge: "left",
     label: "Resize the panel",
     // Dropped while closed, for the sidebar's reason: this pane hides rather
