@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, isToolGroup, segmentWork, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, isToolGroup, segmentWork, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -707,5 +707,31 @@ describe("a pending ask", () => {
   // #301: a respawned Codex child numbered its requests from 0 again.
   it("is not retired by a decision made before it under the same id", () => {
     expect(pending([ask(0, "0"), decided(1, "0"), ask(2, "0")])).toEqual(["0"]);
+  });
+});
+
+describe("drawsSameTurn", () => {
+  const result = (seq: number, callId: string) =>
+    event(seq, {
+      type: "tool_call_completed",
+      callId,
+      result: { text: "ok", isError: false, structured: null, exitCode: 0, durationMs: null, images: [] },
+    } as AgentEventPayload);
+
+  const view = (events: AgentEvent[], index: number) => {
+    const t = buildTranscript(events);
+    return { ...t, turn: t.turns[index] };
+  };
+
+  const log = [prompt(1, "one", false), callStarted(2, "a"), result(3, "a"), completed(4)];
+
+  it("holds for an old turn when a later one moves", () => {
+    const next = [...log, prompt(5, "two", false), callStarted(6, "b")];
+    expect(drawsSameTurn(view(log, 0), view(next, 0))).toBe(true);
+  });
+
+  it("breaks when a result lands for one of the turn's calls", () => {
+    const open = [prompt(1, "one", false), callStarted(2, "a")];
+    expect(drawsSameTurn(view(open, 0), view([...open, result(3, "a")], 0))).toBe(false);
   });
 });

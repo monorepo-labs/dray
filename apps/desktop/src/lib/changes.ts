@@ -62,6 +62,18 @@ export function turnChangedTree({ baseline, head }: ChangeRange): boolean {
   return !!baseline && !!head && baseline !== head;
 }
 
+/// The newest finished tool call's id, or "" where there is none.
+///
+/// What tells a working-tree read to re-read mid-turn. Only a tool can write,
+/// so text, reasoning and progress events moving `events.length` asked for a
+/// `git add -A` snapshot each and could never change its answer.
+export function lastToolResult(events: AgentEvent[]): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].payload.type === "tool_call_completed") return events[i].id;
+  }
+  return "";
+}
+
 /// Splits a path into the part that gets dimmed and the part that doesn't. The
 /// basename is what the reader scans for, so it stays at full contrast while
 /// the directories recede.

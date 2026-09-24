@@ -99,6 +99,8 @@ type SidebarProps = {
   onToggleCollapsed: () => void;
   onOpenSettings: () => void;
   onSelect: (sessionId: string) => void;
+  /// See `SessionRow`'s own.
+  onPrefetch?: (sessionId: string) => void;
   /// The split groups of the active space, drawn as runs of their own ahead
   /// of everything else. Each holds only sessions in `items`.
   groups: SplitGroup[];
@@ -868,6 +870,7 @@ export default function Sidebar({
   collapsed,
   onToggleCollapsed,
   onSelect,
+  onPrefetch,
   groups: splits,
   onDropSession,
   splitLearned,
@@ -1361,6 +1364,7 @@ export default function Sidebar({
                       group.kind === "pinned" && depth > 0 && !item.pinned
                     }
                     onSelect={onSelect}
+                    onPrefetch={onPrefetch}
                     onDragStart={
                       !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
@@ -1983,6 +1987,10 @@ const RAIL_X = 12;
 const STEP = 12;
 const ELBOW = 10;
 
+/// How long the pointer rests on a row before its transcript is read ahead of
+/// the click. Long enough that sweeping down the list reads nothing.
+const PREFETCH_HOVER_MS = 100;
+
 function SessionRow({
   item,
   depth,
@@ -1995,6 +2003,7 @@ function SessionRow({
   faded = false,
   marksLive = true,
   onSelect,
+  onPrefetch,
   onDragStart,
   nested = false,
   inheritsPin = false,
@@ -2022,6 +2031,9 @@ function SessionRow({
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
   onSelect: (sessionId: string) => void;
+  /// Warms the row's transcript once the pointer has rested on it, so the click
+  /// finds it loaded. Loads without selecting.
+  onPrefetch?: (sessionId: string) => void;
   /// Wires the row for dragging onto the transcript column. See `startSessionDrag`.
   onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   /// This row has a parent in the same list, so 'Detach from parent' is a real
@@ -2050,6 +2062,9 @@ function SessionRow({
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  const hover = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(hover.current), []);
 
   // The rail this row elbows onto is its parent's, one step to the left of the
   // one it opens for its own children.
@@ -2087,6 +2102,11 @@ function SessionRow({
         role="button"
         tabIndex={0}
         onClick={() => void onSelect(item.sessionId)}
+        onPointerEnter={() => {
+          clearTimeout(hover.current);
+          hover.current = setTimeout(() => onPrefetch?.(item.sessionId), PREFETCH_HOVER_MS);
+        }}
+        onPointerLeave={() => clearTimeout(hover.current)}
         onPointerDown={onDragStart}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {

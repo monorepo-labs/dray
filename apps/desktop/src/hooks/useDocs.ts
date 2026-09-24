@@ -152,6 +152,14 @@ function write(sid: string, next: Partial<SessionDocs>) {
   emit();
 }
 
+/// Drops what a deleted session held, text and all. A read still out finds
+/// neither its entry nor its number, so it lands nowhere.
+export function forgetDocs(sid: string) {
+  if (!bySession.delete(sid)) return;
+  for (const key of seqByPath.keys()) if (key.startsWith(`${sid}\n`)) seqByPath.delete(key);
+  emit();
+}
+
 type DocsSnapshot = SessionDocs & { opened: number };
 
 /// Bumped on every change. `useSyncExternalStore` subscribes to *this* rather

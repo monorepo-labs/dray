@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { useWindowFocused } from "@/lib/focus";
 import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { PrMark } from "@/types/events";
@@ -289,13 +290,24 @@ export function usePrMarks(repoPaths: string[]) {
   );
   const openKey = openRepos.join("\n");
 
+  // Paused while the window is in the background, where a mark changes
+  // nothing the reader can see. Coming back re-reads whatever the pause let go
+  // stale, so "Ready to merge" lands on return rather than a poll later — only
+  // on the return itself, since `load(false)` above already answers a change
+  // of repos and a forced read beside it would queue a second `gh`.
+  const focused = useWindowFocused();
+  const wasFocused = useRef(focused);
   useEffect(() => {
-    if (!openKey) return;
+    const returned = focused && !wasFocused.current;
+    wasFocused.current = focused;
+    if (!openKey || !focused) return;
 
     const targets = openKey.split("\n");
+    const stale = targets.filter((path) => Date.now() - (fetchedAt.get(path) ?? 0) >= OPEN_POLL_MS);
+    if (returned && stale.length > 0) void load(true, stale);
     const id = setInterval(() => void load(true, targets), OPEN_POLL_MS);
     return () => clearInterval(id);
-  }, [openKey, load]);
+  }, [openKey, focused, load]);
 
   return {
     /// The pull request a session's row is marked with, or nothing. Takes the

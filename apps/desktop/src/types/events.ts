@@ -1637,11 +1637,22 @@ parentSessionId: string | null, created: string, modified: string, archived: boo
 export type SessionInfo = { cwd: string | null, model: string | null, harnessVersion: string | null, tools: Array<string>, mcpServers: Array<McpServer>, subagentTypes: Array<string>, settings: Settings | null, };
 
 /**
+ * Events from one stretch of a session's log, and the byte offset the
+ * stretch starts at — `None` once it reaches the top. An offset stays valid
+ * for the life of the file, since the log is only ever appended to.
+ */
+export type SessionPage = { events: Array<AgentEvent>, olderBefore: number | null, };
+
+/**
  * What crosses the IPC boundary for one session: its index entry plus the
  * replayed event log. Distinct from [`crate::session::Session`], which owns a
  * child process and cannot be serialized.
  */
-export type SessionSnapshot = { events: Array<AgentEvent>, sessionId: string, harness: Harness, 
+export type SessionSnapshot = { events: Array<AgentEvent>, 
+/**
+ * Where the log's unread older part ends, when `events` is only its tail.
+ */
+olderBefore: number | null, sessionId: string, harness: Harness, 
 /**
  * Where the agent actually runs. Equals `project_path` for a normal
  * session; points inside `.claude/worktrees/<name>` for a worktree one.

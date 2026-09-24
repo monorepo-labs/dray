@@ -37,7 +37,7 @@ pub mod parser;
 pub mod permissions;
 pub mod probe;
 
-use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
+use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::Grok};
@@ -186,7 +186,6 @@ pub async fn init(
     };
 
     let seq = Arc::new(AtomicU64::new(seq_start));
-    let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
     let queued: QueuedMessages = Arc::new(Mutex::new(Vec::new()));
     // The ring's denominator, learned from the session's own reply below and
@@ -197,14 +196,13 @@ pub async fn init(
     ));
 
     tokio::spawn({
-        let events = events.clone();
         let status = status.clone();
         let queued = queued.clone();
         let seq = seq.clone();
         let window = window.clone();
         async move {
             if let Err(error) =
-                read_stdout(stdout, reader, ready_rx, events, status, queued, seq, window).await
+                read_stdout(stdout, reader, ready_rx, status, queued, seq, window).await
             {
                 eprintln!("Failed to read grok stdout: {error}");
             }
@@ -269,7 +267,6 @@ pub async fn init(
         // fast twin and recorded as standard ignores the switch being turned
         // *off* — the child stays on the twin while the composer says it left.
         fast,
-        events,
         seq,
         status,
         pending_permissions: pending,
@@ -701,7 +698,6 @@ async fn read_stdout(
     stdout: ChildStdout,
     handles: ReaderHandles,
     ready: tokio::sync::oneshot::Receiver<GrokSession>,
-    events: Arc<Mutex<Vec<AgentEvent>>>,
     status: Arc<Mutex<StatusTracker>>,
     queued: QueuedMessages,
     seq: Arc<AtomicU64>,
@@ -865,11 +861,9 @@ async fn read_stdout(
             session_id: &handles.session_id,
             harness: Grok,
             session_cwd: &handles.session_cwd,
-            events: &events,
             status: &status,
             queued: &queued,
             flush_seq: &seq,
-            flush_events: &events,
             flush_transport: transport,
         };
 
@@ -896,7 +890,6 @@ async fn read_stdout(
             Grok,
             &queued,
             &seq,
-            &events,
             &handles.app,
         )
         .await;
@@ -906,11 +899,9 @@ async fn read_stdout(
                 session_id: &handles.session_id,
                 harness: Grok,
                 session_cwd: &handles.session_cwd,
-                events: &events,
                 status: &status,
                 queued: &queued,
                 flush_seq: &seq,
-                flush_events: &events,
                 flush_transport: transport,
             };
             for agent_event in mapper.map(parser::GrokEvent::PromptFailed {

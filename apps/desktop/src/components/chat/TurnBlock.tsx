@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
@@ -6,7 +6,7 @@ import EventRow from "@/components/chat/EventRow";
 import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
-import { GROUP_MIN, isToolGroup, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
+import { drawsSameTurn, GROUP_MIN, isToolGroup, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
 import type { FileEdit, ToolResult } from "@/types/events";
 import { cn } from "@/lib/utils";
 
@@ -64,7 +64,7 @@ function segmentLabel(seg: TurnSegment) {
 
 /// One turn: the user's prompt, a collapsed summary of the work, and the final
 /// answer. Expanding reveals the intermediate steps.
-export default function TurnBlock({
+export default memo(function TurnBlock({
   turn,
   subagentById,
   resultByCallId,
@@ -180,6 +180,17 @@ export default function TurnBlock({
         />
       )}
     </div>
+  );
+}, drawsTheSame);
+
+/// Whether a turn would draw what it drew last time — its callbacks and footer
+/// by identity, its data by [`drawsSameTurn`].
+function drawsTheSame(a: TurnBlockProps, b: TurnBlockProps): boolean {
+  return (
+    a.footer === b.footer &&
+    a.onOpenSubagent === b.onOpenSubagent &&
+    a.onOpenSession === b.onOpenSession &&
+    drawsSameTurn(a, b)
   );
 }
 

@@ -116,3 +116,97 @@ export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlug
     },
   } as CodeHighlighterPlugin;
 }
+
+/// How long a streaming code block must stop growing before it is tokenized.
+const SETTLE_MS = 150;
+
+/// `plugin`, for a message that is still streaming.
+///
+/// An open fence grows on every delta, and every length is a new cache key, so
+/// the plain plugin tokenized the whole block again on the main thread for each
+/// token — measured at 113 tokenizes and 2.2s over one 130-line fence — and kept
+/// every prefix in its cache for good. Here a block is tokenized only once it
+/// has stopped growing for `SETTLE_MS`, which a closed fence always does, and
+/// that one result lands in the plain plugin's cache where the committed message
+/// finds it. Meanwhile the block draws the lines an earlier tokenize already
+/// coloured and the rest plain. Every line of a prefix but its last is final,
+/// since a grammar's state only runs forward.
+export function streamingCodePlugin(plugin: CodeHighlighterPlugin): CodeHighlighterPlugin {
+  // Newest first, and few: only the blocks streaming right now read these.
+  const settled: { lang: string; code: string; result: HighlightResult }[] = [];
+  type Callback = (result: HighlightResult) => void;
+  const pending: {
+    lang: string;
+    code: string;
+    timer?: ReturnType<typeof setTimeout>;
+    callback?: Callback;
+    /// Earlier requests this one took over, each owed a result for its own text.
+    superseded: { code: string; callback?: Callback }[];
+  }[] = [];
+
+  const plainLine = (content: string) => [
+    { content, color: "inherit", bgColor: "transparent", htmlStyle: {}, offset: 0 },
+  ];
+
+  const partial = (code: string, lang: string): HighlightResult => {
+    const base = settled.find((s) => s.lang === lang && code.startsWith(s.code));
+    const keep = base ? Math.max(0, base.result.tokens.length - 1) : 0;
+    const plain = code.split("\n").slice(keep).map(plainLine);
+    return {
+      ...(base?.result ?? { bg: "transparent", fg: "inherit" }),
+      tokens: [...(base?.result.tokens.slice(0, keep) ?? []), ...plain],
+    } as HighlightResult;
+  };
+
+  /// `result`, cut back to `code`, a prefix of what it tokenized. Its last line
+  /// keeps its colour only where it is a whole line of `result`.
+  const cut = (result: HighlightResult, code: string): HighlightResult => {
+    const lines = code.split("\n");
+    const tokens = result.tokens.slice(0, lines.length);
+    const last = lines.length - 1;
+    if (tokens[last]?.map((t) => t.content).join("") !== lines[last]) {
+      tokens[last] = plainLine(lines[last]) as (typeof tokens)[number];
+    }
+    return { ...result, tokens };
+  };
+
+  return {
+    ...plugin,
+    highlight(options: HighlightOptions, callback?: (result: HighlightResult) => void) {
+      const { code } = options;
+      const lang = options.language ? options.language.trim().toLowerCase() : "text";
+
+      const done = settled.find((s) => s.lang === lang && s.code === code);
+      if (done) return done.result;
+
+      // A block growing takes over its own earlier wait rather than queueing
+      // beside it — a request whose text extends a pending one is taken to be
+      // that block. It may be another fence that happens to start with the
+      // first one's text, so the earlier request still gets a result, cut from
+      // this one's rather than tokenized again.
+      const wait: (typeof pending)[number] = { lang, code, superseded: [] };
+      const earlier = pending.findIndex((p) => p.lang === lang && code.startsWith(p.code));
+      if (earlier >= 0) {
+        const [prev] = pending.splice(earlier, 1);
+        clearTimeout(prev.timer);
+        wait.superseded = [...prev.superseded, { code: prev.code, callback: prev.callback }];
+      }
+      wait.callback = callback;
+
+      wait.timer = setTimeout(() => {
+        pending.splice(pending.indexOf(wait), 1);
+        const deliver = (result: HighlightResult) => {
+          settled.unshift({ lang, code, result });
+          settled.length = Math.min(settled.length, 8);
+          for (const s of wait.superseded) s.callback?.(cut(result, s.code));
+          callback?.(result);
+        };
+        const result = plugin.highlight(options, deliver);
+        if (result) deliver(result);
+      }, SETTLE_MS);
+      pending.push(wait);
+
+      return partial(code, lang);
+    },
+  } as CodeHighlighterPlugin;
+}

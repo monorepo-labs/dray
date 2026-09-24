@@ -1,3 +1,4 @@
+import { Suspense, useState } from "react";
 import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
@@ -265,6 +266,15 @@ export function TabBody({ active, children }: { active: boolean; children: React
       {children}
     </div>
   );
+}
+
+/// Mounts `children` the first time `when` holds and keeps them mounted after,
+/// so a lazily imported view costs nothing at launch and still hides rather
+/// than unmounts once it has been opened.
+export function MountOnce({ when, children }: { when: boolean; children: React.ReactNode }) {
+  const [seen, setSeen] = useState(when);
+  if (when && !seen) setSeen(true);
+  return seen || when ? <Suspense fallback={null}>{children}</Suspense> : null;
 }
 
 /// The frame every right-hand inspector shares: one border, one row of tabs.

@@ -78,6 +78,7 @@ futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
 sha2 = "0.10"
+tauri-plugin-window-state = "2"
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables

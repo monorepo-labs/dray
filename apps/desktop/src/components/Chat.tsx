@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
@@ -21,16 +21,17 @@ import {
 } from "@/components/ui/tooltip";
 import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
-import type { ApiRetryState, QueuedPrompt, StreamingBlock, Working } from "@/hooks/useSessions";
+import type { ApiRetryState, QueuedPrompt, Working } from "@/hooks/useSessions";
+import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
   session: SessionSnapshot | null;
-  streamingBlock: StreamingBlock | null;
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt into this one, for the avatar a
   /// `dray send` message draws. Selecting the session is all it does — the same
@@ -154,7 +155,6 @@ function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
 
 export default function Chat({
   session,
-  streamingBlock,
   onOpenSubagent,
   onOpenSession,
   onOpenSubagentPanel,
@@ -240,27 +240,10 @@ export default function Chat({
   const showRail = rail && checkpoints.length >= RAIL_MIN;
   const [activeTurn, setActiveTurn] = useState<string | null>(null);
 
-  // Told apart by the type `block_start` declared, not by content — thinking
-  // deltas are plain text on the wire. Only one block streams at a time, so at
-  // most one of these is non-empty.
-  const streamingText = streamingBlock?.type === "text" ? streamingBlock.text : "";
-  const streamingThinking =
-    streamingBlock?.type === "thinking" ? streamingBlock.text : "";
-
-  // A tool call the model is still composing. Unlike the two above this is
-  // non-empty from the first frame — the block announces its tool before any
-  // argument arrives, and having only the name is exactly the case the preview
-  // exists to cover.
-  const streamingTool =
-    streamingBlock?.type === "tool_use" && streamingBlock.name
-      ? { name: streamingBlock.name, partialJson: streamingBlock.text }
-      : null;
-
-  // Kept a string rather than a boolean: the scroll-pin effect below takes this
-  // as a dependency, and prose re-pinning per delta depends on the value
-  // changing as it grows. The tool preview is one fixed-height row, so a
-  // constant is right for it — it only has to differ from "".
-  const streamingAny = streamingText || streamingThinking || (streamingTool ? "tool" : "");
+  // Which kind of preview is open, not its text: the text grows on every
+  // delta and only `StreamingPreview` reads it, so the transcript around it
+  // re-renders when a block opens or retires rather than per token.
+  const streamingKind = useStreamingKind(session?.sessionId ?? null);
 
   // The turn the indicator belongs to, or null when nothing is waiting on
   // output.
@@ -316,7 +299,7 @@ export default function Chat({
     cards.length === 0 &&
     lastTurn &&
     !lastTurn.completed &&
-    (!streamingAny || orbRidesPreview)
+    (!streamingKind || orbRidesPreview)
       ? lastTurn
       : null;
 
@@ -329,9 +312,9 @@ export default function Chat({
   // maps from `result`, which fires once per run rather than per message, so a
   // turn stays open across every `message_start` in it — and after a `result`
   // the next thing is a `user_message`, which opens the next turn before any
-  // delta arrives. So this is non-null whenever `streamingText` is.
+  // delta arrives. So this is non-null whenever a text preview is.
   const streamingTurn =
-    streamingAny && lastTurn && !lastTurn.completed ? lastTurn : null;
+    streamingKind && lastTurn && !lastTurn.completed ? lastTurn : null;
 
   // A new session resets the pin, or the previous session's scroll position
   // would decide whether this one follows. Must run before the pin effect below,
@@ -341,13 +324,15 @@ export default function Chat({
   }, [session?.sessionId]);
 
   // Keyed on the session too: switching between transcripts with equal event
-  // counts must still land at the bottom.
+  // counts must still land at the bottom. A preview *growing* is not a key: the
+  // ResizeObserver below re-pins on every height it adds, where keying on the
+  // text wrote `scrollTop` and read layout back on every delta.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && followRef.current) pin(el);
     syncAtBottom();
     syncActive();
-  }, [session?.sessionId, events.length, streamingAny]);
+  }, [session?.sessionId, events.length, streamingKind]);
 
   // How many of the newest turns are drawn. Opening a long session mounts only
   // what fits on screen and backfills the rest above it in deferred steps, so
@@ -356,11 +341,14 @@ export default function Chat({
   // effect, so a switch draws the new session's window on its very first
   // commit instead of one full render later.
   //
-  // Held as the index of the oldest mounted turn, so a turn the live session
-  // appends is inside the window without moving it — see `firstMount`.
-  const [mount, setMount] = useState<{ sessionId: string | null; start: number }>({
+  // Held as the key of the oldest mounted turn, so a turn the live session
+  // appends is inside the window without moving it — see `firstMount` — and a
+  // page of older turns landing above it stays unmounted until backfill steps
+  // up to it, where an index would have shifted onto the page and mounted it
+  // whole.
+  const [mount, setMount] = useState<{ sessionId: string | null; key: string | null }>({
     sessionId: null,
-    start: 0,
+    key: null,
   });
   //
   // `tail` replaces the whole arrangement rather than seeding it: a capped
@@ -371,7 +359,7 @@ export default function Chat({
     tail != null
       ? Math.max(0, turns.length - tail)
       : mount.sessionId === session?.sessionId
-        ? mount.start
+        ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
         : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
   const backfilling = tail == null && mounted > 0;
@@ -388,8 +376,16 @@ export default function Chat({
   // One step per macrotask, after the previous one has painted. A single
   // deferred pass would still hold the thread for the whole parse; steps keep
   // the pane responsive while the rest of the transcript fills in.
+  //
+  // With every held turn mounted, the rest of the log is read a page at a time
+  // above it, and each page lands as more to backfill.
+  const olderBefore = session?.olderBefore;
   useEffect(() => {
-    if (!backfilling || !session) return;
+    if (!session) return;
+    if (!backfilling) {
+      if (tail == null && olderBefore != null) loadOlder(session.sessionId);
+      return;
+    }
     const sessionId = session.sessionId;
     const timer = setTimeout(() => {
       const oldest = contentRef.current?.querySelector<HTMLElement>("[data-turn]");
@@ -397,10 +393,10 @@ export default function Chat({
         oldest?.dataset.turn && !followRef.current
           ? { key: oldest.dataset.turn, top: oldest.getBoundingClientRect().top }
           : null;
-      setMount({ sessionId, start: grow(mounted) });
+      setMount({ sessionId, key: turns[grow(mounted)].key });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backfilling, mounted, session?.sessionId]);
+  }, [backfilling, mounted, session?.sessionId, olderBefore]);
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
@@ -479,7 +475,7 @@ export default function Chat({
     if (!node) {
       if (session && backfilling) {
         pendingJump.current = key;
-        setMount({ sessionId: session.sessionId, start: 0 });
+        setMount({ sessionId: session.sessionId, key: turns[0].key });
       }
       return;
     }
@@ -602,6 +598,22 @@ export default function Chat({
     if (active && session) scrollToBottom();
   });
 
+  // One object per session rather than per render: every file-path span in
+  // every message reads this context, and a fresh value re-renders all of them
+  // through `Markdown`'s memo.
+  const cwd = session?.cwd;
+  const chatSession = useMemo(
+    () => ({ cwd: cwd ?? null, sessionId }),
+    [cwd, sessionId],
+  );
+
+  // The shell hands these down as fresh arrows on every render, which would
+  // defeat `TurnBlock`'s memo; the rows only need whichever is current.
+  const callbacks = useRef({ onOpenSubagent, onOpenSession });
+  callbacks.current = { onOpenSubagent, onOpenSession };
+  const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
+  const openSession = useCallback((id: string) => callbacks.current.onOpenSession(id), []);
+
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
   // same nothing, but inside the arrangement it is about to fill — see
@@ -616,7 +628,7 @@ export default function Chat({
     //
     // The session rides a context because the things that read it are leaves — a
     // `@mention` and a file link, several components down. See `useChatSession`.
-    <ChatSessionContext value={{ cwd: session.cwd, sessionId: session.sessionId }}>
+    <ChatSessionContext value={chatSession}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -634,8 +646,8 @@ export default function Chat({
                   subagentById={subagentById}
                   resultByCallId={resultByCallId}
                   editsByCallId={editsByCallId}
-                  onOpenSubagent={onOpenSubagent}
-                  onOpenSession={onOpenSession}
+                  onOpenSubagent={openSubagent}
+                  onOpenSession={openSession}
                   // Both cover the wait for output, and on every harness but fx
                   // never at once — `waitingTurn` requires no streaming text
                   // there. Inside the block so they sit at the gap the committed
@@ -646,21 +658,9 @@ export default function Chat({
                   footer={
                     turn !== streamingTurn && turn !== waitingTurn ? undefined : (
                       <>
-                        {turn === streamingTurn &&
-                          (streamingThinking ? (
-                            // The same component the committed `reasoning` event
-                            // renders with, in its `streaming` presentation — the
-                            // multi-line preview keeps growing live; it collapses
-                            // to one line once committed.
-                            <Reasoning text={streamingThinking} encrypted={false} streaming />
-                          ) : streamingTool ? (
-                            // Must come before the text arm: a tool block leaves
-                            // `streamingText` empty, so falling through would
-                            // render an empty message where the row belongs.
-                            <StreamingToolCall {...streamingTool} />
-                          ) : (
-                            <AssistantMessage text={streamingText} streaming />
-                          ))}
+                        {turn === streamingTurn && (
+                          <StreamingPreview sessionId={session.sessionId} />
+                        )}
                         {turn === waitingTurn && (
                           <WorkingIndicator tokens={working?.tokens ?? 0} />
                         )}
@@ -791,4 +791,30 @@ export default function Chat({
       </div>
     </ChatSessionContext>
   );
+}
+
+/// The open block's preview — the one row that reads the streaming text, so the
+/// one row a delta re-renders.
+///
+/// Told apart by the type `block_start` declared, not by content — thinking
+/// deltas are plain text on the wire. Only one block streams at a time.
+function StreamingPreview({ sessionId }: { sessionId: string }) {
+  const block = useStreamingBlock(sessionId);
+  if (!block) return null;
+
+  if (block.type === "thinking") {
+    // The same component the committed `reasoning` event renders with, in its
+    // `streaming` presentation — the multi-line preview keeps growing live; it
+    // collapses to one line once committed.
+    return block.text ? <Reasoning text={block.text} encrypted={false} streaming /> : null;
+  }
+
+  // A tool call the model is still composing. Non-empty from the first frame —
+  // the block announces its tool before any argument arrives, and having only
+  // the name is exactly the case the preview exists to cover.
+  if (block.type === "tool_use") {
+    return block.name ? <StreamingToolCall name={block.name} partialJson={block.text} /> : null;
+  }
+
+  return <AssistantMessage text={block.text} streaming />;
 }

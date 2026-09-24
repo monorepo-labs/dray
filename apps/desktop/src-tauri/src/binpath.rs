@@ -7,27 +7,29 @@
 //! `Command::new("claude")` resolves under `pnpm tauri dev` and fails from the
 //! bundle, which is the same binary behaving differently by how it was started.
 //!
-//! Resolved once into a `OnceLock` and reused: the login-shell probe below costs
+//! Resolved once into a `OnceCell` and reused: the login-shell probe below costs
 //! real time (a shell reading the user's whole rc chain), and the answer can't
 //! change while the app runs.
 
 use crate::harness::Harness;
+use std::ffi::OsString;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
+use tokio::sync::OnceCell;
 
-static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
-/// Not a `OnceLock` like the two beside it, because this one caches an
+static CLAUDE_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+/// Not a `OnceCell` like the two beside it, because this one caches an
 /// *absence* and that absence is what the reader is being asked to fix — see
 /// [`forget_gh`].
 static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
 /// Bumped by every [`forget_gh`], so a probe already running when the reader
 /// installed `gh` cannot put its own miss back over the answer.
 static GH_GENERATION: AtomicU64 = AtomicU64::new(0);
-static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
+static CODEX_PATH: OnceCell<PathBuf> = OnceCell::const_new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
 ///
@@ -49,14 +51,11 @@ pub async fn claude() -> PathBuf {
 
 /// The slot's answer, or `resolve`'s, kept for the life of the process.
 ///
-/// A race here is harmless: both threads resolved the same binary, and the
-/// loser just drops its copy.
-async fn cached<T: Clone>(slot: &'static OnceLock<T>, resolve: impl Future<Output = T>) -> T {
-    if let Some(hit) = slot.get() {
-        return hit.clone();
-    }
-    let resolved = resolve.await;
-    slot.get_or_init(|| resolved).clone()
+/// A caller arriving mid-resolve waits on it rather than starting its own:
+/// launch asks for every agent from several places at once, and a miss ends in
+/// a login shell.
+async fn cached<T: Clone>(slot: &'static OnceCell<T>, resolve: impl Future<Output = T>) -> T {
+    slot.get_or_init(|| resolve).await.clone()
 }
 
 /// Resolves `name`, or the bare name for [`claude`]'s reason.
@@ -115,6 +114,7 @@ pub fn forget_gh() {
     let mut slot = GH_PATH.write().unwrap();
     *slot = None;
     GH_GENERATION.fetch_add(1, Ordering::Release);
+    LOGIN_PATH_STALE.store(true, Ordering::Release);
 }
 
 /// The absolute path to a `codex` that can actually speak app-server.
@@ -138,22 +138,18 @@ pub async fn codex() -> PathBuf {
 }
 
 async fn resolve_codex() -> PathBuf {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(path) = search_path("codex") {
-        candidates.push(path);
+    for candidate in [search_path("codex"), search_known_dirs("codex")].into_iter().flatten() {
+        if is_executable(&candidate) && speaks_app_server(&candidate).await {
+            return candidate;
+        }
     }
-    if let Some(path) = search_known_dirs("codex") {
-        candidates.push(path);
-    }
-    if let Some(path) = login_shell_which("codex").await {
-        candidates.push(path);
-    }
+    // Only asked once the cheap candidates have failed, since it costs a login
+    // shell where nothing else here has needed one.
+    let late = login_shell_which("codex").await;
     // Last, because it belongs to somebody else's bundle — but present, because
     // on a machine with the ChatGPT app and no separate install it is the only
     // Codex there is.
-    candidates.push(PathBuf::from(CHATGPT_APP_CODEX));
-
-    for candidate in candidates {
+    for candidate in late.into_iter().chain([PathBuf::from(CHATGPT_APP_CODEX)]) {
         if is_executable(&candidate) && speaks_app_server(&candidate).await {
             return candidate;
         }
@@ -162,7 +158,7 @@ async fn resolve_codex() -> PathBuf {
     PathBuf::from("codex")
 }
 
-static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
+static PI_PATH: OnceCell<PathBuf> = OnceCell::const_new();
 
 /// Where `pi` is, or the bare name as a last resort — [`claude`]'s shape, and
 /// for its reason.
@@ -181,7 +177,7 @@ pub async fn pi() -> PathBuf {
     cached(&PI_PATH, or_bare("pi")).await
 }
 
-static FX_PATH: OnceLock<PathBuf> = OnceLock::new();
+static FX_PATH: OnceCell<PathBuf> = OnceCell::const_new();
 
 /// Where `fx` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Vercel's installer puts it in `~/.local/bin`, one of the known dirs.
@@ -189,7 +185,7 @@ pub async fn fx() -> PathBuf {
     cached(&FX_PATH, or_bare("fx")).await
 }
 
-static GROK_PATH: OnceLock<PathBuf> = OnceLock::new();
+static GROK_PATH: OnceCell<PathBuf> = OnceCell::const_new();
 
 /// Where `grok` is, or the bare name as a last resort — [`claude`]'s shape.
 /// xAI's installer puts it in `~/.local/bin` and symlinks `~/.grok/bin/grok`
@@ -504,17 +500,42 @@ fn find_versioned(root: &Path, depth: usize, layouts: &[&str], bin: &str) -> Opt
     })
 }
 
-/// Asks the user's login shell where `bin` is, which is the only way to see a
-/// `PATH` built by rc files the app never sourced.
-///
+/// Looks for `bin` on the user's login-shell `PATH`, which is the only way to
+/// see one built by rc files the app never sourced.
+async fn login_shell_which(bin: &str) -> Option<PathBuf> {
+    // Held across the shell, so callers arriving mid-read wait for it.
+    let mut slot = LOGIN_PATH.lock().await;
+    if LOGIN_PATH_STALE.swap(false, Ordering::AcqRel) {
+        *slot = None;
+    }
+    if slot.is_none() {
+        *slot = Some(login_shell_path().await);
+    }
+    let path = slot.as_ref()?.as_ref()?;
+    std::env::split_paths(path)
+        .map(|dir| dir.join(bin))
+        .find(|candidate| is_executable(candidate))
+}
+
+/// The login shell's `PATH`, read once for every binary. A shell per binary
+/// was several of them from a Dock launch, each reading the whole rc chain.
+static LOGIN_PATH: tokio::sync::Mutex<Option<Option<OsString>>> =
+    tokio::sync::Mutex::const_new(None);
+/// Set by [`forget_gh`]: an install that also added its directory to the
+/// reader's rc files is only found by reading the `PATH` again.
+static LOGIN_PATH_STALE: AtomicBool = AtomicBool::new(false);
+
 /// `-l` matters more than it looks: without it zsh reads `.zshrc` only, and a
 /// `PATH` exported from `.zprofile` — where the installers write it — stays
 /// invisible.
-async fn login_shell_which(bin: &str) -> Option<PathBuf> {
+async fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
     let output = Command::new(shell)
-        .args(["-l", "-c", &format!("command -v {bin}")])
+        // Behind a marker, since an rc file is free to print on its own.
+        // `printenv` rather than `$PATH`, which fish expands as a list, and by
+        // absolute path, since the `PATH` being read need not hold it.
+        .args(["-l", "-c", "echo __DRAY_PATH__; /usr/bin/printenv PATH"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -525,11 +546,9 @@ async fn login_shell_which(bin: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let line = String::from_utf8(output.stdout).ok()?;
-    // `command -v` prints the name unchanged for a shell builtin or function,
-    // which is not something we can spawn.
-    let path = PathBuf::from(line.trim());
-    is_executable(&path).then_some(path)
+    let out = String::from_utf8(output.stdout).ok()?;
+    let (_, path) = out.rsplit_once("__DRAY_PATH__\n")?;
+    Some(path.trim_end().into())
 }
 
 #[cfg(unix)]
@@ -569,6 +588,13 @@ mod tests {
     #[tokio::test]
     async fn a_missing_binary_resolves_to_none() {
         assert!(resolve("dray-definitely-not-a-real-binary").await.is_none());
+    }
+
+    /// The marker is what separates the `PATH` from anything an rc file
+    /// prints, so a parse that lost it would find nothing through this path.
+    #[tokio::test]
+    async fn the_login_shell_path_finds_a_binary() {
+        assert!(login_shell_which("sh").await.is_some_and(|p| p.is_absolute()));
     }
 
     /// mise's nesting is the layout that went missing: `installs/<tool>/<v>/`

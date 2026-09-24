@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { channel } from "@/lib/channel";
 import type { AgentCheck, AgentUpdate, Harness } from "@/types/events";
 
+const FIRST_CHECK_MS = 30 * 1000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const DONE_MS = 4000;
 
@@ -51,11 +52,13 @@ async function check() {
 
 let started = false;
 
-/// Checks now and every six hours after, for the life of the process.
+/// Checks shortly after launch and every six hours after, for the life of the
+/// process. Not at launch itself: every agent's `--version` and a registry
+/// fetch each would compete with the reads the first screen is waiting on.
 export function startAgentUpdateChecks() {
   if (started) return;
   started = true;
-  void check();
+  setTimeout(() => void check(), FIRST_CHECK_MS);
   setInterval(() => void check(), CHECK_EVERY_MS);
 }
 

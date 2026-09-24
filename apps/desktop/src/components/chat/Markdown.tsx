@@ -4,7 +4,7 @@ import { Streamdown, type Components, type ThemeInput } from "streamdown";
 import FileLink from "@/components/chat/FileLink";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
-import { createSharedCodePlugin } from "@/lib/codePlugin";
+import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
@@ -43,15 +43,25 @@ type MarkdownProps = {
 // own token cache — rebuilding one on every render would throw that away and
 // re-tokenize every visible block.
 const pluginCache = new Map<string, ReturnType<typeof createSharedCodePlugin>>();
+const streamingCache = new Map<string, ReturnType<typeof createSharedCodePlugin>>();
 
-function codePlugin(pair: CodeThemePair) {
+function codePlugin(pair: CodeThemePair, streaming: boolean) {
   const key = `${pair.light}:${pair.dark}`;
   let plugin = pluginCache.get(key);
   if (!plugin) {
     plugin = createSharedCodePlugin(pair);
     pluginCache.set(key, plugin);
   }
-  return plugin;
+  if (!streaming) return plugin;
+
+  // Wraps the plain one rather than standing beside it, so a block settled
+  // while streaming is already in the cache the committed message reads.
+  let wrapped = streamingCache.get(key);
+  if (!wrapped) {
+    wrapped = streamingCodePlugin(plugin);
+    streamingCache.set(key, wrapped);
+  }
+  return wrapped;
 }
 
 // Copy is the only control worth keeping, and code's is the only one of
@@ -98,7 +108,7 @@ function MarkdownImpl({
     (): [ThemeInput, ThemeInput] => [pair.light as ThemeInput, pair.dark as ThemeInput],
     [pair.light, pair.dark],
   );
-  const plugins = useMemo(() => ({ code: codePlugin(pair) }), [pair]);
+  const plugins = useMemo(() => ({ code: codePlugin(pair, streaming) }), [pair, streaming]);
 
   // The caller's own overrides win, so a surface needing its own `span` or
   // `table` is not quietly handed this one instead.

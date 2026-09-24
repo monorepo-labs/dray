@@ -1223,25 +1223,35 @@ pub struct WorkStatus {
 /// with the default, and the row reads that as nothing to offer rather than as
 /// an error.
 pub async fn work_status(cwd: &str) -> WorkStatus {
-    let branch = head_branch(cwd).await;
-    let upstream = match branch {
-        Some(_) => upstream_branch(cwd).await,
-        None => None,
+    // Three independent chains, run side by side: in series this was up to
+    // eight `git` round trips end to end on every turn's close.
+    let upstream_side = async {
+        let branch = head_branch(cwd).await;
+        let upstream = match branch {
+            Some(_) => upstream_branch(cwd).await,
+            None => None,
+        };
+        let ahead = match upstream {
+            Some(_) => git_count(cwd, &["rev-list", "--count", "@{u}..HEAD"]).await.unwrap_or(0),
+            None => 0,
+        };
+        (branch, upstream, ahead)
     };
-    let ahead = match upstream {
-        Some(_) => git_count(cwd, &["rev-list", "--count", "@{u}..HEAD"]).await.unwrap_or(0),
-        None => 0,
-    };
-
-    let base = default_base(cwd).await;
 
     // Counted against the remote-tracking ref, not the local branch of the same
     // name: a local `main` can be stale or absent entirely in a worktree, and
     // either way it is not what the pull request would be opened against.
-    let ahead_of_base = match &base {
-        Some(base_ref) => git_count(cwd, &["rev-list", "--count", &format!("{base_ref}..HEAD")]).await,
-        None => None,
+    let base_side = async {
+        let base = default_base(cwd).await;
+        let ahead_of_base = match &base {
+            Some(base_ref) => git_count(cwd, &["rev-list", "--count", &format!("{base_ref}..HEAD")]).await,
+            None => None,
+        };
+        (base, ahead_of_base)
     };
+
+    let ((branch, upstream, ahead), (base, ahead_of_base), dirty) =
+        tokio::join!(upstream_side, base_side, dirty_count(cwd));
 
     // `default_base` answers `origin/<branch>` — the remote is hardcoded there —
     // so the prefix comes off rather than everything up to the last slash. A
@@ -1251,7 +1261,7 @@ pub async fn work_status(cwd: &str) -> WorkStatus {
     let default_branch = base.map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string());
 
     WorkStatus {
-        dirty: dirty_count(cwd).await,
+        dirty,
         branch,
         upstream,
         ahead,

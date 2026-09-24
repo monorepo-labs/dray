@@ -123,8 +123,8 @@ function Empty({ children, tone }: { children: React.ReactNode; tone?: "error" }
   );
 }
 
-/// Memoized because the panel re-renders on every session event — its
-/// `revision` prop moves with the stream — while a row's own props only change
+/// Memoized because the panel re-renders on every session event, while a row's
+/// own props only change
 /// when a fresh read actually finds different trees (`useChanges` keeps the old
 /// object otherwise). Without this every delta re-rendered every diff.
 const FileRow = memo(function FileRow({

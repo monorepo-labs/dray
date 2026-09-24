@@ -1,4 +1,4 @@
-use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
+use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::{claude_code, read_stderr, record_failure, Harness::ClaudeCode};
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker};
@@ -164,8 +164,6 @@ pub async fn init(
     let stdout = child.stdout.take().context("failed to take stdout")?;
     let stderr = child.stderr.take().context("failed to take stderr")?;
 
-    let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
-    let stdout_events = events.clone();
 
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
     let stdout_status = status.clone();
@@ -196,7 +194,6 @@ pub async fn init(
             stdout,
             &session_id,
             &stdout_cwd,
-            stdout_events,
             stdout_seq,
             stdout_status,
             stdout_pending,
@@ -225,7 +222,6 @@ pub async fn init(
         effort,
         permission_mode,
         fast,
-        events,
         seq,
         status,
         pending_permissions,
@@ -239,7 +235,6 @@ async fn read_stdout(
     stdout: ChildStdout,
     session_id: &str,
     session_cwd: &str,
-    events: Arc<Mutex<Vec<AgentEvent>>>,
     seq: Arc<AtomicU64>,
     status: Arc<Mutex<StatusTracker>>,
     pending_permissions: PendingPermissions,
@@ -261,11 +256,9 @@ async fn read_stdout(
         session_id,
         harness: ClaudeCode,
         session_cwd,
-        events: &events,
         status: &status,
         queued: &queued,
         flush_seq: &seq,
-        flush_events: &events,
         flush_transport: &crate::session::Transport::Lines(stdin.clone()),
     };
 

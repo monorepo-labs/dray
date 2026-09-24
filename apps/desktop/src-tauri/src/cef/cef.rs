@@ -26,9 +26,9 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[path = "automation.rs"]
@@ -376,26 +376,74 @@ unsafe fn patch_nsapp(app: &NSApplication) {
 
 static PUMP: OnceLock<mpsc::Sender<i64>> = OnceLock::new();
 
-/// CEF asks for work through `on_schedule_message_pump_work(delay)`; a thread
-/// waits that long (capped) and runs `do_message_loop_work` on the main
-/// thread. It also ticks on its own at ~30Hz.
-// ponytail: a free-running 30Hz tick beside the scheduled one; the proper
-// pump (tests_shared's timer with reentrancy guards) if CPU or latency shows.
+/// Browsers asked for and not yet handed back by `on_after_created`. Creating
+/// one leaves work Chromium never asks for again — measured: without the
+/// pump's safety net, not one tab opened — so the net runs while any is out.
+/// Counted rather than timed, since a create under load has no upper bound.
+static CREATING: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts a browser creation in, and wakes the pump in case it is asleep with
+/// nothing alive.
+fn creation_started() {
+    CREATING.fetch_add(1, Ordering::SeqCst);
+    if let Some(tx) = PUMP.get() {
+        let _ = tx.send(0);
+    }
+}
+
+/// Counts one out: handed back, or refused before it began.
+fn creation_ended() {
+    let _ = CREATING.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+}
+
+/// CEF asks for work through `on_schedule_message_pump_work(delay)`. A thread
+/// holds the latest request — each one replaces the last, as that callback's
+/// contract says — and runs `do_message_loop_work` on the main thread when it
+/// comes due.
+///
+/// While a browser is alive or being made it also runs one 33ms after the
+/// last, which is cefclient's own safety net: a work call stops at its time
+/// slice without asking again for what it left. With no browser nothing left
+/// over is anything the reader could see, so the thread sleeps until CEF asks
+/// — once every few seconds, measured idle. It used to tick at 30Hz from the
+/// first tab to quit, tabs or none.
 fn start_pump(app: AppHandle) {
+    const NET: Duration = Duration::from_millis(33);
     let (tx, rx) = mpsc::channel::<i64>();
     let _ = PUMP.set(tx);
     std::thread::Builder::new()
         .name("cef-pump".into())
-        .spawn(move || loop {
-            let delay = match rx.recv_timeout(Duration::from_millis(33)) {
-                Ok(delay) => delay.clamp(0, 33) as u64,
-                Err(mpsc::RecvTimeoutError::Timeout) => 0,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            };
-            if delay > 0 {
-                std::thread::sleep(Duration::from_millis(delay));
+        .spawn(move || {
+            let mut due: Option<Instant> = None;
+            let mut ran = Instant::now();
+            loop {
+                let live = CREATING.load(Ordering::SeqCst) > 0 || !TABS.lock().unwrap().is_empty();
+                let net = live.then(|| ran + NET);
+                let wake = match (due, net) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                let asked = match wake {
+                    Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
+                    None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                };
+                match asked {
+                    Ok(delay) => {
+                        // A delayed request replaces the pending one; an
+                        // immediate one runs now, before a later request can
+                        // replace it — cefclient does the same.
+                        due = (delay > 0).then(|| Instant::now() + Duration::from_millis(delay as u64));
+                        if due.is_some() {
+                            continue;
+                        }
+                    }
+                    // The net firing first leaves a later request standing.
+                    Err(mpsc::RecvTimeoutError::Timeout) => due = due.filter(|at| *at > Instant::now()),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+                ran = Instant::now();
+                let _ = app.run_on_main_thread(do_message_loop_work);
             }
-            let _ = app.run_on_main_thread(do_message_loop_work);
         })
         .expect("cef pump thread");
 }
@@ -547,6 +595,7 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
     let info = child_window_info()?;
     let mut client = DrayClient::new(session.to_string(), activate);
     let mut context = context_for(session);
+    creation_started();
     let ok = browser_host_create_browser(
         Some(&info),
         Some(&mut client),
@@ -558,6 +607,7 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
     if ok == 1 {
         Ok(())
     } else {
+        creation_ended();
         Err("could not create the browser".into())
     }
 }
@@ -707,6 +757,8 @@ wrap_life_span_handler! {
                 None => tabs.push(tab),
             }
             drop(tabs);
+            // After the tab is in `TABS`, so the pump's net never lapses between.
+            creation_ended();
             if self.activate || active_id(&self.session).is_none() {
                 set_active(&self.session, Some(id));
             }
@@ -741,6 +793,7 @@ wrap_life_span_handler! {
             let Ok(info) = child_window_info() else { return 1 };
             *window_info = info;
             *client = Some(DrayClient::new(self.session.clone(), true));
+            creation_started();
             0
         }
 

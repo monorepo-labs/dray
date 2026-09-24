@@ -78,6 +78,12 @@ export const COMMON_LANGS = [
 /// nothing blocks on it, and any view whose language is missing still loads
 /// what it needs on mount.
 export function warmHighlighter(pair: CodeThemePair): void {
+  // After first paint: the WASM engine and fifteen grammars are no part of it.
+  if ("requestIdleCallback" in window) window.requestIdleCallback(() => preload(pair));
+  else setTimeout(() => preload(pair), 1000);
+}
+
+function preload(pair: CodeThemePair): void {
   void preloadHighlighter({
     themes: [pair.light, pair.dark],
     langs: COMMON_LANGS,
@@ -98,9 +104,12 @@ export function warmHighlighter(pair: CodeThemePair): void {
 /// placeholder: the common case is a second diff in a language already on
 /// screen, which must mount highlighted on its first frame.
 export function useHighlighter(lang: string, pair: CodeThemePair): boolean {
-  const [ready, setReady] = useState(() => canTokenize(lang, pair));
+  const [ready, setReady] = useState(() => poolWanted && canTokenize(lang, pair));
 
   useEffect(() => {
+    // Before `ready` flips, since a view captures the pool when it mounts and
+    // one mounted without it tokenizes on the main thread for good.
+    wantPool();
     if (canTokenize(lang, pair)) {
       setReady(true);
       return;
@@ -131,4 +140,25 @@ export function useHighlighter(lang: string, pair: CodeThemePair): boolean {
   }, [lang, pair.light, pair.dark]);
 
   return ready;
+}
+
+/// Whether a code view has ever asked for the diff worker pool. Its two workers
+/// each boot a WASM Shiki with every common grammar, so `DiffWorkerPool` makes
+/// them on the first diff rather than at launch.
+let poolWanted = false;
+const poolListeners = new Set<() => void>();
+
+function wantPool(): void {
+  if (poolWanted) return;
+  poolWanted = true;
+  for (const listener of poolListeners) listener();
+}
+
+export function subscribePool(listener: () => void): () => void {
+  poolListeners.add(listener);
+  return () => poolListeners.delete(listener);
+}
+
+export function isPoolWanted(): boolean {
+  return poolWanted;
 }

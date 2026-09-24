@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { useWindowFocused } from "@/lib/focus";
 import { isSettling } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { MergeMethod, PrUnavailable, PullRequest } from "@/types/events";
@@ -249,11 +250,12 @@ export function usePullRequest(
     void load(false);
   }, [load]);
 
-  // A refetch when the tab is opened, in case the window sat idle past the
-  // freshness cutoff while another tab was showing.
+  // A refetch when the tab is opened, or the window comes back to the front, in
+  // case it sat idle past the freshness cutoff while the poll below was off.
+  const focused = useWindowFocused();
   useEffect(() => {
-    if (active) void load(false);
-  }, [active, load]);
+    if (active && focused) void load(false);
+  }, [active, focused, load]);
 
   // The sidebar's read saw this branch's pull request change — the same
   // reading that raises "Ready to merge". Re-read at once, tab or no tab: this
@@ -276,12 +278,14 @@ export function usePullRequest(
   // still a check the reader is waiting on.
   const settling = state.prs.some(isSettling);
   const anyOpen = state.prs.some(isOpen);
+  // Paused while the window is in the background: nobody is reading the tab,
+  // and the refetch above catches up on return.
   useEffect(() => {
-    if (!active || !anyOpen) return;
+    if (!active || !anyOpen || !focused) return;
 
     const id = setInterval(() => void load(true), settling ? SETTLING_POLL_MS : OPEN_POLL_MS);
     return () => clearInterval(id);
-  }, [active, anyOpen, settling, load]);
+  }, [active, anyOpen, focused, settling, load]);
 
   /// Runs a write against `number` and refetches.
   ///

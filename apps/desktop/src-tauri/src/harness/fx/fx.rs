@@ -20,7 +20,7 @@ pub mod models;
 pub mod parser;
 pub mod permissions;
 
-use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy};
+use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::Fx};
@@ -310,17 +310,15 @@ pub async fn init(
     };
 
     let seq = Arc::new(AtomicU64::new(seq_start));
-    let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
     let queued: QueuedMessages = Arc::new(Mutex::new(Vec::new()));
 
     tokio::spawn({
-        let events = events.clone();
         let status = status.clone();
         let queued = queued.clone();
         let seq = seq.clone();
         async move {
-            if let Err(error) = read_stdout(stdout, reader, ready_rx, events, status, queued, seq).await
+            if let Err(error) = read_stdout(stdout, reader, ready_rx, status, queued, seq).await
             {
                 eprintln!("Failed to read fx stdout: {error}");
             }
@@ -391,7 +389,7 @@ pub async fn init(
         note_effort(&session, &config, level, app);
     }
     if let Some(refusal) = refusal {
-        crate::session::report_session_error(session_id, Fx, &refusal, &seq, &events, app).await;
+        crate::session::report_session_error(session_id, Fx, &refusal, &seq, app).await;
     }
 
     // A stance that will not apply is the fatal one: the session would run
@@ -416,7 +414,6 @@ pub async fn init(
         effort: applied,
         permission_mode,
         fast,
-        events,
         seq,
         status,
         pending_permissions: pending,
@@ -987,7 +984,6 @@ async fn read_stdout(
     stdout: ChildStdout,
     handles: ReaderHandles,
     ready: tokio::sync::oneshot::Receiver<FxSession>,
-    events: Arc<Mutex<Vec<AgentEvent>>>,
     status: Arc<Mutex<StatusTracker>>,
     queued: QueuedMessages,
     seq: Arc<AtomicU64>,
@@ -1112,11 +1108,9 @@ async fn read_stdout(
             session_id: &handles.session_id,
             harness: Fx,
             session_cwd: &handles.session_cwd,
-            events: &events,
             status: &status,
             queued: &queued,
             flush_seq: &seq,
-            flush_events: &events,
             flush_transport: transport,
         };
 
@@ -1145,7 +1139,6 @@ async fn read_stdout(
             Fx,
             &queued,
             &seq,
-            &events,
             &handles.app,
         )
         .await;
@@ -1155,11 +1148,9 @@ async fn read_stdout(
                 session_id: &handles.session_id,
                 harness: Fx,
                 session_cwd: &handles.session_cwd,
-                events: &events,
                 status: &status,
                 queued: &queued,
                 flush_seq: &seq,
-                flush_events: &events,
                 flush_transport: transport,
             };
             for agent_event in mapper.map(parser::FxEvent::PromptFailed {

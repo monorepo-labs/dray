@@ -26,11 +26,11 @@ use fff_search::{
 };
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::Path,
     process::Stdio,
     sync::{Mutex, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
@@ -64,6 +64,13 @@ pub struct FileMatch {
 /// checkpoint, so eviction needs no teardown of ours.
 const MAX_INDEXES: usize = 4;
 
+/// How long an index outlives its last use. Each one holds a recursive FSEvents
+/// watch — which on a project root covers every `.claude/worktrees` build dir
+/// under it — and a debouncer thread that wakes every 25ms whether anything
+/// changed or not, so a kept index is idle work for the life of the process.
+/// Rebuilding costs one walk (25ms on this repo) on the next `@`.
+const IDLE_DROP: Duration = Duration::from_secs(10 * 60);
+
 /// A cold index still has to answer the first `@` typed after a project switch.
 /// Short enough that a huge repo returns a partial list rather than hanging the
 /// menu — the search runs against whatever has been walked so far, so waiting
@@ -71,15 +78,8 @@ const MAX_INDEXES: usize = 4;
 /// next keystroke anyway.
 const SCAN_WAIT: Duration = Duration::from_millis(1500);
 
-struct Indexes {
-    by_path: HashMap<String, SharedFilePicker>,
-    /// Insertion order, oldest first. A `VecDeque` rather than a real LRU: with
-    /// a cap of four, evicting the oldest *created* index differs from the
-    /// oldest *used* one only in cases where both are about to be rebuilt.
-    order: VecDeque<String>,
-}
-
-static INDEXES: OnceLock<Mutex<Indexes>> = OnceLock::new();
+/// Each index beside when it was last asked for, keyed by directory.
+static INDEXES: OnceLock<Mutex<HashMap<String, (SharedFilePicker, Instant)>>> = OnceLock::new();
 
 /// The index for `cwd`, built if this is the first time it has been asked for.
 ///
@@ -88,15 +88,21 @@ static INDEXES: OnceLock<Mutex<Indexes>> = OnceLock::new();
 /// never blocks on a scan. Callers that need results wait on the handle instead.
 fn index_for(cwd: &str) -> Result<SharedFilePicker> {
     let indexes = INDEXES.get_or_init(|| {
-        Mutex::new(Indexes {
-            by_path: HashMap::new(),
-            order: VecDeque::new(),
-        })
+        let _ = std::thread::Builder::new()
+            .name("file-index-reaper".into())
+            .spawn(|| loop {
+                std::thread::sleep(Duration::from_secs(60));
+                if let Some(indexes) = INDEXES.get() {
+                    indexes.lock().unwrap().retain(|_, (_, used)| used.elapsed() < IDLE_DROP);
+                }
+            });
+        Mutex::new(HashMap::new())
     });
 
     let mut indexes = indexes.lock().unwrap();
 
-    if let Some(hit) = indexes.by_path.get(cwd) {
+    if let Some((hit, used)) = indexes.get_mut(cwd) {
+        *used = Instant::now();
         return Ok(hit.clone());
     }
 
@@ -124,12 +130,15 @@ fn index_for(cwd: &str) -> Result<SharedFilePicker> {
     )
     .context("couldn't start indexing the project's files")?;
 
-    indexes.by_path.insert(cwd.to_string(), shared.clone());
-    indexes.order.push_back(cwd.to_string());
+    indexes.insert(cwd.to_string(), (shared.clone(), Instant::now()));
 
-    while indexes.order.len() > MAX_INDEXES {
-        if let Some(evicted) = indexes.order.pop_front() {
-            indexes.by_path.remove(&evicted);
+    while indexes.len() > MAX_INDEXES {
+        let oldest = indexes
+            .iter()
+            .min_by_key(|(_, (_, used))| *used)
+            .map(|(path, _)| path.clone());
+        if let Some(oldest) = oldest {
+            indexes.remove(&oldest);
         }
     }
 

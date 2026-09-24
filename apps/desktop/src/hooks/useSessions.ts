@@ -2,10 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
+import { appendStreamingText, peekStreamingBlock, retireStreamingBlock, startStreamingBlock, type StreamingBlock } from "@/hooks/useStreamingBlock";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
+import { forgetDocs } from "@/hooks/useDocs";
 import { useDockBadge } from "@/hooks/useDockBadge";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { forgetOpenFiles } from "@/hooks/useOpenFiles";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -18,11 +22,13 @@ import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
+import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { FIRST_MOUNT } from "@/lib/turnWindow";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -118,21 +124,6 @@ export type ApiRetryState = {
   reason: string | null;
 };
 
-export type StreamingBlock = {
-    index: number,
-    type: "text" | "thinking" | "tool_use" | null
-    /// Accumulated deltas. Prose for a text or thinking block; for a `tool_use`
-    /// one it is the raw `input_json_delta` stream, which is a prefix of a JSON
-    /// object rather than anything renderable — see [streamingCall](../lib/streaming.ts).
-    text: string,
-    /// Both set only on a `tool_use` block, from the `block_start` that opens it.
-    /// The name is what the preview row renders before any argument has arrived;
-    /// `callId` is the tool_use id, which the committed `tool_call_started`
-    /// repeats as its `callId` and is matched on to retire this preview.
-    name: string | null,
-    callId: string | null,
-}
-
 /// Sessions whose worktree removal has been asked for and not refused.
 ///
 /// Module-level rather than a ref because it guards a write to disk, not a
@@ -147,7 +138,6 @@ const NO_TASKS: ReadonlySet<string> = new Set();
 /// on the hook's return are this, spread.
 export type PaneState = {
   session: SessionSnapshot | null;
-  streamingBlock: StreamingBlock | null;
   busy: boolean;
   working: Working | null;
   backgroundTaskCount: number;
@@ -212,8 +202,6 @@ export function useSessions() {
 
     const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
     const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-    // sessionId → the one in-flight block (CLI streams start→deltas→stop serially).
-    const [streamingContentBlock, setStreamingContentBlock] = useState<Record<string, StreamingBlock | null>>({});
     const [sessionIndexItems, setSessionIndexItems] = useState<SessionIndexItem[]>([]);
     // Which side of the archived split the sidebar is showing. Not persisted:
     // archived is the exception view, so every launch starts on the active list.
@@ -653,11 +641,22 @@ const dropProvisional = (sessionId: string, id: string) =>
   );
 
 
+// A tail read landing on a session that already holds older pages keeps them,
+// so the merged log starts wherever the earlier of the two did — or at the top,
+// where either one already reached it.
 const upsertSession = (snapshot: SessionSnapshot) =>
   setSessions((prev) =>
     prev.some((s) => s.sessionId === snapshot.sessionId)
       ? prev.map((s) =>
-          s.sessionId === snapshot.sessionId ? mergeEvents(snapshot, s.events) : s,
+          s.sessionId === snapshot.sessionId
+            ? {
+                ...mergeEvents(snapshot, s.events),
+                olderBefore:
+                  s.olderBefore == null || snapshot.olderBefore == null
+                    ? null
+                    : Math.min(s.olderBefore, snapshot.olderBefore),
+              }
+            : s,
         )
       : [...prev, snapshot],
   );
@@ -764,6 +763,7 @@ const handleSendMsg = async (
   if (isNewSession) {
     const shell: SessionSnapshot = {
       events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
+      olderBefore: null,
       sessionId,
       harness,
       cwd,
@@ -1185,15 +1185,13 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   }
 
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
-    if (snapshot) {
+    if (await loadTail(sessionId)) {
       // Held whoever asked for it — a loaded transcript is worth having and the
       // sweep decides when it stops being. The *answer* is the other question:
       // a click that landed while this read was out has already claimed the
       // request and moved the reader somewhere this read did not put them, so
       // saying it landed would let a caller tear down for a move that is no
       // longer theirs. The rollback below takes the same reading.
-      upsertSession(snapshot);
       return selectionRequestRef.current === sessionId;
     }
 
@@ -1554,11 +1552,14 @@ const deleteSession = async (sessionId: string) => {
 
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
-  setStreamingContentBlock(({ [sessionId]: _, ...rest }) => rest);
+  retireStreamingBlock(sessionId);
   setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
+  deletedRef.current.add(sessionId);
+  forgetDocs(sessionId);
+  forgetOpenFiles(sessionId);
 
   if (selectedSessionId === sessionId) {
     handleNewSession();
@@ -1717,7 +1718,31 @@ useEffect(() => {
       const agentEvent = event.payload;
 
         if (agentEvent.payload.type != "delta") {
-            setSessions((prev) => {
+            // The committed event supersedes its preview, and it arrives one
+            // line *before* `block_stop` — so waiting for the stop leaves both
+            // on screen for a frame, the preview shoved down by the event that
+            // just replaced it. Text and reasoning match on the block index;
+            // `tool_call_started` carries no `BlockRef` — the mapper builds it
+            // from the committed `assistant` message rather than from the
+            // stream — so it matches on the tool_use id the two do share. Index
+            // alone for the first: the CLI runs one block at a time, but a
+            // stale preview from an earlier message would share indices.
+            const payload = agentEvent.payload;
+            const supersedes =
+              (payload.type === "assistant_text" || payload.type === "reasoning") && payload.block
+                ? (b: StreamingBlock) => b.index === payload.block!.index
+                : payload.type === "tool_call_started"
+                  ? (b: StreamingBlock) => b.callId === payload.callId
+                  : null;
+            const preview = supersedes && peekStreamingBlock(agentEvent.sessionId);
+            const retiring = !!preview && supersedes(preview);
+
+            // The preview lives outside React now, so the two writes no longer
+            // batch on their own: its retirement renders synchronously while
+            // this commit waits for the scheduler, which could paint a frame
+            // with neither. `flushSync` puts both in one render again, and only
+            // on the few events a turn that actually retire something.
+            const commit = () => setSessions((prev) => {
             // Held rather than dropped where the session is not here yet. See
             // `earlyEvents`: its child streams before its row exists.
             if (!prev.some((s) => s.sessionId === agentEvent.sessionId)) {
@@ -1733,6 +1758,14 @@ useEffect(() => {
                 : s,
             );
             });
+            if (retiring) {
+              flushSync(() => {
+                commit();
+                retireStreamingBlock(agentEvent.sessionId);
+              });
+            } else {
+              commit();
+            }
 
             // A held prompt reached the CLI, so the pending row it was drawn as
             // gives way to the real one now in the transcript. Matched by
@@ -1747,41 +1780,6 @@ useEffect(() => {
                 const cur = prev[agentEvent.sessionId];
                 if (!cur?.length) return prev;
                 return { ...prev, [agentEvent.sessionId]: cur.slice(1) };
-              });
-            }
-
-            // The committed event supersedes its preview, and it arrives one
-            // line *before* `block_stop` — so waiting for the stop leaves both
-            // on screen for a frame, the preview shoved down by the event that
-            // just replaced it. Retiring the preview here puts both writes in
-            // one listener call, which React batches into a single render.
-            const streamingBlockRef =
-              (agentEvent.payload.type === "assistant_text" ||
-                agentEvent.payload.type === "reasoning") &&
-              agentEvent.payload.block;
-
-            if (streamingBlockRef) {
-              setStreamingContentBlock((prev) => {
-                const cur = prev[agentEvent.sessionId];
-                // Index alone: the CLI runs one block at a time, but a stale
-                // preview from an earlier message would share indices.
-                if (!cur || cur.index !== streamingBlockRef.index) return prev;
-                return { ...prev, [agentEvent.sessionId]: null };
-              });
-            }
-
-            // `tool_call_started` carries no `BlockRef` — the mapper builds it
-            // from the committed `assistant` message rather than from the stream
-            // — so the preview is retired on the tool_use id the two do share.
-            // Here rather than on `block_stop` for the same reason as above: the
-            // stop lands ~20ms later, and waiting for it draws both rows for a
-            // frame with the preview shoved down by its own replacement.
-            if (agentEvent.payload.type === "tool_call_started") {
-              const { callId } = agentEvent.payload;
-              setStreamingContentBlock((prev) => {
-                const cur = prev[agentEvent.sessionId];
-                if (!cur || cur.callId !== callId) return prev;
-                return { ...prev, [agentEvent.sessionId]: null };
               });
             }
 
@@ -1959,9 +1957,7 @@ useEffect(() => {
                 // The block announces its kind up front — this is the only
                 // frame that knows thinking from text, since thinking deltas
                 // arrive as plain text_delta afterwards.
-                setStreamingContentBlock((prev) => ({
-                  ...prev,
-                  [sessionId]: {
+                startStreamingBlock(sessionId, {
                     index: payload.block.index,
                     text: "",
                     type: payload.blockType.type,
@@ -1971,36 +1967,13 @@ useEffect(() => {
                     // for the committed event that arrives at the end.
                     name: payload.blockType.type === "tool_use" ? payload.blockType.name : null,
                     callId: payload.blockType.type === "tool_use" ? payload.blockType.id : null,
-                  },
-                }));
+                });
             } else if (payload.delta == "text_delta") {
-                setStreamingContentBlock((prev) => {
-                  const cur = prev[sessionId];
-                  if (!cur || cur.index !== payload.block.index) return prev;
-                  return {
-                    ...prev,
-                    // Deltas append; the type stays what block_start declared.
-                    // Stamping "text" here is what used to make streamed
-                    // thinking render as assistant prose until it committed.
-                    [sessionId]: { ...cur, type: cur.type ?? "text", text: cur.text + payload.text },
-                  };
-                });
+                appendStreamingText(sessionId, payload.block.index, payload.text);
             } else if (payload.delta == "input_delta") {
-                setStreamingContentBlock((prev) => {
-                  const cur = prev[sessionId];
-                  if (!cur || cur.index !== payload.block.index) return prev;
-                  return {
-                    ...prev,
-                    [sessionId]: {
-                      ...cur,
-                      text: cur.text + payload.partialJson,
-                    },
-                  };
-                });
-            } else if (payload.delta == "block_stop") {
-                setStreamingContentBlock((prev) => ({ ...prev, [sessionId]: null }));
+                appendStreamingText(sessionId, payload.block.index, payload.partialJson);
             } else {
-                setStreamingContentBlock((prev) => ({ ...prev, [sessionId]: null }));
+                retireStreamingBlock(sessionId);
             }
         }
 
@@ -2101,22 +2074,88 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
-/// Loads a transcript without selecting it, for a split pane. Guarded so the
-/// panes re-rendering mid-read don't issue a second one.
-const loadingRef = useRef(new Set<string>());
+/// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
+/// whether the id resolved to anything. The rest of the log is paged in by
+/// `loadOlder`, which the transcript asks for once it has mounted everything it
+/// holds — a 21MB log is ~1.8MB of tail, and the webview's `JSON.parse` of the
+/// whole was ~400ms before the newest turn could draw.
+///
+/// One read per session however many ask at once, so a hover's prefetch and
+/// the click that follows share it rather than landing twice.
+const tailReads = useRef(new Map<string, Promise<boolean>>());
+const deletedRef = useRef(new Set<string>());
+const loadTail = (sessionId: string): Promise<boolean> => {
+  const running = tailReads.current.get(sessionId);
+  if (running) return running;
+  const read = invoke<SessionSnapshot | null>("get_session_by_id", {
+    sessionId,
+    turns: FIRST_MOUNT,
+  })
+    .then((snapshot) => {
+      if (!snapshot) return false;
+      // A read outlived by a delete must not put the transcript back.
+      if (deletedRef.current.has(sessionId)) return false;
+      // Stamped as touched, so the count cap takes the least recently used
+      // transcript rather than the one a hover just warmed for its click.
+      lastViewedRef.current.set(sessionId, Date.now());
+      upsertSession(snapshot);
+      evictSessionsRef.current();
+      return true;
+    })
+    .finally(() => tailReads.current.delete(sessionId));
+  tailReads.current.set(sessionId, read);
+  return read;
+};
+
+/// Loads a transcript without selecting it — a split pane, or a sidebar row
+/// hovered long enough to be worth warming. Touches no selection ref, so a
+/// prefetch cannot be read as a move the rollback owns.
 const ensureLoaded = async (sessionId: string) => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
-  if (loadingRef.current.has(sessionId)) return;
-  loadingRef.current.add(sessionId);
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
-    if (snapshot) upsertSession(snapshot);
+    await loadTail(sessionId);
   } catch (e) {
-    console.error("failed to load a split pane", e);
-  } finally {
-    loadingRef.current.delete(sessionId);
+    console.error("failed to load a transcript", e);
   }
 };
+
+/// The turns before what a transcript holds, prepended in log order — never
+/// sorted by `seq`, which a Claude Code subagent numbers from 0. Dropped where
+/// the session was evicted or re-read meanwhile, since its `olderBefore` then
+/// no longer names where this page ends.
+///
+/// A failed read is tried again after a pause, a few times, since the
+/// transcript asks only when its window moves and would otherwise sit short of
+/// its first turn for as long as it stays loaded.
+const pageReads = useRef(new Set<string>());
+const loadOlder = async (sessionId: string, attempt = 0) => {
+  const before = sessionsRef.current.find((s) => s.sessionId === sessionId)?.olderBefore;
+  if (before == null || pageReads.current.has(sessionId)) return;
+  pageReads.current.add(sessionId);
+  try {
+    const page = await invoke<SessionPage>("get_session_page", {
+      sessionId,
+      before,
+      turns: OLDER_PAGE_TURNS,
+    });
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.sessionId !== sessionId || s.olderBefore !== before) return s;
+        const held = new Set(s.events.map((e) => e.id));
+        const older = page.events.filter((e) => !held.has(e.id));
+        return { ...s, events: [...older, ...s.events], olderBefore: page.olderBefore };
+      }),
+    );
+  } catch (e) {
+    console.error("failed to load older turns", e);
+    if (attempt < OLDER_PAGE_RETRIES) {
+      setTimeout(() => void loadOlder(sessionId, attempt + 1), 1000 * 2 ** attempt);
+    }
+  } finally {
+    pageReads.current.delete(sessionId);
+  }
+};
+useEffect(() => setOlderLoader((sessionId) => void loadOlder(sessionId)), []);
 
 // When each loaded transcript was last on screen. Stamped on arrival and on
 // leaving, so the idle clock starts the moment the reader looks away.
@@ -2129,8 +2168,18 @@ useEffect(() => {
   };
 }, [selectedSessionId]);
 
+/// Turns per page read above a transcript's tail.
+const OLDER_PAGE_TURNS = 16;
+const OLDER_PAGE_RETRIES = 3;
+
 /// How long a loaded transcript may sit unviewed before it is dropped.
 const IDLE_EVICT_MS = 10 * 60 * 1000;
+
+/// How many transcripts stay loaded however recently they were viewed, least
+/// recently touched going first. Flicking down the sidebar otherwise kept every
+/// one for the whole idle window. What the rules below hold is never dropped
+/// for it, so the count can sit above the cap while they do.
+const LOADED_CAP = 8;
 
 /// Drops idle transcripts from memory. Every transcript opened since launch
 /// stayed resident before this — hundreds of megabytes by the end of a day.
@@ -2149,21 +2198,37 @@ const IDLE_EVICT_MS = 10 * 60 * 1000;
 /// nothing to reload it.
 const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
   const now = Date.now();
+  const viewed = (id: string) => lastViewedRef.current.get(id) ?? 0;
+  // Never the session on screen, one mid-turn (its live events would land in
+  // the early-event hold), or one holding a card only its child can redraw.
+  const held = (s: SessionSnapshot) => {
+    const forced = s.sessionId === force?.sessionId;
+    const status =
+      forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+    return (
+      onScreen(s.sessionId)
+      || s.sessionId === selectionRequestRef.current
+      || status === "in_progress"
+      || (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0
+    );
+  };
   setSessions((prev) => {
-    const kept = prev.filter((s) => {
-      const forced = s.sessionId === force?.sessionId;
-      const selected =
-        onScreen(s.sessionId) || s.sessionId === selectionRequestRef.current;
-      const status =
-        forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
-      const asking = (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0;
-      // Never the session on screen, one mid-turn (its live events would land
-      // in the early-event hold), or one holding a card only its child can redraw.
-      if (selected || status === "in_progress" || asking) return true;
-      if (forced) return false;
+    let kept = prev.filter((s) => {
+      if (held(s)) return true;
+      if (s.sessionId === force?.sessionId) return false;
       // Never viewed since load counts as idle.
-      return now - (lastViewedRef.current.get(s.sessionId) ?? 0) < IDLE_EVICT_MS;
+      return now - viewed(s.sessionId) < IDLE_EVICT_MS;
     });
+    if (kept.length > LOADED_CAP) {
+      const drop = new Set(
+        kept
+          .filter((s) => !held(s))
+          .sort((a, b) => viewed(a.sessionId) - viewed(b.sessionId))
+          .slice(0, kept.length - LOADED_CAP)
+          .map((s) => s.sessionId),
+      );
+      kept = kept.filter((s) => !drop.has(s.sessionId));
+    }
     return kept.length === prev.length ? prev : kept;
   });
 };
@@ -2528,7 +2593,6 @@ const paneState = (sessionId: string): PaneState => {
   const paneBusy = status === "in_progress";
   return {
     session,
-    streamingBlock: streamingContentBlock[sessionId] ?? null,
     busy: paneBusy,
     working: paneBusy ? workingBySession[sessionId] ?? null : null,
     backgroundTaskCount: tasksBySession[sessionId]?.length ?? 0,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { changeRange, splitPath } from "@/lib/changes";
+import { changeRange, lastToolResult, splitPath } from "@/lib/changes";
 import type { AgentEvent } from "@/types/events";
 
 /// A prompt carrying a snapshot, or one that failed to take one. Only the
@@ -112,5 +112,15 @@ describe("splitPath", () => {
     // one of them or the path reads as "src/libtools.ts".
     expect(splitPath("src/lib/tools.ts")).toEqual({ dir: "src/lib/", name: "tools.ts" });
     expect(splitPath("README.md")).toEqual({ dir: "", name: "README.md" });
+  });
+});
+
+describe("lastToolResult", () => {
+  it("moves on a tool finishing and on nothing else", () => {
+    const result = (id: string) =>
+      ({ ...prompt(null), id, payload: { type: "tool_call_completed", callId: id, result: {} } }) as AgentEvent;
+    expect(lastToolResult([])).toBe("");
+    expect(lastToolResult([prompt(null), result("a"), noise(), turnEnd("t")])).toBe("a");
+    expect(lastToolResult([result("a"), result("b"), noise()])).toBe("b");
   });
 });

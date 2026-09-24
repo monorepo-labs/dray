@@ -47,6 +47,7 @@ import {
   type Viewport,
 } from "@/lib/browser";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
+import { useWindowFocused } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import type { ChromiumStatus } from "@/types/events";
 
@@ -166,7 +167,7 @@ export default function BrowserPane({
         )}
       >
         {empty ? (
-          <EmptyState sessionId={sessionId} />
+          <EmptyState sessionId={sessionId} active={active} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled: the page
           // is a native view, and a DOM scroll container cannot clip it.
@@ -630,13 +631,13 @@ function DeviceBar({
 /// What to open when nothing is: this checkout's dev servers, the session's
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
-function EmptyState({ sessionId }: { sessionId: string }) {
+function EmptyState({ sessionId, active }: { sessionId: string; active: boolean }) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
   if (chromium && chromium.state !== "ready") {
     return <ChromiumState status={chromium} />;
   }
-  return <Servers sessionId={sessionId} />;
+  return <Servers sessionId={sessionId} active={active} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
@@ -668,10 +669,16 @@ function ChromiumState({ status }: { status: ChromiumStatus }) {
   );
 }
 
-function Servers({ sessionId }: { sessionId: string }) {
+function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
+  // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
+  // mounted while hidden — so it reads only while on screen and frontmost,
+  // and once more on coming back.
+  const focused = useWindowFocused();
+  const polling = active && focused;
 
   useEffect(() => {
+    if (!polling) return;
     let live = true;
     const read = () =>
       void listLocalServers(sessionId)
@@ -683,7 +690,7 @@ function Servers({ sessionId }: { sessionId: string }) {
       live = false;
       clearInterval(timer);
     };
-  }, [sessionId]);
+  }, [sessionId, polling]);
 
   const open = (url: string) => void openInBrowser(sessionId, url, true).catch(() => undefined);
 

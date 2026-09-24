@@ -1,10 +1,8 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
 import Orb from "@/components/Orb";
 
-import CodeView from "@/components/chat/CodeView";
-import DiffView from "@/components/chat/DiffView";
 import ImageRow from "@/components/chat/ImageRow";
 import TodoList from "@/components/chat/TodoList";
 import { basename, truncate } from "@/lib/format";
@@ -26,6 +24,11 @@ import FileLink from "@/components/chat/FileLink";
 import type { FileEdit, ToolResult, ToolType } from "@/types/events";
 import FileEdits from "@/components/chat/FileEdits";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
+
+// The diff renderer is most of `@pierre/diffs`, and a row only draws one once
+// it is opened — so it is fetched on the first expand, not parsed at launch.
+const CodeView = lazy(() => import("@/components/chat/CodeView"));
+const DiffView = lazy(() => import("@/components/chat/DiffView"));
 
 // Shown in the header, so the expanded body omits them to avoid repeating
 // itself. `timeout` is here for a different reason: it is a ceiling the model
@@ -497,13 +500,21 @@ export default function ToolCall({
 
       {todos && <TodoList todos={todos} />}
 
-      {open && sides && <DiffView sides={sides} />}
+      {open && sides && (
+        <Suspense fallback={null}>
+          <DiffView sides={sides} />
+        </Suspense>
+      )}
 
       {/* The harness reported the change itself, so this is a real unified diff
           rather than two sides reconstructed from the call's arguments. */}
       {open && edits && edits.length > 0 && <FileEdits edits={edits} />}
 
-      {open && range && <CodeView range={range} />}
+      {open && range && (
+        <Suspense fallback={null}>
+          <CodeView range={range} />
+        </Suspense>
+      )}
 
       {/* Unboxed and sans, for the reason an answered question is: this is a
           sentence somebody wrote, and a code box frames prose as output. */}

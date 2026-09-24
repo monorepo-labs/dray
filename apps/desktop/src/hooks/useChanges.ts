@@ -76,6 +76,14 @@ function rememberFileVersions(key: string, value: FileVersions) {
 /// of a baseline is immediate, since there is nothing on screen to keep.
 const REFRESH_DEBOUNCE = 300;
 
+/// While a turn runs, one working-tree read per this long at most. Each read is
+/// five `git` spawns and a `git add -A` over the whole tree (~250ms on this
+/// repo), and a busy turn finishes a tool every few seconds — replayed over
+/// real session logs, a 20-tool turn read 42 times behind the debounce alone.
+/// The turn's end reads at once whatever this says, so the answer the panel
+/// settles on is never late; only the running preview is coarser.
+const LIVE_REFRESH_GAP = 15_000;
+
 type ChangesState = {
   changes: ChangeSet | null;
   error: string | null;
@@ -91,19 +99,23 @@ type ChangesState = {
 /// `head` frozen (a finished turn) is the strong case: two fixed trees diff to
 /// one immutable answer, so the cache is authoritative and nothing re-reads
 /// it. `head` null (a turn still running) diffs against the moving working
-/// tree, re-read on `revision` behind the debounce.
+/// tree, re-read on `revision` behind the debounce, and no oftener than
+/// [LIVE_REFRESH_GAP] while `busy`.
 export function useChanges(
   cwd: string,
   baseline: string | null,
   /// The turn's closing snapshot, or null to diff against the tree as it
   /// stands now.
   head: string | null,
-  /// Changes whenever the agent may have written something.
+  /// Changes whenever the agent may have written something: a tool finishing,
+  /// or the turn ending.
   revision: string,
   /// False while the panel is hidden. The component stays mounted so its state
   /// and DOM survive, but a hidden panel must not keep snapshotting the working
   /// tree on every event — reads resume when it comes back on screen.
   active: boolean,
+  /// A turn is running, which is what spaces reads out.
+  busy: boolean,
 ): ChangesState {
   // `\0` as the separator: it is the one byte a path cannot contain, so no
   // (cwd, baseline, head) triple can collide with another. The escape, never a
@@ -145,12 +157,18 @@ export function useChanges(
   // cache until something else triggers a refresh.
   const issued = useRef(0);
   const inFlight = useRef(false);
+  const lastRead = useRef(0);
+  // The key and revision the last read was issued for. Equal to the current
+  // pair means nothing that could move the answer has happened since, so a
+  // turn *starting* costs no snapshot.
+  const readFor = useRef<string | null>(null);
 
   const read = useCallback(async () => {
     if (!key || !baseline) return;
 
     const token = ++issued.current;
     inFlight.current = true;
+    lastRead.current = Date.now();
     setLoading(true);
     try {
       const next = await invoke<ChangeSet>("changes_since", { cwd, baseline, head });
@@ -177,7 +195,13 @@ export function useChanges(
   }, [cwd, baseline, head, key]);
 
   useEffect(() => {
-    if (!key || !active) return;
+    // Forgotten while hidden, so reopening always re-reads: the reader's own
+    // editor moves the tree without any tool finishing.
+    if (!key || !active) {
+      readFor.current = null;
+      return;
+    }
+    const mark = `${key}\0${revision}`;
 
     // Nothing on screen and nothing already fetching: read now, since waiting
     // buys nothing. The `inFlight` half matters — without it, every revision
@@ -185,6 +209,7 @@ export function useChanges(
     // burst of concurrent `git add -A` snapshots slipping through the very
     // debounce that exists to prevent them.
     if (!changeSets.has(key) && !inFlight.current) {
+      readFor.current = mark;
       void read();
       return;
     }
@@ -196,9 +221,17 @@ export function useChanges(
     // `active` in the deps is what refreshes on reopen: events that landed
     // while the panel was hidden bumped `revision` with this effect off, so
     // coming back on screen has to count as a reason to re-read.
-    const timer = setTimeout(() => void read(), REFRESH_DEBOUNCE);
+    if (readFor.current === mark) return;
+
+    const wait = busy
+      ? Math.max(REFRESH_DEBOUNCE, lastRead.current + LIVE_REFRESH_GAP - Date.now())
+      : REFRESH_DEBOUNCE;
+    const timer = setTimeout(() => {
+      readFor.current = mark;
+      void read();
+    }, wait);
     return () => clearTimeout(timer);
-  }, [key, read, revision, active, head]);
+  }, [key, read, revision, active, head, busy]);
 
   return { changes, error, loading, refresh: read };
 }

@@ -1,12 +1,18 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { areThemesEqual } from "@pierre/diffs";
-import { WorkerPoolContextProvider, useWorkerPool } from "@pierre/diffs/react";
+import { WorkerPoolContext, useWorkerPool } from "@pierre/diffs/react";
+import { getOrCreateWorkerPoolSingleton } from "@pierre/diffs/worker";
 // Vite's `?worker` turns the package's worker entry into a constructor and
 // owns bundling it — the library takes a factory precisely because it can't
 // know the host's bundler.
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 
-import { COMMON_LANGS, HIGHLIGHT_ENGINE } from "@/hooks/useHighlighter";
+import {
+  COMMON_LANGS,
+  HIGHLIGHT_ENGINE,
+  isPoolWanted,
+  subscribePool,
+} from "@/hooks/useHighlighter";
 import type { CodeThemePair } from "@/lib/codeTheme";
 
 /// Moves diff highlighting off the main thread.
@@ -25,6 +31,10 @@ import type { CodeThemePair } from "@/lib/codeTheme";
 /// The engine is named here as well as at the main-thread sites, since each
 /// worker builds its own Shiki from this option and the default is the slow
 /// JS engine `HIGHLIGHT_ENGINE` exists to avoid.
+///
+/// Made on the first code view rather than at launch (`useHighlighter` asks),
+/// and never torn down after: the context stays in the tree either way, so the
+/// pool arriving re-renders its readers rather than remounting the app.
 export default function DiffWorkerPool({
   pair,
   children,
@@ -32,18 +42,23 @@ export default function DiffWorkerPool({
   pair: CodeThemePair;
   children: React.ReactNode;
 }) {
+  const wanted = useSyncExternalStore(subscribePool, isPoolWanted);
+  const pool = wanted
+    ? getOrCreateWorkerPoolSingleton({
+        poolOptions: { workerFactory: () => new DiffWorker(), poolSize: 2 },
+        highlighterOptions: {
+          langs: COMMON_LANGS,
+          theme: pair,
+          preferredHighlighter: HIGHLIGHT_ENGINE,
+        },
+      })
+    : undefined;
+
   return (
-    <WorkerPoolContextProvider
-      poolOptions={{ workerFactory: () => new DiffWorker(), poolSize: 2 }}
-      highlighterOptions={{
-        langs: COMMON_LANGS,
-        theme: pair,
-        preferredHighlighter: HIGHLIGHT_ENGINE,
-      }}
-    >
+    <WorkerPoolContext.Provider value={pool}>
       <PoolThemeSync pair={pair} />
       {children}
-    </WorkerPoolContextProvider>
+    </WorkerPoolContext.Provider>
   );
 }
 

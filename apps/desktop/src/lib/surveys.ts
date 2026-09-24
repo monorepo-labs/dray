@@ -16,7 +16,7 @@
 // a host, an id and the properties together, or with nothing — and nothing is
 // the refusal. Reading `analytics_enabled` here as well would be a second
 // reader free to disagree with the first, which is what DRA-199 was.
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { SurveyIdentity } from "@/types/events";
@@ -24,6 +24,10 @@ import type { SurveyIdentity } from "@/types/events";
 /// Whether `init` has run. `posthog.init` a second time is not a no-op, and the
 /// settings toggle can reach this after the first call.
 let started = false;
+
+/// The SDK, loaded only once consent answers yes. It is ~300KB of the entry
+/// chunk otherwise, parsed on every launch including every opted-out one.
+let posthog: PostHog | null = null;
 
 /// The id the SDK was started under, so a re-opt-in can tell whether it is
 /// still the right one. Opting out clears the stored install id and opting back
@@ -70,8 +74,21 @@ export async function startSurveys(): Promise<void> {
     // Opted out. Nothing to start, and anything already running stops — the
     // switch has to mean something without a restart, the same promise
     // `analytics::enabled` makes by reading the file on every send.
-    if (started) posthog.opt_out_capturing();
+    posthog?.opt_out_capturing();
     return;
+  }
+
+  if (!posthog) {
+    let sdk: PostHog;
+    try {
+      sdk = (await import("posthog-js")).default;
+    } catch (e) {
+      console.error("[surveys]", e);
+      return;
+    }
+    // The import is a second await, and the same rule holds across it.
+    if (mine !== generation) return;
+    posthog = sdk;
   }
 
   // Narrowed into a const because the `loaded` callback below closes over it,

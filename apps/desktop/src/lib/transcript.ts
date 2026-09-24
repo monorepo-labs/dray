@@ -571,7 +571,38 @@ const ABANDONED: ToolResult = {
   images: [],
 };
 
+/// Recent builds per log, so the several readers of one session's transcript —
+/// the chat, the shell's subagent panel, a crew card — share one walk instead of
+/// each paying for it on every event. Keyed on the array, which every append
+/// replaces, plus its length so a caller that pushes into one in place still
+/// gets a fresh build. A handful per log, since the readers ask with different
+/// `live` flags.
+const built = new WeakMap<
+  AgentEvent[],
+  { length: number; live: boolean; liveTaskIds: ReadonlySet<string>; result: Transcript }[]
+>();
+
+type Transcript = ReturnType<typeof build>;
+
+/// The transcript a session's log draws — see [`build`]. Memoized per log, so
+/// every reader of one session shares a single walk.
 export function buildTranscript(
+  source: AgentEvent[],
+  live = false,
+  liveTaskIds: ReadonlySet<string> = EMPTY_TASKS,
+): Transcript {
+  const cached = built.get(source) ?? [];
+  const hit = cached.find(
+    (c) => c.length === source.length && c.live === live && c.liveTaskIds === liveTaskIds,
+  );
+  if (hit) return hit.result;
+
+  const result = build(source, live, liveTaskIds);
+  built.set(source, [{ length: source.length, live, liveTaskIds, result }, ...cached].slice(0, 4));
+  return result;
+}
+
+function build(
   source: AgentEvent[],
   /// Whether a child is actually running this session. A call with no result is
   /// only *pending* while something could still produce one; with the process
@@ -612,7 +643,10 @@ export function buildTranscript(
   /// once it closes. One place, below the transcript, works for both.
   pendingAsks: PendingAsk[];
 } {
-  const events = [...source].sort(bySeq);
+  // Events arrive in `seq` order, so the copy and sort are skipped where the
+  // log already is — the common case — rather than paid on every build.
+  const sorted = source.every((e, i) => i === 0 || source[i - 1].seq <= e.seq);
+  const events = sorted ? source : [...source].sort(bySeq);
 
   const resultByCallId = new Map<string, ToolResult>();
   const editsByCallId = new Map<string, FileEdit[]>();
@@ -779,4 +813,79 @@ export function buildTranscript(
     editsByCallId,
     pendingAsks,
   };
+}
+
+/// What a turn draws from: the turn and the maps its rows look calls up in.
+type TurnView = {
+  turn: Turn;
+  subagentById: Map<string, SubagentRun>;
+  resultByCallId: Map<string, ToolResult>;
+  editsByCallId?: Map<string, FileEdit[]>;
+};
+
+/// Whether a turn would draw exactly what it drew last time, as far as its data
+/// goes — `TurnBlock`'s memo.
+///
+/// Every committed event rebuilds the transcript, so each turn arrives as a new
+/// object beside new maps even when nothing in it moved — and with identity as
+/// the test, one event re-rendered every turn in the session (78 of them, ~2,450
+/// components, in the session this was measured on). An unchanged turn keeps
+/// the same event objects, so it is compared by those, and the maps only by the
+/// entries its own calls read.
+export function drawsSameTurn(a: TurnView, b: TurnView): boolean {
+  const t = a.turn;
+  const u = b.turn;
+  if (
+    t === u &&
+    a.resultByCallId === b.resultByCallId &&
+    a.editsByCallId === b.editsByCallId &&
+    a.subagentById === b.subagentById
+  ) {
+    return true;
+  }
+  if (
+    t.key !== u.key ||
+    t.prompt !== u.prompt ||
+    t.completed !== u.completed ||
+    t.finalText !== u.finalText ||
+    t.work.length !== u.work.length
+  ) {
+    return false;
+  }
+
+  const calls: string[] = [];
+  for (let i = 0; i < t.work.length; i++) {
+    const x = t.work[i];
+    const y = u.work[i];
+    if (isToolGroup(x) || isToolGroup(y)) {
+      if (!isToolGroup(x) || !isToolGroup(y) || !sameItems(x.calls, y.calls)) return false;
+      for (const call of x.calls) if (call.payload.type === "tool_call_started") calls.push(call.payload.callId);
+    } else {
+      if (x !== y) return false;
+      if (x.payload.type === "tool_call_started") calls.push(x.payload.callId);
+    }
+  }
+
+  return calls.every(
+    (id) =>
+      a.resultByCallId.get(id) === b.resultByCallId.get(id) &&
+      sameItems(a.editsByCallId?.get(id), b.editsByCallId?.get(id)) &&
+      sameRun(a.subagentById.get(id), b.subagentById.get(id)),
+  );
+}
+
+/// A run is rebuilt on every pass, so it is compared field by field; its events
+/// are the log's own objects.
+function sameRun(a: SubagentRun | undefined, b: SubagentRun | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (Object.keys(a) as (keyof SubagentRun)[]).every((k) =>
+    k === "events" ? sameItems(a.events, b.events) : a[k] === b[k],
+  );
+}
+
+function sameItems<T>(a: readonly T[] | undefined, b: readonly T[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((x, i) => x === b[i]);
 }

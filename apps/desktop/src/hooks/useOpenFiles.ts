@@ -88,6 +88,14 @@ function write(sid: string, next: Partial<SessionFiles>) {
   emit();
 }
 
+/// Drops what a deleted session held, text and all. A read still out finds
+/// neither its entry nor its number, so it lands nowhere.
+export function forgetOpenFiles(sid: string) {
+  if (!bySession.delete(sid)) return;
+  for (const key of seqByPath.keys()) if (key.startsWith(`${sid}\n`)) seqByPath.delete(key);
+  emit();
+}
+
 /// Replaces one file in place, leaving the rest and their identities alone. A
 /// no-op where the path is gone, which is what the async guards come down to.
 function patch(sid: string, path: string, next: (file: OpenFile) => OpenFile) {

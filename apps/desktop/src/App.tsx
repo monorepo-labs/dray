@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -8,23 +8,27 @@ import { Button } from "@/components/ui/button";
 
 import "./App.css";
 import Chat from "@/components/Chat";
-import ChangesPanel from "@/components/ChangesPanel";
-import ChangesView from "@/components/changes/ChangesView";
-import FilesView from "@/components/files/FilesView";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
-import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
-import SettingsPage, { type SettingsTab } from "@/components/SettingsPage";
+import type { SettingsTab } from "@/components/SettingsPage";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
-import IssuePanel from "@/components/IssuePanel";
-import IssuesView from "@/components/IssuesView";
 import MorePanel from "@/components/MorePanel";
 import PlanPanel from "@/components/PlanPanel";
-import PrPanel from "@/components/PrPanel";
-import BrowserPane from "@/components/browser/BrowserPane";
+
+// Nothing here is on first paint, so each is its own chunk, fetched the first
+// time its view opens (`MountOnce`) rather than parsed on every launch.
+const ChangesPanel = lazy(() => import("@/components/ChangesPanel"));
+const ChangesView = lazy(() => import("@/components/changes/ChangesView"));
+const FilesView = lazy(() => import("@/components/files/FilesView"));
+const DocsPanel = lazy(() => import("@/components/DocsPanel"));
+const SettingsPage = lazy(() => import("@/components/SettingsPage"));
+const IssuePanel = lazy(() => import("@/components/IssuePanel"));
+const IssuesView = lazy(() => import("@/components/IssuesView"));
+const PrPanel = lazy(() => import("@/components/PrPanel"));
+const BrowserPane = lazy(() => import("@/components/browser/BrowserPane"));
 import {
   clearOpenError,
   closeTab,
@@ -46,6 +50,7 @@ import { trackFeature } from "@/lib/analytics";
 import { handoffActions } from "@/lib/handoff";
 import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
+  MountOnce,
   PANEL_MIN,
   PanelToggle,
   TabBody,
@@ -117,7 +122,7 @@ import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
-import { changeRange, turnChangedTree } from "@/lib/changes";
+import { changeRange, lastToolResult, turnChangedTree } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
@@ -1126,17 +1131,22 @@ function App() {
   // `todo_write` firing on every tick would yank the pane several times a turn
   // — see `startsNewList`. Held rather than derived, since only the previous
   // reading can say which this is; per session, since each has its own.
-  const seenTodosRef = useRef(new Map<string, Todo[] | null>());
+  const seenTodosRef = useRef(
+    new Map<string, { todos: Todo[] | null; olderBefore: number | null }>(),
+  );
   useEffect(() => {
     // Waiting on the transcript, not just the id: `sessionTodos` reads an empty
     // event list as `null` while one loads, so seeding before it lands would
     // record "no list" and then read the real one as news.
     if (!selectedSession) return;
+    const { sessionId, olderBefore } = selectedSession;
     const seen = seenTodosRef.current;
-    const previous = seen.get(selectedSession.sessionId);
-    seen.set(selectedSession.sessionId, sessionTodos);
-    if (previous === undefined) return;
-    if (sessionTodos && startsNewList(previous, sessionTodos)) showPanel("more");
+    const previous = seen.get(sessionId);
+    seen.set(sessionId, { todos: sessionTodos, olderBefore });
+    // A page of older turns landing is history arriving, not a list being
+    // written, so it re-seeds silently like the first reading does.
+    if (previous === undefined || previous.olderBefore !== olderBefore) return;
+    if (sessionTodos && startsNewList(previous.todos, sessionTodos)) showPanel("more");
   }, [selectedSession, sessionTodos]);
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
@@ -1292,12 +1302,14 @@ function App() {
   // session's: switching from a running session to an idle one drops it without
   // any turn having ended.
   const lastTurn = useRef({ sessionId: selectedSessionId, busy });
+  const [turnsEnded, setTurnsEnded] = useState(0);
   useEffect(() => {
     const prev = lastTurn.current;
     lastTurn.current = { sessionId: selectedSessionId, busy };
     if (prev.sessionId !== selectedSessionId || !prev.busy || busy) return;
     pullRequests.refresh();
     prMarks.refresh();
+    setTurnsEnded((n) => n + 1);
   }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
 
   // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
@@ -1350,10 +1362,17 @@ function App() {
     togglePanel();
   };
 
-  // What tells the panel to re-read — a cache key, not a count. The event total
-  // moves as a turn's writes land, and `busy` covers the turn ending, where the
-  // final file write and the closing event can arrive in either order.
-  const revision = `${selectedSession?.events.length ?? 0}:${busy}`;
+  // What tells the git-backed views to re-read — cache keys, not counts. The
+  // tree, the commit logs and the file list move at a turn's end, since what an
+  // agent commits or creates mid-turn can wait for it; a working-tree diff also
+  // moves as each tool finishes, which is the only kind of event that writes.
+  // Keyed on every event, a 20-tool turn cost ~200 `git` spawns per view.
+  const turnRevision = String(turnsEnded);
+  const lastTool = useMemo(
+    () => lastToolResult(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
+  const writeRevision = `${lastTool}:${turnsEnded}`;
 
   // Both panel bodies are presentational, and their hooks live here for the
   // same reason: the tab row needs what they know before either tab is opened —
@@ -1363,8 +1382,9 @@ function App() {
     selectedSession?.cwd ?? "",
     baseline,
     head,
-    revision,
+    writeRevision,
     panelShown && activeTab === "changes",
+    busy,
   );
 
   // One button, so the tab decides what it re-reads. Subagents has nothing to
@@ -2183,6 +2203,7 @@ function App() {
           // full view was ⌘-clicking it over in the crew, or clicking away to
           // another row and back.
           onSelect={(sessionId) => goToSession(() => void selectAndLeaveCrew(sessionId))}
+          onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
           groups={spaceGroups}
           onDropSession={dropSession}
           splitLearned={splitLearned}
@@ -2304,6 +2325,7 @@ function App() {
             }
           >
             <TabBody active>
+              <MountOnce when>
               <IssuePanel
                 // No session, so no link to remove — the row draws its open-in-
                 // tracker button and nothing else.
@@ -2314,6 +2336,7 @@ function App() {
                 loading={pickedIssueData.loading}
                 unavailable={pickedIssueData.unavailable}
               />
+              </MountOnce>
             </TabBody>
           </RightPanel>
         ) : // Mounted whenever a session is, open or not — closing or switching
@@ -2340,14 +2363,17 @@ function App() {
             cwd={shownSession.cwd}
           >
             <TabBody active={activeTab === "changes"}>
+              <MountOnce when={panelShown && activeTab === "changes"}>
               <ChangesPanel
                 cwd={shownSession.cwd}
                 baseline={baseline}
                 onOpenRepo={() => setViewTab("changes")}
                 {...changesData}
               />
+              </MountOnce>
             </TabBody>
             <TabBody active={activeTab === "browser"}>
+              <MountOnce when={panelShown && activeTab === "browser"}>
               <BrowserPane
                 sessionId={shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
@@ -2356,6 +2382,7 @@ function App() {
                 onExpand={expandBrowser}
                 onCollapse={collapseBrowser}
               />
+              </MountOnce>
             </TabBody>
             <TabBody active={activeTab === "more"}>
               <MorePanel
@@ -2372,28 +2399,36 @@ function App() {
               />
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>
+              <MountOnce when={panelShown && hasPrTab && activeTab === "pr"}>
               <PrPanel
                 branch={prBranch}
                 cwd={shownSession.cwd}
                 {...pullRequests}
               />
+              </MountOnce>
             </TabBody>
             <TabBody active={hasDocsTab && activeTab === "docs"}>
+              {/* On having docs rather than on being shown: its watcher is
+                  what flags a doc changed on disk, open tab or not. */}
+              <MountOnce when={hasDocsTab}>
               <DocsPanel
                 sessionId={selectedSessionId}
                 active={panelShown && activeTab === "docs" && viewTab === "chat"}
               />
+              </MountOnce>
             </TabBody>
             <TabBody active={hasPlanTab && activeTab === "plan"}>
               <PlanPanel sessionId={selectedSessionId} />
             </TabBody>
             <TabBody active={hasIssueTab && activeTab === "issue"}>
+              <MountOnce when={panelShown && hasIssueTab && activeTab === "issue"}>
               <IssuePanel
                 sessionId={selectedSessionId}
                 issues={sessionIssues}
                 onUnlink={unlinkIssue}
                 {...issueData}
               />
+              </MountOnce>
             </TabBody>
           </RightPanel>
         ) : null
@@ -2547,6 +2582,7 @@ function App() {
           the list, its filters and its scroll survive a trip into a session and
           back, which is the trip this page exists to make. */}
       <TabBody active={issuesOpen}>
+        <MountOnce when={issuesOpen}>
         <IssuesView
           active={issuesOpen}
           picked={pickedIssue?.identifier ?? null}
@@ -2559,6 +2595,7 @@ function App() {
           connectError={integrations.error}
           onRecheckGithub={integrations.recheckGithub}
         />
+        </MountOnce>
       </TabBody>
 
       {/* Hidden rather than unmounted, the same bargain the right panel's tabs
@@ -2627,23 +2664,29 @@ function App() {
         // reset with it. Cheap to remount: the reads behind it are cached by
         // tree id at module level and survive the unmount.
         <TabBody active={!issuesOpen && viewTab === "changes"}>
+          <MountOnce when={!issuesOpen && viewTab === "changes"}>
           <ChangesView
             key={selectedSession.sessionId}
             cwd={selectedSession.cwd}
-            active={viewTab === "changes"}
-            revision={revision}
+            active={!issuesOpen && viewTab === "changes"}
+            revision={turnRevision}
+            writeRevision={writeRevision}
+            busy={busy}
           />
+          </MountOnce>
         </TabBody>
       )}
 
       {selectedSession && (
         <TabBody active={!issuesOpen && viewTab === "browser"}>
+          <MountOnce when={fullBrowserOpen}>
           <BrowserPane
             sessionId={selectedSession.sessionId}
             active={fullBrowserOpen}
             mode="full"
             onCollapse={collapseBrowser}
           />
+          </MountOnce>
         </TabBody>
       )}
 
@@ -2652,13 +2695,15 @@ function App() {
         // does not: its store is per session and outlives the remount, so what
         // comes back is that session's own files.
         <TabBody active={!issuesOpen && viewTab === "files"}>
+          <MountOnce when={!issuesOpen && viewTab === "files"}>
           <FilesView
             key={selectedSession.sessionId}
             sessionId={selectedSession.sessionId}
             cwd={selectedSession.cwd}
             active={!issuesOpen && viewTab === "files"}
-            revision={revision}
+            revision={turnRevision}
           />
+          </MountOnce>
         </TabBody>
       )}
     </AppShell>
@@ -2681,7 +2726,9 @@ function App() {
     <QuitDialog />
     <LinkDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
-        collapses and would take ⌘, with it. */}
+        collapses and would take ⌘, with it. Not before its first open, which
+        is also the only place a transcription download can start. */}
+    <MountOnce when={settingsOpen}>
     <SettingsPage
       open={settingsOpen}
       onClose={closeSettings}
@@ -2713,6 +2760,7 @@ function App() {
       // ordinary — a new task has no session yet.
       cwd={composerCwd ?? ""}
     />
+    </MountOnce>
     <WorktreeDialog
       prompt={worktreePrompt}
       onConfirm={(sessionId) => removeWorktree(sessionId)}

@@ -672,7 +672,7 @@ impl Mapper {
                     // A `data:` URL, not a path: this is where the bytes are,
                     // and the session layer is where they can be written to
                     // disk. The URL never survives past the emit — the session
-                    // layer strips it before the retained copies — so a failed
+                    // layer strips it before the log — so a failed
                     // archive still draws live and costs only the reloaded view.
                     images: content
                         .images()
