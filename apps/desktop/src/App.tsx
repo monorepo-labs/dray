@@ -57,7 +57,12 @@ import RightPanel, {
   tabOrder,
   type PanelTab,
 } from "@/components/RightPanel";
-import { CHAT_MIN, useChatColumnFloor, useViewportWidth } from "@/components/ResizeHandle";
+import {
+  CHAT_MIN,
+  useChatColumnFloor,
+  usePaneWidth,
+  useViewportWidth,
+} from "@/components/ResizeHandle";
 import Sidebar, {
   SIDEBAR_MIN,
   SEARCH_INPUT_ID,
@@ -66,7 +71,7 @@ import Sidebar, {
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
-import Crew, { CREW_W } from "@/components/Crew";
+import Crew, { CREW_W, CrewHint } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -721,10 +726,14 @@ function App() {
   // transcript instead; an explicit toggle outranks the default either way.
   // The panel counts as the crew would leave it — under the anchor's key, see
   // `panelKey` below — since reading `panelOpen` itself would loop back here.
+  // The sidebar counts at its drawn width, since the panel yields to it and a
+  // widened sidebar would otherwise leave the panel a sliver; floored at its
+  // minimum, because narrowing the window clamps that width under it.
   const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
+  const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
   const crewBeside =
     useViewportWidth() >=
-    CHAT_MIN + CREW_W + (collapsed ? 0 : SIDEBAR_MIN) + (crewPanelOpen ? PANEL_MIN : 0);
+    CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (crewPanelOpen ? PANEL_MIN : 0);
   const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
   const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewBeside);
   const crewUp = crewExists && !crewHidden;
@@ -2166,6 +2175,8 @@ function App() {
             active={!issuesOpen && viewTab === "chat"}
             chat={paneChat}
           />
+        ) : crewAvailable && !crewBeside ? (
+          <CrewHint />
         ) : undefined
       }
       sidebar={

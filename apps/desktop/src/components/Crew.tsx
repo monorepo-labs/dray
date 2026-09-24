@@ -238,10 +238,19 @@ export default function Crew({
           of it nobody is looking for. "Toggle", not "hide": the chord is the
           only way *back* too, and a hint naming one direction reads as a
           control that only goes that way. */}
-      <div className="flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
-        Toggle crew
-        <ShortcutKeys ids={["crew.toggle"]} className={HINT_KEYS} />
-      </div>
+      <CrewHint />
+    </div>
+  );
+}
+
+/// The chord's hint row. Also drawn alone above the composer where a narrow
+/// window has put the crew away on its own, since the reader never hid it and
+/// the chord is the only way to bring it back.
+export function CrewHint() {
+  return (
+    <div className="flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
+      Toggle crew
+      <ShortcutKeys ids={["crew.toggle"]} className={HINT_KEYS} />
     </div>
   );
 }

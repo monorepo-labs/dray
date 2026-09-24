@@ -69,6 +69,11 @@ function useSeniorPanes(self: Pane | undefined): number {
   return useSyncExternalStore(layoutChanged.subscribe, () => takenBy(widths, ORDER, self));
 }
 
+/// What a side pane is drawn at right now, 0 while it is not on screen.
+export function usePaneWidth(pane: Pane): number {
+  return useSyncExternalStore(layoutChanged.subscribe, () => widths[pane] ?? 0);
+}
+
 function useChatFloor(): number {
   return useSyncExternalStore(layoutChanged.subscribe, () => chatFloor);
 }
