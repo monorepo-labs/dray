@@ -816,7 +816,7 @@ async fn read_stdout(
                                         Some(Transport::Grok(s))
                                             if s.prompt_id.lock().expect("grok prompt id poisoned").is_some()
                                     );
-                                    if ours || !mapper.turn_open() {
+                                    if ours || !mapper.turn_open {
                                         continue;
                                     }
                                     parser::GrokEvent::PromptDone(Box::new(parser::PromptResponse {

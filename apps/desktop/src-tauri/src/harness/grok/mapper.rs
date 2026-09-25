@@ -39,7 +39,7 @@ pub struct Mapper {
     /// `session/new` is honoured, so the index id *is* the resume handle.
     session_id: String,
     seq: Arc<AtomicU64>,
-    turn_open: bool,
+    pub(super) turn_open: bool,
     /// The one block streaming right now. Neither chunk kind carries an id, so
     /// at most one is open and a chunk of the other kind closes it.
     open: Option<OpenBlock>,
@@ -452,12 +452,6 @@ impl Mapper {
         // that run off a row from the turn before.
         self.pending_spawns.clear();
         event
-    }
-
-    /// Whether a turn is drawn as running, so a close grok sends for a turn it
-    /// opened itself is not taken for one nothing here ever started.
-    pub fn turn_open(&self) -> bool {
-        self.turn_open
     }
 
     /// Opens the turn on its first update. grok has no turn-started line the

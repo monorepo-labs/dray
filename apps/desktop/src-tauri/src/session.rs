@@ -1921,9 +1921,9 @@ impl Session {
     ///
     /// pi's `streamingBehavior: "steer"` puts the prompt on pi's own steering
     /// queue, which it drains at the next tool-call boundary inside the run —
-    /// before the model call after it, verified live. So the boundary is pi's to find and the prompt is
-    /// pi's to hold, where Dray's queue exists precisely because Claude Code
-    /// offers neither.
+    /// before the model call after it, verified live. So the boundary is pi's
+    /// to find and the prompt is pi's to hold, where Dray's queue exists
+    /// precisely because Claude Code offers neither.
     ///
     /// Written through rather than held, which trades the same thing
     /// [`queue_and_flush`](Self::queue_and_flush) trades and buys more for it:
