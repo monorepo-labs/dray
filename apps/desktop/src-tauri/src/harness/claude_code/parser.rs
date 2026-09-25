@@ -480,6 +480,10 @@ pub enum ResultEvent {
         model_usage: Value,
         #[serde(default)]
         origin: Option<ResultOrigin>,
+        /// Model calls the turn made. Zero on a notification turn is the CLI
+        /// filing a stranded task's notice ahead of a queued prompt.
+        #[serde(default)]
+        num_turns: u32,
     },
     /// A turn that ended without completing — today, the user interrupting a
     /// streaming response.
