@@ -1229,7 +1229,7 @@
   }
 
   /* Demo pages are documents, not the app, and their content runs past the
-     window: every `demo-*.html` carries `data-demo` to get page scroll back.
+     window: every `demo/*.html` carries `data-demo` to get page scroll back.
      Only `html` scrolls. `body` is `overscroll-none`, so made a scroll box of
      its own it takes the wheel, has nothing to scroll and passes nothing up —
      the page then moved by its scrollbar alone. */

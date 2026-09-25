@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Connected } from "@/lib/issueTracker";
 import type { Issue, IssueFilters } from "@/types/events";
-import "./App.css";
+import "../App.css";
 
 /// The repository the GitHub half reads, which the page takes from the reader's
 /// own stored pick rather than from a prop. Seeded here, or that case draws the
@@ -134,8 +134,7 @@ const FILTERS: IssueFilters = {
 ///
 /// It exists to answer that, which cannot be seen on a machine with a Linear key
 /// and a signed-in `gh`, which is every machine this is developed on. The PR
-/// panel's own empty states are a separate page for the same reason. Delete this
-/// once it has answered.
+/// panel's own empty states are a separate page for the same reason.
 ///
 /// Worth knowing while looking at it: a **missing** `gh` and a **logged-out**
 /// one are one state, `NotConnected`, so both draw whatever GitHub-absent draws.

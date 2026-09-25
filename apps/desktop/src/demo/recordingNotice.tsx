@@ -4,8 +4,8 @@ import ReactDOM from "react-dom/client";
 import BrowserPane from "@/components/browser/BrowserPane";
 import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import DemoThemeBar from "@/demoThemeBar";
-import "./App.css";
+import DemoThemeBar from "@/demo/ThemeBar";
+import "../App.css";
 
 /// What the browser pane shows while `dray browser record` runs.
 ///
@@ -13,8 +13,7 @@ import "./App.css";
 /// browser cannot be, so the real pane is mounted in the real right panel and
 /// the Tauri bridge is stubbed *outside* them — nothing in `src/` carries a
 /// demo seam. The page is a picture standing where the native view would be,
-/// which is exactly what the pane draws while recording anyway. Delete the
-/// page once it has answered.
+/// which is exactly what the pane draws while recording anyway.
 const SESSION = "demo-session";
 
 const TABS = [

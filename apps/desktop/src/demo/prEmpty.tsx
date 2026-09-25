@@ -6,7 +6,7 @@ import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ExternalApp, PrUnavailable } from "@/types/events";
-import "./App.css";
+import "../App.css";
 
 /// The terminals this machine is pretending to have.
 ///
@@ -43,7 +43,7 @@ const CWD = "/Users/you/code/dray";
 /// It exists to answer one thing — what a reader who has never set `gh` up sees
 /// now that the tab stays for them — which cannot be looked at on a machine
 /// where it is installed and logged in, which is every machine this is
-/// developed on. Delete the page once it has answered.
+/// developed on.
 ///
 /// **In the real frame, not on a card.** These states are centred in a column
 /// the reader can drag between 320px and half the window, so a card the page
