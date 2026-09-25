@@ -370,6 +370,8 @@ export function saveCustomDevice(name: string, width: number, height: number): D
 }
 
 export function removeCustomDevice(id: string) {
+  // Another session may still be on it, which would leave a size the menu cannot name.
+  for (const [session, v] of viewportBySession) if (v.preset === id) viewportBySession.delete(session);
   storeDevices(customDevices.filter((d) => d.id !== id));
 }
 

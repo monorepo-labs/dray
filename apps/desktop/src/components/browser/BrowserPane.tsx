@@ -184,9 +184,11 @@ export default function BrowserPane({
       />
       {!empty &&
         (responsive ? (
-          <SaveSizeBar sessionId={sessionId} size={viewport ?? room} />
+          <SaveSizeBar key={sessionId} sessionId={sessionId} size={viewport ?? room} />
         ) : (
-          viewport && <SizeBar sessionId={sessionId} viewport={viewport} />
+          // Keyed on session and device, so a delete question never carries to
+          // another; the pane stays mounted across session switches.
+          viewport && <SizeBar key={`${sessionId}:${viewport.preset}`}sessionId={sessionId} viewport={viewport} />
         ))}
       <div
         ref={stageRef}
@@ -205,8 +207,10 @@ export default function BrowserPane({
             ref={frameRef}
             className="relative shrink-0 rounded-sm shadow-[0_0_0_1px_var(--border)]"
             style={{
-              width: `min(${viewport.width}px, 100%)`,
-              height: `min(${viewport.height}px, 100%)`,
+              // Device sizes are page pixels, which is what the native view is
+              // placed in; the app's own zoom would scale them a second time.
+              width: `min(${viewport.width / zoomLevel()}px, 100%)`,
+              height: `min(${viewport.height / zoomLevel()}px, 100%)`,
             }}
           >
             <Snapshot of={snapshot} />
@@ -657,8 +661,10 @@ function SaveSizeBar({
   const [height, setHeight] = useState(String(size.height));
   const [name, setName] = useState("");
   // The pane resizing, or a typed size landing, moves the fields with it.
-  useEffect(() => setWidth(String(size.width)), [size.width]);
-  useEffect(() => setHeight(String(size.height)), [size.height]);
+  useEffect(() => {
+    setWidth(String(size.width));
+    setHeight(String(size.height));
+  }, [size.width, size.height]);
 
   const typed = () => ({
     width: clampSize(width, size.width),
@@ -676,7 +682,6 @@ function SaveSizeBar({
   };
   const save = () => {
     const next = typed();
-    if (!next.width || !next.height) return;
     const device = saveCustomDevice(name, next.width, next.height);
     setViewport(sessionId, { preset: device.id, ...next });
     setName("");
@@ -743,8 +748,6 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
   const own = saved.find((d) => d.id === viewport.preset);
   const device = VIEWPORT_PRESETS.find((d) => d.id === viewport.preset) ?? own;
   const [confirming, setConfirming] = useState(false);
-  // A question about one device is not one about the next.
-  useEffect(() => setConfirming(false), [viewport.preset]);
   const apply = (next: Viewport | null) => setViewport(sessionId, next);
 
   if (confirming && own) {
