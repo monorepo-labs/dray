@@ -78,7 +78,13 @@ export default function ProjectSelector({
         )}
       </Tooltip>
 
-      <DropdownMenuContent align="start" className="min-w-52">
+      <DropdownMenuContent
+        align="start"
+        className="min-w-52"
+        // Refocusing the trigger on close would reopen its tooltip and strand it
+        // there — see ModelSelector.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DropdownMenuRadioGroup value={value ?? ""} onValueChange={onSelect}>
           {projects.map((project) => (
             // Two projects can share a folder name, so the full path is the

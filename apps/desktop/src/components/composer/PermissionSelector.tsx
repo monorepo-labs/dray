@@ -99,7 +99,13 @@ export default function PermissionSelector({
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenuContent align="start" className="min-w-44">
+      <DropdownMenuContent
+        align="start"
+        className="min-w-44"
+        // Refocusing the trigger on close would reopen its tooltip and strand it
+        // there — see ModelSelector.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DropdownMenuRadioGroup
           value={stance}
           onValueChange={(v) => onChange(v as ApprovalPolicy)}
