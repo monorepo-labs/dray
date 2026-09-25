@@ -1136,12 +1136,12 @@ fn open_devtools(browser: &Browser) {
     }
 }
 
-/// ⌘-chords the page keeps: editing, find, reload. Zoom, hard reload and
+/// ⌘-chords the page keeps: editing, find, the location bar. Zoom, reload and
 /// DevTools are the browser's and handled below, since CEF implements none
 /// of Chrome's accelerators itself. Every other ⌘-chord is the app's — ⌘1,
 /// ⌘B, ⌘E, ⌘N — and is handed back to the webview, since with Chromium's view
 /// focused a key never reaches the document `useHotkey` listens on.
-const PAGE_CHORDS: &[char] = &['c', 'v', 'x', 'a', 'z', 'f', 'r', 'l'];
+const PAGE_CHORDS: &[char] = &['c', 'v', 'x', 'a', 'z', 'f', 'l'];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1183,6 +1183,7 @@ wrap_keyboard_handler! {
                     '=' | '+' if plain => return { zoom(browser, "in"); 1 },
                     '-' if plain => return { zoom(browser, "out"); 1 },
                     '0' if plain => return { zoom(browser, "reset"); 1 },
+                    'r' if plain => return { browser.reload(); 1 },
                     'r' if shift && !alt && !ctrl => return { browser.reload_ignore_cache(); 1 },
                     'i' if alt && !shift && !ctrl => return { open_devtools(browser); 1 },
                     _ => {}

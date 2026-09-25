@@ -12,11 +12,13 @@ import {
   RotateCw,
   Smartphone,
   SquareDashedMousePointer,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -30,24 +32,31 @@ import {
   openDevTools,
   openInBrowser,
   pickElement,
+  removeCustomDevice,
+  saveCustomDevice,
   setPendingTab,
+  setResponsive,
   useOpenError,
+  useResponsive,
   setViewport,
   snapshotPainted,
   useBrowserSnapshot,
   useBrowserTabs,
   useChromium,
+  useCustomDevices,
   usePendingTab,
   usePicking,
   useViewport,
   VIEWPORT_PRESETS,
   type Snapshot as BrowserSnapshot,
   type BrowserTab,
+  type Device,
   type LocalServer,
   type Viewport,
 } from "@/lib/browser";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import { useWindowFocused } from "@/lib/focus";
+import { zoomLevel } from "@/lib/zoom";
 import { cn } from "@/lib/utils";
 import type { ChromiumStatus } from "@/types/events";
 
@@ -95,8 +104,9 @@ export default function BrowserPane({
   const pending = usePendingTab(sessionId);
   const current = pending ? null : (tabs.find((t) => t.active) ?? null);
   const viewport = useViewport(sessionId);
+  // Responsive with no size typed is a flag; with one, it is a viewport.
+  const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
   const snapshot = useBrowserSnapshot(sessionId);
-  const [deviceBar, setDeviceBar] = useState(false);
   const key = useId();
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -130,6 +140,24 @@ export default function BrowserPane({
     };
   }, [sessionId, key, active, mode, standingAside, empty, viewport]);
 
+  // The page's size in responsive mode, which is what Save keeps. In page
+  // pixels: the view is placed in window points, so the app's own zoom
+  // scales what the page lays out at.
+  const [room, setRoom] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const read = () =>
+      setRoom({
+        width: Math.round(stage.clientWidth * zoomLevel()),
+        height: Math.round(stage.clientHeight * zoomLevel()),
+      });
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [standingAside]);
+
   if (standingAside) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-ui text-muted-foreground">
@@ -151,14 +179,15 @@ export default function BrowserPane({
         current={current}
         pending={pending}
         mode={mode}
-        deviceBar={deviceBar}
-        onToggleDeviceBar={() => setDeviceBar((v) => !v)}
         onExpand={onExpand}
         onCollapse={onCollapse}
       />
-      {deviceBar && (
-        <DeviceBar sessionId={sessionId} viewport={viewport} onClose={() => setDeviceBar(false)} />
-      )}
+      {!empty &&
+        (responsive ? (
+          <SaveSizeBar sessionId={sessionId} size={viewport ?? room} />
+        ) : (
+          viewport && <SizeBar sessionId={sessionId} viewport={viewport} />
+        ))}
       <div
         ref={stageRef}
         className={cn(
@@ -169,8 +198,9 @@ export default function BrowserPane({
         {empty ? (
           <EmptyState sessionId={sessionId} active={active} />
         ) : viewport ? (
-          // Clamped to the stage on both axes rather than scrolled: the page
-          // is a native view, and a DOM scroll container cannot clip it.
+          // Clamped to the stage on both axes rather than scrolled or scaled:
+          // the page is a native view the DOM can neither clip nor shrink,
+          // and Chromium would not paint reliably under either (#332).
           <div
             ref={frameRef}
             className="relative shrink-0 rounded-sm shadow-[0_0_0_1px_var(--border)]"
@@ -230,8 +260,6 @@ function Chrome({
   current,
   pending,
   mode,
-  deviceBar,
-  onToggleDeviceBar,
   onExpand,
   onCollapse,
 }: {
@@ -240,8 +268,6 @@ function Chrome({
   current: BrowserTab | null;
   pending: boolean;
   mode: "panel" | "full";
-  deviceBar: boolean;
-  onToggleDeviceBar: () => void;
   onExpand?: () => void;
   onCollapse?: () => void;
 }) {
@@ -299,16 +325,24 @@ function Chrome({
               onClose={() => setPendingTab(sessionId, false)}
             />
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="mb-0.5 shrink-0"
-            aria-label="New tab"
-            disabled={pending}
-            onClick={newTab}
-          >
-            <Plus className="size-3.5" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="mb-0.5 shrink-0"
+                aria-label="New tab"
+                disabled={pending}
+                onClick={newTab}
+              >
+                <Plus className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side={TIP_SIDE}>
+              New tab
+              <ShortcutKeys ids={["browser.newTab"]} />
+            </TooltipContent>
+          </Tooltip>
         </div>
       )}
       <div className="flex h-9 items-center gap-0.5 bg-card px-1.5">
@@ -351,7 +385,14 @@ function Chrome({
             </Button>
           </TooltipTrigger>
           <TooltipContent side={TIP_SIDE}>
-            {current?.loading ? "Stop" : "Reload · ⇧ for hard reload"}
+            {current?.loading ? (
+              "Stop"
+            ) : (
+              <>
+                Reload · ⇧ for hard reload
+                <ShortcutKeys ids={["panel.refresh"]} />
+              </>
+            )}
           </TooltipContent>
         </Tooltip>
         <form
@@ -396,24 +437,7 @@ function Chrome({
             </TooltipContent>
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Device size"
-              aria-pressed={deviceBar}
-              disabled={!current}
-              className={cn(TOOL_BTN, deviceBar && "bg-foreground/10")}
-              onClick={onToggleDeviceBar}
-            >
-              <Smartphone className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>Device size</TooltipContent>
-        </Tooltip>
-        {/* Plain buttons rather than a menu: a menu drops over the page, and
-            the page is a native view nothing in the DOM can draw above. */}
+        <DeviceMenu sessionId={sessionId} disabled={!current} />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -541,89 +565,266 @@ function Favicon({ tab }: { tab: BrowserTab }) {
   );
 }
 
-// Wide enough for four digits beside the placeholder, with the native
-// stepper off — it sat on the placeholder and stepped by one pixel.
-const SIZE_INPUT =
-  "h-6 w-20 rounded-md bg-surface-raised dark:bg-background px-2 font-mono text-ui outline-none focus:ring-1 focus:ring-ring [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+/// Device size, picked where the button is: a native `<select>` laid over the
+/// icon, so the menu is macOS's own. That is the point of it — an in-app menu
+/// lands on the page, and the page is a native view nothing in the DOM draws
+/// over, so opening one swapped the page for a picture of it (a flash) and a
+/// pick made behind that picture came back with the view at a stale size.
+/// A native menu is drawn above everything and touches neither.
+///
+/// Default clears everything and draws no bar; Responsive fills the pane the
+/// same way but puts the bar up, so its size can be saved as a device.
+function DeviceMenu({ sessionId, disabled }: { sessionId: string; disabled: boolean }) {
+  const viewport = useViewport(sessionId);
+  const responsive = useResponsive(sessionId);
+  const saved = useCustomDevices();
+  const apply = (next: Viewport | null) => setViewport(sessionId, next);
+  const option = (d: Device) => (
+    <option key={d.id} value={d.id}>
+      {d.label}
+    </option>
+  );
 
-/// Preset picker, free width and height, rotate. Responsive is the absence
-/// of a viewport, so picking it clears rather than stores one.
-function DeviceBar({
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="group/device relative">
+          <span
+            aria-hidden
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "icon-sm" }),
+              "group-hover/device:bg-foreground/10",
+              (viewport || responsive) && "bg-foreground/10",
+              disabled && "opacity-50",
+            )}
+          >
+            <Smartphone className="size-3.5" />
+          </span>
+          <select
+            aria-label="Device size"
+            disabled={disabled}
+            value={viewport?.preset ?? (responsive ? "responsive" : "default")}
+            onChange={(e) => {
+              if (e.target.value === "responsive") return setResponsive(sessionId);
+              const d = [...VIEWPORT_PRESETS, ...saved].find((x) => x.id === e.target.value);
+              apply(d ? { preset: d.id, width: d.width, height: d.height } : null);
+            }}
+            className="absolute inset-0 cursor-default appearance-none opacity-0"
+          >
+            <option value="default">Default</option>
+            <option value="responsive">Responsive</option>
+            {VIEWPORT_PRESETS.map(option)}
+            {/* A disabled row rather than an <optgroup>, which macOS draws
+                with its items indented off the rest of the list. */}
+            {saved.length > 0 && (
+              <option disabled value="">
+                Saved
+              </option>
+            )}
+            {saved.map(option)}
+          </select>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side={TIP_SIDE}>Device size</TooltipContent>
+    </Tooltip>
+  );
+}
+
+const BAR = "flex h-8 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 text-ui";
+
+// Wide enough for four digits, with the native stepper off — it sat on the
+// digits and stepped by one pixel.
+const SIZE_INPUT =
+  "h-6 w-16 rounded-md bg-surface-raised dark:bg-background px-2 font-mono text-ui tabular-nums outline-none focus:ring-1 focus:ring-ring [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
+/// A typed size, clamped, or `fallback` where the field holds no number.
+function clampSize(raw: string, fallback: number) {
+  const n = Math.round(Number(raw));
+  return n ? Math.max(200, Math.min(4000, n)) : fallback;
+}
+
+/// Responsive mode's bar: the page's size, editable, and Save to keep it as
+/// a device under a name, or under the size itself. Untouched, the size is
+/// the pane's own and follows it; typed into, the page lays out at that.
+function SaveSizeBar({
   sessionId,
-  viewport,
-  onClose,
+  size,
 }: {
   sessionId: string;
-  viewport: Viewport | null;
-  onClose: () => void;
+  size: { width: number; height: number };
 }) {
-  const apply = (next: Viewport | null) => setViewport(sessionId, next);
-  const size = (axis: "width" | "height", raw: string) => {
-    const n = Math.max(200, Math.min(4000, Math.round(Number(raw)) || 0));
-    if (!n) return;
-    apply({ preset: "custom", width: viewport?.width ?? n, height: viewport?.height ?? n, [axis]: n });
+  const [width, setWidth] = useState(String(size.width));
+  const [height, setHeight] = useState(String(size.height));
+  const [name, setName] = useState("");
+  // The pane resizing, or a typed size landing, moves the fields with it.
+  useEffect(() => setWidth(String(size.width)), [size.width]);
+  useEffect(() => setHeight(String(size.height)), [size.height]);
+
+  const typed = () => ({
+    width: clampSize(width, size.width),
+    height: clampSize(height, size.height),
+  });
+  // On blur and Enter, not per keystroke: clamped per keystroke, the "1" of
+  // "1200" became 200 before the rest could be typed.
+  const commit = () => {
+    const next = typed();
+    setWidth(String(next.width));
+    setHeight(String(next.height));
+    if (next.width !== size.width || next.height !== size.height) {
+      setViewport(sessionId, { preset: "responsive", ...next });
+    }
+  };
+  const save = () => {
+    const next = typed();
+    if (!next.width || !next.height) return;
+    const device = saveCustomDevice(name, next.width, next.height);
+    setViewport(sessionId, { preset: device.id, ...next });
+    setName("");
+  };
+  const onEnter = (action: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") action();
   };
 
   return (
-    <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 text-ui">
-      <select
-        value={viewport?.preset ?? "responsive"}
-        aria-label="Device preset"
-        onChange={(e) => {
-          const preset = VIEWPORT_PRESETS.find((p) => p.id === e.target.value);
-          apply(preset ? { preset: preset.id, width: preset.width, height: preset.height } : null);
-        }}
-        className="h-6 rounded-md bg-surface-raised dark:bg-background px-1.5 text-ui outline-none focus:ring-1 focus:ring-ring"
-      >
-        <option value="responsive">Responsive</option>
-        {VIEWPORT_PRESETS.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.label}
-          </option>
-        ))}
-        {viewport?.preset === "custom" && <option value="custom">Custom</option>}
-      </select>
+    <div className={BAR}>
       <input
         type="number"
-        aria-label="Viewport width"
-        value={viewport?.width ?? ""}
-        placeholder="width"
-        onChange={(e) => size("width", e.target.value)}
+        aria-label="Width"
+        value={width}
+        onChange={(e) => setWidth(e.target.value)}
+        onBlur={commit}
+        onKeyDown={onEnter(commit)}
         className={SIZE_INPUT}
       />
       <span className="text-muted-foreground">×</span>
       <input
         type="number"
-        aria-label="Viewport height"
-        value={viewport?.height ?? ""}
-        placeholder="height"
-        onChange={(e) => size("height", e.target.value)}
+        aria-label="Height"
+        value={height}
+        onChange={(e) => setHeight(e.target.value)}
+        onBlur={commit}
+        onKeyDown={onEnter(commit)}
         className={SIZE_INPUT}
       />
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className={TOOL_BTN}
-        aria-label="Rotate"
-        disabled={!viewport}
-        onClick={() =>
-          viewport && apply({ preset: "custom", width: viewport.height, height: viewport.width })
-        }
-      >
-        <RotateCcw className="size-3.5" />
+      <input
+        aria-label="Name"
+        value={name}
+        placeholder="Name (optional)"
+        spellCheck={false}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={onEnter(save)}
+        className="h-6 w-32 min-w-0 rounded-md bg-surface-raised px-2 text-ui outline-none focus:ring-1 focus:ring-ring dark:bg-background"
+      />
+      <Button variant="ghost" size="sm" className={cn("h-6", TOOL_BTN)} onClick={save}>
+        Save
       </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className={cn("ml-auto", TOOL_BTN)}
-        aria-label="Close device toolbar"
-        onClick={() => {
-          apply(null);
-          onClose();
-        }}
-      >
-        <X className="size-3.5" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn("ml-auto", TOOL_BTN)}
+            aria-label="Close"
+            onClick={() => setViewport(sessionId, null)}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side={TIP_SIDE}>Close</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/// The device in use, under the toolbar for as long as one is: its name,
+/// its size, rotate, and delete for a saved one.
+function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewport }) {
+  const saved = useCustomDevices();
+  const own = saved.find((d) => d.id === viewport.preset);
+  const device = VIEWPORT_PRESETS.find((d) => d.id === viewport.preset) ?? own;
+  const [confirming, setConfirming] = useState(false);
+  // A question about one device is not one about the next.
+  useEffect(() => setConfirming(false), [viewport.preset]);
+  const apply = (next: Viewport | null) => setViewport(sessionId, next);
+
+  if (confirming && own) {
+    return (
+      <div className={BAR}>
+        <span className="min-w-0 truncate">Delete “{own.label}”?</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-6 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => {
+            removeCustomDevice(own.id);
+            apply(null);
+          }}
+        >
+          Delete
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("h-6", TOOL_BTN)}
+          autoFocus
+          onClick={() => setConfirming(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={BAR}>
+      {device && <span className="min-w-0 truncate">{device.label}</span>}
+      <span className="shrink-0 font-mono text-muted-foreground tabular-nums">
+        {viewport.width} × {viewport.height}
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={TOOL_BTN}
+            aria-label="Rotate"
+            onClick={() => apply({ ...viewport, width: viewport.height, height: viewport.width })}
+          >
+            <RotateCcw className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side={TIP_SIDE}>Rotate</TooltipContent>
+      </Tooltip>
+      {own && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label={`Delete ${own.label}`}
+              onClick={() => setConfirming(true)}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side={TIP_SIDE}>Delete this size</TooltipContent>
+        </Tooltip>
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn("ml-auto", TOOL_BTN)}
+            aria-label="Close"
+            onClick={() => apply(null)}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side={TIP_SIDE}>Close</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

@@ -105,6 +105,10 @@ const DEVICES: &[(&str, u32, u32)] = &[
     ("iPad Air", 820, 1180),
     ("Laptop", 1280, 800),
     ("Desktop", 1440, 900),
+    ("MacBook Pro 14", 1512, 982),
+    ("MacBook Pro 16", 1728, 1117),
+    ("1080p", 1920, 1080),
+    ("4K", 3840, 2160),
 ];
 
 wrap_dev_tools_message_observer! {
