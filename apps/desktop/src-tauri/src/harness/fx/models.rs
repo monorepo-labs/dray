@@ -84,16 +84,16 @@ pub async fn check_table(app: &AppHandle) {
     CACHE.insert(&key, table);
     let app = app.clone();
     tokio::spawn(async move {
-        let models = match probe().await {
-            Ok(models) => models,
+        let (sourced, models) = match probe().await {
+            Ok(answer) => answer,
             Err(err) => return eprintln!("[fx models] {err:#}"),
         };
         // fx answers for whichever provider is active when it runs, and a
-        // switch away and back mid-probe reads the same settings either side.
-        // So the answer is judged by its ids: one sharing none with the table
-        // is another provider's, or empty. The table is dropped so the next
-        // read probes again — unless Refresh has already replaced it.
-        if !models.iter().any(|m| table_ids.contains(&m.arg)) {
+        // switch away and back mid-probe reads the same settings either side,
+        // so the answer is judged by the provider its own rows name. Anything
+        // else — another provider's list, or an empty one — drops the table so
+        // the next read probes again, unless Refresh has already replaced it.
+        if sourced.as_deref() != Some(key.as_str()) || models.is_empty() {
             let still_table = CACHE
                 .peek(&key)
                 .is_some_and(|cached| cached.iter().map(|m| &m.arg).eq(&table_ids));
@@ -177,7 +177,7 @@ pub async fn refresh() {
 /// switch reloads one) probes again.
 async fn probe_stable() -> Option<(String, Vec<Model>)> {
     let before = active_provider().await;
-    let models = probe()
+    let (_, models) = probe()
         .await
         .map_err(|err| eprintln!("[fx models] {err:#}"))
         .ok()?;
@@ -430,7 +430,9 @@ struct Row {
 /// available", the same as any other failed read.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn probe() -> Result<Vec<Model>> {
+/// fx's models, with the provider a short list's own rows name. That one is
+/// `None` on a long list (gateway), which carries no rows.
+async fn probe() -> Result<(Option<String>, Vec<Model>)> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         PROBE_TIMEOUT,
@@ -460,12 +462,13 @@ async fn probe() -> Result<Vec<Model>> {
     // The provider is read from fx's settings — the one place it is recorded
     // for every list size — falling back to the `source` on a short list's rows
     // when the settings can't be read.
+    let sourced = listing.models.first().map(|r| provider_key(&r.source));
     let provider = active_provider()
         .await
-        .or_else(|| listing.models.first().map(|r| provider_key(&r.source)))
+        .or_else(|| sourced.clone())
         .unwrap_or_default();
 
-    Ok(ids_to_models(listing.ids, &provider))
+    Ok((sourced, ids_to_models(listing.ids, &provider)))
 }
 
 /// The provider `fx provider` last wrote, read from `~/.fx/settings.json`.
