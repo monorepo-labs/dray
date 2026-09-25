@@ -372,16 +372,23 @@ function useDragReorder<T>(
       setDrag(null);
       // A cancelled gesture (focus lost, the OS taking the pointer) is not a
       // drop, and a list that changed mid-drag no longer matches the indexes.
-      if (ev.type !== "pointerup" || latest.current !== before || to === from) return;
-      const next = [...before];
-      next.splice(to, 0, ...next.splice(from, 1));
-      setOrder(next);
-      void Promise.resolve(onMove(before[from], to - from)).finally(() => setOrder(null));
+      if (ev.type !== "pointerup" || latest.current !== before) return;
+      commit(from, to);
     };
 
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
+  };
+
+  /// Draws the move at once and writes it. Both the drag and the keyboard come
+  /// through here, so neither can start one while another is unconfirmed.
+  const commit = (from: number, to: number) => {
+    if (to === from || to < 0 || to >= items.length) return;
+    const next = [...items];
+    next.splice(to, 0, ...next.splice(from, 1));
+    setOrder(next);
+    void Promise.resolve(onMove(items[from], to - from)).finally(() => setOrder(null));
   };
 
   const offsetOf = (i: number) => {
@@ -414,7 +421,7 @@ function useDragReorder<T>(
     const delta = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
     if (!delta) return;
     e.preventDefault();
-    if (i + delta >= 0 && i + delta < shown.length) void onMove(shown[i], delta);
+    if (!order) commit(i, i + delta);
   };
 
   return { list, shown, row, onGripKey };
