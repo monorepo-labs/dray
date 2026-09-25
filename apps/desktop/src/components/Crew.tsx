@@ -188,8 +188,12 @@ export default function Crew({
                 // and collapsing somebody else's open row then bounced the
                 // composer to the anchor instead of leaving it where the
                 // reader had it. The header already focuses what it opens.
-                onPointerDown={() => !focused && onFocus(id)}
-                onFocus={() => !focused && onFocus(id)}
+                //
+                // A card alone claims nothing: answering it is a reply sent by
+                // id, not a move into that session, so the composer stays on
+                // the conversation the reader was in.
+                onPointerDown={() => openFully && !focused && onFocus(id)}
+                onFocus={() => openFully && !focused && onFocus(id)}
                 className={cn(
                   "min-h-0 flex-1 transition-opacity duration-150 ease-out",
                   composing && !focused && "opacity-35",
