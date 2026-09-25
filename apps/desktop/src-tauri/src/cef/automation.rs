@@ -61,6 +61,11 @@ struct Recording {
     /// Frames are dropped while set: a screenshot of this tab is laying it
     /// out at its own size, which is not what the video is of.
     paused: bool,
+    /// Bumped on every pause, so a capture asked for before one and answered
+    /// after it is refused even once `paused` is down again.
+    layout: u64,
+    /// The tab closed. The recording stays for `record stop`; `film` quits.
+    closed: bool,
     recorder: crate::recording::Recorder,
 }
 /// The pane saying it has the page covered, so the reflow the capture needs
@@ -187,6 +192,7 @@ fn recording_of(session: &str) -> Option<(i32, (u32, u32))> {
 fn set_paused(session: &str, paused: bool) {
     if let Some(rec) = RECORDING.lock().unwrap().get_mut(session) {
         rec.paused = paused;
+        rec.layout += paused as u64;
     }
 }
 
@@ -216,55 +222,60 @@ const RECORD_FRAME: Duration = Duration::from_millis(33);
 const TYPE_BUDGET: Duration = Duration::from_secs(4);
 
 /// Films a recording by asking for a frame on a clock, until the recording it
-/// was started for is gone. **Not `Page.startScreencast`**: this CEF build
-/// sends a screencast frame only when scroll offset or size changes, so
-/// typing, hover and animation never reached the video. A capture forces a
-/// fresh frame whatever changed. Captures run one after another, so a page
-/// slower to encode than the clock films at the rate it manages; a failed
-/// one (the tab closed) just skips its frame.
-fn film(session: String, tab: i32, shot: u64) {
+/// was started for is gone or its tab closes. **Not `Page.startScreencast`**:
+/// this CEF build sends a screencast frame only when scroll offset or size
+/// changes, so typing, hover and animation never reached the video. A capture
+/// forces a fresh frame whatever changed. Captures run one after another, so a
+/// page slower to encode than the clock films at the rate it manages. `last`
+/// is the digest of the frame `record start` took itself.
+fn film(session: String, tab: i32, shot: u64, mut last: u64) {
     tauri::async_runtime::spawn(async move {
         let mut tick = tokio::time::interval(RECORD_FRAME);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let filming = || match RECORDING.lock().unwrap().get(&session) {
-            Some(r) if r.shot == shot => Some(!r.paused),
+        // The layout generation a frame may be filed under; `None` while paused.
+        let state = || match RECORDING.lock().unwrap().get(&session) {
+            Some(r) if r.shot == shot && !r.closed => Some((!r.paused).then_some(r.layout)),
             _ => None,
         };
-        // A frame identical to the last is dropped, so a still page leaves a
-        // gap `GAP_CAP` can cut, and the agent thinking costs no video. A
-        // blinking caret defeats it. ponytail: a pixel-diff threshold if that
-        // ever matters.
-        let mut last = 0u64;
         loop {
             tick.tick().await;
-            match filming() {
-                None => return,
-                Some(false) => continue,
-                Some(true) => {}
-            }
-            let Ok(mut reply) = cdp(tab, "Page.captureScreenshot", json!({ "format": "jpeg", "quality": 90 })).await
-            else {
-                continue;
-            };
-            // Asked again: a screenshot of this tab may have paused it while
-            // the capture was out, and that frame is of the wrong layout.
+            let Some(state) = state() else { return };
+            let Some(layout) = state else { continue };
+            let Ok(data) = grab(tab).await else { continue };
             let at = Instant::now();
-            if let Value::String(data) = reply["data"].take() {
-                let hash = {
-                    use std::hash::{Hash, Hasher};
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    data.hash(&mut h);
-                    h.finish()
-                };
-                if std::mem::replace(&mut last, hash) == hash {
-                    continue;
-                }
-                if let Some(rec) = RECORDING.lock().unwrap().get(&session).filter(|r| r.shot == shot && !r.paused) {
+            // A frame identical to the last is dropped, so a still page leaves
+            // a gap `GAP_CAP` can cut, and the agent thinking costs no video. A
+            // blinking caret defeats it. ponytail: a pixel-diff threshold if
+            // that ever matters.
+            let hash = digest(&data);
+            if std::mem::replace(&mut last, hash) == hash {
+                continue;
+            }
+            // A screenshot may have paused and restored the tab while this
+            // capture was out, and then the frame is of its layout, not ours.
+            if let Some(rec) = RECORDING.lock().unwrap().get(&session).filter(|r| r.shot == shot && r.layout == layout) {
+                if !rec.paused {
                     rec.recorder.frame(data, at);
                 }
             }
         }
     });
+}
+
+/// One frame of a recorded tab, as base64 JPEG.
+async fn grab(tab: i32) -> Result<String, String> {
+    let mut reply = cdp(tab, "Page.captureScreenshot", json!({ "format": "jpeg", "quality": 90 })).await?;
+    match reply["data"].take() {
+        Value::String(data) => Ok(data),
+        _ => Err("no image came back".into()),
+    }
+}
+
+fn digest(data: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
 }
 
 /// Removes a session's recordings, for session delete. Best effort, like the
@@ -293,7 +304,10 @@ pub(super) fn forget(tab: i32) {
     // A recorded tab closing uncovers the pane and unlocks its tabs, but the
     // recording stays until `record stop`, which still hands back what was
     // filmed before the close.
-    let closed = RECORDING.lock().unwrap().iter().find(|(_, r)| r.tab == tab).map(|(s, r)| (s.clone(), r.shot));
+    let closed = RECORDING.lock().unwrap().iter_mut().find(|(_, r)| r.tab == tab).map(|(s, r)| {
+        r.closed = true;
+        (s.clone(), r.shot)
+    });
     if let Some((session, shot)) = closed {
         emit_recording(&session, false);
         emit_shooting(&session, false, shot);
@@ -967,7 +981,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             await_shutter(shot).await;
             tokio::time::sleep(SETTLE).await;
             SHUTTER_OPEN.store(false, AtomicOrdering::Release);
-            RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, recorder });
+            RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
             emit_recording(session, true);
             let started = async {
                 on_main(apply_layout)?;
@@ -981,7 +995,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 end_recording(session, tab, shot).await;
                 return Err(format!("could not start recording: {e}"));
             }
-            film(session.to_string(), tab, shot);
+            // One frame before answering, so a `record stop` straight after
+            // still has a clip to hand back rather than racing `film`'s first.
+            let first = grab(tab).await.ok();
+            if let (Some(data), Some(rec)) = (&first, RECORDING.lock().unwrap().get(session)) {
+                rec.recorder.frame(data.clone(), Instant::now());
+            }
+            film(session.to_string(), tab, shot, first.as_deref().map_or(0, digest));
             drop(held);
             ok(format!("recording at {w}×{h}; `dray browser record stop` when done"))
         }
