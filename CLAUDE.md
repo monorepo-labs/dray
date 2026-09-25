@@ -19,7 +19,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 **Default road = work → test → ponytail review → draft PR → Codex review.** No Greptile any more (credits gone).
 
 1. Do the work, then test it for real — run it, not just compile it.
-2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up.
+2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up. Changed anything? Test again — a cut that looked redundant is the easiest way to break what step 1 proved.
 3. Commit, push, open the PR as **draft**.
 4. Spawn one Codex reviewer on the branch: `dray new --harness codex --model gpt-6-sol --effort medium --from <this session id> "<brief>"`. Brief is self-contained — PR link, what changed and why, where bugs could hide — and ends by telling it to `dray send` its findings back to this session with file:line and a concrete failure each.
 5. Fix what is real, test, push, `dray send` the reviewer to look again. **Five rounds max**, then report what is left. Committing and pushing inside this loop needs no fresh ask.
