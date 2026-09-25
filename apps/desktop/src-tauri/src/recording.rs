@@ -12,7 +12,7 @@ use base64::Engine;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,10 @@ struct Sample {
 /// A recording under way, ended by `finish` or `discard`.
 pub struct Recorder {
     tx: mpsc::SyncSender<Frame>,
+    /// The newest frame a full queue turned away, sent at `finish`: the page
+    /// may stop painting right after it, and it is the final state the video
+    /// exists to show. Cleared by any later frame that got through.
+    dropped: Mutex<Option<Frame>>,
     thread: JoinHandle<Result<bool, String>>,
     mov: PathBuf,
 }
@@ -60,19 +64,23 @@ impl Recorder {
         let file = File::create(&mov).map_err(|e| format!("could not create {}: {e}", mov.display()))?;
         let (tx, rx) = mpsc::sync_channel(QUEUE);
         let thread = std::thread::spawn(move || write(file, rx).map_err(|e| e.to_string()));
-        Ok(Recorder { tx, thread, mov })
+        Ok(Recorder { tx, dropped: Mutex::new(None), thread, mov })
     }
 
     /// One screencast frame, stamped where it arrived. Never blocks: the
-    /// caller is CEF's UI thread, so a full queue drops the frame.
+    /// caller is CEF's UI thread, so a full queue sets the frame aside.
     pub fn frame(&self, jpeg_base64: String, at: Instant) {
-        let _ = self.tx.try_send(Frame { jpeg_base64, at });
+        let mut dropped = self.dropped.lock().unwrap();
+        *dropped = match self.tx.try_send(Frame { jpeg_base64, at }) {
+            Err(mpsc::TrySendError::Full(frame)) => Some(frame),
+            _ => None,
+        };
     }
 
     /// Ends the recording without converting it and removes the `.mov`, for
     /// a session settled or deleted mid-recording. Blocking, like `finish`.
     pub fn discard(self) {
-        let Recorder { tx, thread, mov } = self;
+        let Recorder { tx, thread, mov, .. } = self;
         drop(tx);
         let _ = thread.join();
         let _ = std::fs::remove_file(&mov);
@@ -83,7 +91,12 @@ impl Recorder {
     /// `name` where it slugs to anything, else after the start time.
     /// Blocking: the join and the conversion both take real time.
     pub fn finish(self, name: Option<&str>) -> Result<(PathBuf, bool), String> {
-        let Recorder { tx, thread, mov } = self;
+        let Recorder { tx, dropped, thread, mov } = self;
+        // Blocking is fine here, off the UI thread: the writer drains the
+        // queue and makes room.
+        if let Some(last) = dropped.into_inner().unwrap() {
+            let _ = tx.send(last);
+        }
         drop(tx);
         let truncated = thread.join().map_err(|_| "the recording thread panicked".to_string())??;
         let mp4 = match name.map(slug).filter(|s| !s.is_empty()) {
