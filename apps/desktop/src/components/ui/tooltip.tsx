@@ -25,6 +25,11 @@ function Tooltip({
 /// Opens on keyboard focus only. A menu that shares this trigger hands focus
 /// back to it on close, and Radix opened the tooltip on that focus and left it
 /// up until the next click. `preventDefault` is what Radix's own handler checks.
+/// WebKit before Safari 15.4 (macOS 11's original) can't parse the selector and
+/// `matches` would throw, so there it keeps opening on every focus.
+const focusVisible =
+  typeof CSS !== "undefined" && CSS.supports("selector(:focus-visible)")
+
 function TooltipTrigger({
   onFocus,
   ...props
@@ -34,7 +39,9 @@ function TooltipTrigger({
       data-slot="tooltip-trigger"
       onFocus={(e) => {
         onFocus?.(e)
-        if (!e.currentTarget.matches(":focus-visible")) e.preventDefault()
+        if (focusVisible && !e.currentTarget.matches(":focus-visible")) {
+          e.preventDefault()
+        }
       }}
       {...props}
     />
