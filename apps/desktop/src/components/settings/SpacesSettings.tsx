@@ -325,13 +325,15 @@ function useDragReorder<T>(
   // Read at release, to tell whether the list moved under the drag.
   const latest = useRef(items);
   latest.current = items;
+  // Set synchronously for as long as a move is being written.
+  const pending = useRef(false);
   const shown = order ?? items;
 
   const start = (e: React.PointerEvent<HTMLElement>, from: number) => {
     // Not while the last drop is still being written: the move is a relative
     // delta, so one measured against an unconfirmed order lands wrong if that
     // write fails.
-    if (e.button !== 0 || !list.current || order) return;
+    if (e.button !== 0 || !list.current || pending.current) return;
     // The row's own controls and fields answer their own presses.
     if ((e.target as Element).closest("button:not([data-grip]), input")) return;
     // Keeps the press from starting a text selection across the rows.
@@ -384,11 +386,17 @@ function useDragReorder<T>(
   /// Draws the move at once and writes it. Both the drag and the keyboard come
   /// through here, so neither can start one while another is unconfirmed.
   const commit = (from: number, to: number) => {
-    if (to === from || to < 0 || to >= items.length) return;
+    // A ref, not `order`: a drag's release runs the closure from its press,
+    // which may predate a keyboard move made while it was held.
+    if (pending.current || to === from || to < 0 || to >= items.length) return;
     const next = [...items];
     next.splice(to, 0, ...next.splice(from, 1));
+    pending.current = true;
     setOrder(next);
-    void Promise.resolve(onMove(items[from], to - from)).finally(() => setOrder(null));
+    void Promise.resolve(onMove(items[from], to - from)).finally(() => {
+      pending.current = false;
+      setOrder(null);
+    });
   };
 
   const offsetOf = (i: number) => {
@@ -421,7 +429,7 @@ function useDragReorder<T>(
     const delta = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
     if (!delta) return;
     e.preventDefault();
-    if (!order) commit(i, i + delta);
+    if (!drag) commit(i, i + delta);
   };
 
   return { list, shown, row, onGripKey };
