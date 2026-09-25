@@ -248,14 +248,17 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
             // blinking caret defeats it. ponytail: a pixel-diff threshold if
             // that ever matters.
             let hash = digest(&data);
-            if std::mem::replace(&mut last, hash) == hash {
+            if hash == last {
                 continue;
             }
             // A screenshot may have paused the tab while this capture was out,
             // and then the frame is of its layout, not ours. A pause bumps
-            // `layout`, so an unchanged one also means not paused now.
+            // `layout`, so an unchanged one also means not paused now. Only a
+            // filed frame becomes the baseline, or a refused one would dedupe
+            // away the same page state captured properly a moment later.
             if let Some(rec) = RECORDING.lock().unwrap().get(&session).filter(|r| r.shot == shot && r.layout == layout) {
                 rec.recorder.frame(data, at);
+                last = hash;
             }
         }
     });
@@ -986,21 +989,26 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 on_main(apply_layout)?;
                 cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
                 tokio::time::sleep(SETTLE).await;
-                Ok::<_, String>(())
+                // One frame before answering, so a `record stop` straight after
+                // still has a clip to hand back rather than racing `film`'s first.
+                grab(tab).await
             }
             .await;
-            if let Err(e) = started {
-                RECORDING.lock().unwrap().remove(session);
-                end_recording(session, tab, shot).await;
-                return Err(format!("could not start recording: {e}"));
+            let first = match started {
+                Ok(first) => first,
+                Err(e) => {
+                    if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
+                        std::thread::spawn(move || rec.recorder.discard());
+                    }
+                    end_recording(session, tab, shot).await;
+                    return Err(format!("could not start recording: {e}"));
+                }
+            };
+            let baseline = digest(&first);
+            if let Some(rec) = RECORDING.lock().unwrap().get(session) {
+                rec.recorder.frame(first, Instant::now());
             }
-            // One frame before answering, so a `record stop` straight after
-            // still has a clip to hand back rather than racing `film`'s first.
-            let first = grab(tab).await.ok();
-            if let (Some(data), Some(rec)) = (&first, RECORDING.lock().unwrap().get(session)) {
-                rec.recorder.frame(data.clone(), Instant::now());
-            }
-            film(session.to_string(), tab, shot, first.as_deref().map_or(0, digest));
+            film(session.to_string(), tab, shot, baseline);
             drop(held);
             ok(format!("recording at {w}×{h}; `dray browser record stop` when done"))
         }
