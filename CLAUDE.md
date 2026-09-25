@@ -14,9 +14,15 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Status = open or closed, and the PR is what close it.** `Fixes #123` in the PR body, which GitHub read on merge. Body = the only slot: worktree branch is `worktree-<name>` minted by the CLI and carry no id, unlike the tracker this replaced. **Exception: work pushed straight to `main`.** No PR = nothing to read, so `gh issue close` yourself.
 
-**PR nobody need review carry `no-review` label.** Copy tweak, doc, prompt wording, config. Add at open (`gh pr create --label no-review`), since review fire on open. Anything touching behaviour = no label.
+**PR nobody need review carry `no-review` label and get no reviewer.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = reviewed.
 
-**Default road = work → PR → stop.** Greptile review every PR on open, so spawn no reviewer session. Open ready, not draft — Greptile skip draft, so a draft sit unreviewed till somebody ping `@greptile review` by hand.
+**Default road = work → test → ponytail review → draft PR → Codex review.** No Greptile any more (credits gone).
+
+1. Do the work, then test it for real — run it, not just compile it.
+2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up.
+3. Commit, push, open the PR as **draft**.
+4. Spawn one Codex reviewer on the branch: `dray new --harness codex --model gpt-6-sol --effort medium --from <this session id> "<brief>"`. Brief is self-contained — PR link, what changed and why, where bugs could hide — and ends by telling it to `dray send` its findings back to this session with file:line and a concrete failure each.
+5. Fix what is real, test, push, `dray send` the reviewer to look again. **Five rounds max**, then report what is left. Committing and pushing inside this loop needs no fresh ask.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
