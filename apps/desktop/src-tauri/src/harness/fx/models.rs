@@ -83,14 +83,20 @@ pub async fn check_table(app: &AppHandle) {
     CACHE.insert(&key, table);
     let app = app.clone();
     tokio::spawn(async move {
-        let Some((provider, models)) = probe_stable().await else {
-            return;
+        // An empty answer is no better than the table it would replace.
+        let models = match probe().await {
+            Ok(models) if !models.is_empty() => models,
+            Ok(_) => return,
+            Err(err) => return eprintln!("[fx models] {err:#}"),
         };
-        CACHE.insert(&provider, models);
-        if provider == key {
-            if let Err(err) = app.emit("models_changed", ()) {
-                eprintln!("[fx models_changed emit err] {err}");
-            }
+        // A switch mid-probe makes the answer unattributable. Dropping the
+        // table is what lets the next read of this provider probe again.
+        if active_provider().await.as_deref() != Some(key.as_str()) {
+            return CACHE.remove(&key);
+        }
+        CACHE.insert(&key, models);
+        if let Err(err) = app.emit("models_changed", ()) {
+            eprintln!("[fx models_changed emit err] {err}");
         }
     });
 }
