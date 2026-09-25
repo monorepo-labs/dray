@@ -28,6 +28,10 @@ const HOLD_LAST: Duration = Duration::from_millis(1500);
 /// dropped; `co64` if recordings ever need to be longer than ~4GB of JPEG.
 const MAX_BYTES: u64 = u32::MAX as u64 - (64 << 20);
 const TIMESCALE: u32 = 1000;
+/// Frames waiting for the writer. Each is ~100KB of base64, so this is a few
+/// megabytes at most; a frame arriving to a full queue is dropped, since the
+/// sender is CEF's UI thread and must never wait on a disk.
+const QUEUE: usize = 64;
 
 struct Frame {
     jpeg_base64: String,
@@ -40,11 +44,9 @@ struct Sample {
     at: Instant,
 }
 
-/// A recording under way. Dropped without `finish`, the thread ends and the
-/// half-written `.mov` stays behind in the session's directory, which goes
-/// with the session.
+/// A recording under way, ended by `finish` or `discard`.
 pub struct Recorder {
-    tx: mpsc::Sender<Frame>,
+    tx: mpsc::SyncSender<Frame>,
     thread: JoinHandle<Result<bool, String>>,
     mov: PathBuf,
 }
@@ -56,15 +58,24 @@ impl Recorder {
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let mov = dir.join(format!("{stem}.mov"));
         let file = File::create(&mov).map_err(|e| format!("could not create {}: {e}", mov.display()))?;
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(QUEUE);
         let thread = std::thread::spawn(move || write(file, rx).map_err(|e| e.to_string()));
         Ok(Recorder { tx, thread, mov })
     }
 
     /// One screencast frame, stamped where it arrived. Never blocks: the
-    /// caller is CEF's UI thread.
+    /// caller is CEF's UI thread, so a full queue drops the frame.
     pub fn frame(&self, jpeg_base64: String, at: Instant) {
-        let _ = self.tx.send(Frame { jpeg_base64, at });
+        let _ = self.tx.try_send(Frame { jpeg_base64, at });
+    }
+
+    /// Ends the recording without converting it and removes the `.mov`, for
+    /// a session settled or deleted mid-recording. Blocking, like `finish`.
+    pub fn discard(self) {
+        let Recorder { tx, thread, mov } = self;
+        drop(tx);
+        let _ = thread.join();
+        let _ = std::fs::remove_file(&mov);
     }
 
     /// Closes the `.mov`, converts it and answers the `.mp4`'s path and
@@ -349,6 +360,16 @@ mod tests {
         assert_eq!(slug(".hidden"), "hidden");
         assert_eq!(slug("日本"), "");
         assert!(slug(&"a ".repeat(100)).len() <= 60);
+    }
+
+    #[test]
+    fn a_discarded_recording_leaves_no_file() {
+        let dir = std::env::temp_dir().join(format!("dray-recording-discard-{}", std::process::id()));
+        let recorder = Recorder::start(&dir, "gone").unwrap();
+        recorder.frame(base64::engine::general_purpose::STANDARD.encode(FRAME1), Instant::now());
+        recorder.discard();
+        assert!(!dir.join("gone.mov").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

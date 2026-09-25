@@ -222,11 +222,14 @@ fn set_paused(session: &str, paused: bool) {
 }
 
 /// Ends a session's recording without converting it, for settle and delete:
-/// the child and its tabs are going, and nobody is left to watch it.
+/// the child and its tabs are going, and nobody is left to watch it. The
+/// half-written file goes too, off this thread, since the join waits on the
+/// writer.
 pub(super) fn drop_recording(session: &str) {
     if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
         emit_recording(session, false);
         emit_shooting(session, false, rec.shot);
+        std::thread::spawn(move || rec.recorder.discard());
     }
 }
 
@@ -256,6 +259,14 @@ pub(super) fn log(tab: i32, error: bool, text: String) {
 pub(super) fn forget(tab: i32) {
     if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
         m.remove(&tab);
+    }
+    // A recorded tab closing uncovers the pane and unlocks its tabs, but the
+    // recording stays until `record stop`, which still hands back what was
+    // filmed before the close.
+    let closed = RECORDING.lock().unwrap().iter().find(|(_, r)| r.tab == tab).map(|(s, r)| (s.clone(), r.shot));
+    if let Some((session, shot)) = closed {
+        emit_recording(&session, false);
+        emit_shooting(&session, false, shot);
     }
 }
 

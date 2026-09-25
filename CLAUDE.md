@@ -772,7 +772,7 @@ That ordering is the whole feature. The index entry lands **before** spawn on pu
 
 **Every demo's `<html>` carries `data-demo`**, or it cannot scroll: the app pins `html`, `body` and `#root` to the window with overflow hidden, since it owns every scroll container, and [App.css](apps/desktop/src/App.css) gives page scroll back only to that attribute.
 
-**Every demo mounts `<DemoThemeBar />`** ([ThemeBar.tsx](apps/desktop/src/demo/ThemeBar.tsx)): Settings' own theme swatches ([ThemeSwatches](apps/desktop/src/components/ThemeSwatches.tsx), arrow keys included) and Light/Dark on the app's theme store, since a surface is judged across every palette and both modes. No hand-rolled mode toggle, and no theme attributes hardcoded on the page's `<html>`.
+**A new demo mounts `<DemoThemeBar />`** ([ThemeBar.tsx](apps/desktop/src/demo/ThemeBar.tsx)): Settings' own theme swatches ([ThemeSwatches](apps/desktop/src/components/ThemeSwatches.tsx), arrow keys included) and Light/Dark on the app's theme store, since a surface is judged across every palette and both modes. No hand-rolled mode toggle, and no theme attributes hardcoded on the page's `<html>`. The recording demo has it; the three older demos predate it and are left as they were, on purpose.
 
 Two things that fail as a blank page with nothing in the dev server's output: **a demo page has to bring `App`'s own providers with it** (a control with a tooltip throws without `TooltipProvider`), and **a browser is not a webview** — `getCurrentWebview()` and `getCurrentWindow()` **throw** outside Tauri rather than rejecting, so reach for a `try` whenever an effect touches `@tauri-apps/api` synchronously. `invoke` is safe, since it rejects.
 
