@@ -687,7 +687,7 @@ export type FileBody = { "kind": "text", text: string, } | { "kind": "image",
  * the attachments directory and must stay scoped, so a file anywhere
  * else has no URL the webview can fetch.
  */
-dataUrl: string, };
+dataUrl: string, } | { "kind": "video", path: string, };
 
 export type FileChange = "add" | "update" | "delete";
 

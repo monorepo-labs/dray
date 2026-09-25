@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
@@ -199,6 +200,11 @@ function Body({
     );
   }
 
+  if (file.state.body.kind === "video") {
+    // Keyed on the path so a failure on one tab does not stick to the next.
+    return <Video key={file.path} path={file.state.body.path} />;
+  }
+
   // Plain text while the grammar loads, not an empty box: a grammar fetch runs
   // from ~10ms to several hundred, and a blank pane that long reads as a stall.
   if (!ready || !contents) {
@@ -211,4 +217,23 @@ function Body({
   // edge in place as the host grows to its virtual height, so an 8000-line file
   // opened at the top landed at the end. Measured; one pixel is the whole cure.
   return <File file={contents} options={options} style={{ minHeight: 1 }} />;
+}
+
+/// A video, streamed through the asset protocol `read_file` just allowed it on.
+///
+/// The container is judged by extension before this mounts, so the one thing
+/// left to fail is the codec inside it — which is the reason the note gives.
+function Video({ path }: { path: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Note text="This video's format can't be played here." error />;
+  return (
+    <div className="flex min-h-full items-center justify-center bg-black">
+      <video
+        src={convertFileSrc(path)}
+        controls
+        className="max-h-full max-w-full"
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
 }

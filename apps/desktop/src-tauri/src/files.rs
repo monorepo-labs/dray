@@ -32,11 +32,15 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
-use tokio::{io::AsyncWriteExt, process::Command};
+use tauri::Manager;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+};
 use ts_rs::TS;
 
 use crate::attachments::{image_mime, MAX_IMAGE_BYTES};
-use crate::docs::read_file_capped;
+use crate::docs::{file_len, read_file_capped, TOO_LARGE};
 use crate::Fail;
 
 /// One row in the picker. `path` is relative to the indexed directory, which is
@@ -388,17 +392,55 @@ pub enum FileBody {
         /// else has no URL the webview can fetch.
         data_url: String,
     },
+    /// The path itself, for `convertFileSrc`. A video is far too big for a
+    /// `data:` URL and needs Range requests to seek, which the asset protocol
+    /// serves — so `read_file` allows this one file on that protocol instead.
+    Video {
+        path: String,
+    },
 }
+
+const NOT_TEXT: &str = "Not text — nothing to show.";
 
 /// Reads one file for the viewer, or names why it can't.
 ///
-/// `read_doc`'s three checks — metadata first, a capped read, UTF-8 refused
-/// rather than mangled — against a larger cap, with images answered before the
-/// text branch since their bytes are never text.
+/// A video is allowed on the asset protocol by its exact, canonical path —
+/// canonical because the protocol resolves links before it checks, so
+/// `/tmp/a.mp4` would otherwise be refused as `/private/tmp/a.mp4`. The scope
+/// grows by the files the reader opens and nothing else; this command already
+/// hands the webview any file under the cap, so streaming one the reader asked
+/// for widens nothing a page could not already read.
 #[tauri::command]
-pub async fn read_file(path: String) -> Result<FileBody, String> {
-    let image = viewable_image(Path::new(&path));
-    let bytes = read_file_capped(&path, if image.is_some() { MAX_IMAGE_BYTES } else { MAX_FILE }).await?;
+pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, String> {
+    let body = read_body(&path).await?;
+    if matches!(body, FileBody::Video { .. }) {
+        let real = tokio::fs::canonicalize(&path).await.map_err(|e| e.to_string())?;
+        app.asset_protocol_scope()
+            .allow_file(real)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(body)
+}
+
+/// `read_doc`'s three checks — metadata first, a capped read, UTF-8 refused
+/// rather than mangled — against a larger cap. Media is answered before the
+/// size check, since its bytes are never text and its cap is its own.
+async fn read_body(path: &str) -> Result<FileBody, String> {
+    if is_video(Path::new(path)) {
+        file_len(path).await?;
+        return Ok(FileBody::Video { path: path.to_string() });
+    }
+
+    let image = viewable_image(Path::new(path));
+    let cap = if image.is_some() { MAX_IMAGE_BYTES } else { MAX_FILE };
+    let bytes = match read_file_capped(path, cap).await {
+        // Too large and not text: the second is the reason worth naming, since
+        // no cap would ever make a zip readable here.
+        Err(e) if e == TOO_LARGE && image.is_none() && looks_binary(path).await => {
+            return Err(NOT_TEXT.to_string())
+        }
+        other => other?,
+    };
 
     if let Some(mime) = image {
         return Ok(FileBody::Image {
@@ -408,7 +450,23 @@ pub async fn read_file(path: String) -> Result<FileBody, String> {
 
     String::from_utf8(bytes)
         .map(|text| FileBody::Text { text })
-        .map_err(|_| "Not text — nothing to show.".to_string())
+        .map_err(|_| NOT_TEXT.to_string())
+}
+
+/// Git's own test: a NUL in the first 8000 bytes means binary.
+async fn looks_binary(path: &str) -> bool {
+    let Ok(file) = tokio::fs::File::open(path).await else {
+        return false;
+    };
+    let mut head = Vec::new();
+    file.take(8000).read_to_end(&mut head).await.is_ok() && head.contains(&0)
+}
+
+/// The containers WKWebView plays. By extension, as images are.
+fn is_video(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "mp4" | "m4v" | "mov" | "webm"))
 }
 
 /// The image types this view draws.
@@ -623,7 +681,7 @@ mod tests {
         let path = dir.join("huge.txt");
         std::fs::write(&path, vec![b'a'; MAX_FILE as usize + 1]).unwrap();
 
-        assert!(read_file(path.to_str().unwrap().into()).await.is_err());
+        assert!(read_body(path.to_str().unwrap()).await.is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -638,16 +696,35 @@ mod tests {
         let svg = dir.join("mark.svg");
         std::fs::write(&svg, "<svg/>").unwrap();
 
-        let body = read_file(png.to_str().unwrap().into()).await.unwrap();
+        let body = read_body(png.to_str().unwrap()).await.unwrap();
         let FileBody::Image { data_url } = body else {
             panic!("a png read as text");
         };
         assert!(data_url.starts_with("data:image/png;base64,"), "{data_url}");
 
-        let body = read_file(svg.to_str().unwrap().into()).await.unwrap();
+        let body = read_body(svg.to_str().unwrap()).await.unwrap();
         assert!(
             matches!(body, FileBody::Image { data_url } if data_url.starts_with("data:image/svg+xml;base64,")),
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A video past the text cap still plays, and a binary past it says it
+    /// is not text rather than blaming its size — the two ways the viewer used
+    /// to refuse a video with the wrong sentence.
+    #[tokio::test]
+    async fn answers_a_large_file_by_kind_not_size() {
+        let dir = scratch();
+        let big = vec![0u8; MAX_FILE as usize + 1];
+        let mov = dir.join("clip.MOV");
+        std::fs::write(&mov, &big).unwrap();
+        let zip = dir.join("bundle.zip");
+        std::fs::write(&zip, &big).unwrap();
+
+        let body = read_body(mov.to_str().unwrap()).await.unwrap();
+        assert!(matches!(body, FileBody::Video { path } if path == mov.to_str().unwrap()));
+        assert_eq!(read_body(zip.to_str().unwrap()).await.unwrap_err(), NOT_TEXT);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -661,7 +738,7 @@ mod tests {
         let path = dir.join("blob.bin");
         std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
 
-        assert!(read_file(path.to_str().unwrap().into()).await.is_err());
+        assert!(read_body(path.to_str().unwrap()).await.is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
