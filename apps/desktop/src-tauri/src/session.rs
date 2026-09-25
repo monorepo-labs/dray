@@ -965,7 +965,7 @@ impl SessionManager {
                 // nothing for Dray's queue to do here and no boundary for it to
                 // race for — whether or not a tool happens to be running now.
                 if matches!(s.stdin, Transport::Pi(_) | Transport::Grok(_)) {
-                    s.steer(prompt, attachment_paths, issues, from, app).await?;
+                    s.steer(prompt, attachment_paths, issues, from, app).await;
                     return Ok(SendOutcome {
                         issues: linked,
                         ..Default::default()
@@ -1938,8 +1938,8 @@ impl Session {
         issues: &[IssueRef],
         from: Option<MessageSender>,
         app: &AppHandle,
-    ) -> Result<()> {
-        deliver_prompt(
+    ) {
+        let sent = deliver_prompt(
             &self.id,
             self.harness,
             prompt,
@@ -1959,8 +1959,15 @@ impl Session {
             &self.stdin,
             app,
         )
-        .await
-        .map(|_| ())
+        .await;
+        // Drawn beside the bubble, for `deliver_batch`'s reason: the prompt is
+        // already logged by the time the send can fail, so an error returned to
+        // the composer leaves a message nothing answers, and a retry draws it
+        // twice.
+        if let Err(err) = sent {
+            eprintln!("[steer err] {err:#}");
+            report_send_failure(&self.id, self.harness, &format!("{err:#}"), &self.seq, app).await;
+        }
     }
 
     /// Holds a prompt and immediately hands it over, for the case where a tool
