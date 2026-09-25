@@ -1,4 +1,4 @@
-//! A browser recording on disk: the screencast's JPEG frames streamed into a
+//! A browser recording on disk: the page's JPEG frames streamed into a
 //! Photo-JPEG QuickTime file, then handed to macOS's own `avconvert` for an
 //! H.264 MP4 anything can play.
 //!
@@ -17,7 +17,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Longest a frame is held for. The agent thinks for seconds between
-/// actions and a screencast only sends a frame when the page paints, so a
+/// actions and a frame identical to the last is never sent here, so a
 /// real-time video is mostly a still page; capping each gap keeps the page's
 /// own timing and drops the thinking.
 const GAP_CAP: Duration = Duration::from_secs(1);
@@ -67,8 +67,8 @@ impl Recorder {
         Ok(Recorder { tx, dropped: Mutex::new(None), thread, mov })
     }
 
-    /// One screencast frame, stamped where it arrived. Never blocks: the
-    /// caller is CEF's UI thread, so a full queue sets the frame aside.
+    /// One frame, stamped where it arrived. Never blocks: the
+    /// capture loop must not wait on the writer, so a full queue sets the frame aside.
     pub fn frame(&self, jpeg_base64: String, at: Instant) {
         let mut dropped = self.dropped.lock().unwrap();
         *dropped = match self.tx.try_send(Frame { jpeg_base64, at }) {
