@@ -80,19 +80,27 @@ pub async fn check_table(app: &AppHandle) {
     let Some(table) = known_models(&key) else {
         return;
     };
+    let table_ids: Vec<String> = table.iter().map(|m| m.arg.clone()).collect();
     CACHE.insert(&key, table);
     let app = app.clone();
     tokio::spawn(async move {
-        // An empty answer is no better than the table it would replace.
         let models = match probe().await {
-            Ok(models) if !models.is_empty() => models,
-            Ok(_) => return,
+            Ok(models) => models,
             Err(err) => return eprintln!("[fx models] {err:#}"),
         };
-        // A switch mid-probe makes the answer unattributable. Dropping the
-        // table is what lets the next read of this provider probe again.
-        if active_provider().await.as_deref() != Some(key.as_str()) {
-            return CACHE.remove(&key);
+        // fx answers for whichever provider is active when it runs, and a
+        // switch away and back mid-probe reads the same settings either side.
+        // So the answer is judged by its ids: one sharing none with the table
+        // is another provider's, or empty. The table is dropped so the next
+        // read probes again — unless Refresh has already replaced it.
+        if !models.iter().any(|m| table_ids.contains(&m.arg)) {
+            let still_table = CACHE
+                .peek(&key)
+                .is_some_and(|cached| cached.iter().map(|m| &m.arg).eq(&table_ids));
+            if still_table {
+                CACHE.remove(&key);
+            }
+            return;
         }
         CACHE.insert(&key, models);
         if let Err(err) = app.emit("models_changed", ()) {
