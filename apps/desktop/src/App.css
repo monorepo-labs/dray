@@ -921,6 +921,8 @@
      using this must also set a transparent text fill. 200% sizing gives the
      gradient somewhere to travel from and to. */
   --animate-shimmer: shimmer 2s linear infinite;
+  /* A recording light: fades out and back rather than pinging outwards. */
+  --animate-rec-blink: rec-blink 1.2s ease-in-out infinite alternate;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -965,6 +967,15 @@
     }
     to {
       background-position: -200% 0;
+    }
+  }
+
+  @keyframes rec-blink {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0.2;
     }
   }
 }
@@ -1215,6 +1226,19 @@
   body,
   #root {
     @apply h-full overflow-hidden;
+  }
+
+  /* Demo pages are documents, not the app, and their content runs past the
+     window: every `demo-*.html` carries `data-demo` to get page scroll back.
+     Only `html` scrolls. `body` is `overscroll-none`, so made a scroll box of
+     its own it takes the wheel, has nothing to scroll and passes nothing up —
+     the page then moved by its scrollbar alone. */
+  html[data-demo] {
+    @apply h-auto overflow-auto;
+  }
+  html[data-demo] body,
+  html[data-demo] #root {
+    @apply h-auto overflow-visible;
   }
 
   ::-webkit-scrollbar {

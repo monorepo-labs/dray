@@ -29,6 +29,10 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(target_os = "macos")]
 pub mod chromium;
+// Without the feature too, for the same reason: its tests need no Chromium.
+#[cfg(target_os = "macos")]
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+pub mod recording;
 mod local_servers;
 pub mod docs;
 pub mod download;

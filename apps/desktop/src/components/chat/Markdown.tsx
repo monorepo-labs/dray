@@ -1,8 +1,10 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { memo, useMemo } from "react";
 import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
+import VideoPlayer from "@/components/chat/VideoPlayer";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
@@ -228,6 +230,10 @@ function MarkdownImpl({
   );
 }
 
+/// Where `dray browser record` writes, the one place the asset protocol lets
+/// a video be read from.
+const RECORDING = /\/\.dray\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
+
 /// Every `span` in the rendered markdown, passed through untouched unless
 /// `rehypeFilePaths` marked it.
 ///
@@ -269,7 +275,7 @@ function FilePathSpan({
         </span>
       );
     }
-    return (
+    const link = (
       <FileLink
         path={path}
         line={Number.isInteger(line) && line > 0 ? line : undefined}
@@ -278,6 +284,15 @@ function FilePathSpan({
       >
         {body}
       </FileLink>
+    );
+    if (!RECORDING.test(path)) return link;
+    // A `dray browser record` video plays where the agent names it, so
+    // checking its work is watching, not finding a file.
+    return (
+      <>
+        {link}
+        <VideoPlayer src={convertFileSrc(path)} />
+      </>
     );
   }
 

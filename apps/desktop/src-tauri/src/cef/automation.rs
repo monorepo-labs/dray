@@ -48,6 +48,21 @@ const DEFAULT_VIEWPORT: (u32, u32) = (1440, 900);
 /// not serialized. ponytail: one lock app-wide, per-tab if captures ever
 /// queue behind each other.
 static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// The recordings under way, one per session at most.
+static RECORDING: Mutex<std::collections::BTreeMap<String, Recording>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+struct Recording {
+    tab: i32,
+    /// The size the page is laid out at, which the parked view takes too.
+    size: (u32, u32),
+    /// The shutter it opened, closed again by `record stop`.
+    shot: u64,
+    /// Frames are dropped while set: a screenshot of this tab is laying it
+    /// out at its own size, which is not what the video is of.
+    paused: bool,
+    recorder: crate::recording::Recorder,
+}
 /// The pane saying it has the page covered, so the reflow the capture needs
 /// happens behind a still rather than on screen. Waited on rather than
 /// guessed at: the cover is a page snapshot, an image decode and a layout
@@ -94,6 +109,16 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TEXT: usize = 40_000;
 const MAX_CONSOLE: usize = 200;
 
+/// A ring where a recorded click lands, fading out after. Pointer events
+/// off, so it never takes the click it marks.
+const CLICK_MARK_JS: &str = "((x, y) => { const d = document.createElement('div'); \
+  d.style.cssText = `position:fixed;left:${x - 16}px;top:${y - 16}px;width:32px;height:32px;box-sizing:border-box;\
+border-radius:50%;background:rgba(250,204,21,.35);border:3px solid rgba(234,179,8,.95);pointer-events:none;\
+z-index:2147483647;transition:transform .6s ease-out,opacity .6s ease-out`; \
+  document.documentElement.appendChild(d); \
+  setTimeout(() => { d.style.transform = 'scale(2)'; d.style.opacity = '0'; }, 250); \
+  setTimeout(() => d.remove(), 900); })";
+
 /// The pane's device presets, by name. Duplicated from `VIEWPORT_PRESETS`
 /// in browser.ts, since the refusal for an unknown name has to come from
 /// here; a test holds the two together.
@@ -136,6 +161,37 @@ wrap_dev_tools_message_observer! {
             };
             let _ = tx.send(reply);
         }
+
+        fn on_dev_tools_event(
+            &self,
+            browser: Option<&mut Browser>,
+            method: Option<&CefString>,
+            params: Option<&[u8]>,
+        ) {
+            if method.map(|m| m.to_string()).as_deref() != Some("Page.screencastFrame") {
+                return;
+            }
+            let (Some(browser), Some(params)) = (browser, params) else { return };
+            let at = Instant::now();
+            let Ok(mut frame) = serde_json::from_slice::<Value>(params) else { return };
+            // Acked before anything else: Chromium sends nothing more until
+            // it is, so a frame dropped below must still be answered. The
+            // reply lands in `on_dev_tools_method_result` with nobody waiting.
+            let ack = json!({
+                "id": NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed),
+                "method": "Page.screencastFrameAck",
+                "params": { "sessionId": frame["sessionId"] },
+            });
+            if let Some(host) = browser.host() {
+                host.send_dev_tools_message(Some(ack.to_string().as_bytes()));
+            }
+            let id = browser.identifier();
+            if let Value::String(data) = frame["data"].take() {
+                if let Some(rec) = RECORDING.lock().unwrap().values().find(|r| r.tab == id && !r.paused) {
+                    rec.recorder.frame(data, at);
+                }
+            }
+        }
     }
 }
 
@@ -145,6 +201,46 @@ pub(super) fn observe(browser: &Browser) -> Option<Registration> {
     browser
         .host()
         .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new())))
+}
+
+/// The size a recorded tab's view is parked at, off-screen, instead of being
+/// hidden: a hidden view paints nothing, and a screencast only sends what
+/// was painted. See `apply_layout`.
+pub(super) fn parked(tab: i32) -> Option<(u32, u32)> {
+    RECORDING.lock().unwrap().values().find(|r| r.tab == tab).map(|r| r.size)
+}
+
+/// The tab a session is recording and the size it is laid out at.
+fn recording_of(session: &str) -> Option<(i32, (u32, u32))> {
+    RECORDING.lock().unwrap().get(session).map(|r| (r.tab, r.size))
+}
+
+fn set_paused(session: &str, paused: bool) {
+    if let Some(rec) = RECORDING.lock().unwrap().get_mut(session) {
+        rec.paused = paused;
+    }
+}
+
+/// Ends a session's recording without converting it, for settle and delete:
+/// the child and its tabs are going, and nobody is left to watch it.
+pub(super) fn drop_recording(session: &str) {
+    if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
+        emit_recording(session, false);
+        emit_shooting(session, false, rec.shot);
+    }
+}
+
+fn metrics(w: u32, h: u32) -> Value {
+    json!({ "width": w, "height": h, "deviceScaleFactor": 1, "mobile": false })
+}
+
+/// Removes a session's recordings, for session delete. Best effort, like the
+/// attachments beside it. The id names a directory, so only a uuid's
+/// characters are let through.
+pub fn delete_recordings(session: &str) {
+    if !session.is_empty() && session.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        let _ = std::fs::remove_dir_all(recordings_dir(session));
+    }
 }
 
 /// Called from `on_console_message` for every line a page logs.
@@ -360,6 +456,13 @@ async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
 
 async fn click(tab: i32, at: &Locator, count: u32) -> Result<(), String> {
     let (x, y) = center(tab, at).await?;
+    if parked(tab).is_some() {
+        // CDP's clicks draw no cursor, so in a recording the page changes
+        // with no visible cause. A frame has to land with the mark on it
+        // before a click that navigates takes the page away.
+        let _ = eval(tab, &format!("{CLICK_MARK_JS}({x}, {y})")).await;
+        tokio::time::sleep(SETTLE).await;
+    }
     mouse(tab, "mouseMoved", x, y, json!({})).await?;
     for n in 1..=count {
         let button = json!({ "button": "left", "clickCount": n });
@@ -683,35 +786,59 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = active_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
-            // Numbered before the event goes out, so an ack cannot name a
-            // shot that does not exist yet; `await_shutter` reads the mark
-            // before it waits, so one arriving early is not missed either.
-            let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-            SHUTTER_OPEN.store(true, AtomicOrdering::Release);
-            emit_shooting(session, true, shot);
-            await_shutter(shot).await;
-            // The hide has run, but a hidden view leaves the window on its
-            // next frame — so the page is given one before it is asked to
-            // reflow into a widget that may still be composited.
-            tokio::time::sleep(SETTLE).await;
-            // Closed before the override, never after: past here the page
-            // stops being the one on screen, so a cover taken from it would
-            // be a picture of the very reflow being hidden.
-            SHUTTER_OPEN.store(false, AtomicOrdering::Release);
+            // A recording already holds this session's shutter open, so the
+            // pane is covered: opening it again adds nothing, and closing it
+            // would uncover the page mid-recording.
+            let recording = recording_of(session);
+            let shot = if recording.is_some() {
+                None
+            } else {
+                // Numbered before the event goes out, so an ack cannot name a
+                // shot that does not exist yet; `await_shutter` reads the mark
+                // before it waits, so one arriving early is not missed either.
+                let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
+                SHUTTER_OPEN.store(true, AtomicOrdering::Release);
+                emit_shooting(session, true, shot);
+                await_shutter(shot).await;
+                // The hide has run, but a hidden view leaves the window on its
+                // next frame — so the page is given one before it is asked to
+                // reflow into a widget that may still be composited.
+                tokio::time::sleep(SETTLE).await;
+                // Closed before the override, never after: past here the page
+                // stops being the one on screen, so a cover taken from it would
+                // be a picture of the very reflow being hidden.
+                SHUTTER_OPEN.store(false, AtomicOrdering::Release);
+                Some(shot)
+            };
+            // The screenshot's size may not be the recording's — a phone shot
+            // of a desktop recording — so the video holds its last frame for
+            // the length of the capture rather than show the page reflowing.
+            let recorded = recording.filter(|(rec_tab, _)| *rec_tab == tab);
+            if recorded.is_some() {
+                set_paused(session, true);
+            }
             let bytes = capture(tab, w, h, full).await;
-            // Cleared on the failing path too, or one timed-out capture leaves
+            // Put back on the failing path too, or one timed-out capture leaves
             // the tab laid out at a width nobody asked for and every later
-            // verb reads a page that isn't the one on screen. The shutter
-            // closes there for the same reason: a capture that failed must
-            // not leave the pane holding the camera card for good.
-            let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
-            // The page is back to the pane's size but has not painted it
-            // yet, and handing the view over inside that window puts the
-            // capture's layout on screen for a frame — the reflow, arriving
-            // at the end. The still is holding the pane meanwhile, so this
-            // costs nothing anybody can see.
-            tokio::time::sleep(SETTLE).await;
-            emit_shooting(session, false, shot);
+            // verb reads a page that isn't the one on screen. A tab being
+            // recorded goes back to the recording's size rather than the
+            // pane's, and resumes once it has repainted there.
+            if let Some((_, (rw, rh))) = recorded {
+                let _ = cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(rw, rh)).await;
+                tokio::time::sleep(SETTLE).await;
+                set_paused(session, false);
+            } else {
+                let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+            }
+            if let Some(shot) = shot {
+                // The page is back to the pane's size but has not painted it
+                // yet, and handing the view over inside that window puts the
+                // capture's layout on screen for a frame — the reflow, arriving
+                // at the end. The still is holding the pane meanwhile, so this
+                // costs nothing anybody can see.
+                tokio::time::sleep(SETTLE).await;
+                emit_shooting(session, false, shot);
+            }
             drop(held);
             let bytes = bytes?;
             let path = match path {
@@ -766,6 +893,68 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 .collect();
             Ok((text, Value::Array(data)))
         }
+        BrowserAction::RecordStart => {
+            let tab = active_tab(session)?;
+            let (w, h) = screenshot_size(session);
+            let held = CAPTURING.lock().await;
+            if RECORDING.lock().unwrap().contains_key(session) {
+                return Err("already recording; `dray browser record stop` first".into());
+            }
+            let stem = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+                .to_string();
+            let recorder = crate::recording::Recorder::start(&recordings_dir(session), &stem)?;
+            // The shutter a screenshot opens, held for the whole recording: the
+            // page is laid out at w×h throughout, and the pane keeps its still
+            // up rather than show that layout squeezed into itself.
+            let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
+            SHUTTER_OPEN.store(true, AtomicOrdering::Release);
+            emit_shooting(session, true, shot);
+            await_shutter(shot).await;
+            tokio::time::sleep(SETTLE).await;
+            SHUTTER_OPEN.store(false, AtomicOrdering::Release);
+            RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, recorder });
+            emit_recording(session, true);
+            let started = async {
+                on_main(apply_layout)?;
+                cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
+                tokio::time::sleep(SETTLE).await;
+                cdp(
+                    tab,
+                    "Page.startScreencast",
+                    json!({ "format": "jpeg", "quality": 80, "maxWidth": w, "maxHeight": h }),
+                )
+                .await
+            }
+            .await;
+            if let Err(e) = started {
+                RECORDING.lock().unwrap().remove(session);
+                end_recording(session, tab, shot).await;
+                return Err(format!("could not start recording: {e}"));
+            }
+            drop(held);
+            ok(format!("recording at {w}×{h}; `dray browser record stop` when done"))
+        }
+        BrowserAction::RecordStop { name } => {
+            let held = CAPTURING.lock().await;
+            let (tab, _) = recording_of(session)
+                .ok_or("nothing is recording; `dray browser record start` first")?;
+            // Stopped before the recording is taken, so the last frames still
+            // have somewhere to go. A tab closed mid-recording refuses this and
+            // the override alike, which changes nothing.
+            let _ = cdp(tab, "Page.stopScreencast", json!({})).await;
+            let rec = RECORDING.lock().unwrap().remove(session).ok_or("the recording was dropped")?;
+            end_recording(session, tab, rec.shot).await;
+            drop(held);
+            let (path, truncated) = tokio::task::spawn_blocking(move || rec.recorder.finish(name.as_deref()))
+                .await
+                .map_err(|e| e.to_string())??;
+            let shown = path.display().to_string();
+            let text = if truncated { format!("{shown} (cut short at the size limit)") } else { shown.clone() };
+            Ok((text, json!({ "path": shown, "truncated": truncated })))
+        }
         BrowserAction::SetViewport { width, height } => {
             active_tab(session)?;
             remember_viewport(session, width, height);
@@ -798,6 +987,32 @@ fn screenshot_size(session: &str) -> (u32, u32) {
         .as_ref()
         .and_then(|m| m.get(session).copied())
         .unwrap_or(DEFAULT_VIEWPORT)
+}
+
+/// Where a session's recordings go, deleted with it (`delete_recordings`).
+fn recordings_dir(session: &str) -> PathBuf {
+    browser_dir().join("recordings").join(session)
+}
+
+/// Puts the tab back the way a recording found it: the override off, the
+/// view unparked, and the pane's shutter closed once the page has repainted
+/// at the pane's size, or the reader is handed the recording's layout.
+async fn end_recording(session: &str, tab: i32, shot: u64) {
+    let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+    let _ = on_main(apply_layout);
+    tokio::time::sleep(SETTLE).await;
+    emit_recording(session, false);
+    emit_shooting(session, false, shot);
+}
+
+/// Tells the pane a session is recording, so it can say so over the still it
+/// holds meanwhile. Its own event rather than a reading of `browser_shooting`:
+/// a screenshot holds the same shutter for a moment, and a notice flashing
+/// up for every screenshot is the flash `Snapshot` exists to avoid.
+fn emit_recording(session: &str, recording: bool) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit("browser_recording", json!({ "sessionId": session, "recording": recording }));
+    }
 }
 
 /// The PNG of the page laid out at `w`×`h`. The widget is the pane's size,

@@ -460,12 +460,19 @@ wrap_app! {
         /// keychain access per code signature — so Chromium's cookie key in
         /// "Chromium Safe Storage" raised a password prompt on every launch.
         /// The mock keychain is what Chromium's own tests run with.
+        ///
+        /// Occluded windows are not backgrounded: Chromium stops painting a
+        /// page whose window is covered, and a `dray browser record` then
+        /// records nothing — measured, zero frames with Dray behind another
+        /// app. Recording is done while the reader is elsewhere, so that is
+        /// the case that matters. Only the presented tab is affected; the
+        /// others are hidden views and stay throttled.
         fn on_before_command_line_processing(&self, process_type: Option<&CefString>, command_line: Option<&mut CommandLine>) {
             let is_browser = process_type.map(|p| p.to_string().is_empty()).unwrap_or(true);
-            if cfg!(debug_assertions) && is_browser {
-                if let Some(command_line) = command_line {
-                    command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
-                }
+            let Some(command_line) = command_line.filter(|_| is_browser) else { return };
+            command_line.append_switch(Some(&CefString::from("disable-backgrounding-occluded-windows")));
+            if cfg!(debug_assertions) {
+                command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
             }
         }
     }
@@ -646,10 +653,16 @@ fn apply_layout() {
                 host.notify_move_or_resize_started();
             }
         }
+        let parked = if show { None } else { automation::parked(id) };
         if !show && !view.isHidden() {
             refocus_webview(view);
         }
-        view.setHidden(!show);
+        if let Some((w, h)) = parked {
+            view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w as f64, h as f64)));
+            view.setHidden(false);
+        } else {
+            view.setHidden(!show);
+        }
     }
 }
 
@@ -1346,6 +1359,7 @@ pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
 
 /// Closes every tab a session holds, for session delete.
 pub fn close_session(session_id: &str) {
+    automation::drop_recording(session_id);
     let session_id = session_id.to_string();
     let _ = on_main(move || {
         let browsers: Vec<Browser> = TABS

@@ -33,6 +33,7 @@ import {
   clearOpenError,
   closeTab,
   describePick,
+  isRecording,
   openInBrowser,
   setPendingTab,
   setPickHandler,
@@ -1941,7 +1942,7 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!selectedSessionId) return;
+    if (!selectedSessionId || isRecording(selectedSessionId)) return;
     // The pending tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
     if (pendingBrowserTab) return setPendingTab(selectedSessionId, false);

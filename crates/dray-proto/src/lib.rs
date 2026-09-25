@@ -245,6 +245,14 @@ pub enum BrowserAction {
     SetViewport { width: u32, height: u32 },
     /// A device preset by name, as the pane's device bar lists them.
     SetDevice { name: String },
+    /// Start recording the active tab, at the size `screenshot` uses.
+    RecordStart,
+    /// Stop recording and answer the MP4's path, named after `name` where
+    /// one is given.
+    RecordStop {
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

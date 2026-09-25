@@ -79,15 +79,22 @@ function start() {
   // drawn on top of that still: it is the page pixel for pixel, so the
   // whole shot is invisible, which is the point.
   void listen<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
-    shooting = e.payload.shooting ? e.payload.sessionId : null;
+    const { sessionId, shooting: on } = e.payload;
+    if (on) shooting.add(sessionId);
+    else shooting.delete(sessionId);
     shot = e.payload.shot;
     const winner = presenter();
     // Nothing of this session's page is on screen, so there is no reflow to
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    if (shooting && (!shown || winner?.sessionId !== shooting)) shutterReady(shot);
+    if (on && (!shown || winner?.sessionId !== sessionId)) shutterReady(shot);
     present();
+    notify();
+  });
+  void listen<{ sessionId: string; recording: boolean }>("browser_recording", (e) => {
+    if (e.payload.recording) recording.add(e.payload.sessionId);
+    else recording.delete(e.payload.sessionId);
     notify();
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
@@ -238,6 +245,18 @@ export function setPickHandler(fn: typeof pickHandler) {
   pickHandler = fn;
 }
 
+/// Sessions `dray browser record` is recording, as `browser_recording` says.
+const recording = new Set<string>();
+
+export function useRecording(sessionId: string): boolean {
+  return useSyncExternalStore(subscribe, () => recording.has(sessionId));
+}
+
+/// Read at a keypress, where a hook's copy would be the last render's.
+export function isRecording(sessionId: string): boolean {
+  return recording.has(sessionId);
+}
+
 export function usePicking(sessionId: string): boolean {
   return useSyncExternalStore(subscribe, () => picking.has(sessionId));
 }
@@ -367,15 +386,16 @@ export type Snapshot = { sessionId: string; url: string | null };
 let snapshot: Snapshot | null = null;
 let capturing = false;
 
-/// The session whose page `dray browser screenshot` is photographing, or
-/// `null`. The capture lays the page out at the asked-for size, which is a
-/// visible reflow in the pane the reader is watching — so the view hides
-/// for the shot and the page's own still is drawn in its place. The still
-/// is what makes it a cover rather than a hole: the shutter opens *before*
-/// the override lands, so what is photographed is the page as the reader
-/// last saw it, and the swap is invisible.
-let shooting: string | null = null;
-/// Which shot that is, as `browser_shooting` numbered it.
+/// The sessions whose page `dray browser screenshot` or `record` is laying
+/// out at another size, which is a visible reflow in the pane the reader is
+/// watching — so the view hides and the page's own still is drawn in its
+/// place. The still is what makes it a cover rather than a hole: the shutter
+/// opens *before* the override lands, so what is photographed is the page as
+/// the reader last saw it, and the swap is invisible. A set, since a
+/// recording holds its session's shutter open for its whole length and
+/// another session's screenshot must not close it.
+const shooting = new Set<string>();
+/// The newest shot, as `browser_shooting` numbered it.
 let shot = 0;
 
 /// Whether the native view is off screen: a modal landed on it, or a shot
@@ -386,7 +406,7 @@ let shot = 0;
 function hiding(): boolean {
   if (occluded) return true;
   const winner = presenter();
-  return !!winner && shooting === winner.sessionId;
+  return !!winner && shooting.has(winner.sessionId);
 }
 
 export function useBrowserSnapshot(sessionId: string): Snapshot | null {
