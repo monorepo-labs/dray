@@ -45,6 +45,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
 
 /// How long a cached answer stands. Expires, because `fx provider` and
@@ -61,6 +62,37 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 /// runnable, so [`find`] reads the unfiltered list.
 pub async fn list() -> Vec<Model> {
     all().await.into_iter().filter(visible).collect()
+}
+
+/// Starts a background `fx models` where the next [`list`] would answer from
+/// [`known_models`], so a model a subscription ships after this build reaches
+/// the picker without a Dray release; `models_changed` makes the picker read
+/// again.
+///
+/// The table is cached before the probe, which is what stops a burst of reads
+/// spawning one probe each and what a failed probe — a signed-out grok, or
+/// fx's own `MalformedResponse` — leaves in place.
+pub async fn check_table(app: &AppHandle) {
+    let key = active_provider().await.unwrap_or_default();
+    if CACHE.peek(&key).is_some() {
+        return;
+    }
+    let Some(table) = known_models(&key) else {
+        return;
+    };
+    CACHE.insert(&key, table);
+    let app = app.clone();
+    tokio::spawn(async move {
+        let Some((provider, models)) = probe_stable().await else {
+            return;
+        };
+        CACHE.insert(&provider, models);
+        if provider == key {
+            if let Err(err) = app.emit("models_changed", ()) {
+                eprintln!("[fx models_changed emit err] {err}");
+            }
+        }
+    });
 }
 
 /// Every model fx reports for its active provider, hidden rows included,
@@ -142,20 +174,21 @@ async fn probe_stable() -> Option<(String, Vec<Model>)> {
 /// The fixed model lists for the subscription providers, or `None` for one
 /// whose list must be discovered (gateway).
 ///
-// ponytail: hardcoded from fx's own output — a subscription tier changes its
-// models rarely, and the cost of a stale row here is one line to edit against
-// two seconds off every switch. gateway is left to the probe precisely because
-// its list is the one that moves.
+/// **A first draw, never the answer.** [`list`] probes fx behind it, so a model
+/// shipped after this build replaces the table within a read — the table only
+/// buys the first draw its two seconds back.
 fn known_models(provider: &str) -> Option<Vec<Model>> {
     let ids: &[&str] = match provider {
         "codex" => &[
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
         ],
-        "grok" => &["grok-4.6", "grok-4.5"],
+        "grok" => &["grok-4.7", "grok-4.6", "grok-4.5"],
         _ => return None,
     };
     Some(ids_to_models(
@@ -763,12 +796,12 @@ mod tests {
     #[test]
     fn subscription_providers_answer_from_a_table_gateway_does_not() {
         let codex = known_models("codex").expect("codex is known");
-        assert_eq!(codex.len(), 5);
-        assert_eq!(codex[1].arg, "gpt-5.6-sol");
+        assert_eq!(codex.len(), 7);
+        assert_eq!(codex[1].arg, "gpt-6-sol");
         assert!(codex[0].efforts.contains(&Effort::Ultra));
 
         let grok = known_models("grok").expect("grok is known");
-        assert_eq!(grok.len(), 2);
+        assert_eq!(grok.len(), 3);
         assert!(!grok[0].efforts.contains(&Effort::Ultra));
 
         // gateway's list is discovered, so it falls through to the probe.

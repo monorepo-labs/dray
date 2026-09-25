@@ -264,12 +264,15 @@ struct AgentAvailability {
 /// rather than erroring — a reader with no provider configured is in an
 /// ordinary state, and the picker draws its own empty row for it.
 #[tauri::command]
-async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+async fn list_models(app: AppHandle, harness: Option<harness::Harness>) -> Vec<Model> {
     // Defaulted rather than required so a caller that predates the second
     // harness still gets the list it always got.
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
-        harness::Harness::Fx => harness::fx::models::list().await,
+        harness::Harness::Fx => {
+            harness::fx::models::check_table(&app).await;
+            harness::fx::models::list().await
+        }
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
         other => models::models_for(other),
