@@ -860,6 +860,38 @@ fn update_tab(id: i32, f: impl FnOnce(&mut Tab)) {
     publish(&session);
 }
 
+/// The first entry of a list CEF lent a callback. Rebuilt from the `*mut` so
+/// it is the crate's `BorrowedMut` shape, which iterates and frees nothing on
+/// drop. `clone()` goes through `*const` into `Borrowed`, which copies the
+/// zero-sized opaque struct and iterates as empty — every tab drew the globe.
+fn first_string(list: &mut CefStringList) -> Option<String> {
+    CefStringList::from(<*mut sys::_cef_string_list_t>::from(list)).into_iter().next()
+}
+
+#[cfg(test)]
+mod string_list_tests {
+    use super::*;
+
+    /// Needs the framework loaded, found the way the build found it: `CEF_PATH`.
+    fn load_framework() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = sys::get_cef_dir().expect("CEF not found").join(sys::FRAMEWORK_PATH);
+        let path = std::ffi::CString::new(dir.canonicalize().unwrap().as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { sys::cef_load_library(path.as_ptr().cast()) }, 1);
+    }
+
+    #[test]
+    fn a_lent_list_reads_its_first_entry() {
+        load_framework();
+        let mut list = CefStringList::new();
+        list.append("https://example.com/favicon.ico");
+        list.append("https://example.com/icon.png");
+        assert_eq!(first_string(&mut list).as_deref(), Some("https://example.com/favicon.ico"));
+        // Still owned by `list`: the borrowed rebuild must not have freed it.
+        assert_eq!(list.into_iter().count(), 2);
+    }
+}
+
 wrap_display_handler! {
     struct DrayDisplay;
 
@@ -880,14 +912,7 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
-            // Rebuilt from the `*mut` so it is the crate's `BorrowedMut` shape,
-            // which iterates and frees nothing on drop. `clone()` goes through
-            // `*const` into `Borrowed`, which copies the zero-sized opaque
-            // struct and iterates as empty — every tab drew the globe.
-            let first = icon_urls
-                .map(|list| CefStringList::from(<*mut sys::_cef_string_list_t>::from(list)))
-                .and_then(|list| list.into_iter().next())
-                .unwrap_or_default();
+            let first = icon_urls.and_then(first_string).unwrap_or_default();
             update_tab(id, |t| t.favicon = first);
         }
 
