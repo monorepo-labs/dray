@@ -404,19 +404,17 @@ const NOT_TEXT: &str = "Not text — nothing to show.";
 
 /// Reads one file for the viewer, or names why it can't.
 ///
-/// A video is allowed on the asset protocol by its exact, canonical path —
-/// canonical because the protocol resolves links before it checks, so
-/// `/tmp/a.mp4` would otherwise be refused as `/private/tmp/a.mp4`. The scope
-/// grows by the files the reader opens and nothing else; this command already
-/// hands the webview any file under the cap, so streaming one the reader asked
-/// for widens nothing a page could not already read.
+/// A video is allowed on the asset protocol by its exact, canonical path. The
+/// scope grows by the files the reader opens and nothing else, for the life of
+/// the process — Tauri has no way to take a grant back — and this command
+/// already hands the webview any file under the cap, so streaming one the
+/// reader asked for widens nothing a page could not already read.
 #[tauri::command]
 pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, String> {
     let body = read_body(&path).await?;
-    if matches!(body, FileBody::Video { .. }) {
-        let real = tokio::fs::canonicalize(&path).await.map_err(|e| e.to_string())?;
+    if let FileBody::Video { path } = &body {
         app.asset_protocol_scope()
-            .allow_file(real)
+            .allow_file(path)
             .map_err(|e| e.to_string())?;
     }
     Ok(body)
@@ -426,9 +424,15 @@ pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, 
 /// rather than mangled — against a larger cap. Media is answered before the
 /// size check, since its bytes are never text and its cap is its own.
 async fn read_body(path: &str) -> Result<FileBody, String> {
-    if is_video(Path::new(path)) {
-        file_len(path).await?;
-        return Ok(FileBody::Video { path: path.to_string() });
+    // Judged on the link's target, or `secret.mp4` pointing at a database
+    // would stream it whole past the cap. Canonical is also what the protocol
+    // matches against, since it resolves links before it checks.
+    if let Ok(real) = tokio::fs::canonicalize(path).await {
+        if is_video(&real) {
+            let real = real.to_string_lossy().into_owned();
+            file_len(&real).await?;
+            return Ok(FileBody::Video { path: real });
+        }
     }
 
     let image = viewable_image(Path::new(path));
@@ -722,9 +726,15 @@ mod tests {
         let zip = dir.join("bundle.zip");
         std::fs::write(&zip, &big).unwrap();
 
+        let real = std::fs::canonicalize(&mov).unwrap();
         let body = read_body(mov.to_str().unwrap()).await.unwrap();
-        assert!(matches!(body, FileBody::Video { path } if path == mov.to_str().unwrap()));
+        assert!(matches!(body, FileBody::Video { path } if path == real.to_str().unwrap()));
         assert_eq!(read_body(zip.to_str().unwrap()).await.unwrap_err(), NOT_TEXT);
+
+        // A video name on a link is not a video: the target decides.
+        let link = dir.join("secret.mp4");
+        std::os::unix::fs::symlink(&zip, &link).unwrap();
+        assert_eq!(read_body(link.to_str().unwrap()).await.unwrap_err(), NOT_TEXT);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

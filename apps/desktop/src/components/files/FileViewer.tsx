@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
@@ -7,6 +7,7 @@ import Note from "@/components/changes/Note";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
+import type { FileBody } from "@/types/events";
 import { diffSide } from "@/lib/diff";
 import { basename } from "@/lib/format";
 
@@ -201,8 +202,7 @@ function Body({
   }
 
   if (file.state.body.kind === "video") {
-    // Keyed on the path so a failure on one tab does not stick to the next.
-    return <Video key={file.path} path={file.state.body.path} />;
+    return <Video body={file.state.body} />;
   }
 
   // Plain text while the grammar loads, not an empty box: a grammar fetch runs
@@ -221,19 +221,26 @@ function Body({
 
 /// A video, streamed through the asset protocol `read_file` just allowed it on.
 ///
-/// The container is judged by extension before this mounts, so the one thing
-/// left to fail is the codec inside it — which is the reason the note gives.
-function Video({ path }: { path: string }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <Note text="This video's format can't be played here." error />;
+/// A failure belongs to the read it happened under, so a re-read — the file
+/// changing, the turn ending — tries the player again rather than keeping the
+/// note up over a file that may be fine now.
+function Video({ body }: { body: { path: string } }) {
+  const [failed, setFailed] = useState<{ for: object; message: string } | null>(null);
+  if (failed?.for === body) return <Note text={failed.message} error />;
+
+  // The media error cannot tell a missing file from a codec it lacks, so ask
+  // the file again: a refusal there is the real reason, and a file that still
+  // reads is one this player cannot decode.
+  const onError = () => {
+    invoke<FileBody>("read_file", { path: body.path }).then(
+      () => setFailed({ for: body, message: "This video's format can't be played here." }),
+      (e) => setFailed({ for: body, message: String(e) }),
+    );
+  };
+
   return (
     <div className="flex min-h-full items-center justify-center bg-black">
-      <video
-        src={convertFileSrc(path)}
-        controls
-        className="max-h-full max-w-full"
-        onError={() => setFailed(true)}
-      />
+      <video src={convertFileSrc(body.path)} controls className="max-h-full max-w-full" onError={onError} />
     </div>
   );
 }
