@@ -170,6 +170,16 @@ impl Mapper {
                     | ResultEvent::ErrorDuringExecution { session_id, .. } => session_id.clone(),
                 };
 
+                // A resume files a task stranded by the last child as a
+                // model-less turn ahead of the prompt's own. Its `result` would
+                // end the reader's turn early, and `/compact` then reads as done
+                // for the whole compaction (v2.1.282).
+                if matches!(&result_event, ResultEvent::Success { origin: Some(o), num_turns: 0, .. }
+                    if o.kind == "task-notification")
+                {
+                    return Ok(None);
+                }
+
                 let payload = self
                     .handle_result_event(result_event)
                     .with_context(|| format!("mapping result event for session {session_id}"))?;
@@ -1823,6 +1833,20 @@ mod tests {
             .filter(|event| matches!(event.payload, AgentEventPayload::UserMessage { .. }))
             .count();
         assert_eq!(prompts, 0, "this app mints its own user events");
+    }
+
+    /// `/compact` sent to a resumed session whose last child left a background
+    /// task behind: the stranded notice's model-less turn must not close the
+    /// prompt's, or the compaction runs behind a turn that already reads done.
+    #[test]
+    fn a_stranded_task_notice_does_not_end_the_prompt_turn() {
+        let events = map_fixture(
+            &mut Mapper::default(),
+            include_str!("fixtures/stranded_task_resume.jsonl"),
+        );
+        let completed = |e: &AgentEvent| matches!(e.payload, AgentEventPayload::TurnCompleted { .. });
+        assert_eq!(events.iter().filter(|e| completed(e)).count(), 1);
+        assert!(completed(events.last().unwrap()));
     }
 
     /// The gauge's whole input, checked end to end on the one capture that

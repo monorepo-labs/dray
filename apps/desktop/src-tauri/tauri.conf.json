@@ -31,7 +31,11 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/.dray/attachments/**"]
+        "scope": [
+          "$HOME/.dray/attachments/**",
+          "$HOME/.dray/browser/recordings/**",
+          "$HOME/.dray/browser-dev/recordings/**"
+        ]
       }
     }
   },

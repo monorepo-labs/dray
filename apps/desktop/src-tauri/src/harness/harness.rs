@@ -217,6 +217,11 @@ impl<T: Clone> ProbeCache<T> {
             .insert(key.to_string(), (Instant::now(), value));
     }
 
+    /// Drops one answer, so the next read of `key` probes again.
+    pub fn remove(&self, key: &str) {
+        self.entries.lock().unwrap().remove(key);
+    }
+
     /// Drops every answer, so the next read probes again.
     pub fn forget(&self) {
         self.entries.lock().unwrap().clear();

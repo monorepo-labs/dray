@@ -29,6 +29,10 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(target_os = "macos")]
 pub mod chromium;
+// Without the feature too, for the same reason: its tests need no Chromium.
+#[cfg(target_os = "macos")]
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+pub mod recording;
 mod local_servers;
 pub mod docs;
 pub mod download;
@@ -264,12 +268,15 @@ struct AgentAvailability {
 /// rather than erroring — a reader with no provider configured is in an
 /// ordinary state, and the picker draws its own empty row for it.
 #[tauri::command]
-async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
+async fn list_models(app: AppHandle, harness: Option<harness::Harness>) -> Vec<Model> {
     // Defaulted rather than required so a caller that predates the second
     // harness still gets the list it always got.
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
-        harness::Harness::Fx => harness::fx::models::list().await,
+        harness::Harness::Fx => {
+            harness::fx::models::check_table(&app).await;
+            harness::fx::models::list().await
+        }
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
         other => models::models_for(other),
@@ -706,6 +713,7 @@ pub fn run() {
             projects::add_project,
             projects::remove_project,
             projects::set_last_selected_project,
+            projects::move_project,
             projects::set_project_space,
             projects::retag_space,
             git::list_branches,

@@ -460,12 +460,19 @@ wrap_app! {
         /// keychain access per code signature — so Chromium's cookie key in
         /// "Chromium Safe Storage" raised a password prompt on every launch.
         /// The mock keychain is what Chromium's own tests run with.
+        ///
+        /// Occluded windows are not backgrounded: Chromium stops painting a
+        /// page whose window is covered, and a `dray browser record` then
+        /// records nothing — measured, zero frames with Dray behind another
+        /// app. Recording is done while the reader is elsewhere, so that is
+        /// the case that matters. Only the presented tab is affected; the
+        /// others are hidden views and stay throttled.
         fn on_before_command_line_processing(&self, process_type: Option<&CefString>, command_line: Option<&mut CommandLine>) {
             let is_browser = process_type.map(|p| p.to_string().is_empty()).unwrap_or(true);
-            if cfg!(debug_assertions) && is_browser {
-                if let Some(command_line) = command_line {
-                    command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
-                }
+            let Some(command_line) = command_line.filter(|_| is_browser) else { return };
+            command_line.append_switch(Some(&CefString::from("disable-backgrounding-occluded-windows")));
+            if cfg!(debug_assertions) {
+                command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
             }
         }
     }
@@ -646,10 +653,16 @@ fn apply_layout() {
                 host.notify_move_or_resize_started();
             }
         }
+        let parked = if show { None } else { automation::parked(id) };
         if !show && !view.isHidden() {
             refocus_webview(view);
         }
-        view.setHidden(!show);
+        if let Some((w, h)) = parked {
+            view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w as f64, h as f64)));
+            view.setHidden(false);
+        } else {
+            view.setHidden(!show);
+        }
     }
 }
 
@@ -860,6 +873,38 @@ fn update_tab(id: i32, f: impl FnOnce(&mut Tab)) {
     publish(&session);
 }
 
+/// The first entry of a list CEF lent a callback. Rebuilt from the `*mut` so
+/// it is the crate's `BorrowedMut` shape, which iterates and frees nothing on
+/// drop. `clone()` goes through `*const` into `Borrowed`, which copies the
+/// zero-sized opaque struct and iterates as empty — every tab drew the globe.
+fn first_string(list: &mut CefStringList) -> Option<String> {
+    CefStringList::from(<*mut sys::_cef_string_list_t>::from(list)).into_iter().next()
+}
+
+#[cfg(test)]
+mod string_list_tests {
+    use super::*;
+
+    /// Needs the framework loaded, found the way the build found it: `CEF_PATH`.
+    fn load_framework() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = sys::get_cef_dir().expect("CEF not found").join(sys::FRAMEWORK_PATH);
+        let path = std::ffi::CString::new(dir.canonicalize().unwrap().as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { sys::cef_load_library(path.as_ptr().cast()) }, 1);
+    }
+
+    #[test]
+    fn a_lent_list_reads_its_first_entry() {
+        load_framework();
+        let mut list = CefStringList::new();
+        list.append("https://example.com/favicon.ico");
+        list.append("https://example.com/icon.png");
+        assert_eq!(first_string(&mut list).as_deref(), Some("https://example.com/favicon.ico"));
+        // Still owned by `list`: the borrowed rebuild must not have freed it.
+        assert_eq!(list.into_iter().count(), 2);
+    }
+}
+
 wrap_display_handler! {
     struct DrayDisplay;
 
@@ -880,10 +925,7 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
-            // A clone of the borrowed wrapper iterates and frees nothing on
-            // drop; rebuilding one from a const pointer makes the crate's
-            // `Borrowed` shape, which iterates as empty.
-            let first = icon_urls.and_then(|list| list.clone().into_iter().next()).unwrap_or_default();
+            let first = icon_urls.and_then(first_string).unwrap_or_default();
             update_tab(id, |t| t.favicon = first);
         }
 
@@ -1347,6 +1389,7 @@ pub fn browser_pick(session_id: String, start: bool) -> Result<(), String> {
 
 /// Closes every tab a session holds, for session delete.
 pub fn close_session(session_id: &str) {
+    automation::drop_recording(session_id);
     let session_id = session_id.to_string();
     let _ = on_main(move || {
         let browsers: Vec<Browser> = TABS

@@ -271,6 +271,8 @@ dray browser eval "document.title"
 dray browser console                          # what the page logged since last asked; `errors` for errors alone
 dray browser set device "iPhone 15"           # or: set viewport 375 667 — what screenshots are
                                               # laid out at; the pane on screen is left alone
+dray browser record start                     # record the active tab, at the screenshot size
+dray browser record stop "checkout flow"      # prints the MP4's path: checkout-flow.mp4
 dray browser tab                              # list tabs; also: tab new [url], tab <id>, tab close [id]
 dray browser back                             # also: forward, reload, close
 ```
@@ -282,6 +284,14 @@ one after anything that changes the page. `-i` lists interactive elements only,
 region. Only `http(s)` pages open here. Read a screenshot
 with your image tooling only when the layout itself is the question; the
 snapshot is cheaper and names what to act on.
+
+**Record a video when you have built something the user will want to see
+working.** `record start`, walk through the feature the way a person would,
+`record stop` with a name for the feature, since the file travels by it. Put
+the path it prints in your reply: the app plays it inline,
+so the user checks your work by watching instead of redoing it. Clicks are
+marked with a ring and pauses between your actions are cut to a second, so
+don't rush or pad. Screenshots work while recording.
 
 `open` waits for the page to load; `click` and `press` wait for any navigation
 they cause. A local dev server is the usual page — start it in the background

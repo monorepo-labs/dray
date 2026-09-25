@@ -147,6 +147,16 @@ export type PaneState = {
   queuedMessages: QueuedPrompt[];
 };
 
+/// The project picked most recently, which is what launch reopens. The list is
+/// in the reader's own order, so that is the newest stamp, not the front.
+/// RFC 3339 compares as a string.
+function lastSelected(list: Project[]): Project | null {
+  return list.reduce<Project | null>(
+    (best, p) => (!best || p.lastSelected > best.lastSelected ? p : best),
+    null,
+  );
+}
+
 // Two events with nothing between them, so whichever came last says whether a
 // compaction is still running. Gated on `busy` for the same reason as the task
 // set: a `started` with no `completed` after it is the shape a killed session
@@ -467,7 +477,6 @@ const handleAttachProject = async () => {
   if (typeof picked !== "string") return;
 
   try {
-    // Returns the list already sorted, so the attached project is at the front.
     setProjects(await invoke<Project[]>("add_project", { path: picked }));
     setProjectPath(picked);
   } catch (e) {
@@ -482,7 +491,8 @@ const handleRemoveProject = async (path: string) => {
   try {
     const left = await invoke<Project[]>("remove_project", { path });
     setProjects(left);
-    if (projectPath === path) setProjectPath(left[0]?.path ?? null);
+    // The newest stamp, not the front: the same project a restart would open.
+    if (projectPath === path) setProjectPath(lastSelected(left)?.path ?? null);
   } catch (e) {
     setError(String(e));
   }
@@ -494,6 +504,16 @@ const handleRemoveProject = async (path: string) => {
 const setProjectSpace = async (path: string, space: string | null) => {
   try {
     setProjects(await invoke<Project[]>("set_project_space", { path, space }));
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
+// Steps a project one place in the order the composer and the sidebar filter
+// both draw. Settings is the only caller.
+const moveProject = async (path: string, delta: number) => {
+  try {
+    setProjects(await invoke<Project[]>("move_project", { path, delta }));
   } catch (e) {
     setError(String(e));
   }
@@ -1669,9 +1689,7 @@ useEffect(() => {
   invoke<Project[]>("list_projects")
     .then((list) => {
       setProjects(list);
-      // Sorted most-recently-selected first, so the front of the list *is* the
-      // project to reopen — no separate pointer to keep in step.
-      setProjectPath(list[0]?.path ?? null);
+      setProjectPath(lastSelected(list)?.path ?? null);
     })
     // Without this a failed read leaves the picker silently empty, and the
     // reason only reaches the console.
@@ -2650,6 +2668,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide};
 
 }

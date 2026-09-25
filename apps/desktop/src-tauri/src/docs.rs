@@ -218,16 +218,21 @@ pub(crate) const TOO_LARGE: &str = "File is too large to open here.";
 /// check, because the two are separate calls and a file being appended to
 /// between them would otherwise arrive at whatever length it had reached.
 pub(crate) async fn read_file_capped(path: &str, cap: u64) -> Result<Vec<u8>, String> {
+    if file_len(path).await? > cap {
+        return Err(TOO_LARGE.to_string());
+    }
+    read_capped(path, cap).await
+}
+
+/// The size of the file at `path`, or the sentence saying there is no file there.
+pub(crate) async fn file_len(path: &str) -> Result<u64, String> {
     let meta = fs::metadata(path)
         .await
         .map_err(|_| "No file at this path.".to_string())?;
     if !meta.is_file() {
         return Err("Not a file — nothing to show here.".to_string());
     }
-    if meta.len() > cap {
-        return Err(TOO_LARGE.to_string());
-    }
-    read_capped(path, cap).await
+    Ok(meta.len())
 }
 
 /// Reads at most `cap`, refusing anything longer rather than truncating it.

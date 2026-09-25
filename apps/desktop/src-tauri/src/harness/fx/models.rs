@@ -45,6 +45,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
 
 /// How long a cached answer stands. Expires, because `fx provider` and
@@ -61,6 +62,51 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 /// runnable, so [`find`] reads the unfiltered list.
 pub async fn list() -> Vec<Model> {
     all().await.into_iter().filter(visible).collect()
+}
+
+/// Starts a background `fx models` where the next [`list`] would answer from
+/// [`known_models`], so a model a subscription ships after this build reaches
+/// the picker without a Dray release; `models_changed` makes the picker read
+/// again.
+///
+/// The table is cached before the probe, which is what stops a burst of reads
+/// spawning one probe each and what a failed probe — a signed-out grok, or
+/// fx's own `MalformedResponse` — leaves in place.
+pub async fn check_table(app: &AppHandle) {
+    let key = active_provider().await.unwrap_or_default();
+    if CACHE.peek(&key).is_some() {
+        return;
+    }
+    let Some(table) = known_models(&key) else {
+        return;
+    };
+    let table_ids: Vec<String> = table.iter().map(|m| m.arg.clone()).collect();
+    CACHE.insert(&key, table);
+    let app = app.clone();
+    tokio::spawn(async move {
+        let (sourced, models) = match probe().await {
+            Ok(answer) => answer,
+            Err(err) => return eprintln!("[fx models] {err:#}"),
+        };
+        // fx answers for whichever provider is active when it runs, and a
+        // switch away and back mid-probe reads the same settings either side,
+        // so the answer is judged by the provider its own rows name. Anything
+        // else — another provider's list, or an empty one — drops the table so
+        // the next read probes again, unless Refresh has already replaced it.
+        if sourced.as_deref() != Some(key.as_str()) || models.is_empty() {
+            let still_table = CACHE
+                .peek(&key)
+                .is_some_and(|cached| cached.iter().map(|m| &m.arg).eq(&table_ids));
+            if still_table {
+                CACHE.remove(&key);
+            }
+            return;
+        }
+        CACHE.insert(&key, models);
+        if let Err(err) = app.emit("models_changed", ()) {
+            eprintln!("[fx models_changed emit err] {err}");
+        }
+    });
 }
 
 /// Every model fx reports for its active provider, hidden rows included,
@@ -131,7 +177,7 @@ pub async fn refresh() {
 /// switch reloads one) probes again.
 async fn probe_stable() -> Option<(String, Vec<Model>)> {
     let before = active_provider().await;
-    let models = probe()
+    let (_, models) = probe()
         .await
         .map_err(|err| eprintln!("[fx models] {err:#}"))
         .ok()?;
@@ -142,20 +188,21 @@ async fn probe_stable() -> Option<(String, Vec<Model>)> {
 /// The fixed model lists for the subscription providers, or `None` for one
 /// whose list must be discovered (gateway).
 ///
-// ponytail: hardcoded from fx's own output — a subscription tier changes its
-// models rarely, and the cost of a stale row here is one line to edit against
-// two seconds off every switch. gateway is left to the probe precisely because
-// its list is the one that moves.
+/// **A first draw, never the answer.** [`list`] probes fx behind it, so a model
+/// shipped after this build replaces the table within a read — the table only
+/// buys the first draw its two seconds back.
 fn known_models(provider: &str) -> Option<Vec<Model>> {
     let ids: &[&str] = match provider {
         "codex" => &[
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
         ],
-        "grok" => &["grok-4.6", "grok-4.5"],
+        "grok" => &["grok-4.7", "grok-4.6", "grok-4.5"],
         _ => return None,
     };
     Some(ids_to_models(
@@ -383,7 +430,9 @@ struct Row {
 /// available", the same as any other failed read.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn probe() -> Result<Vec<Model>> {
+/// fx's models, with the provider a short list's own rows name. That one is
+/// `None` on a long list (gateway), which carries no rows.
+async fn probe() -> Result<(Option<String>, Vec<Model>)> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         PROBE_TIMEOUT,
@@ -413,12 +462,13 @@ async fn probe() -> Result<Vec<Model>> {
     // The provider is read from fx's settings — the one place it is recorded
     // for every list size — falling back to the `source` on a short list's rows
     // when the settings can't be read.
+    let sourced = listing.models.first().map(|r| provider_key(&r.source));
     let provider = active_provider()
         .await
-        .or_else(|| listing.models.first().map(|r| provider_key(&r.source)))
+        .or_else(|| sourced.clone())
         .unwrap_or_default();
 
-    Ok(ids_to_models(listing.ids, &provider))
+    Ok((sourced, ids_to_models(listing.ids, &provider)))
 }
 
 /// The provider `fx provider` last wrote, read from `~/.fx/settings.json`.
@@ -763,12 +813,12 @@ mod tests {
     #[test]
     fn subscription_providers_answer_from_a_table_gateway_does_not() {
         let codex = known_models("codex").expect("codex is known");
-        assert_eq!(codex.len(), 5);
-        assert_eq!(codex[1].arg, "gpt-5.6-sol");
+        assert_eq!(codex.len(), 7);
+        assert_eq!(codex[1].arg, "gpt-6-sol");
         assert!(codex[0].efforts.contains(&Effort::Ultra));
 
         let grok = known_models("grok").expect("grok is known");
-        assert_eq!(grok.len(), 2);
+        assert_eq!(grok.len(), 3);
         assert!(!grok[0].efforts.contains(&Effort::Ultra));
 
         // gateway's list is discovered, so it falls through to the probe.

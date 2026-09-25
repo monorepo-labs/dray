@@ -33,6 +33,7 @@ import {
   clearOpenError,
   closeTab,
   describePick,
+  isRecording,
   navigate,
   openInBrowser,
   setPendingTab,
@@ -196,6 +197,7 @@ function App() {
     handleSelectProject,
     handleRemoveProject,
     setProjectSpace,
+    moveProject,
     retagSpace,
     canAnnounce,
     handleSelectBranch,
@@ -1942,7 +1944,7 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!selectedSessionId) return;
+    if (!selectedSessionId || isRecording(selectedSessionId)) return;
     // The pending tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
     if (pendingBrowserTab) return setPendingTab(selectedSessionId, false);
@@ -2026,7 +2028,9 @@ function App() {
   });
   // ⌘T, the chord every browser gives a new tab. Bound only while the browser
   // is on screen, so it stays free everywhere else.
-  useHotkey("browser.newTab", () => selectedSessionId && setPendingTab(selectedSessionId, true), {
+  useHotkey("browser.newTab", () => {
+    if (selectedSessionId && !isRecording(selectedSessionId)) setPendingTab(selectedSessionId, true);
+  }, {
     enabled: browserShown && !!selectedSessionId,
   });
   // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
@@ -2772,6 +2776,7 @@ function App() {
       onRenameSpace={renameSpace}
       onRemoveSpace={removeSpace}
       onMoveSpace={moveSpaceBy}
+      onMoveProject={moveProject}
       autoHideSidebar={autoHideSidebar}
       onAutoHideSidebarChange={setAutoHideSidebar}
       integrations={integrations}

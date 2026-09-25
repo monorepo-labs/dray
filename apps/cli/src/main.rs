@@ -175,7 +175,8 @@ Verbs:
   wait [<selector> | <ms>] [--url ..] [--text ..] [--load ..]
   screenshot [path] [--full] | eval <js> | console | errors
   set viewport <w> <h> | set device <name>
-screenshot lays the page out at 1440×900, or the last set viewport/device.";
+  record start | record stop [name]
+screenshot and record lay the page out at 1440×900, or the last set viewport/device.";
 
 #[derive(Args)]
 #[command(after_help = BROWSER_VERBS)]
@@ -573,6 +574,11 @@ fn act(
         "eval" => A::Eval { js: word("eval <js>")? },
         "console" => A::Console,
         "errors" => A::Errors,
+        "record" => match word("record <start|stop [name]>")?.as_str() {
+            "start" => A::RecordStart,
+            "stop" => A::RecordStop { name: word("").ok() },
+            other => return Err(format!("record {other}? start or stop")),
+        },
         "set" => match word("set viewport <w> <h>, or set device <name>")?.as_str() {
             "viewport" => {
                 let mut dim = || -> Result<u32, String> {

@@ -388,8 +388,8 @@ function splitPinned(
 /// inside it. Ordering on the newest session read well for one screenshot and
 /// badly in use: every reply to any session lifted its whole project over the
 /// others, so headings the eye had learned the position of moved while a turn
-/// was running. The project list only reorders when a project is *selected*,
-/// which is the reader's own act. A project no longer attached still has
+/// was running. The project list only reorders when the reader moves a project
+/// in Settings. A project no longer attached still has
 /// sessions to draw, so it keeps first-appearance order after the attached
 /// ones.
 ///

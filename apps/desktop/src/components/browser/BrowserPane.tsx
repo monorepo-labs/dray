@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -46,6 +47,7 @@ import {
   useCustomDevices,
   usePendingTab,
   usePicking,
+  useRecording,
   useViewport,
   VIEWPORT_PRESETS,
   type Snapshot as BrowserSnapshot,
@@ -107,6 +109,7 @@ export default function BrowserPane({
   // Responsive with no size typed is a flag; with one, it is a viewport.
   const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
   const snapshot = useBrowserSnapshot(sessionId);
+  const recording = useRecording(sessionId);
   const key = useId();
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -218,6 +221,7 @@ export default function BrowserPane({
         ) : (
           <Snapshot of={snapshot} />
         )}
+        {recording && !empty && <RecordingNotice />}
       </div>
     </div>
   );
@@ -279,6 +283,10 @@ function Chrome({
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
+  // The reader cannot change tabs mid-recording: the agent's next verb goes to
+  // whichever tab is active, and a switch here would send it somewhere else.
+  // The agent's own tab verbs stay open, since a flow may cross tabs.
+  const recording = useRecording(sessionId);
   const url = current?.url ?? "";
 
   // A new tab is for typing into.
@@ -312,6 +320,7 @@ function Chrome({
               title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
               icon={<Favicon tab={tab} />}
               label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
+              locked={recording}
               onPick={() => {
                 setPendingTab(sessionId, false);
                 if (!tab.active) void activateTab(sessionId, tab.id);
@@ -336,7 +345,7 @@ function Chrome({
                 size="icon-sm"
                 className="mb-0.5 shrink-0"
                 aria-label="New tab"
-                disabled={pending}
+                disabled={pending || recording}
                 onClick={newTab}
               >
                 <Plus className="size-3.5" />
@@ -510,6 +519,7 @@ function TabButton({
   title,
   icon,
   label,
+  locked = false,
   onPick,
   onClose,
 }: {
@@ -517,27 +527,33 @@ function TabButton({
   title: string;
   icon: React.ReactNode;
   label: string;
+  /// Neither picked nor closed, while a recording holds the strip.
+  locked?: boolean;
   onPick: () => void;
   onClose: () => void;
 }) {
+  const pick = locked ? undefined : onPick;
   return (
     <div
       role="tab"
       aria-selected={active}
-      tabIndex={0}
+      aria-disabled={locked || undefined}
+      tabIndex={locked ? -1 : 0}
       title={title}
-      onClick={onPick}
-      onKeyDown={(e) => e.key === "Enter" && onPick()}
+      onClick={pick}
+      onKeyDown={(e) => e.key === "Enter" && pick?.()}
       className={cn(
         "group/tab flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
         active
           ? "browser-tab-active bg-card text-foreground"
-          : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
+          : locked
+            ? "text-muted-foreground opacity-50"
+            : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
       )}
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <button
+      {!locked && <button
         type="button"
         aria-label="Close tab"
         className="rounded p-0.5 opacity-0 hover:bg-muted group-hover/tab:opacity-100"
@@ -547,7 +563,7 @@ function TabButton({
         }}
       >
         <X className="size-3" />
-      </button>
+      </button>}
     </div>
   );
 }

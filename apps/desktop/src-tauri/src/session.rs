@@ -1487,6 +1487,8 @@ impl SessionManager {
         if let Err(e) = attachments::delete_session_attachments(session_id).await {
             eprintln!("could not delete attachments for {session_id}: {e}");
         }
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        crate::cef::automation::delete_recordings(session_id);
 
         // pi keeps its own transcript beside Dray's, because the *file* is its
         // resume handle. Left behind it is a whole conversation on disk that

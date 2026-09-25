@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
 import type { SubagentRun } from "@/lib/transcript";
 import type { AgentEvent, ToolResult } from "@/types/events";
-import "./App.css";
+import "../App.css";
 
 /// `OpenInButton` scans for installed apps through `invoke`, which rejects
 /// outside Tauri — it draws nothing rather than an empty menu, so the tab row
@@ -153,8 +153,7 @@ const CASES: {
 /// It exists to answer one thing — what a checklist written for the transcript
 /// looks like in a 32rem pane it has to share with a run list — which needs
 /// both sections filled and a real agent to fill them. Drag the pane's edge:
-/// the narrow end is where this is most likely to fall apart. **Delete the page
-/// once it has answered.**
+/// the narrow end is where this is most likely to fall apart.
 function ModeToggle({
   mode,
   onFlip,
