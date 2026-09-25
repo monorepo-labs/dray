@@ -322,10 +322,16 @@ function useDragReorder<T>(
     null,
   );
   const list = useRef<HTMLDivElement>(null);
+  // Read at release, to tell whether the list moved under the drag.
+  const latest = useRef(items);
+  latest.current = items;
   const shown = order ?? items;
 
   const start = (e: React.PointerEvent<HTMLElement>, from: number) => {
-    if (e.button !== 0 || !list.current) return;
+    // Not while the last drop is still being written: the move is a relative
+    // delta, so one measured against an unconfirmed order lands wrong if that
+    // write fails.
+    if (e.button !== 0 || !list.current || order) return;
     // The row's own controls and fields answer their own presses.
     if ((e.target as Element).closest("button:not([data-grip]), input")) return;
     // Keeps the press from starting a text selection across the rows.
@@ -358,13 +364,15 @@ function useDragReorder<T>(
       setDrag({ from, to, dy, step });
     };
 
-    const end = () => {
+    const end = (ev: PointerEvent) => {
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", end);
       el.removeEventListener("pointercancel", end);
       document.body.classList.remove("session-drag");
       setDrag(null);
-      if (to === from) return;
+      // A cancelled gesture (focus lost, the OS taking the pointer) is not a
+      // drop, and a list that changed mid-drag no longer matches the indexes.
+      if (ev.type !== "pointerup" || latest.current !== before || to === from) return;
       const next = [...before];
       next.splice(to, 0, ...next.splice(from, 1));
       setOrder(next);

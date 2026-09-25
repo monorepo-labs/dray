@@ -147,6 +147,16 @@ export type PaneState = {
   queuedMessages: QueuedPrompt[];
 };
 
+/// The project picked most recently, which is what launch reopens. The list is
+/// in the reader's own order, so that is the newest stamp, not the front.
+/// RFC 3339 compares as a string.
+function lastSelected(list: Project[]): Project | null {
+  return list.reduce<Project | null>(
+    (best, p) => (!best || p.lastSelected > best.lastSelected ? p : best),
+    null,
+  );
+}
+
 // Two events with nothing between them, so whichever came last says whether a
 // compaction is still running. Gated on `busy` for the same reason as the task
 // set: a `started` with no `completed` after it is the shape a killed session
@@ -481,7 +491,8 @@ const handleRemoveProject = async (path: string) => {
   try {
     const left = await invoke<Project[]>("remove_project", { path });
     setProjects(left);
-    if (projectPath === path) setProjectPath(left[0]?.path ?? null);
+    // The newest stamp, not the front: the same project a restart would open.
+    if (projectPath === path) setProjectPath(lastSelected(left)?.path ?? null);
   } catch (e) {
     setError(String(e));
   }
@@ -1678,13 +1689,7 @@ useEffect(() => {
   invoke<Project[]>("list_projects")
     .then((list) => {
       setProjects(list);
-      // The list is in the reader's order, so the project to reopen is the
-      // newest stamp rather than the front. RFC 3339 compares as a string.
-      const last = list.reduce<Project | null>(
-        (best, p) => (!best || p.lastSelected > best.lastSelected ? p : best),
-        null,
-      );
-      setProjectPath(last?.path ?? null);
+      setProjectPath(lastSelected(list)?.path ?? null);
     })
     // Without this a failed read leaves the picker silently empty, and the
     // reason only reaches the console.
