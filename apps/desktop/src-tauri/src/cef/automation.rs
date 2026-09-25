@@ -251,12 +251,11 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
             if std::mem::replace(&mut last, hash) == hash {
                 continue;
             }
-            // A screenshot may have paused and restored the tab while this
-            // capture was out, and then the frame is of its layout, not ours.
+            // A screenshot may have paused the tab while this capture was out,
+            // and then the frame is of its layout, not ours. A pause bumps
+            // `layout`, so an unchanged one also means not paused now.
             if let Some(rec) = RECORDING.lock().unwrap().get(&session).filter(|r| r.shot == shot && r.layout == layout) {
-                if !rec.paused {
-                    rec.recorder.frame(data, at);
-                }
+                rec.recorder.frame(data, at);
             }
         }
     });
