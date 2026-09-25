@@ -672,6 +672,24 @@ pub async fn start_turn(session: &GrokSession, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Hands a prompt to the turn already running, which the model reads at its
+/// next tool or model gap — measured, a turn told mid-run to skip its remaining
+/// commands skipped them and closed on one prompt id.
+///
+/// Not a second `session/prompt`: grok would take that too, but queue it to run
+/// after the turn, and it would replace the id the read loop settles this turn
+/// on. **Landing after the turn has ended loses nothing** — grok answers the
+/// same `queued` and opens a turn of its own for it (`interject-fallback-…`),
+/// which the read loop closes off grok's own `turn_completed`. Text only: the
+/// method refuses a content array.
+pub async fn interject(session: &GrokSession, text: &str) -> Result<()> {
+    session
+        .client
+        .request("_x.ai/interject", json!({"sessionId": session.id, "text": text}))
+        .await
+        .map(|_| ())
+}
+
 /// Stops the running turn. A notification: grok acknowledges nothing, kills the
 /// running *foreground* tool and answers the prompt with `cancelled`.
 ///
@@ -787,9 +805,27 @@ async fn read_stdout(
                                     );
                                     continue;
                                 }
-                                _ => {}
+                                // A turn Dray opened ends on its prompt's answer,
+                                // which lands just after this. One grok opened
+                                // itself — an interject arriving after the turn it
+                                // was aimed at — has no answer coming, so without
+                                // this the session sits `in_progress` for good.
+                                parser::GrokUpdate::TurnCompleted { stop_reason } => {
+                                    let ours = matches!(
+                                        transport.as_ref(),
+                                        Some(Transport::Grok(s))
+                                            if s.prompt_id.lock().expect("grok prompt id poisoned").is_some()
+                                    );
+                                    if ours || !mapper.turn_open() {
+                                        continue;
+                                    }
+                                    parser::GrokEvent::PromptDone(Box::new(parser::PromptResponse {
+                                        stop_reason: stop_reason.clone(),
+                                        ..Default::default()
+                                    }))
+                                }
+                                _ => parser::GrokEvent::Update(note.update),
                             }
-                            parser::GrokEvent::Update(note.update)
                         }
                         Err(parser::ParseOutcome::Ignored) => continue,
                         Err(parser::ParseOutcome::Unknown) => {

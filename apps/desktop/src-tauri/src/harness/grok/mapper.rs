@@ -343,7 +343,7 @@ impl Mapper {
             GrokUpdate::UserMessageChunk
             | GrokUpdate::ToolCallDeltaChunk
             | GrokUpdate::ResponseCompleted
-            | GrokUpdate::TurnCompleted
+            | GrokUpdate::TurnCompleted { .. }
             | GrokUpdate::ModelChanged
             | GrokUpdate::SessionSummaryGenerated
             | GrokUpdate::HookRunStarted
@@ -452,6 +452,12 @@ impl Mapper {
         // that run off a row from the turn before.
         self.pending_spawns.clear();
         event
+    }
+
+    /// Whether a turn is drawn as running, so a close grok sends for a turn it
+    /// opened itself is not taken for one nothing here ever started.
+    pub fn turn_open(&self) -> bool {
+        self.turn_open
     }
 
     /// Opens the turn on its first update. grok has no turn-started line the

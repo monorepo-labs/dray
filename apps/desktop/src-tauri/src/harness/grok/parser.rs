@@ -57,8 +57,7 @@ pub struct UpdateNotification {
 ///
 /// The unit variants are kinds seen and deliberately drawn as nothing:
 /// `user_message_chunk` is `session/load`'s replay of a prompt Dray already
-/// logged, the hook and delta-chunk kinds say nothing a row could show, and
-/// `turn_completed` restates what the prompt response already carries. Naming
+/// logged, the hook and delta-chunk kinds say nothing a row could show. Naming
 /// them keeps [`Self::Unknown`] — and so the failure log — a signal.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "sessionUpdate", rename_all = "snake_case")]
@@ -132,11 +131,18 @@ pub enum GrokUpdate {
         tokens_after: Option<u64>,
     },
 
+    /// Every turn's end, sent just ahead of the prompt's own answer. Read only
+    /// for a turn grok opened itself — an interject that landed after the turn
+    /// it was aimed at — since no `session/prompt` answer will ever close it.
+    TurnCompleted {
+        #[serde(default)]
+        stop_reason: String,
+    },
+
     // Seen, and drawn as nothing.
     UserMessageChunk,
     ToolCallDeltaChunk,
     ResponseCompleted,
-    TurnCompleted,
     ModelChanged,
     SessionSummaryGenerated,
     HookRunStarted,
@@ -452,6 +458,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The only end a turn grok opened itself will get, so its reason has to
+    /// survive the parse. Shape as captured off an idle `_x.ai/interject`, which
+    /// grok ran as `interject-fallback-…` with no `session/prompt` behind it.
+    #[test]
+    fn turn_completed_carries_its_stop_reason() {
+        let note = parse_notification(
+            "_x.ai/session_notification",
+            json!({
+                "sessionId": "s1",
+                "update": {"sessionUpdate": "turn_completed",
+                           "prompt_id": "interject-fallback-01a0d837",
+                           "stop_reason": "end_turn",
+                           "usage": {"inputTokens": 43059, "outputTokens": 31}},
+            }),
+        )
+        .unwrap_or_else(|_| panic!("turn_completed is parsed"));
+        assert!(matches!(note.update, GrokUpdate::TurnCompleted { stop_reason } if stop_reason == "end_turn"));
     }
 
     /// grok's wire mixes cases and `rawOutput` is where it bites: the envelope
