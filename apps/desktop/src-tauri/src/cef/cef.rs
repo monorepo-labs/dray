@@ -880,10 +880,14 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let Some(id) = browser.map(|b| b.identifier()) else { return };
-            // A clone of the borrowed wrapper iterates and frees nothing on
-            // drop; rebuilding one from a const pointer makes the crate's
-            // `Borrowed` shape, which iterates as empty.
-            let first = icon_urls.and_then(|list| list.clone().into_iter().next()).unwrap_or_default();
+            // Rebuilt from the `*mut` so it is the crate's `BorrowedMut` shape,
+            // which iterates and frees nothing on drop. `clone()` goes through
+            // `*const` into `Borrowed`, which copies the zero-sized opaque
+            // struct and iterates as empty — every tab drew the globe.
+            let first = icon_urls
+                .map(|list| CefStringList::from(<*mut sys::_cef_string_list_t>::from(list)))
+                .and_then(|list| list.into_iter().next())
+                .unwrap_or_default();
             update_tab(id, |t| t.favicon = first);
         }
 
