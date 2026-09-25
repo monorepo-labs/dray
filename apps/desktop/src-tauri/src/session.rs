@@ -965,7 +965,7 @@ impl SessionManager {
                 // nothing for Dray's queue to do here and no boundary for it to
                 // race for — whether or not a tool happens to be running now.
                 if matches!(s.stdin, Transport::Pi(_) | Transport::Grok(_)) {
-                    s.steer(prompt, attachment_paths, issues, from, app).await;
+                    s.steer(prompt, attachment_paths, issues, from, app).await?;
                     return Ok(SendOutcome {
                         issues: linked,
                         ..Default::default()
@@ -1938,7 +1938,7 @@ impl Session {
         issues: &[IssueRef],
         from: Option<MessageSender>,
         app: &AppHandle,
-    ) {
+    ) -> Result<()> {
         let sent = deliver_prompt(
             &self.id,
             self.harness,
@@ -1960,13 +1960,18 @@ impl Session {
             app,
         )
         .await;
-        // Drawn beside the bubble, for `deliver_batch`'s reason: the prompt is
-        // already logged by the time the send can fail, so an error returned to
-        // the composer leaves a message nothing answers, and a retry draws it
-        // twice.
-        if let Err(err) = sent {
-            eprintln!("[steer err] {err:#}");
-            report_send_failure(&self.id, self.harness, &format!("{err:#}"), &self.seq, app).await;
+        match sent {
+            // Drawn beside the bubble, for `deliver_batch`'s reason: returned to
+            // the composer, it leaves a message nothing answers, and a retry
+            // draws it twice.
+            Err(err) if err.is::<Undelivered>() => {
+                eprintln!("[steer err] {err:#}");
+                report_send_failure(&self.id, self.harness, &format!("{err:#}"), &self.seq, app).await;
+                Ok(())
+            }
+            // Nothing logged yet — an attachment that could not be read — so the
+            // composer keeps the draft and says why.
+            other => other.map(|_| ()),
         }
     }
 
@@ -2498,6 +2503,18 @@ pub async fn write_line(stdin: &Arc<Mutex<ChildStdin>>, value: &impl Serialize) 
     Ok(())
 }
 
+/// A prompt already drawn and logged whose send then failed, so a caller can
+/// tell it from a failure that left nothing on screen. Marked on the two sends
+/// [`Session::steer`] reaches, pi's and grok's.
+#[derive(Debug)]
+struct Undelivered;
+
+impl std::fmt::Display for Undelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("couldn't hand the prompt to the agent")
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -2600,13 +2617,15 @@ async fn deliver_prompt(
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await?;
+        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
+            .await
+            .context(Undelivered)?;
         return Ok(text);
     }
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
-        crate::harness::grok::interject(session, &text).await?;
+        crate::harness::grok::interject(session, &text).await.context(Undelivered)?;
         return Ok(text);
     }
     // fx takes a prompt as a request that blocks for the turn, so the write
@@ -3392,6 +3411,17 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    /// `steer` tells a send that failed after the bubble was logged from one
+    /// that failed before it by the marker alone, so it has to survive as
+    /// context over the harness's own error and not match a plain one.
+    #[test]
+    fn a_failed_send_is_told_from_a_failed_prepare() {
+        let sent = Err::<(), _>(anyhow::anyhow!("broken pipe")).context(Undelivered).unwrap_err();
+        assert!(sent.is::<Undelivered>());
+        assert_eq!(format!("{sent:#}"), "couldn't hand the prompt to the agent: broken pipe");
+        assert!(!anyhow::anyhow!("attachment unreadable").is::<Undelivered>());
+    }
 
     /// A send holding one session's lock across a respawn — seconds of kill,
     /// spawn and git — must not hold up Stop in another, and must still order
