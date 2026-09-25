@@ -28,9 +28,9 @@ pub struct Project {
     /// leaving takes it with them.
     #[serde(default)]
     pub space: Option<String>,
-    /// Doubles as the sort key and the "which project was last open" answer:
-    /// selecting a project *is* what makes it most recent, so a separate
-    /// `last_selected` pointer would be a second place to keep the same fact.
+    /// Which project launch reopens, and nothing else. It was the sort key too,
+    /// which moved every picker's rows on each pick; order is now the file's
+    /// own, set by the reader in Settings.
     pub last_selected: String,
 }
 
@@ -46,17 +46,14 @@ async fn canonical(path: &str) -> Result<String> {
     Ok(resolved.to_string_lossy().into_owned())
 }
 
-/// Reads `projects.json`, most recently selected first — so the picker's order
-/// and its default are both just `projects[0]`. A missing or empty file means
-/// no projects yet, not an error — same convention as the session index.
+/// Reads `projects.json` in the reader's own order. A missing or empty file
+/// means no projects yet, not an error — same convention as the session index.
+///
+/// Unsorted on purpose: files written before order was manual were saved
+/// most-recent-first, so that is simply where an existing list starts.
 #[tauri::command]
 pub async fn list_projects() -> Result<Vec<Project>, Fail> {
-    let mut projects: Vec<Project> = read_json(&projects_path().await?).await?;
-    // Descending, so the newest selection sorts to the front. RFC 3339 stamps
-    // compare correctly as strings at fixed width.
-    projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
-
-    Ok(projects)
+    Ok(read_json(&projects_path().await?).await?)
 }
 
 async fn projects_path() -> Result<std::path::PathBuf> {
@@ -69,7 +66,7 @@ async fn write_projects(projects: &[Project]) -> Result<()> {
     write_atomic(&projects_path().await?, serde_json::to_string(projects)?).await
 }
 
-/// Attaches a directory and selects it. Re-attaching a known project is a
+/// Attaches a directory at the end of the list and selects it. Re-attaching a known project is a
 /// no-op apart from the selection, so the picker's "Attach" can double as
 /// "switch to one I already have" without growing duplicates.
 #[tauri::command]
@@ -90,7 +87,6 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
         }),
     }
 
-    projects.sort_by(|a, b| b.last_selected.cmp(&a.last_selected));
     write_projects(&projects).await?;
 
     Ok(projects)
@@ -109,8 +105,8 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
     Ok(projects)
 }
 
-/// Stamps a project as the most recently selected, which also moves it to the
-/// front of the next read. Unknown paths are ignored rather than inserted —
+/// Stamps a project as the most recently selected, which is what launch
+/// reopens. Order is untouched. Unknown paths are ignored rather than inserted —
 /// attaching is [`add_project`]'s job.
 #[tauri::command]
 pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
@@ -144,6 +140,35 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
     write_projects(&projects).await?;
 
     Ok(projects)
+}
+
+/// Steps a project `delta` places in the order every picker draws. Past either
+/// end is a no-op rather than a wrap, matching the spaces list beside it.
+#[tauri::command]
+pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    if move_by(&mut projects, path, delta) {
+        write_projects(&projects).await?;
+    }
+
+    Ok(projects)
+}
+
+/// The edit [`move_project`] makes, split from the file so it can be tested.
+/// Answers whether anything moved.
+fn move_by(projects: &mut Vec<Project>, path: &str, delta: isize) -> bool {
+    let Some(from) = projects.iter().position(|p| p.path == path) else {
+        return false;
+    };
+    let to = from as isize + delta;
+    if delta == 0 || to < 0 || to >= projects.len() as isize {
+        return false;
+    }
+    let project = projects.remove(from);
+    projects.insert(to as usize, project);
+    true
 }
 
 /// A blank name is the same as no space: an empty string would draw a nameless
@@ -223,6 +248,19 @@ mod tests {
             space: space.map(Into::into),
             last_selected: "2026-08-01T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn move_by_steps_one_place_and_stops_at_the_ends() {
+        let paths = |ps: &[Project]| ps.iter().map(|p| p.path.clone()).collect::<Vec<_>>();
+        let mut projects = vec![filed("/a", None), filed("/b", None), filed("/c", None)];
+
+        assert!(move_by(&mut projects, "/c", -1));
+        assert_eq!(paths(&projects), ["/a", "/c", "/b"]);
+        assert!(!move_by(&mut projects, "/a", -1));
+        assert!(!move_by(&mut projects, "/b", 1));
+        assert!(!move_by(&mut projects, "/missing", 1));
+        assert_eq!(paths(&projects), ["/a", "/c", "/b"]);
     }
 
     #[test]

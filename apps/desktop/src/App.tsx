@@ -196,6 +196,7 @@ function App() {
     handleSelectProject,
     handleRemoveProject,
     setProjectSpace,
+    moveProject,
     retagSpace,
     canAnnounce,
     handleSelectBranch,
@@ -2757,6 +2758,7 @@ function App() {
       onRenameSpace={renameSpace}
       onRemoveSpace={removeSpace}
       onMoveSpace={moveSpaceBy}
+      onMoveProject={moveProject}
       autoHideSidebar={autoHideSidebar}
       onAutoHideSidebarChange={setAutoHideSidebar}
       integrations={integrations}

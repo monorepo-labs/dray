@@ -102,6 +102,7 @@ export default function SettingsPage({
   onRenameSpace,
   onRemoveSpace,
   onMoveSpace,
+  onMoveProject,
   autoHideSidebar,
   onAutoHideSidebarChange,
   integrations,
@@ -133,6 +134,7 @@ export default function SettingsPage({
   onRenameSpace: (from: string, to: string) => void;
   onRemoveSpace: (name: string) => void;
   onMoveSpace: (name: string, delta: number) => void;
+  onMoveProject: (path: string, delta: number) => void;
   /// Owned by `App` for the reason the update channel is: the effect that acts
   /// on this lives there, and a second `useLocalStorage` copy here would write
   /// a value that effect never sees.
@@ -194,6 +196,7 @@ export default function SettingsPage({
             onRenameSpace={onRenameSpace}
             onRemoveSpace={onRemoveSpace}
             onMoveSpace={onMoveSpace}
+            onMoveProject={onMoveProject}
           />
         ),
         accounts: <AccountsSettings cwd={cwd} />,

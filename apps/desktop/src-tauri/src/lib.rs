@@ -713,6 +713,7 @@ pub fn run() {
             projects::add_project,
             projects::remove_project,
             projects::set_last_selected_project,
+            projects::move_project,
             projects::set_project_space,
             projects::retag_space,
             git::list_branches,
