@@ -153,10 +153,7 @@ export function useResizable({
     writeLocalStorage(storageKey, next);
     if (fallbackKey) writeLocalStorage(fallbackKey, next);
   };
-  // Carries the key it began under: the key can move mid-drag (a session
-  // switched by chord with the button still held), and a drag begun on one
-  // session must not resize or save another.
-  const from = useRef<{ x: number; width: number; key: string } | null>(null);
+  const from = useRef<{ x: number; width: number } | null>(null);
 
   // One range for everything here, so what is drawn, what the keys move and
   // what assistive technology is told can never disagree. A CSS `max-width`
@@ -196,9 +193,9 @@ export function useResizable({
   // press live and every later pointer move resized the pane with nothing held
   // down. The write lands here because only the last frame is a preference.
   const end = () => {
-    const start = from.current;
+    if (!from.current) return;
     from.current = null;
-    if (start?.key === storageKey) save(width);
+    save(width);
   };
 
   // Arrows widen and narrow, Home resets: the pointer's three verbs, since a
@@ -226,11 +223,11 @@ export function useResizable({
         // same cure a session-row drag takes.
         e.preventDefault();
         e.currentTarget.setPointerCapture(e.pointerId);
-        from.current = { x: e.clientX, width, key: storageKey };
+        from.current = { x: e.clientX, width };
       }}
       onPointerMove={(e) => {
         const start = from.current;
-        if (start?.key !== storageKey) return;
+        if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
         setStored(clamp(start.width + moved));
       }}
