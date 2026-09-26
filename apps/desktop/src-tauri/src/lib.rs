@@ -678,6 +678,8 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_close,
             #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_move,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_nav,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_layout,

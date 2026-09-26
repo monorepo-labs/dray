@@ -39,7 +39,7 @@ pub struct Mapper {
     /// `session/new` is honoured, so the index id *is* the resume handle.
     session_id: String,
     seq: Arc<AtomicU64>,
-    turn_open: bool,
+    pub(super) turn_open: bool,
     /// The one block streaming right now. Neither chunk kind carries an id, so
     /// at most one is open and a chunk of the other kind closes it.
     open: Option<OpenBlock>,
@@ -343,7 +343,7 @@ impl Mapper {
             GrokUpdate::UserMessageChunk
             | GrokUpdate::ToolCallDeltaChunk
             | GrokUpdate::ResponseCompleted
-            | GrokUpdate::TurnCompleted
+            | GrokUpdate::TurnCompleted { .. }
             | GrokUpdate::ModelChanged
             | GrokUpdate::SessionSummaryGenerated
             | GrokUpdate::HookRunStarted

@@ -1329,6 +1329,62 @@ pub fn browser_activate(session_id: String, id: i32) -> Result<(), String> {
     })
 }
 
+/// Moves a tab to place `to` among its session's tabs, for drag-to-reorder,
+/// and answers with the new order. Off the main thread, since it touches no
+/// browser; `dray browser`'s tab list follows, both reading this order.
+#[tauri::command]
+pub fn browser_move(session_id: String, id: i32, to: usize) -> Vec<TabInfo> {
+    {
+        let mut tabs = TABS.lock().unwrap();
+        if let Some(from) = tabs.iter().position(|t| t.id == id && t.session == session_id) {
+            move_among(&mut tabs, from, to, |t| t.session == session_id);
+        }
+    }
+    // One snapshot for both the event and the reply, so the two never disagree
+    // about the order.
+    let tabs = tabs_of(&session_id);
+    if let Some(app) = APP.get() {
+        let _ = app.emit(
+            "browser_tabs",
+            TabsEvent { session_id: session_id.clone(), tabs: tabs.clone() },
+        );
+    }
+    tabs
+}
+
+/// Moves `v[from]` to place `to` among the items `mine` picks, leaving every
+/// other item where it is — `TABS` holds every session's tabs in one list.
+fn move_among<T>(v: &mut Vec<T>, from: usize, to: usize, mine: impl Fn(&T) -> bool) {
+    let item = v.remove(from);
+    let places: Vec<usize> = (0..v.len()).filter(|&i| mine(&v[i])).collect();
+    let at = match places.get(to) {
+        Some(&i) => i,
+        None => places.last().map_or(from, |&i| i + 1),
+    };
+    v.insert(at, item);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::move_among;
+
+    #[test]
+    fn moves_within_one_session_only() {
+        // a/b are two sessions interleaved in one list.
+        let mut v = vec!["a1", "b1", "a2", "b2", "a3"];
+        let a = |t: &&str| t.starts_with('a');
+        move_among(&mut v, 0, 2, a);
+        assert_eq!(v, ["b1", "a2", "b2", "a3", "a1"]);
+        move_among(&mut v, 4, 0, a);
+        assert_eq!(v, ["b1", "a1", "a2", "b2", "a3"]);
+        move_among(&mut v, 1, 1, a);
+        assert_eq!(v, ["b1", "a2", "b2", "a1", "a3"]);
+        let mut solo = vec!["a1"];
+        move_among(&mut solo, 0, 0, a);
+        assert_eq!(solo, ["a1"]);
+    }
+}
+
 /// Closes one tab. The rest happens in `on_before_close`.
 #[tauri::command]
 pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {

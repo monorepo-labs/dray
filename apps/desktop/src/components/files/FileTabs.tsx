@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { useDragReorder } from "@/hooks/useDragReorder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { tabLabels } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
@@ -28,22 +29,33 @@ export default function FileTabs({
   active,
   onSelect,
   onClose,
+  onMove,
   actions,
 }: {
   files: readonly OpenFile[];
   active: string | null;
   onSelect: (path: string) => void;
   onClose: (path: string) => void;
+  onMove: (path: string, delta: number) => void;
   /// Drawn at the row's end, past the scrolling strip — what acts on the file
   /// being read rather than on the row.
   actions?: ReactNode;
 }) {
-  const labels = tabLabels(files.map((file) => file.path));
+  const { list, shown, drag, start, offset } = useDragReorder(
+    files,
+    (file) => file.path,
+    (file, delta) => onMove(file.path, delta),
+    "x",
+  );
+  const labels = tabLabels(shown.map((file) => file.path));
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
-      <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        {files.map((file, i) => (
+      <div
+        ref={list}
+        className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+      >
+        {shown.map((file, i) => (
           <Tab
             key={file.path}
             path={file.path}
@@ -51,6 +63,10 @@ export default function FileTabs({
             active={file.path === active}
             onSelect={() => onSelect(file.path)}
             onClose={() => onClose(file.path)}
+            onPointerDown={(e) => start(e, i)}
+            transform={offset(i)}
+            held={drag?.from === i}
+            gliding={!!drag && drag.from !== i}
           />
         ))}
       </div>
@@ -65,12 +81,22 @@ function Tab({
   active,
   onSelect,
   onClose,
+  onPointerDown,
+  transform,
+  held,
+  gliding,
 }: {
   path: string;
   label: string;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
+  transform: string;
+  /// The tab in hand, mid-drag.
+  held: boolean;
+  /// A tab sliding aside for the one in hand.
+  gliding: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -105,11 +131,17 @@ function Tab({
         e.preventDefault();
         onClose();
       }}
+      onPointerDown={onPointerDown}
+      style={{ transform }}
       className={cn(
         "group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md py-1 pl-2 pr-1 text-ui transition-colors",
-        active
+        active || held
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-muted-foreground hover:text-foreground",
+        // The one in hand tracks the pointer exactly and draws over the tabs it
+        // passes; only those making room glide.
+        held && "relative z-10",
+        gliding && "transition-[color,background-color,transform] duration-150 ease-out",
       )}
     >
       <FileIcon path={path} className="size-3.5" />

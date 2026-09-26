@@ -532,11 +532,6 @@ export default function ModelSelector({
         // = 226. A sixth agent costs another 24 and wants this raised again —
         // or the hint dropped, which is what the fx arm below already does.
         className="w-[232px]"
-        // The trigger is also the tooltip trigger, so Radix returning focus to
-        // it on close reopens the tooltip on that focus and leaves it stuck
-        // until the next click. Don't refocus the trigger — the composer takes
-        // focus back on its own.
-        onCloseAutoFocus={(e) => e.preventDefault()}
       >
         {/* Not menu items: a segmented control says "one of these two" where
             two stacked rows would read as two more models. Plain buttons, so

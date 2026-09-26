@@ -212,6 +212,23 @@ export function activateTab(sessionId: string, id: number) {
   return invoke("browser_activate", { sessionId, id });
 }
 
+/// Moves a tab to place `to` in its session's strip.
+///
+/// The reply's *order* is applied before this resolves, since the strip drops
+/// its drawn order then and the `browser_tabs` event saying the same thing can
+/// land after the reply. Order alone, over the tabs already held: which tabs
+/// exist is the events' to say, since the reply may be older or newer than the
+/// last one to land. A held tab the reply lacks goes last until one does.
+export function moveTab(sessionId: string, id: number, to: number) {
+  return invoke<BrowserTab[]>("browser_move", { sessionId, id, to }).then((reply) => {
+    const place = new Map(reply.map((t, i) => [t.id, i]));
+    const held = tabsBySession.get(sessionId) ?? [];
+    const rank = (t: BrowserTab) => place.get(t.id) ?? reply.length;
+    tabsBySession.set(sessionId, [...held].sort((a, b) => rank(a) - rank(b)));
+    notify();
+  });
+}
+
 export function closeTab(sessionId: string, id: number) {
   return invoke("browser_close", { sessionId, id });
 }

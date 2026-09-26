@@ -74,7 +74,7 @@ import Sidebar, {
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
-import Crew, { CREW_W, CrewHint } from "@/components/Crew";
+import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -135,7 +135,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
-import { sidebarMove } from "@/lib/sidebarAuto";
+import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -281,6 +281,9 @@ function App() {
     "ade.autoHideSidebarInBrowser",
     true,
   );
+  // The right pane's half of the same bargain, its own switch since a reader
+  // may want the pane beside a page where the sidebar is only in the way.
+  const [autoHidePanel, setAutoHidePanel] = useLocalStorage("ade.autoHidePanelInBrowser", true);
   // Owned here for the same reason: `RightPanel`, the shell and the settings
   // row all read it.
   const [panelSide, setPanelSide] = useLocalStorage<PanelSide>("ade.panelSide", "right");
@@ -736,13 +739,18 @@ function App() {
   // The sidebar counts at its drawn width, since the panel yields to it and a
   // widened sidebar would otherwise leave the panel a sliver; floored at its
   // minimum, because narrowing the window clamps that width under it.
+  // Up to a 14" MacBook's width, an open panel stacks the crew even where the
+  // minimums fit: all four at their floors reads as cramped, not as fitting.
+  // That case still starts shown — it fits, it is only drawn somewhere else.
   const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
   const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
-  const crewBeside =
-    useViewportWidth() >=
+  const viewportW = useViewportWidth();
+  const crewFits =
+    viewportW >=
     CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (crewPanelOpen ? PANEL_MIN : 0);
+  const crewBeside = crewFits && !(crewPanelOpen && viewportW <= CREW_STACK_WITH_PANEL_W);
   const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
-  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewBeside);
+  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewFits);
   const crewUp = crewExists && !crewHidden;
   const crewDrawn = crewAvailable && !crewHidden;
 
@@ -1171,9 +1179,9 @@ function App() {
   const pendingBrowserTab = usePendingTab(selectedSessionId ?? "");
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
-  // on it closes the pane, every time and whatever tab the pane was on: the
-  // reader came for the full width. Nothing keeps it closed — ⌘E brings it
-  // back beside the page — and the next arrival closes it again.
+  // on it closes the pane, whatever tab the pane was on: the reader came for
+  // the full width. ⌘E brings it back beside the page, and leaving gives back
+  // a pane the arrival took — the sidebar's rule, under its own switch.
   const fullBrowserOpen = !issuesOpen && viewTab === "browser";
   const lastViewTab = useRef(viewTab);
   // Set only where arriving on the browser is what collapsed the sidebar, so
@@ -1181,10 +1189,29 @@ function App() {
   // drops the claim for the same reason: a sidebar they closed by hand while
   // reading a page is theirs, not ours to give back.
   const hidForBrowser = useRef(false);
+  // The pane's claims, one per pane key, since the pane is per session — see
+  // [panelMove](./lib/sidebarAuto.ts) for why one claim was not enough.
+  const panelHidForBrowser = useRef(new Set<string>());
+  const lastPanelKey = useRef(panelKey);
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
-    if (viewTab === "browser" && was !== "browser") setPanelOpen(false);
+    const keyMoved = lastPanelKey.current !== panelKey;
+    lastPanelKey.current = panelKey;
+
+    if (panelKey) {
+      const move = panelMove({
+        from: was,
+        to: viewTab,
+        keyMoved,
+        enabled: autoHidePanel,
+        open: panelOpen,
+        claimed: panelHidForBrowser.current.has(panelKey),
+      });
+      if (move === "hide") panelHidForBrowser.current.add(panelKey);
+      else if (move === "restore") panelHidForBrowser.current.delete(panelKey);
+      if (move) setPanelOpen(move === "restore");
+    }
 
     // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
     // pure and tested: `collapsed` is a dep this effect only *reads*, so the
@@ -1218,6 +1245,9 @@ function App() {
   }, [
     viewTab,
     setPanelOpen,
+    panelOpen,
+    panelKey,
+    autoHidePanel,
     collapsed,
     setCollapsed,
     autoHideSidebar,
@@ -1250,7 +1280,12 @@ function App() {
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
 
-  const togglePanel = () => setPanelOpen((prev) => !prev);
+  // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
+  // hand is the reader's.
+  const togglePanel = () => {
+    if (panelKey) panelHidForBrowser.current.delete(panelKey);
+    setPanelOpen((prev) => !prev);
+  };
 
   // Moves along the visible row, wrapping. Off `tabs` rather than `PANEL_TABS`,
   // so a session with no PR tab cycles through two and never lands on one that
@@ -2209,8 +2244,6 @@ function App() {
             active={!issuesOpen && viewTab === "chat"}
             chat={paneChat}
           />
-        ) : crewAvailable && !crewBeside ? (
-          <CrewHint />
         ) : undefined
       }
       sidebar={
@@ -2797,6 +2830,8 @@ function App() {
       onMoveProject={moveProject}
       autoHideSidebar={autoHideSidebar}
       onAutoHideSidebarChange={setAutoHideSidebar}
+      autoHidePanel={autoHidePanel}
+      onAutoHidePanelChange={setAutoHidePanel}
       panelSide={panelSide}
       onPanelSideChange={setPanelSide}
       integrations={integrations}

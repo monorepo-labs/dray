@@ -137,6 +137,16 @@ export function activateFile(sid: string | null, path: string) {
   write(sid, { active: path });
 }
 
+/// Moves a tab `delta` places along the strip, for drag-to-reorder.
+export function moveFile(sid: string | null, path: string, delta: number) {
+  if (!sid) return;
+  const open = [...state(sid).open];
+  const at = open.findIndex((file) => file.path === path);
+  if (at === -1) return;
+  open.splice(at + delta, 0, ...open.splice(at, 1));
+  write(sid, { open });
+}
+
 /// Closes a tab.
 ///
 /// Closing the active one activates its left-hand neighbour, or the right-hand

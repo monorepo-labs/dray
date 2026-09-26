@@ -32,3 +32,30 @@ export function sidebarMove({
   if (from === "browser") return claimed ? "restore" : null;
   return null;
 }
+
+/// The right pane's half of the same rule, which differs because the pane and
+/// the view tab are both per session: selecting another session moves the view
+/// without the claimed session ever leaving its page. So a claim is given back
+/// only once its own key is on screen off the Browser view, and a hide fires
+/// only on a key that stayed put — a session reached already on the Browser,
+/// pane open, is the reader returning to it rather than arriving.
+export function panelMove({
+  from,
+  to,
+  keyMoved,
+  enabled,
+  open,
+  claimed,
+}: {
+  from: ViewTab;
+  to: ViewTab;
+  /// The pane key changed this render: a session, group or crew switch.
+  keyMoved: boolean;
+  enabled: boolean;
+  open: boolean;
+  /// Arriving at the Browser is what closed this key's pane.
+  claimed: boolean;
+}): SidebarMove {
+  if (to !== "browser") return claimed ? "restore" : null;
+  return enabled && open && from !== "browser" && !keyMoved ? "hide" : null;
+}

@@ -23,6 +23,7 @@ import { useResizable } from "@/components/ResizeHandle";
 import {
   activateFile,
   closeFile,
+  moveFile,
   openInFiles,
   refreshOpenFiles,
   useOpenFiles,
@@ -242,6 +243,7 @@ export default function FilesView({
             active={activePath}
             onSelect={(path) => activateFile(sessionId, path)}
             onClose={(path) => closeFile(sessionId, path)}
+            onMove={(path, delta) => moveFile(sessionId, path, delta)}
             // The same split button the right panel hands a *directory* to,
             // wearing the file opener. On the tab row rather than over a header
             // of its own: it acts on the file being read, which the strip

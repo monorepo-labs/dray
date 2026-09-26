@@ -22,12 +22,14 @@ import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDragReorder } from "@/hooks/useDragReorder";
 import {
   activateTab,
   claimPresenter,
   closeTab,
   downloadChromium,
   listLocalServers,
+  moveTab,
   navigate,
   normalizeUrl,
   openDevTools,
@@ -288,6 +290,12 @@ function Chrome({
   // The agent's own tab verbs stay open, since a flow may cross tabs.
   const recording = useRecording(sessionId);
   const url = current?.url ?? "";
+  const reorder = useDragReorder(
+    tabs,
+    (tab) => tab.id,
+    (tab, _delta, to) => moveTab(sessionId, tab.id, to),
+    "x",
+  );
 
   // A new tab is for typing into.
   useEffect(() => {
@@ -312,10 +320,18 @@ function Chrome({
       {(tabs.length > 0 || pending) && (
         // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
         // a bar under them takes the height the tabs' own bottom edge needs.
-        <div className="flex h-8 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {tabs.map((tab) => (
+        <div
+          ref={reorder.list}
+          className="flex h-8 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {reorder.shown.map((tab, i) => (
             <TabButton
               key={tab.id}
+              // Not mid-recording, when the agent's tab numbers must hold still.
+              onPointerDown={recording ? undefined : (e) => reorder.start(e, i)}
+              transform={reorder.offset(i)}
+              held={reorder.drag?.from === i}
+              gliding={!!reorder.drag && reorder.drag.from !== i}
               active={tab.active && !pending}
               title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
               icon={<Favicon tab={tab} />}
@@ -522,6 +538,10 @@ function TabButton({
   locked = false,
   onPick,
   onClose,
+  onPointerDown,
+  transform,
+  held = false,
+  gliding = false,
 }: {
   active: boolean;
   title: string;
@@ -531,6 +551,13 @@ function TabButton({
   locked?: boolean;
   onPick: () => void;
   onClose: () => void;
+  /// Drag-to-reorder, on real tabs only.
+  onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  transform?: string;
+  /// The tab in hand, mid-drag.
+  held?: boolean;
+  /// A tab sliding aside for the one in hand.
+  gliding?: boolean;
 }) {
   const pick = locked ? undefined : onPick;
   return (
@@ -542,13 +569,21 @@ function TabButton({
       title={title}
       onClick={pick}
       onKeyDown={(e) => e.key === "Enter" && pick?.()}
+      onPointerDown={onPointerDown}
+      style={{ transform }}
       className={cn(
         "group/tab flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
         active
           ? "browser-tab-active bg-card text-foreground"
           : locked
             ? "text-muted-foreground opacity-50"
-            : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
+            : held
+              ? "bg-card/50 text-foreground"
+              : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
+        // The one in hand tracks the pointer and draws over the tabs it
+        // passes; only those making room glide.
+        held && "relative z-10",
+        gliding && "transition-transform duration-150 ease-out",
       )}
     >
       {icon}
