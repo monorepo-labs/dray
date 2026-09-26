@@ -158,11 +158,3 @@ export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
 export function hiddenChildren(items: SessionIndexItem[], parentId: string): SessionIndexItem[] {
   return items.filter((i) => i.hidden && i.parentSessionId === parentId && i.sessionId !== parentId);
 }
-
-/// Where a notice about `sessionId` should land: the parent for a hidden
-/// session, whose crew is where that session is drawn.
-export function noticeTarget(items: SessionIndexItem[], sessionId: string): string {
-  const item = items.find((i) => i.sessionId === sessionId);
-  const parent = item?.hidden && item.parentSessionId;
-  return parent && items.some((i) => i.sessionId === parent) ? parent : sessionId;
-}

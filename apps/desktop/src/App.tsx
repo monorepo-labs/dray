@@ -135,7 +135,7 @@ import { changeRange, lastToolResult, turnChangedTree } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows, crewSeen, inSidebar, noticeTarget } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen, inSidebar } from "@/lib/crew";
 import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
@@ -1728,7 +1728,8 @@ function App() {
     const gen = filterGen.current;
     if (!(await handleSelectSessionIndexItem(sessionId)) || !projectFilter) return;
     if (gen !== filterGen.current) return;
-    const path = sessionIndexItems.find((i) => i.sessionId === sessionId)?.projectPath;
+    const path = (await indexItem(sessionId))?.projectPath;
+    if (gen !== filterGen.current) return;
     // Outside the space, the space effect below closes it instead.
     if (!path || path === projectFilter || !sessionInSpace(projects, space, path)) return;
     const next = spaceProjects.some((p) => p.path === path) ? path : null;
@@ -1738,11 +1739,26 @@ function App() {
     if (next) handleSelectProject(next);
   };
 
+  /// A session's index entry from the loaded side, else from the backend: the
+  /// sidebar holds one side of the settled split, and a notice can name a
+  /// session on the other.
+  const indexItem = async (id: string) =>
+    sessionIndexItems.find((i) => i.sessionId === id) ??
+    (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: id }).catch(
+      () => null,
+    ));
+
+  /// A notice or banner click. A hidden session is drawn in its parent's crew,
+  /// so it opens the parent — where the parent still exists.
+  const openNotice = async (id: string) => {
+    const item = await indexItem(id);
+    const parent = item?.hidden && item.parentSessionId ? await indexItem(item.parentSessionId) : null;
+    await openFromNotice(parent?.sessionId ?? id);
+  };
+
   // A ref, since the listener is registered once and the handler reads state.
-  // A hidden session is drawn in its parent's crew, so its banner opens that.
-  const openBanner = (id: string) => openFromNotice(noticeTarget(sessionIndexItems, id));
-  const openFromNoticeRef = useRef(openBanner);
-  openFromNoticeRef.current = openBanner;
+  const openFromNoticeRef = useRef(openNotice);
+  openFromNoticeRef.current = openNotice;
   // The reader clicked a desktop banner. Rust has already raised the window.
   useEffect(() => {
     const unlisten = listen<string>("notification_activated", (event) => {
@@ -2846,7 +2862,7 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) => goToSession(() => void openFromNotice(noticeTarget(sessionIndexItems, id)))}
+      onSelect={(id) => goToSession(() => void openNotice(id))}
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a

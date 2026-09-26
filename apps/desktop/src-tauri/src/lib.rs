@@ -401,6 +401,13 @@ async fn work_status(cwd: String) -> git::WorkStatus {
     git::work_status(&cwd).await
 }
 
+/// One session's index entry, settled or not. The frontend holds one side of
+/// the settled split, so a notice about a session on the other side asks here.
+#[tauri::command]
+async fn session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
+    Ok(store::get_session_index_item(session_id).await?)
+}
+
 /// What removing this session's worktree would cost, for the dialog that asks.
 ///
 /// Answers for a session with no worktree too — an all-zero, `exists: false`
@@ -745,6 +752,7 @@ pub fn run() {
             delete_session,
             fork_session,
             worktree_disposition,
+            session_index_item,
             remove_session_worktree,
             mark_session_read,
             interrupt_session,

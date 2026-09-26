@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crewAnchor, crewRows, crewSeen, hiddenChildren, inSidebar, noticeTarget } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen, hiddenChildren, inSidebar } from "@/lib/crew";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
@@ -195,11 +195,5 @@ describe("hidden sessions", () => {
 
   it("names only the hidden children for a cascade", () => {
     expect(hiddenChildren(items, "a").map((i) => i.sessionId)).toEqual(["review"]);
-  });
-
-  it("sends a notice to the parent, and only where the parent is here", () => {
-    expect(noticeTarget(items, "review")).toBe("a");
-    expect(noticeTarget(items, "shown")).toBe("shown");
-    expect(noticeTarget(items, "orphan")).toBe("orphan");
   });
 });
