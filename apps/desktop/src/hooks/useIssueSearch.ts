@@ -39,7 +39,12 @@ const DEBOUNCE_MS = 200;
 /// assigning yourself an issue is a habit far fewer repositories have than
 /// Linear workspaces do, and the picker opened empty on repositories with
 /// plenty of open work in them.
-const queryFor = (text: string, tracker: IssueTracker, repo: string | null): IssueQuery => ({
+const queryFor = (
+  text: string,
+  tracker: IssueTracker,
+  repo: string | null,
+  workspace: string | null,
+): IssueQuery => ({
   tracker,
   text: text || null,
   scope: tracker === "github" ? "all" : "assigned",
@@ -47,6 +52,9 @@ const queryFor = (text: string, tracker: IssueTracker, repo: string | null): Iss
   projectId: null,
   label: null,
   settled: false,
+  // The workspace this session's project reads, so a tag picked here is one the
+  // send resolves in the same place. Under GitHub, nothing.
+  workspace: tracker === "linear" ? workspace : null,
 });
 
 /// What an empty picker says, in terms of why it is empty.
@@ -100,6 +108,8 @@ export function useIssueSearch(
   query: string | null,
   tracker: IssueTracker = "linear",
   cwd: string | null = null,
+  /// The Linear workspace the session's project reads, `null` for the default.
+  workspace: string | null = null,
 ): { issues: Issue[]; loading: boolean; emptyNote?: string } {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(false);
@@ -129,10 +139,13 @@ export function useIssueSearch(
   /// does not blank under somebody mid-word; they must not outlive a *tracker*
   /// switch, where they are another workspace's issues sitting under the chips
   /// that just moved.
-  const [shownTracker, setShownTracker] = useState(tracker);
+  // Keyed on the workspace too: moving to a session whose project reads another
+  // Linear workspace is the same switch one level down.
+  const shownKey = `${tracker}:${workspace ?? ""}`;
+  const [shownTracker, setShownTracker] = useState(shownKey);
 
-  if (shownTracker !== tracker) {
-    setShownTracker(tracker);
+  if (shownTracker !== shownKey) {
+    setShownTracker(shownKey);
     setIssues([]);
     showing.current = false;
   }
@@ -183,8 +196,8 @@ export function useIssueSearch(
     // Either is on screen for the frame the keystroke lands in, which is the
     // whole point — the read below then replaces it, since Linear matches
     // descriptions and this cannot.
-    const exact = cachedIssues(queryFor(query, tracker, repo ?? null));
-    const base = query ? cachedIssues(queryFor("", tracker, repo ?? null)) : undefined;
+    const exact = cachedIssues(queryFor(query, tracker, repo ?? null, workspace));
+    const base = query ? cachedIssues(queryFor("", tracker, repo ?? null, workspace)) : undefined;
     const painted = exact?.issues ?? (base && filterIssues(base.issues, query));
     if (painted) {
       setIssues(painted.slice(0, LIMIT));
@@ -206,7 +219,7 @@ export function useIssueSearch(
 
     setLoading(true);
 
-    const asked = queryFor(query, tracker, repo ?? null);
+    const asked = queryFor(query, tracker, repo ?? null, workspace);
 
     const run = () => {
       invoke<Issue[]>("list_issues", { query: asked, limit: ISSUE_LIST_LIMIT })
@@ -240,7 +253,7 @@ export function useIssueSearch(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, tracker, repo, github]);
+  }, [query, tracker, repo, github, workspace]);
 
   return {
     issues,

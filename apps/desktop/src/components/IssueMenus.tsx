@@ -28,7 +28,9 @@ import type { IssuePriority, IssueState } from "@/types/events";
 /// What a menu needs to name the issue it writes to. Satisfied by both `Issue`
 /// and `IssueDetail`, which is what lets one component serve a list row and an
 /// opened body without knowing which it has.
-type Target = { identifier: string; id: string };
+/// The workspace rides along so a write goes out with the key of the
+/// workspace the issue was read from.
+type Target = { identifier: string; id: string; workspace?: string | null; slot?: string };
 
 /// One row of a menu. The two menus differ only in what fills this, which is
 /// why the keyboard rule below is written once.

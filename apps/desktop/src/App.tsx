@@ -96,6 +96,7 @@ import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { offersFast } from "@/lib/fastMode";
+import { linearWorkspaces, projectForPath, workspaceFor, workspaceName } from "@/lib/linearWorkspace";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
@@ -199,6 +200,8 @@ function App() {
     handleSelectProject,
     handleRemoveProject,
     setProjectSpace,
+    setProjectLinearWorkspace,
+    reloadProjects,
     moveProject,
     retagSpace,
     canAnnounce,
@@ -385,7 +388,7 @@ function App() {
   // page's own connect form and the composer's placeholder all read it, and a
   // hook per surface is a second answer to "are we connected" free to disagree
   // with the first.
-  const integrations = useIntegrations(true);
+  const integrations = useIntegrations(true, reloadProjects);
   // Either one is enough to draw the page and open the picker: the two are
   // alternatives rather than halves of one connection, and a reader with only
   // `gh` signed in has issues to read.
@@ -1342,6 +1345,22 @@ function App() {
   // this follows where the prompt is actually going, and the two come apart the
   // moment a session is open in a project the reader has filtered away.
   const composerProject = selectedSession?.projectPath ?? projectPath;
+  /// Every connected Linear workspace, the default first.
+  const linearWorkspaceList = linearWorkspaces(integrations.integrations);
+  /// The Linear workspace the composer's project reads: its own pin, else its
+  /// space's, else the default. The `#` picker lists it and the issues page
+  /// opens on it, so a tag picked in either is one the send resolves in the
+  /// same place — Rust's `pinned_workspace` is the other statement of this.
+  const composerLinearWorkspace = useMemo(
+    () =>
+      workspaceFor(
+        projectForPath(projects, composerProject),
+        integrations.integrations?.linearSpacePins ?? {},
+        linearWorkspaceList,
+      ).id,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projects, composerProject, integrations.integrations],
+  );
   const composerSessions = useMemo(
     () =>
       sessionIndexItems.filter(
@@ -1838,6 +1857,8 @@ function App() {
     // that happened to take the name.
     setGroups((prev) => prev.map((g) => (g.space === from ? { ...g, space: to } : g)));
     if (storedSpace === from) setStoredSpace(to);
+    // Its Linear pin moved with it in Rust, which nothing here saw.
+    integrations.reload();
   };
 
   /// Removes a space and files its projects under none. The projects and their
@@ -1849,6 +1870,7 @@ function App() {
     // Its groups go where its projects go: under none, which is every project.
     setGroups((prev) => prev.map((g) => (g.space === name ? { ...g, space: null } : g)));
     if (storedSpace === name) changeSpace(null);
+    integrations.reload();
   };
 
   /// Keeps what is *on screen* inside the active space — the composer's project
@@ -1895,6 +1917,13 @@ function App() {
 
   /// The sidebar's own "New space", which is a request for the field rather
   /// than for a space — naming it is Settings' job, so this only opens the tab.
+  /// Where a second Linear workspace is added: the connect pane is for the
+  /// reader with none, and "another" belongs beside the list it adds to.
+  const openLinearSettings = () => {
+    setSettingsTab("integrations");
+    setSettingsOpen(true);
+  };
+
   const openNewSpace = () => {
     setSettingsTab("spaces");
     setNamingSpace(true);
@@ -1908,7 +1937,31 @@ function App() {
   /// prompt text on send, so nothing is linked here. It lands in the composer
   /// rather than starting a session, which is what leaves the project, the
   /// model and the harness still to be picked.
-  const workOnIssue = (issue: { identifier: string; title: string }) => {
+  const workOnIssue = (issue: { identifier: string; title: string; workspace?: string | null }) => {
+    // A tag carries no workspace, and the send resolves it in the one the new
+    // task's project reads. From a page switched to another workspace that is
+    // the wrong issue wherever both hold the identifier — so say so rather
+    // than draft a tag that links something else.
+    const target = workspaceFor(
+      projectForPath(projects, projectPath),
+      integrations.integrations?.linearSpacePins ?? {},
+      linearWorkspaceList,
+    ).id;
+    // `target` is null where the project reads a default Linear never
+    // identified — and an issue carrying a workspace was read from one that
+    // was identified, so it is another workspace's all the same.
+    if (issue.workspace && issue.workspace !== target) {
+      const project = projectForPath(projects, projectPath)?.name ?? "This project";
+      pushNotice({
+        sessionId: issue.identifier,
+        kind: "issue-failed",
+        label: "Could not start work",
+        subject: issue.identifier,
+        detail: `${issue.identifier} is in ${workspaceName(linearWorkspaceList, issue.workspace)}, but ${project} reads ${workspaceName(linearWorkspaceList, target)}. Pin it to that workspace in Settings first.`,
+      });
+      return;
+    }
+
     goToSession(handleNewSession);
     // The same two things the `#` picker's own pick does, and the draft reads
     // as prose without either. **The title is remembered**, since nothing
@@ -2635,6 +2688,7 @@ function App() {
           commands={slashCommands}
           commandsLoading={slashCommandsLoading}
           cwd={composerCwd}
+          linearWorkspace={composerLinearWorkspace}
           onStop={handleInterrupt}
           onCancelQueued={handleCancelQueued}
           onCancelRecording={() => {
@@ -2784,6 +2838,10 @@ function App() {
           connecting={integrations.busy}
           connectError={integrations.error}
           onRecheckGithub={integrations.recheckGithub}
+          linearWorkspaces={linearWorkspaceList}
+          projectWorkspace={composerLinearWorkspace}
+          project={composerProject ?? null}
+          onAddWorkspace={openLinearSettings}
         />
         </MountOnce>
       </TabBody>
@@ -2930,6 +2988,7 @@ function App() {
       spaces={spaces}
       startNamingSpace={namingSpace}
       onSetProjectSpace={setProjectSpace}
+      onSetProjectLinearWorkspace={setProjectLinearWorkspace}
       onRemoveProject={handleRemoveProject}
       onCreateSpace={createSpace}
       onRenameSpace={renameSpace}

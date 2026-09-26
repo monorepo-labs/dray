@@ -28,6 +28,13 @@ pub struct Project {
     /// leaving takes it with them.
     #[serde(default)]
     pub space: Option<String>,
+    /// The Linear workspace (`organization.id`) this project reads, where it
+    /// pins its own. `None` reads its Space's pin, then the default — see
+    /// [`crate::issues::pinned_workspace`]. A tag on the project and nothing
+    /// else, the same kind of record `space` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub linear_workspace: Option<String>,
     /// Which project launch reopens, and nothing else. It was the sort key too,
     /// which moved every picker's rows on each pick; order is now the file's
     /// own, set by the reader in Settings.
@@ -83,6 +90,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
             name: basename(&path),
             path,
             space: None,
+            linear_workspace: None,
             last_selected: now,
         }),
     }
@@ -142,6 +150,26 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
     Ok(projects)
 }
 
+/// Pins a project to a Linear workspace, or clears its own pin with `None` so
+/// it reads its Space's again.
+#[tauri::command]
+pub async fn set_project_linear_workspace(
+    path: &str,
+    workspace: Option<String>,
+) -> Result<Vec<Project>, Fail> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    let Some(i) = projects.iter().position(|p| p.path == path) else {
+        return Ok(projects);
+    };
+
+    projects[i].linear_workspace = workspace.filter(|w| !w.is_empty());
+    write_projects(&projects).await?;
+
+    Ok(projects)
+}
+
 /// Steps a project `delta` places in the order every picker draws. Past either
 /// end is a no-op rather than a wrap, matching the spaces list beside it.
 #[tauri::command]
@@ -154,6 +182,40 @@ pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail
     }
 
     Ok(projects)
+}
+
+/// Clears every project's pin to a workspace being disconnected, so a
+/// reconnect later starts from the default rather than reviving pins the reader
+/// saw go.
+pub async fn clear_linear_workspace(workspace: &str) -> Result<()> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    let mut cleared = false;
+    for project in &mut projects {
+        if project.linear_workspace.as_deref() == Some(workspace) {
+            project.linear_workspace = None;
+            cleared = true;
+        }
+    }
+
+    if cleared {
+        write_projects(&projects).await?;
+    }
+    Ok(())
+}
+
+/// The attached project a directory sits in: the longest project path it is
+/// under, so a worktree at `<project>/.claude/worktrees/<name>` answers its
+/// project. By path component, never by string prefix, or `/x/app` would claim
+/// `/x/app-web`.
+pub fn project_for_dir<'a>(projects: &'a [Project], dir: &str) -> Option<&'a Project> {
+    let dir = std::path::Path::new(dir);
+
+    projects
+        .iter()
+        .filter(|project| dir.starts_with(&project.path))
+        .max_by_key(|project| project.path.len())
 }
 
 /// The edit [`move_project`] makes, split from the file so it can be tested.
@@ -207,11 +269,55 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
 
+    // The Space's Linear pin follows it, and is moved even where no project
+    // carried the tag: a Space can be pinned before anything is filed in it.
+    // **First**, so a failed move fails the rename before any tag changes —
+    // the pin and the tags land together or neither does, and the caller's
+    // record of spaces follows either way. A rename onto a Space that has its
+    // own pin keeps that one.
+    let to_name = normalize_space(to.clone());
+    // What the move actually did, recorded inside the settings write itself:
+    // a reading taken before it can be stale by the time a rollback needs it.
+    let mut moved: Option<String> = None;
+    let mut placed = false;
+    if crate::settings::read().await.linear_space_pins.contains_key(from) {
+        crate::settings::update(|next| {
+            if let Some(pin) = next.linear_space_pins.remove(from) {
+                if let Some(to) = to_name.as_ref().filter(|to| !next.linear_space_pins.contains_key(*to)) {
+                    next.linear_space_pins.insert(to.clone(), pin.clone());
+                    placed = true;
+                }
+                moved = Some(pin);
+            }
+        })
+        .await?;
+    }
+
     // A space nobody had filled yet carries no tag, so changing nothing is the
     // ordinary path for renaming one — and a rewrite that moves no value is one
     // every other reader of this file has to survive for no reason.
     if retag(&mut projects, from, to) {
-        write_projects(&projects).await?;
+        if let Err(e) = write_projects(&projects).await {
+            // Put the pin back where the tags still are. The destination loses
+            // only the pin this rename placed there, and only while it is
+            // still that one: a pin set on it since is somebody's own choice.
+            // Nor does the source lose a pin set on it since.
+            if let Some(pin) = moved {
+                let undone = crate::settings::update(|next| {
+                    if let Some(to) = to_name.as_ref().filter(|_| placed) {
+                        if next.linear_space_pins.get(to) == Some(&pin) {
+                            next.linear_space_pins.remove(to);
+                        }
+                    }
+                    next.linear_space_pins.entry(from.to_string()).or_insert(pin);
+                })
+                .await;
+                if let Err(undo) = undone {
+                    eprintln!("[settings write err] space pin not put back: {undo:#}");
+                }
+            }
+            return Err(e.into());
+        }
     }
 
     Ok(projects)
@@ -246,8 +352,31 @@ mod tests {
             path: path.into(),
             name: path.into(),
             space: space.map(Into::into),
+            linear_workspace: None,
             last_selected: "2026-08-01T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn a_worktree_belongs_to_the_project_it_sits_in() {
+        let projects = vec![filed("/x/app", None), filed("/x/app-web", None)];
+
+        let at = |dir| project_for_dir(&projects, dir).map(|p| p.path.as_str());
+        assert_eq!(at("/x/app"), Some("/x/app"));
+        assert_eq!(at("/x/app/.claude/worktrees/bold-fox"), Some("/x/app"));
+        // A string prefix would hand this to `/x/app`.
+        assert_eq!(at("/x/app-web/src"), Some("/x/app-web"));
+        assert_eq!(at("/elsewhere"), None);
+    }
+
+    #[test]
+    fn the_innermost_project_wins() {
+        let projects = vec![filed("/x", None), filed("/x/inner", None)];
+
+        assert_eq!(
+            project_for_dir(&projects, "/x/inner/src").map(|p| p.path.as_str()),
+            Some("/x/inner")
+        );
     }
 
     #[test]

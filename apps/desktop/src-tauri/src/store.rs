@@ -1046,11 +1046,7 @@ pub async fn set_session_flags(
 /// sidebar, and tagging must not jump the row to the top of it.
 pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec<IssueRef>> {
     update_item(session_id, |item| {
-        match item.issues.iter_mut().find(|linked| {
-            linked.tracker == issue.tracker
-                && (linked.id == issue.id
-                    || linked.identifier.eq_ignore_ascii_case(&issue.identifier))
-        }) {
+        match item.issues.iter_mut().find(|linked| same_issue(linked, &issue)) {
             Some(existing) => *existing = issue,
             None => item.issues.push(issue),
         }
@@ -1058,6 +1054,53 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
     })
     .await?
     .with_context(|| format!("no such session: {session_id}"))
+}
+
+/// Whether two links name one issue: same tracker, same id or identifier, and
+/// not two different Linear workspaces — `ENG-12` can exist in both. A link
+/// with no workspace matches either, since it was written before there could be
+/// two or by a build that dropped the field.
+fn same_issue(a: &IssueRef, b: &IssueRef) -> bool {
+    let other_workspace = matches!(
+        (a.workspace.as_deref(), b.workspace.as_deref()),
+        (Some(x), Some(y)) if x != y
+    );
+
+    a.tracker == b.tracker
+        && !other_workspace
+        && (a.id == b.id || a.identifier.eq_ignore_ascii_case(&b.identifier))
+}
+
+/// Removes the one link with this id in this workspace — `None` meaning a link
+/// that names no workspace, never "any". The panel's unlink, which holds the
+/// whole link it drew; `dray issue unlink` goes through
+/// [`unlink_session_issue`], which matches as loosely as its caller spoke.
+pub async fn unlink_exact_session_issue(
+    session_id: &str,
+    id: &str,
+    workspace: Option<&str>,
+) -> Result<Vec<IssueRef>> {
+    update_item(session_id, |item| {
+        item.issues.retain(|linked| !is_link(linked, id, workspace));
+        item.issues.clone()
+    })
+    .await?
+    .with_context(|| format!("no such session: {session_id}"))
+}
+
+/// Whether this is the link with `id` in `workspace`, exactly.
+fn is_link(linked: &IssueRef, id: &str, workspace: Option<&str>) -> bool {
+    linked.id == id && linked.workspace.as_deref() == workspace
+}
+
+/// Whether an unlink of `key` in `workspace` takes this link.
+fn unlinks(linked: &IssueRef, key: &str, workspace: Option<&str>) -> bool {
+    let named = linked.id == key || linked.identifier.eq_ignore_ascii_case(key);
+    let elsewhere = matches!(
+        (linked.workspace.as_deref(), workspace),
+        (Some(x), Some(y)) if x != y
+    );
+    named && !elsewhere
 }
 
 /// Removes one link, matched on the tracker's own id *or* the human
@@ -1069,10 +1112,18 @@ pub async fn link_session_issue(session_id: &str, issue: IssueRef) -> Result<Vec
 ///
 /// A key the session never carried is not an error: the caller asked for it to
 /// be gone, and it is.
-pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<IssueRef>> {
+///
+/// `workspace` keeps apart what [`same_issue`] keeps apart: `ENG-12` from two
+/// Linear workspaces is two links, and removing one must leave the other. A
+/// caller naming no workspace — `dray issue unlink ENG-12` with no `--url` —
+/// removes every link it matches, having said nothing narrower.
+pub async fn unlink_session_issue(
+    session_id: &str,
+    key: &str,
+    workspace: Option<&str>,
+) -> Result<Vec<IssueRef>> {
     update_item(session_id, |item| {
-        item.issues
-            .retain(|linked| linked.id != key && !linked.identifier.eq_ignore_ascii_case(key));
+        item.issues.retain(|linked| !unlinks(linked, key, workspace));
         item.issues.clone()
     })
     .await?
@@ -2879,6 +2930,51 @@ mod tests {
         );
 
         assert_eq!(max_seq(""), None);
+    }
+
+    fn linked(identifier: &str, workspace: Option<&str>) -> IssueRef {
+        IssueRef {
+            tracker: crate::issues::IssueTracker::Linear,
+            id: format!("uuid-{identifier}-{workspace:?}"),
+            identifier: identifier.into(),
+            title: String::new(),
+            url: String::new(),
+            workspace: workspace.map(Into::into),
+        }
+    }
+
+    /// `ENG-12` can exist in two Linear workspaces, and linking one must not
+    /// overwrite the other's row.
+    #[test]
+    fn one_identifier_in_two_workspaces_is_two_links() {
+        assert!(!same_issue(&linked("ENG-12", Some("a")), &linked("ENG-12", Some("b"))));
+        assert!(same_issue(&linked("ENG-12", Some("a")), &linked("eng-12", Some("a"))));
+        // A link from before there were workspaces could be either.
+        assert!(same_issue(&linked("ENG-12", None), &linked("ENG-12", Some("b"))));
+    }
+
+    #[test]
+    fn unlinking_one_workspace_leaves_the_other() {
+        let a = linked("ENG-12", Some("a"));
+        let b = linked("ENG-12", Some("b"));
+
+        assert!(unlinks(&a, "ENG-12", Some("a")));
+        assert!(!unlinks(&b, "ENG-12", Some("a")));
+        // Named by no workspace, it takes every link it matches.
+        assert!(unlinks(&a, "ENG-12", None) && unlinks(&b, "ENG-12", None));
+        assert!(!unlinks(&a, "ENG-13", Some("a")));
+    }
+
+    /// The panel's unlink takes the row it drew and nothing else — a link
+    /// with no workspace is its own row, not a wildcard.
+    #[test]
+    fn the_panel_unlinks_exactly_one_row() {
+        let blind_old = IssueRef { id: "ENG-12".into(), ..linked("ENG-12", None) };
+        let blind_a = IssueRef { id: "ENG-12".into(), ..linked("ENG-12", Some("a")) };
+
+        assert!(is_link(&blind_old, "ENG-12", None));
+        assert!(!is_link(&blind_a, "ENG-12", None));
+        assert!(is_link(&blind_a, "ENG-12", Some("a")));
     }
 }
 

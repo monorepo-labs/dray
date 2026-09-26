@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { Download, File } from "lucide-react";
@@ -32,6 +32,12 @@ import type { IssueAsset } from "@/types/events";
 /// under, and one from an older generation is a miss: connecting a key, and
 /// pressing Refresh, each bump it.
 type Cached = { generation: number; asset: IssueAsset | null };
+
+/// The Linear workspace of the issue whose description is being drawn, so an
+/// upload goes out with that workspace's key first. Context rather than a prop
+/// because the cards below are markdown renderers, handed only the element's
+/// own attributes. `null` lets Rust try each connected key in turn.
+export const IssueWorkspaceContext = createContext<string | null>(null);
 
 const cache = new Map<string, Cached>();
 const inFlight = new Map<string, Promise<IssueAsset | null>>();
@@ -69,7 +75,7 @@ function cached(url: string): Cached | undefined {
   return entry;
 }
 
-function load(url: string): Promise<IssueAsset | null> {
+function load(url: string, workspace: string | null): Promise<IssueAsset | null> {
   const entry = cached(url);
   if (entry) return Promise.resolve(entry.asset);
 
@@ -83,7 +89,7 @@ function load(url: string): Promise<IssueAsset | null> {
   // than an answer standing in for one nobody has asked for yet.
   const generation = issueGeneration();
 
-  const request = invoke<IssueAsset>("fetch_issue_asset", { url })
+  const request = invoke<IssueAsset>("fetch_issue_asset", { url, workspace })
     .catch(() => null)
     .then((asset) => {
       remember(url, { generation, asset });
@@ -96,6 +102,7 @@ function load(url: string): Promise<IssueAsset | null> {
 }
 
 function useAsset(url: string): { asset: IssueAsset | null; loading: boolean } {
+  const workspace = useContext(IssueWorkspaceContext);
   const [asset, setAsset] = useState<IssueAsset | null>(() => cached(url)?.asset ?? null);
   const [loading, setLoading] = useState(() => !cached(url));
 
@@ -113,7 +120,7 @@ function useAsset(url: string): { asset: IssueAsset | null; loading: boolean } {
 
     let live = true;
     setLoading(true);
-    void load(url).then((next) => {
+    void load(url, workspace).then((next) => {
       if (!live) return;
       setAsset(next);
       setLoading(false);
@@ -122,7 +129,7 @@ function useAsset(url: string): { asset: IssueAsset | null; loading: boolean } {
     return () => {
       live = false;
     };
-  }, [url, generation]);
+  }, [url, workspace, generation]);
 
   return { asset, loading };
 }

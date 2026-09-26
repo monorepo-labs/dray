@@ -567,7 +567,7 @@ impl SessionManager {
         // event so the tag draws as a button, `linked` is written onto the
         // session and holds only what a caller named outright. See
         // [`issues::expand_tags`].
-        let expanded = issues::expand_tags(prompt, issue_ids).await;
+        let expanded = issues::expand_tags(prompt, issue_ids, cwd).await;
         let prompt = expanded.prompt.as_str();
         let issues = &expanded.mentioned;
         let linked_issues = &expanded.linked;

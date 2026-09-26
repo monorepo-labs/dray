@@ -13,13 +13,13 @@ import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import AppIcon from "@/components/AppIcon";
-import LinearIcon from "@/components/LinearIcon";
 import rauchgAvatar from "@/assets/avatars/rauchg.jpg";
 import type { PanelSide } from "@/components/RightPanel";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
 import ThemeSwatches, { useRovingGroup } from "@/components/ThemeSwatches";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
+import LinearWorkspaces from "@/components/settings/LinearWorkspaces";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -98,6 +98,7 @@ export default function SettingsPage({
   spaces,
   startNamingSpace,
   onSetProjectSpace,
+  onSetProjectLinearWorkspace,
   onRemoveProject,
   onCreateSpace,
   onRenameSpace,
@@ -134,6 +135,8 @@ export default function SettingsPage({
   /// the sidebar's own "New space" lands.
   startNamingSpace?: boolean;
   onSetProjectSpace: (path: string, space: string | null) => void;
+  /// Pins a project to a Linear workspace, or clears its own pin with `null`.
+  onSetProjectLinearWorkspace: (path: string, workspace: string | null) => void;
   onRemoveProject: (path: string) => void;
   onCreateSpace: (name: string) => void;
   onRenameSpace: (from: string, to: string) => void;
@@ -229,15 +232,22 @@ export default function SettingsPage({
           />
         ),
         integrations: (
-          <Section>
-            <OpenFilesRow />
-            <BrowserRow />
+          <>
+            <Section>
+              <OpenFilesRow />
+              <BrowserRow />
+            </Section>
             {/* Draws nothing until something is connected, which is why it
-                carries no heading of its own — a heading left standing over
-                nothing names a group the reader cannot reach. Connecting
-                happens on the issues page. */}
-            <IssueTrackerRow {...integrations} />
-          </Section>
+                carries no section of its own — a heading left standing over
+                nothing names a group the reader cannot reach. Connecting the
+                first workspace happens on the issues page. */}
+            <LinearWorkspaces
+              integrations={integrations}
+              projects={projects}
+              spaces={spaces}
+              onSetProjectWorkspace={onSetProjectLinearWorkspace}
+            />
+          </>
         ),
         about: (
           <>
@@ -870,73 +880,6 @@ function BrowserRow() {
         </Button>
       )}
     </SettingRow>
-  );
-}
-
-/// The connected issue tracker — and **only** when there is one.
-///
-/// Connecting happens on the issues page, not here. That page is the surface
-/// with nothing to show without a key, so it is where the field that fixes it
-/// belongs; a second copy in this page would be a second form for one slot,
-/// and a settings row offering to connect something the reader has never seen
-/// is a row they cannot judge. What is left here is what settings are actually
-/// for: seeing what is connected, and taking it back.
-function IssueTrackerRow({
-  integrations,
-  busy,
-  error,
-  disconnect,
-}: ReturnType<typeof useIntegrations>) {
-  const id = useId();
-  /// The button arms a confirm that replaces it — the same shape the sidebar's
-  /// delete and the PR panel's merge use. Asked for because the key is not
-  /// recoverable from here: taking it back means finding the tracker's own
-  /// settings page and minting a new one, which is a long way to be sent by a
-  /// button pressed on the way to somewhere else.
-  const [confirming, setConfirming] = useState(false);
-
-  const account = integrations?.linear ?? null;
-
-  // Nothing connected is nothing to say. The reader is not missing a control:
-  // the Issues page in the sidebar is where this starts.
-  if (!account) return null;
-
-  return (
-    <div className="flex flex-col gap-2">
-        <SettingRow
-          id={id}
-          label="Issue tracker"
-          description={
-            confirming
-              ? "Dray will forget the key. Sessions keep the issues they are tagged with."
-              : // The mark rather than the word, since the word is already the row's
-                // subject — and it is what makes this row findable at a glance in a
-                // dialog of sentences.
-                <span className="flex items-center gap-1.5">
-                  <LinearIcon className="size-3.5" />
-                  {account.orgName}, as {account.userName}
-                </span>
-          }
-        >
-          {confirming ? (
-            <CancelOrConfirm
-              verb="Disconnect"
-              busy={busy}
-              onCancel={() => setConfirming(false)}
-              onConfirm={async () => {
-                await disconnect();
-                setConfirming(false);
-              }}
-            />
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
-              Disconnect
-            </Button>
-          )}
-        </SettingRow>
-
-      {error && <p className="text-ui text-destructive">{error}</p>}
-    </div>
   );
 }
 

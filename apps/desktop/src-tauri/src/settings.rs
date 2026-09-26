@@ -50,8 +50,34 @@ pub struct AppSettings {
     /// what saves a round trip to draw a name in the settings row. It is
     /// therefore not the connection: an account here with no key behind it
     /// reads as disconnected. See [`crate::issues::get_integrations`].
+    ///
+    /// The **default** Linear workspace's, since there can be several. Kept
+    /// beside `linear_workspaces` rather than folded into it because an older
+    /// build reads this field alone.
     #[serde(default)]
     pub linear_account: Option<TrackerAccount>,
+    /// A fingerprint of the key `linear_account` was learned from — never the
+    /// key. The default slot's key can change without this file hearing of it
+    /// (a settings write failing after the credential write, an older build
+    /// reconnecting), and an account trusted for a key it does not describe
+    /// stamps one workspace's issues as another's. A mismatch is re-verified.
+    #[serde(default)]
+    pub linear_account_key: Option<String>,
+    /// Whose each connected Linear workspace's key is, default included.
+    ///
+    /// A cache and nothing more: `credentials.json` says what is connected. An
+    /// older build rewriting this file drops the field — nothing here carries
+    /// fields it cannot spell — and the next read asks Linear again.
+    #[serde(default)]
+    pub linear_workspaces: Vec<TrackerAccount>,
+    /// Space name → the Linear workspace (`organization.id`) its projects read.
+    ///
+    /// Here rather than in local storage beside the Space list because Rust
+    /// reads it: a tag in a prompt is resolved in `send_msg`, with no frontend
+    /// to ask. Lost to an older build the same way as the field above, which
+    /// costs the pin and nothing else — its projects fall back to the default.
+    #[serde(default)]
+    pub linear_space_pins: std::collections::BTreeMap<String, String>,
     /// Which speech-to-text model and microphone to use.
     ///
     /// Here rather than in the webview's local storage, unlike every other
@@ -106,6 +132,9 @@ impl Default for AppSettings {
             analytics_enabled: enabled_by_default(),
             install_id: None,
             linear_account: None,
+            linear_account_key: None,
+            linear_workspaces: Vec::new(),
+            linear_space_pins: Default::default(),
             transcription: TranscriptionSettings::default(),
         }
     }
@@ -352,6 +381,9 @@ mod tests {
             analytics_enabled: false,
             install_id: Some("2f1c…".into()),
             linear_account: None,
+            linear_account_key: None,
+            linear_workspaces: Vec::new(),
+            linear_space_pins: [("Work".to_string(), "org-1".to_string())].into(),
             transcription: TranscriptionSettings::default(),
         };
 

@@ -179,6 +179,26 @@ two unrelated workspaces under one set of headings with no ordering meaning
 anything across them, since a Linear issue carries a priority and a GitHub one
 does not.
 
+**Workspace menu**, beside the filters, drawn only under Linear with **two or
+more workspaces** connected — Linear's mark and the workspace's name, filled
+like a scope chip
+
+> Workspace
+> {Acme}
+> {JangoAI}
+> Add workspace…
+
+The page opens on the workspace the composer's project reads, and this switches
+it for the visit only — it changes no pin, which is a Settings question. The
+last row opens Settings, since that is where a second key is pasted.
+
+**Work on it, from a workspace the new task's project does not read** — a tag
+carries no workspace and would resolve in the project's own, so the page says so
+instead of drafting a tag that links another issue
+
+> Could not start work
+> {ENG-12} is in {JangoAI}, but {jangoai-ios} reads {Acme}. Pin it to that workspace in Settings first.
+
 **Scope chips**
 
 > Assigned to me
@@ -333,7 +353,7 @@ this one stays a sentence and names what makes a project count
 
 **Failed read, above the list** (what was already read stays on screen)
 
-> Linear rejected the saved key. Disconnect it in Settings, then paste a new one.
+> Linear rejected the key saved for this workspace. Disconnect it in Settings, then add a new one.
 > Could not reach Linear.
 > No issue tracker connected.
 
@@ -514,7 +534,7 @@ they could not be fetched:
 **Failed read**
 
 > Connect a tracker on the Issues page to see this issue.
-> Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.
+> Linear rejected the key saved for this workspace. Disconnect it in Settings, then add it again with a new key.
 > Could not reach Linear.
 
 The first names neither tracker, because this row can be either: a session
@@ -567,31 +587,80 @@ header would otherwise sit at "New session" over a list of issues.
 
 ---
 
-## Settings dialog
+## Settings dialog — Linear workspaces
 
-Drawn **only when something is connected** — connecting happens on the Issues
-page, and a settings row offering to connect something the reader has never seen
-is a row they cannot judge.
+Drawn **only when a workspace is connected** — the first one is connected on the
+Issues page, and a settings row offering to connect something the reader has
+never seen is a row they cannot judge. Every later one is added here, beside the
+list it adds to.
 
-**Label**
+**Heading**, with Linear's mark
 
-> Issue tracker
+> Linear workspaces
 
-**Subtext** — with Linear's mark beside it
+**Button**, at the heading's far end
 
-> {Acme}, as {Yogesh}
+> Add workspace
 
-**Button**
+**Which opens a field in place** — a key belongs to one workspace, so which one
+is added is whichever the key was made in, and the placeholder says so since
+there is no workspace picker to say it
 
+> lin_api_… from the workspace to add
+> Cancel
+> Connect
+
+The field's accessible name
+
+> Linear API key
+
+**Refused** — Linear answered with no workspace, which a personal key always has
+
+> Linear did not say which workspace that key belongs to.
+
+**One row per workspace**, the default first and marked
+
+> {Acme} Default
+> as {Yogesh}
+
+**A key Linear has not answered for** still lists, under what is known about it,
+since its row is where it is disconnected — including a default with no id,
+which Disconnect reaches by being the default
+
+> Linear has not answered for this key. Disconnect it, then add a new one.
+
+**Buttons** — the first only on a workspace that is not the default
+
+> Make default
 > Disconnect
 
-**Once pressed**, the row asks before it acts — the key is not recoverable from
-here, so taking it back means a trip to Linear for a new one.
+**Once Disconnect is pressed**, the row asks before it acts — the key is not
+recoverable from here, and every pin naming the workspace goes with it
 
-> Dray will forget the key. Sessions keep the issues they are tagged with.
+> Dray will forget this key and every pin to it. Sessions keep their issues.
 
 > Cancel
 > Disconnect
+
+**Make default refused** — the workspace went away, the current default was never
+identified, or a disconnect landed while the swap was saving
+
+> That Linear workspace is not connected.
+> Linear has not said which workspace {Acme}'s key belongs to. Disconnect it first.
+> The Linear workspaces changed while that was saving. Try again.
+
+**Spaces** — drawn with two or more workspaces and at least one Space
+
+> Spaces
+> Every project in a Space reads its workspace, unless the project picks its own.
+> Default ({Acme})
+
+**Projects** — drawn with two or more workspaces. The first row of each menu
+says what the project reads with no pin of its own, and from where
+
+> Projects
+> From {Jango AI} ({JangoAI})
+> Default ({Acme})
 
 ---
 
