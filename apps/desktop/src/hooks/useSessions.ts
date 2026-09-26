@@ -2382,18 +2382,6 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   // turns green and the turn itself stays unread — so that one still announces.
   if (kind === "asking" && crewSeenRef.current.has(sessionId)) return true;
 
-  // A hidden session finishing while its parent is up: the card would only
-  // open the parent the reader is already on, and a review turning in is not
-  // worth one. Sound alone, and still unread, so the crew row goes green.
-  const hidden = item ?? sessionsRef.current.find((s) => s.sessionId === sessionId);
-  if (
-    kind === "completed" &&
-    hidden?.hidden &&
-    (hidden.parentSessionId === selectedSessionIdRef.current || crewSeenRef.current.has(sessionId))
-  ) {
-    return false;
-  }
-
   pushNotice({ sessionId, kind, label });
   return false;
 };
