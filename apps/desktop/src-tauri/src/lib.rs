@@ -165,8 +165,9 @@ async fn send_msg(
             None,
             is_new_session,
             // The composer never has a parent, and its prompts are the user's
-            // own; only the orchestration socket sets either.
+            // own; only the orchestration socket sets either — or hides one.
             None,
+            false,
             None,
             &app,
         )
@@ -441,9 +442,10 @@ async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
     pinned: Option<bool>,
+    hidden: Option<bool>,
     manager: State<'_, SessionManager>,
 ) -> Result<Option<SessionIndexItem>, Fail> {
-    let updated = store::set_session_flags(session_id, archived, pinned).await?;
+    let updated = store::set_session_flags(session_id, archived, pinned, hidden).await?;
     if updated.is_some() && archived == Some(true) {
         if let Err(e) = manager.settle(session_id).await {
             eprintln!("could not stop settled session {session_id}: {e}");

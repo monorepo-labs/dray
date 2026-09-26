@@ -99,6 +99,12 @@ struct New {
     /// calling session's setting when the agent is the same.
     #[arg(long)]
     fast: bool,
+
+    /// Keep the session out of the sidebar. It shows only in the calling
+    /// session's crew, where the user can still open it or show it in the
+    /// sidebar. Needs a calling session.
+    #[arg(long)]
+    hidden: bool,
 }
 
 #[derive(Args)]
@@ -275,6 +281,7 @@ fn new(args: New) -> Result<(), String> {
         // parent's rather than turning fast mode *off* for a session spawned by
         // one running on it. clap has no other spelling for a bare flag.
         fast: args.fast.then_some(true),
+        hidden: args.hidden,
     });
 
     match send(request)? {
@@ -297,6 +304,14 @@ fn new(args: New) -> Result<(), String> {
                     None => String::new(),
                 }
             );
+            // An app older than the flag ignores it and lists the session, and
+            // the agent would otherwise tell the user it is hidden.
+            if args.hidden && !session.hidden {
+                eprintln!(
+                    "This Dray app does not know --hidden, so the session shows in the sidebar. \
+                     Update the Dray app."
+                );
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -651,8 +666,9 @@ fn print_table(sessions: &[SessionSummary]) {
             .as_deref()
             .map(|id| format!("  spawned by {id}"))
             .unwrap_or_default();
+        let hidden = if s.hidden { "  hidden" } else { "" };
         println!(
-            "{}  {:<12} {:<40.40}  {:<24}{parent}",
+            "{}  {:<12} {:<40.40}  {:<24}{parent}{hidden}",
             s.session_id,
             s.status,
             s.title,

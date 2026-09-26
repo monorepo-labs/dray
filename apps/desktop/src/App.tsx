@@ -134,7 +134,7 @@ import { changeRange, lastToolResult, turnChangedTree } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen, inSidebar, noticeTarget } from "@/lib/crew";
 import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
@@ -1022,7 +1022,7 @@ function App() {
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
   const searchedSessions = useMemo(
-    () => filterSessions(visibleSessions, search),
+    () => filterSessions(inSidebar(visibleSessions), search),
     [visibleSessions, search],
   );
 
@@ -2240,6 +2240,7 @@ function App() {
             onToggle={toggleCrewRow}
             onFocus={focusSession}
             onOpenInMain={openCrewRowInMain}
+            onShowInSidebar={(id) => void setSessionFlags(id, { hidden: false })}
             composing={composing}
             active={!issuesOpen && viewTab === "chat"}
             chat={paneChat}
@@ -2793,7 +2794,9 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
+      onSelect={(id) =>
+        goToSession(() => void handleSelectSessionIndexItem(noticeTarget(sessionIndexItems, id)))
+      }
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a

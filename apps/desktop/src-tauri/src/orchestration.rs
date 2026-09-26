@@ -394,6 +394,12 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
         }
     }
 
+    // A hidden session is drawn in its parent's crew and nowhere else, so one
+    // made from a terminal would be listed nowhere at all.
+    if create.hidden && parent.is_none() {
+        bail!("--hidden needs a calling session: a hidden session shows only in its parent's crew");
+    }
+
     let project_path = resolve_project(&create, parent.as_ref())?;
 
     // The project is deliberately *not* attached here. The sidebar's filter
@@ -446,6 +452,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
             base_ref.as_deref(),
             true,
             create.parent_session_id.as_deref(),
+            create.hidden,
             // The creating session is this one's *parent*, which the sidebar
             // already draws by nesting the row. Its opening prompt is the brief,
             // not a message relayed into a conversation already under way.
@@ -696,6 +703,7 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
             None,
             false,
             None,
+            false,
             from,
             app,
         )
@@ -810,6 +818,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
             .unwrap_or_else(|| "idle".into()),
         modified: item.modified,
         parent_session_id: item.parent_session_id,
+        hidden: item.hidden,
     }
 }
 

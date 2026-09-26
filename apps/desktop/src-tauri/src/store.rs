@@ -147,6 +147,14 @@ pub struct SessionIndexItem {
     pub modified: String,
     pub archived: bool,
     pub pinned: bool,
+    /// Left out of the sidebar and drawn only in its parent's crew — a review
+    /// session nobody means to read on its own. `dray new --hidden` sets it,
+    /// the crew row's menu clears it, and detaching clears it too, since a
+    /// session with no parent has no crew to be drawn in.
+    ///
+    /// `#[serde(default)]`: an entry written before the field reads as shown.
+    #[serde(default)]
+    pub hidden: bool,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -587,6 +595,7 @@ impl SessionIndexItem {
             modified: now,
             archived: false,
             pinned: false,
+            hidden: false,
             unknown: Default::default(),
         }
     }
@@ -666,6 +675,7 @@ impl SessionIndexItem {
             modified: now,
             archived: false,
             pinned: false,
+            hidden: false,
             unknown: Default::default(),
         }
     }
@@ -926,13 +936,15 @@ pub async fn touch_session_index_item(
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
+        // No parent means no crew, so a hidden session would be listed nowhere.
+        item.hidden = false;
         item.clone()
     })
     .await?)
 }
 
-/// Sets `archived` and/or `pinned` on one entry. `None` leaves that flag alone,
-/// so the two sidebar controls share one command without either clobbering the
+/// Sets `archived`, `pinned` and/or `hidden` on one entry. `None` leaves that
+/// flag alone, so the controls share one command without clobbering each
 /// other's field. Returns the entry as written, or `None` if the id is unknown.
 ///
 /// The index write alone. The command in `lib.rs` wraps it, since settling
@@ -941,6 +953,7 @@ pub async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
     pinned: Option<bool>,
+    hidden: Option<bool>,
 ) -> Result<Option<SessionIndexItem>> {
     let written = update_item(session_id, |item| {
         // Collected here and reported after the write, so a failed write reports
@@ -960,6 +973,9 @@ pub async fn set_session_flags(
                 actions.push(if v { "pin" } else { "unpin" });
             }
             item.pinned = v;
+        }
+        if let Some(v) = hidden {
+            item.hidden = v;
         }
 
         // `modified` is deliberately left alone: it orders the list, and flipping a
@@ -1908,6 +1924,7 @@ mod tests {
             "modified": "2026-08-30T09:41:00Z",
             "archived": false,
             "pinned": true,
+            "hidden": true,
             "somethingWeHaveNotShippedYet": {"keep": [1, 2]},
         });
 

@@ -140,3 +140,25 @@ export function crewAnchor(
 export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
   return drawn ? rows.map((r) => r.item.sessionId) : [];
 }
+
+/// The sidebar's list: everything but a hidden session whose parent is here to
+/// draw it in a crew. A hidden one whose parent is missing stays listed, since
+/// out of the sidebar it would be reachable from nowhere.
+export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
+  const ids = new Set(items.map((i) => i.sessionId));
+  return items.filter((i) => !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)));
+}
+
+/// The hidden sessions `parentId` started directly. Settle, delete and worktree
+/// removal carry on to these, since nothing else on screen can reach them.
+export function hiddenChildren(items: SessionIndexItem[], parentId: string): SessionIndexItem[] {
+  return items.filter((i) => i.hidden && i.parentSessionId === parentId && i.sessionId !== parentId);
+}
+
+/// Where a notice about `sessionId` should land: the parent for a hidden
+/// session, whose crew is where that session is drawn.
+export function noticeTarget(items: SessionIndexItem[], sessionId: string): string {
+  const item = items.find((i) => i.sessionId === sessionId);
+  const parent = item?.hidden && item.parentSessionId;
+  return parent && items.some((i) => i.sessionId === parent) ? parent : sessionId;
+}

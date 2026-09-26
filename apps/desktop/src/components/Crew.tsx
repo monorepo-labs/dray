@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Blobatar } from "@blobatar/react";
 import { idle, surprised } from "blobatar/expression";
-import { CircleDashed, MousePointerClick } from "lucide-react";
+import { CircleDashed, Eye, MousePointerClick } from "lucide-react";
 
 import Chat from "@/components/Chat";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QuestionRequest from "@/components/chat/QuestionRequest";
 import Orb from "@/components/Orb";
@@ -53,6 +59,8 @@ type CrewProps = {
   /// one. The only way *out* of the arrangement from inside it — everything
   /// else here keeps the conversation that started these on the left.
   onOpenInMain: (sessionId: string) => void;
+  /// Right-click on a hidden row: list it in the sidebar too.
+  onShowInSidebar: (sessionId: string) => void;
   /// A draft is standing in the selected session, so every other transcript
   /// gives way. The split grid's own rule, read off the same store, and the
   /// *emptiness* alone — subscribing to the text would rerender every mounted
@@ -96,6 +104,7 @@ export default function Crew({
   onToggle,
   onFocus,
   onOpenInMain,
+  onShowInSidebar,
   composing,
   active,
   chat,
@@ -181,6 +190,7 @@ export default function Crew({
                   pr={prFor(row.item.projectPath, row.item.branch)}
                   onToggle={() => onToggle(id)}
                   onOpenInMain={() => onOpenInMain(id)}
+                  onShowInSidebar={() => onShowInSidebar(id)}
                 />
               </div>
               {/* Stacked, the list is as wide as the composer and the first
@@ -387,6 +397,7 @@ function CrewHeader({
   pr,
   onToggle,
   onOpenInMain,
+  onShowInSidebar,
 }: {
   row: CrewRow;
   open: boolean;
@@ -394,6 +405,7 @@ function CrewHeader({
   pr: PrMark | undefined;
   onToggle: () => void;
   onOpenInMain: () => void;
+  onShowInSidebar: () => void;
 }) {
   // The avatar cannot carry the two states on its own: its hue is seeded from
   // the session id, so yellow and green have nowhere to live on it — it says
@@ -412,8 +424,13 @@ function CrewHeader({
     // click anywhere but on the words read as the app ignoring it. A `button`
     // rather than a div with a handler, since it is one — that is what gets it
     // Enter, Space and a tab stop for free.
+    //
+    // The menu opens on a hidden row alone: showing it in the sidebar is the one
+    // thing it offers, and a shown row has nothing to put there.
+    <ContextMenu>
     <Tooltip delayDuration={TIP_DELAY}>
       <TooltipTrigger asChild>
+        <ContextMenuTrigger asChild disabled={!row.item.hidden}>
         <button
           type="button"
           aria-expanded={open}
@@ -474,6 +491,7 @@ function CrewHeader({
             )}
           </span>
         </button>
+        </ContextMenuTrigger>
       </TooltipTrigger>
       {/* The click is a keycap rather than the word, so the whole gesture is
           one chip pair the eye takes in at once, with the sentence left to say
@@ -502,6 +520,13 @@ function CrewHeader({
         to open in full view
       </TooltipContent>
     </Tooltip>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem className="text-ui" onSelect={onShowInSidebar}>
+          <Eye />
+          Show in sidebar
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

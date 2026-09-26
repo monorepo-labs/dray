@@ -316,6 +316,14 @@ pub struct CreateSession {
     /// fine and none of them would have been.
     #[serde(default)]
     pub fast: Option<bool>,
+    /// Keep the session out of the sidebar; it shows in its parent's crew
+    /// alone. Needs a parent, since without one no crew can draw it.
+    ///
+    /// No protocol bump: an old app ignores it and lists the session, which
+    /// the reader can see, and [`SessionSummary::hidden`] comes back `false`
+    /// so the CLI can say so.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// Tagging a session that already exists — or untagging it.
@@ -451,6 +459,10 @@ pub struct SessionSummary {
     /// from the composer or from a terminal, and for one since detached.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+    /// Out of the sidebar, in its parent's crew alone. Absent from an app that
+    /// predates the flag, which reads as `false` — the truth there.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// One issue a session is tagged with, as the CLI prints it.

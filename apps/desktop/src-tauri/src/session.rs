@@ -473,6 +473,9 @@ impl SessionManager {
         // composer never has one, and it is recorded rather than acted on —
         // the depth cap reads it back off the index on the *next* create.
         parent_session_id: Option<&str>,
+        // Kept out of the sidebar, drawn in the parent's crew alone. Only the
+        // orchestration socket sets it, and only with a parent.
+        hidden: bool,
         // The session that relayed this prompt, for a message arriving over the
         // orchestration socket. `None` everywhere else: the composer's prompts
         // are the user's own, and a `user_message` with a sender is drawn
@@ -671,6 +674,7 @@ impl SessionManager {
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.
             item.issues = linked_issues.clone();
+            item.hidden = hidden;
 
             // The one failure that has to undo the tree, and the row that just
             // failed to be written is exactly why: removal is offered from a
@@ -1420,6 +1424,19 @@ impl SessionManager {
         // and counting it here would report two features for one press.
         if existed {
             crate::analytics::feature_used("worktree_deleted");
+        }
+
+        // A hidden child is drawn in this session's crew alone, so nothing on
+        // screen offers to remove its tree: it goes with this one. Read off the
+        // index rather than left to the frontend, which after a settle no longer
+        // holds the children when the card offering this is pressed.
+        let children = crate::store::read_index().await?.into_iter().filter(|i| {
+            i.hidden && i.parent_session_id.as_deref() == Some(session_id) && i.worktree_name.is_some()
+        });
+        for child in children {
+            if let Err(e) = Box::pin(self.remove_worktree(&child.session_id)).await {
+                eprintln!("could not remove worktree for hidden {}: {e}", child.session_id);
+            }
         }
 
         Ok(relocated)

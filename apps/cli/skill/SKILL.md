@@ -51,6 +51,7 @@ Options:
 | `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
 | `--fast` | Run at the agent's faster tier, which spends more usage. Inherits this session's when the harness is the same — see *Fast mode*. |
+| `--hidden` | Keep the session out of the sidebar; it shows only in this session's crew. Needs a calling session — see *Hidden sessions*. |
 
 ### Fast mode
 
@@ -205,6 +206,34 @@ Three things to know:
 The line `dray new` prints says what it resolved: `Started "…" in worktree
 calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
 session id, since the branch that id resolved to is something only the app knew.
+
+### Hidden sessions
+
+```bash
+dray new --hidden --from <session-id> "Review the work on this branch and send your findings back to <session-id>"
+```
+
+A hidden session is left out of the sidebar. It shows only in the crew beside
+this session, where the user can still open its transcript, answer its
+permission cards, or right-click it and pick **Show in sidebar**. It is deleted,
+settled and has its worktree removed together with this session.
+
+**Review sessions are hidden by default.** A reviewer reports back to you, so
+the user rarely reads it on its own, and a sidebar row per review is clutter.
+Decide like this:
+
+1. The user said which they want — in this conversation, in `CLAUDE.md`,
+   `AGENTS.md` or memory. Do that.
+2. Nothing says. Pass `--hidden`, and tell the user in one line that the
+   reviewer is hidden, that it shows in the crew beside this session, and that
+   they can ask you to record their preference in `CLAUDE.md`, `AGENTS.md` or
+   memory so you stop asking.
+
+Only reviews default to hidden. Any other session the user asked for is work
+they will want to find, so it stays in the sidebar unless they say otherwise.
+
+If `dray new` warns that the app does not know `--hidden`, the session is in the
+sidebar after all — tell the user rather than saying it is hidden.
 
 ## Listing sessions
 
