@@ -213,8 +213,15 @@ export function activateTab(sessionId: string, id: number) {
 }
 
 /// Moves a tab to place `to` in its session's strip.
+///
+/// The reply carries the new order and is written before this resolves. The
+/// `browser_tabs` event says the same thing, but the strip drops its drawn
+/// order when this resolves, and that event can land after the reply.
 export function moveTab(sessionId: string, id: number, to: number) {
-  return invoke("browser_move", { sessionId, id, to });
+  return invoke<BrowserTab[]>("browser_move", { sessionId, id, to }).then((tabs) => {
+    tabsBySession.set(sessionId, tabs);
+    notify();
+  });
 }
 
 export function closeTab(sessionId: string, id: number) {

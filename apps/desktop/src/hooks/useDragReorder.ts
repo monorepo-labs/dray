@@ -3,6 +3,10 @@ import { useRef, useState } from "react";
 /// Pointer travel before a press becomes a drag, so a click on a tab or row
 /// draws no drag state for the frame between press and release.
 const DEAD_ZONE = 4;
+/// How near an overflowing list's edge the pointer scrolls it, and how far a
+/// frame.
+const EDGE = 24;
+const SPEED = 8;
 
 /// Drag-to-reorder for one list: the Spaces settings rows, and the browser and
 /// Files tab strips. The item follows the pointer and the ones it passes slide
@@ -67,13 +71,42 @@ export function useDragReorder<T>(
     const max = rects[rects.length - 1][hi] - rects[from][hi];
     let to = from;
     let moved = false;
+    // A strip that overflows scrolls itself while the pointer holds near an
+    // edge, or a tab could only be dropped among the ones already in view.
+    // Travel counts the scroll too, which keeps it in the frame `rects` were
+    // measured in.
+    const box = list.current;
+    const scroll = axis === "x" ? "scrollLeft" : "scrollTop";
+    const scrollable =
+      axis === "x" ? box.scrollWidth > box.clientWidth : box.scrollHeight > box.clientHeight;
+    const scroll0 = box[scroll];
+    const edges = box.getBoundingClientRect();
+    let pointer = origin;
+    let frame = 0;
     el.setPointerCapture(e.pointerId);
 
+    const tick = () => {
+      const v = pointer < edges[lo] + EDGE ? -SPEED : pointer > edges[hi] - EDGE ? SPEED : 0;
+      if (v) {
+        box[scroll] += v;
+        update();
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
     const move = (ev: PointerEvent) => {
-      const raw = at(ev) - origin;
-      if (!moved && Math.abs(raw) < DEAD_ZONE) return;
-      if (!moved) document.body.classList.add("session-drag");
+      pointer = at(ev);
+      if (!moved && Math.abs(pointer - origin) < DEAD_ZONE) return;
+      if (!moved) {
+        document.body.classList.add("session-drag");
+        if (scrollable) frame = requestAnimationFrame(tick);
+      }
       moved = true;
+      update();
+    };
+
+    const update = () => {
+      const raw = pointer - origin + box[scroll] - scroll0;
       const d = Math.min(max, Math.max(min, raw));
       // The leading edge crossing a neighbour's middle is past the neighbour.
       // Judged on the edge rather than the item's own middle, which the clamp
@@ -90,6 +123,7 @@ export function useDragReorder<T>(
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", end);
       el.removeEventListener("pointercancel", end);
+      cancelAnimationFrame(frame);
       document.body.classList.remove("session-drag");
       setDrag(null);
       // A cancelled gesture (focus lost, the OS taking the pointer) is not a

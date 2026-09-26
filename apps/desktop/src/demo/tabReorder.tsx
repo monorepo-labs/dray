@@ -15,7 +15,7 @@ import "../App.css";
 /// reorder, then publish `browser_tabs`.
 const SESSION = "demo-session";
 
-let tabs = ["Acme — Ship faster", "Pricing — Acme", "Docs — Acme", "Changelog — Acme"].map(
+let tabs = ["Acme", "Pricing", "Docs", "Changelog", "Blog", "Careers"].map(
   (title, i) => ({
     id: i + 1,
     url: `http://localhost:3000/${i}`,
@@ -61,7 +61,7 @@ Object.assign(window, {
           next.splice(args.to!, 0, tabs.find((t) => t.id === args.id)!);
           tabs = next;
           emit("browser_tabs", { sessionId: SESSION, tabs });
-          return null;
+          return tabs;
         }
         case "browser_activate":
           tabs = tabs.map((t) => ({ ...t, active: t.id === args.id }));
@@ -93,14 +93,29 @@ const FILES: OpenFile[] = ["src/App.tsx", "src/lib/browser.ts", "src-tauri/src/l
 /// checking this page without a real pointer.
 async function dragCheck(): Promise<string> {
   const frame = () => new Promise((r) => requestAnimationFrame(r));
+  const cases: [string, string, (tabs: HTMLElement[]) => number, number][] = [
+    ["files, past two", "#file-tabs", (tabs) => tabs[2].getBoundingClientRect().right - 5, 0],
+    ["browser, past one", "#browser-tabs", (tabs) => tabs[1].getBoundingClientRect().right - 5, 0],
+    // Held at the strip's edge, so it has to scroll to go further.
+    [
+      "browser, held at the edge",
+      "#browser-tabs",
+      (tabs) => tabs[0].parentElement!.getBoundingClientRect().right - 5,
+      60,
+    ],
+  ];
   const out: string[] = [];
-  for (const sel of ["#file-tabs [role=tab]", "#browser-tabs [role=tab]"]) {
+  for (const [name, root, target, hold] of cases) {
+    const sel = `${root} [role=tab]`;
     const read = () => [...document.querySelectorAll(sel)].map((t) => t.textContent?.trim());
     const before = read().join(" | ");
     const tabs = [...document.querySelectorAll<HTMLElement>(sel)];
+    const strip = tabs[0].parentElement!;
+    strip.scrollLeft = 0;
+    await frame();
     const r = tabs[0].getBoundingClientRect();
     const x0 = r.left + 10;
-    const x1 = tabs[2].getBoundingClientRect().right - 5;
+    const x1 = target(tabs);
     const base = { pointerId: 1, pointerType: "mouse", isPrimary: true, bubbles: true, button: 0 };
     const at = (x: number, buttons: number) => ({ ...base, buttons, clientX: x, clientY: r.top + r.height / 2 });
     tabs[0].dispatchEvent(new PointerEvent("pointerdown", at(x0, 1)));
@@ -108,10 +123,11 @@ async function dragCheck(): Promise<string> {
       tabs[0].dispatchEvent(new PointerEvent("pointermove", at(x0 + ((x1 - x0) * i) / 10, 1)));
       await frame();
     }
-    const mid = `held ${tabs[0].style.transform}, neighbour ${tabs[1].style.transform}`;
+    for (let i = 0; i < hold; i++) await frame();
+    const mid = `held ${tabs[0].style.transform}, neighbour ${tabs[1].style.transform}, scrolled ${strip.scrollLeft}px`;
     tabs[0].dispatchEvent(new PointerEvent("pointerup", at(x1, 0)));
     await new Promise((r) => setTimeout(r, 100));
-    out.push(`${sel}\n  before: ${before}\n  mid: ${mid}\n  after: ${read().join(" | ")}`);
+    out.push(`${name}\n  before: ${before}\n  mid: ${mid}\n  after: ${read().join(" | ")}`);
   }
   return out.join("\n");
 }
@@ -156,7 +172,7 @@ function Demo() {
             />
           </div>
         </section>
-        <section className="flex max-w-2xl flex-col gap-2">
+        <section className="flex max-w-md flex-col gap-2">
           <h2 className="text-ui text-muted-foreground">Browser pane</h2>
           <div id="browser-tabs" className="h-40 overflow-hidden rounded-lg border border-border bg-card">
             <BrowserPane sessionId={SESSION} active mode="panel" />

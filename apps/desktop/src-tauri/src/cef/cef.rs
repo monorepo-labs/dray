@@ -1329,19 +1329,19 @@ pub fn browser_activate(session_id: String, id: i32) -> Result<(), String> {
     })
 }
 
-/// Moves a tab to place `to` among its session's tabs, for drag-to-reorder.
-/// Off the main thread, since it touches no browser; `dray browser`'s tab
-/// numbers follow, both reading this order.
+/// Moves a tab to place `to` among its session's tabs, for drag-to-reorder,
+/// and answers with the new order. Off the main thread, since it touches no
+/// browser; `dray browser`'s tab list follows, both reading this order.
 #[tauri::command]
-pub fn browser_move(session_id: String, id: i32, to: usize) {
+pub fn browser_move(session_id: String, id: i32, to: usize) -> Vec<TabInfo> {
     {
         let mut tabs = TABS.lock().unwrap();
-        let Some(from) = tabs.iter().position(|t| t.id == id && t.session == session_id) else {
-            return;
-        };
-        move_among(&mut tabs, from, to, |t| t.session == session_id);
+        if let Some(from) = tabs.iter().position(|t| t.id == id && t.session == session_id) {
+            move_among(&mut tabs, from, to, |t| t.session == session_id);
+        }
     }
     publish(&session_id);
+    tabs_of(&session_id)
 }
 
 /// Moves `v[from]` to place `to` among the items `mine` picks, leaving every
