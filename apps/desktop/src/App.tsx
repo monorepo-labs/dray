@@ -134,7 +134,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
-import { sidebarMove } from "@/lib/sidebarAuto";
+import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -1180,29 +1180,28 @@ function App() {
   // drops the claim for the same reason: a sidebar they closed by hand while
   // reading a page is theirs, not ours to give back.
   const hidForBrowser = useRef(false);
-  // The pane's claim names the key it was closed under, and restoring writes
-  // that key rather than the one on screen: the view tab is per session, so
-  // selecting a session sitting on Chat leaves the Browser view and moves
-  // `panelKey` in one render, and a claim read against the new key was lost.
-  const panelHidForBrowser = useRef<string | null>(null);
+  // The pane's claims, one per pane key, since the pane is per session — see
+  // [panelMove](./lib/sidebarAuto.ts) for why one claim was not enough.
+  const panelHidForBrowser = useRef(new Set<string>());
+  const lastPanelKey = useRef(panelKey);
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
+    const keyMoved = lastPanelKey.current !== panelKey;
+    lastPanelKey.current = panelKey;
 
-    const claim = panelHidForBrowser.current;
-    const panelMove = sidebarMove({
-      from: was,
-      to: viewTab,
-      enabled: autoHidePanel,
-      collapsed: !panelOpen,
-      claimed: claim !== null,
-    });
-    if (panelMove === "hide") {
-      panelHidForBrowser.current = panelKey;
-      setPanelOpen(false);
-    } else if (panelMove === "restore" && claim) {
-      panelHidForBrowser.current = null;
-      setPanelOpens((prev) => ({ ...prev, [claim]: true }));
+    if (panelKey) {
+      const move = panelMove({
+        from: was,
+        to: viewTab,
+        keyMoved,
+        enabled: autoHidePanel,
+        open: panelOpen,
+        claimed: panelHidForBrowser.current.has(panelKey),
+      });
+      if (move === "hide") panelHidForBrowser.current.add(panelKey);
+      else if (move === "restore") panelHidForBrowser.current.delete(panelKey);
+      if (move) setPanelOpen(move === "restore");
     }
 
     // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
@@ -1275,7 +1274,7 @@ function App() {
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
   // hand is the reader's.
   const togglePanel = () => {
-    panelHidForBrowser.current = null;
+    if (panelKey) panelHidForBrowser.current.delete(panelKey);
     setPanelOpen((prev) => !prev);
   };
 
