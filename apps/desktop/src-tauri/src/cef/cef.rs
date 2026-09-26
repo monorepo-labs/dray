@@ -1340,8 +1340,8 @@ pub fn browser_move(session_id: String, id: i32, to: usize) -> Vec<TabInfo> {
             move_among(&mut tabs, from, to, |t| t.session == session_id);
         }
     }
-    // One snapshot for both the event and the reply, so any list the frontend
-    // holds that names other tabs is newer than this reply, never older.
+    // One snapshot for both the event and the reply, so the two never disagree
+    // about the order.
     let tabs = tabs_of(&session_id);
     if let Some(app) = APP.get() {
         let _ = app.emit(

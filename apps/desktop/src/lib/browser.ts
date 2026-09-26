@@ -216,15 +216,15 @@ export function activateTab(sessionId: string, id: number) {
 ///
 /// The reply's *order* is applied before this resolves, since the strip drops
 /// its drawn order then and the `browser_tabs` event saying the same thing can
-/// land after the reply. Order alone, over the tabs already held: the reply
-/// can also be *older* than an event, and taken whole it would put back a tab
-/// that has since closed. Where the two name different tabs the event is the
-/// newer one and already carries the move.
+/// land after the reply. Order alone, over the tabs already held: which tabs
+/// exist is the events' to say, since the reply may be older or newer than the
+/// last one to land. A held tab the reply lacks goes last until one does.
 export function moveTab(sessionId: string, id: number, to: number) {
   return invoke<BrowserTab[]>("browser_move", { sessionId, id, to }).then((reply) => {
-    const held = new Map((tabsBySession.get(sessionId) ?? []).map((t) => [t.id, t]));
-    if (reply.length !== held.size || !reply.every((t) => held.has(t.id))) return;
-    tabsBySession.set(sessionId, reply.map((t) => held.get(t.id)!));
+    const place = new Map(reply.map((t, i) => [t.id, i]));
+    const held = tabsBySession.get(sessionId) ?? [];
+    const rank = (t: BrowserTab) => place.get(t.id) ?? reply.length;
+    tabsBySession.set(sessionId, [...held].sort((a, b) => rank(a) - rank(b)));
     notify();
   });
 }
