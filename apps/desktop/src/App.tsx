@@ -1640,6 +1640,7 @@ function App() {
     // what was open in it. Nothing is restored: the effect below closes a
     // transcript that falls outside the space being entered.
     filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterGen.current++;
     setProjectFilter(null);
 
     for (const notice of getNotices()) {
@@ -1665,6 +1666,9 @@ function App() {
   /// switch after launch, so the entry is written on the way out of a filter
   /// and nowhere else.
   const filterSelection = useRef<Record<string, string | null>>({});
+  /// Bumped at every filter move, at call time, so a read across an await can
+  /// tell the filter moved under it. Rendered state is a render behind.
+  const filterGen = useRef(0);
 
   /// Drops a session from every filter's memory, so a filter cannot reopen a
   /// transcript the reader has just put away.
@@ -1691,6 +1695,7 @@ function App() {
   const changeProjectFilter = (next: string | null) => {
     if (next === projectFilter) return;
     filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterGen.current++;
     setProjectFilter(next);
     if (next) handleSelectProject(next);
 
@@ -1711,15 +1716,20 @@ function App() {
   ///
   /// Only once the select has landed: a rollback puts the old session back, and
   /// following that would undo a filter switch the reader just made. A detached
-  /// project has no filter entry, so its session widens to All Projects.
+  /// project has no filter entry, so its session widens to All Projects. And
+  /// only where no filter or space switch landed during the read — everything
+  /// below is the click-time render's, and would undo that switch.
   const openFromNotice = async (sessionId: string) => {
     const previous = selectedSessionId;
+    const gen = filterGen.current;
     if (!(await handleSelectSessionIndexItem(sessionId)) || !projectFilter) return;
+    if (gen !== filterGen.current) return;
     const path = sessionIndexItems.find((i) => i.sessionId === sessionId)?.projectPath;
     // Outside the space, the space effect below closes it instead.
     if (!path || path === projectFilter || !sessionInSpace(projects, space, path)) return;
     const next = spaceProjects.some((p) => p.path === path) ? path : null;
     filterSelection.current[projectFilter] = previous;
+    filterGen.current++;
     setProjectFilter(next);
     if (next) handleSelectProject(next);
   };
