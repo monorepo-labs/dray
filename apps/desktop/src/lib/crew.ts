@@ -143,14 +143,11 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
 
 /// The sidebar's list: everything but a hidden session whose parent is here to
 /// draw it in a crew. A hidden one whose parent is missing stays listed, since
-/// out of the sidebar it would be reachable from nowhere — and so does a settled
-/// one, since the crew draws no settled rows and the settled list is its only
-/// way back.
+/// out of the sidebar it would be reachable from nowhere. Settled ones too:
+/// unsettling the parent brings them back to its crew.
 export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
   const ids = new Set(items.map((i) => i.sessionId));
-  return items.filter(
-    (i) => !(i.hidden && !i.archived && i.parentSessionId && ids.has(i.parentSessionId)),
-  );
+  return items.filter((i) => !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)));
 }
 
 /// `asking` with every hidden asker's ancestors added, for the sidebar. A hidden

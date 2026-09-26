@@ -184,9 +184,9 @@ describe("hidden sessions", () => {
     expect(inSidebar(items).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
-  it("lists a settled hidden child, which no crew draws", () => {
+  it("leaves a settled hidden child out of the settled list too", () => {
     const settled = [item("a", null, { archived: true }), item("review", "a", { hidden: true, archived: true })];
-    expect(inSidebar(settled).map((i) => i.sessionId)).toEqual(["a", "review"]);
+    expect(inSidebar(settled).map((i) => i.sessionId)).toEqual(["a"]);
   });
 
   it("still draws it in the parent's crew", () => {
