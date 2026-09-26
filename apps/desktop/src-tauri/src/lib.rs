@@ -446,9 +446,21 @@ async fn set_session_flags(
     manager: State<'_, SessionManager>,
 ) -> Result<Option<SessionIndexItem>, Fail> {
     let updated = store::set_session_flags(session_id, archived, pinned, hidden).await?;
-    if updated.is_some() && archived == Some(true) {
-        if let Err(e) = manager.settle(session_id).await {
-            eprintln!("could not stop settled session {session_id}: {e}");
+    if updated.is_none() {
+        return Ok(None);
+    }
+    // A hidden child settles and unsettles with its parent, since only the
+    // parent's crew draws it. Here off the whole index, where the frontend
+    // holds one side of the split and can miss a child on the other.
+    let mut settling = vec![session_id.to_string()];
+    if let Some(archived) = archived {
+        settling.extend(store::archive_hidden_descendants(session_id, archived).await?);
+    }
+    if archived == Some(true) {
+        for id in &settling {
+            if let Err(e) = manager.settle(id).await {
+                eprintln!("could not stop settled session {id}: {e}");
+            }
         }
     }
     Ok(updated)

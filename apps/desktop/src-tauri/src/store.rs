@@ -943,6 +943,37 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
     .await?)
 }
 
+/// The hidden sessions `parent_id` started directly — the ones that follow it
+/// through settle, delete and worktree removal, since only its crew draws them.
+pub async fn hidden_children(parent_id: &str) -> Result<Vec<SessionIndexItem>> {
+    Ok(read_index()
+        .await?
+        .into_iter()
+        .filter(|i| {
+            i.hidden && i.parent_session_id.as_deref() == Some(parent_id) && i.session_id != parent_id
+        })
+        .collect())
+}
+
+/// Moves every hidden descendant of `parent_id` to `archived`, answering their
+/// ids. Written without [`set_session_flags`]' reporting: one press settles a
+/// parent, however many hidden children follow it.
+pub async fn archive_hidden_descendants(parent_id: &str, archived: bool) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut parent = parent_id.to_string();
+    loop {
+        for child in hidden_children(&parent).await? {
+            update_item(&child.session_id, |item| item.archived = archived).await?;
+            ids.push(child.session_id);
+        }
+        let Some(next) = ids.get(i) else { break };
+        parent = next.clone();
+        i += 1;
+    }
+    Ok(ids)
+}
+
 /// Sets `archived`, `pinned` and/or `hidden` on one entry. `None` leaves that
 /// flag alone, so the controls share one command without clobbering each
 /// other's field. Returns the entry as written, or `None` if the id is unknown.
