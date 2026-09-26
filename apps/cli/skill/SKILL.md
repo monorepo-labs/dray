@@ -216,12 +216,14 @@ dray new --hidden --from <session-id> "Review the work on this branch and send y
 `--hidden` keeps the session out of the sidebar; it shows only in the crew
 beside this session.
 
-**Hide review sessions by default.** Follow the user where they have said
-otherwise — in this conversation, `CLAUDE.md`, `AGENTS.md` or memory. Where
-nothing says, pass `--hidden` and tell the user in one line that the reviewer
-is in the crew beside this session, and that they can have you record a
-preference in `CLAUDE.md`, `AGENTS.md` or memory. Every other session stays in
-the sidebar unless the user asks.
+**Hide review sessions by default.** A review session checks work already done
+— a code or PR review, a second opinion on a diff — and sends its findings back
+to you rather than making changes of its own. Follow the user where they have
+said otherwise, in this conversation, `CLAUDE.md`, `AGENTS.md` or memory. Where
+nothing says, pass `--hidden` and tell the user in one line that the reviewer is
+in the crew beside this session, and that they can have you record a preference
+in `CLAUDE.md`, `AGENTS.md` or memory. Every other session stays in the sidebar
+unless the user asks.
 
 ## Listing sessions
 
