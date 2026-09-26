@@ -1056,6 +1056,10 @@ function App() {
   const prBranch = selectedSession
     ? sessionBranch(selectedSession, workStatus?.branch)
     : null;
+  // The header's way back from a hidden session, which has no sidebar row.
+  const hiddenParent = selectedSession?.hidden
+    ? sessionIndexItems.find((i) => i.sessionId === selectedSession.parentSessionId)
+    : undefined;
   // "The PR tab is on screen", read off the *pick* rather than off `activeTab`,
   // which cannot exist yet — it is derived from this hook's own answer. An
   // unset pick counts, since the derived default is the PR tab whenever there
@@ -2418,6 +2422,13 @@ function App() {
             // its session, and the focused one's repeated up here read as a
             // second line of the same row.
             standIn={issuesOpen ? "Issues" : mainGroup ? groupName(mainGroup) : null}
+            parent={
+              hiddenParent && {
+                title: hiddenParent.title,
+                onSelect: () =>
+                  goToSession(() => void handleSelectSessionIndexItem(hiddenParent.sessionId)),
+              }
+            }
             className="flex-1"
           />
 

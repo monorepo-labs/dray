@@ -439,7 +439,7 @@ function CrewHeader({
           // in the main column instead of in its strip is that sentence again.
           onClick={(e) => (e.metaKey || e.ctrlKey ? onOpenInMain() : onToggle())}
           className={cn(
-            "group relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-left text-ui",
+            "group relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 pl-1.5 pr-3 text-left text-ui select-none",
             // Selection is weight and colour, no fill. A filled row is how a
             // *list* marks the one thing it is showing, and in a column with no
             // borders it was the loudest shape on screen — a lit band across

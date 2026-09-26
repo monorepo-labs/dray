@@ -19,6 +19,9 @@ type SessionHeaderProps = {
   /// header naming one branch while the PR tab looks up another is the whole
   /// of the bug that rule exists to stop.
   branch: string | null;
+  /// A hidden session's parent, drawn as a breadcrumb step: the sidebar lists
+  /// no row for a hidden session, so this is the way back to the crew it sits in.
+  parent?: { title: string; onSelect: () => void } | null;
   className?: string;
 };
 
@@ -33,6 +36,7 @@ export default function SessionHeader({
   session,
   branch,
   standIn,
+  parent,
   className,
 }: SessionHeaderProps) {
   // The path that is on the clipboard, not a boolean: this header is reused
@@ -72,6 +76,21 @@ export default function SessionHeader({
         <span aria-hidden className="shrink-0 text-muted-foreground/50">
           /
         </span>
+
+        {parent && (
+          <>
+            <button
+              type="button"
+              onClick={parent.onSelect}
+              className="cursor-pointer truncate rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {parent.title}
+            </button>
+            <span aria-hidden className="shrink-0 text-muted-foreground/50">
+              /
+            </span>
+          </>
+        )}
 
         <span className="truncate font-medium text-foreground">{session.title}</span>
       </span>
