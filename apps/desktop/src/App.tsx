@@ -215,7 +215,7 @@ function App() {
     handleRespondPermission,
     handleAnswerQuestions,
     handleSelectSessionIndexItem,
-    selectionRequestRef,
+    navGen,
     handleNewSession,
     markSessionUnread,
     setSessionFlags,
@@ -1727,10 +1727,13 @@ function App() {
   const openFromNotice = async (sessionId: string) => {
     const previous = selectedSessionId;
     const gen = filterGen.current;
-    if (!(await handleSelectSessionIndexItem(sessionId)) || !projectFilter) return;
+    const selecting = handleSelectSessionIndexItem(sessionId);
+    // Past this select's own move, so any later one is somebody else's.
+    const nav = navGen.current;
+    if (!(await selecting) || !projectFilter) return;
     if (gen !== filterGen.current) return;
     const path = (await indexItem(sessionId))?.projectPath;
-    if (gen !== filterGen.current) return;
+    if (gen !== filterGen.current || nav !== navGen.current) return;
     // Outside the space, the space effect below closes it instead.
     if (!path || path === projectFilter || !sessionInSpace(projects, space, path)) return;
     const next = spaceProjects.some((p) => p.path === path) ? path : null;
@@ -1754,11 +1757,11 @@ function App() {
   const openNotice = async (id: string) => {
     // Nothing is claimed until `openFromNotice` selects, so a click or filter
     // move landing during the lookups wins and this gives up.
-    const claimed = selectionRequestRef.current;
+    const nav = navGen.current;
     const gen = filterGen.current;
     const item = await indexItem(id);
     const parent = item?.hidden && item.parentSessionId ? await indexItem(item.parentSessionId) : null;
-    if (selectionRequestRef.current !== claimed || gen !== filterGen.current) return;
+    if (nav !== navGen.current || gen !== filterGen.current) return;
     await openFromNotice(parent?.sessionId ?? id);
   };
 
