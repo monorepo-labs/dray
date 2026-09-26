@@ -1,23 +1,23 @@
 {
-  "version": "0.24.0",
-  "notes": "### Added\n\n- **Agents can record the browser.** `dray browser record start` and\n  `record stop` save an MP4 that plays inline in chat, so checking a\n  feature is watching a video. Typing, hover and animation are captured.\n  Needs `dray` 0.6.0, which updates itself.\n- **Device sizes in the browser.** Pick a device from the icon's menu,\n  set a responsive size and save it, rotate any device. MacBook Pro 14\n  and 16, 1080p and 4K are new presets.\n- **⌘R reloads the browser page and ⌘T opens a new tab.**\n- **The Files view plays videos** (mp4, m4v, mov, webm).\n- **Drag to reorder projects and spaces** in Settings → Spaces. The\n  sidebar and the composer's project picker now keep that order.\n\n### Fixed\n\n- **fx lists the newest Codex and grok models**, read from fx itself.\n- **Browser tabs show their favicons** again.\n- **`/compact` on a resumed Claude Code session stays busy** until it\n  actually finishes.\n- **A file the Files view can't show says why**, instead of \"Not text\".\n- **Answering a card in the crew column keeps you on the parent session.**",
-  "pub_date": "2026-09-25T10:24:21.362Z",
+  "version": "0.25.0",
+  "notes": "### Added\n\n- **Hidden sessions for reviews.** A session started with `dray new\n  --hidden` stays out of the sidebar and shows only in the crew beside\n  the session that started it. Right-click it there to show it in the\n  sidebar. Agents hide review sessions by default. Needs `dray` 0.7.0,\n  which updates itself.\n- **The side panel can sit on the left.** Settings › Appearance ›\n  Panel side.\n- **The side panel remembers its width per session.**\n- **Drag to reorder tabs** in the Browser and Files views.\n- **Grok Build takes a message mid-turn** into the turn it is running,\n  instead of holding it until the turn ends.\n\n### Changed\n\n- **On a 14\" screen with the side panel open, the crew sits under the\n  chat** instead of squeezing in beside it.\n\n### Fixed\n\n- **Leaving the Browser view gives the side panel back** if arriving\n  there closed it.\n- **A session opened from a notice moves the sidebar's project filter**\n  so its row is visible.\n- **Merging a PR keeps the panel on the PR tab.**\n- **Tooltips no longer stick** after closing the project or permission\n  menu.",
+  "pub_date": "2026-09-26T08:32:01.633Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJPMkdpbGF1djV4eDNMU3d5UkRFb3p0SmhYNTJndVB1aUw3bys5aXMzVTBXUGZMamVVMlVUTmtvMWFDUjZHVnZCZXh5UWJYdHlnK2d0Wkd3NzBsbmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMzMxODUyCWZpbGU6RHJheS5hcHAudGFyLmd6CkhDWGR2Q2lBOFkxdis0TGk2eWF4U3ZGa3d0VVdXMk5KVTJZTGRkQnZhZ0toWElKQ2g0bHdZbG5FcytiOS9mTFM1OXhoUkdLdy9GZTYyZEVFVjdnbUJBPT0K",
-      "url": "https://downloads.drayhq.com/v0.24.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg5N3AwMWIrUEtlT2NoZERhMjV5VFhJdnROYVJnZkhwQUdJNFMwRnpQb1lQMmplN0FibzVMMWtCYm9ESFE2MUFBZ3lRRURoMzhzS1JhcXNJRG9oWUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNDExNTE0CWZpbGU6RHJheS5hcHAudGFyLmd6CmZmZnBsdEhxZS92VHE1ZjQ1ZHpuTnNPRnc3cXhEWHRTeVBJU1pWUVVYWlNrVVNwbTBVdis0Z2o5L2tyaXhRVWRiME1sR2xtNlpkVHBQUTlZb1o1bUJ3PT0K",
+      "url": "https://downloads.drayhq.com/v0.25.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJPMkdpbGF1djV4eDNMU3d5UkRFb3p0SmhYNTJndVB1aUw3bys5aXMzVTBXUGZMamVVMlVUTmtvMWFDUjZHVnZCZXh5UWJYdHlnK2d0Wkd3NzBsbmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMzMxODUyCWZpbGU6RHJheS5hcHAudGFyLmd6CkhDWGR2Q2lBOFkxdis0TGk2eWF4U3ZGa3d0VVdXMk5KVTJZTGRkQnZhZ0toWElKQ2g0bHdZbG5FcytiOS9mTFM1OXhoUkdLdy9GZTYyZEVFVjdnbUJBPT0K",
-      "url": "https://downloads.drayhq.com/v0.24.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg5N3AwMWIrUEtlT2NoZERhMjV5VFhJdnROYVJnZkhwQUdJNFMwRnpQb1lQMmplN0FibzVMMWtCYm9ESFE2MUFBZ3lRRURoMzhzS1JhcXNJRG9oWUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNDExNTE0CWZpbGU6RHJheS5hcHAudGFyLmd6CmZmZnBsdEhxZS92VHE1ZjQ1ZHpuTnNPRnc3cXhEWHRTeVBJU1pWUVVYWlNrVVNwbTBVdis0Z2o5L2tyaXhRVWRiME1sR2xtNlpkVHBQUTlZb1o1bUJ3PT0K",
+      "url": "https://downloads.drayhq.com/v0.25.0/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJPMkdpbGF1djV4eDNMU3d5UkRFb3p0SmhYNTJndVB1aUw3bys5aXMzVTBXUGZMamVVMlVUTmtvMWFDUjZHVnZCZXh5UWJYdHlnK2d0Wkd3NzBsbmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMzMxODUyCWZpbGU6RHJheS5hcHAudGFyLmd6CkhDWGR2Q2lBOFkxdis0TGk2eWF4U3ZGa3d0VVdXMk5KVTJZTGRkQnZhZ0toWElKQ2g0bHdZbG5FcytiOS9mTFM1OXhoUkdLdy9GZTYyZEVFVjdnbUJBPT0K",
-      "url": "https://downloads.drayhq.com/v0.24.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg5N3AwMWIrUEtlT2NoZERhMjV5VFhJdnROYVJnZkhwQUdJNFMwRnpQb1lQMmplN0FibzVMMWtCYm9ESFE2MUFBZ3lRRURoMzhzS1JhcXNJRG9oWUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNDExNTE0CWZpbGU6RHJheS5hcHAudGFyLmd6CmZmZnBsdEhxZS92VHE1ZjQ1ZHpuTnNPRnc3cXhEWHRTeVBJU1pWUVVYWlNrVVNwbTBVdis0Z2o5L2tyaXhRVWRiME1sR2xtNlpkVHBQUTlZb1o1bUJ3PT0K",
+      "url": "https://downloads.drayhq.com/v0.25.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJPMkdpbGF1djV4eDNMU3d5UkRFb3p0SmhYNTJndVB1aUw3bys5aXMzVTBXUGZMamVVMlVUTmtvMWFDUjZHVnZCZXh5UWJYdHlnK2d0Wkd3NzBsbmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMzMxODUyCWZpbGU6RHJheS5hcHAudGFyLmd6CkhDWGR2Q2lBOFkxdis0TGk2eWF4U3ZGa3d0VVdXMk5KVTJZTGRkQnZhZ0toWElKQ2g0bHdZbG5FcytiOS9mTFM1OXhoUkdLdy9GZTYyZEVFVjdnbUJBPT0K",
-      "url": "https://downloads.drayhq.com/v0.24.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg5N3AwMWIrUEtlT2NoZERhMjV5VFhJdnROYVJnZkhwQUdJNFMwRnpQb1lQMmplN0FibzVMMWtCYm9ESFE2MUFBZ3lRRURoMzhzS1JhcXNJRG9oWUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNDExNTE0CWZpbGU6RHJheS5hcHAudGFyLmd6CmZmZnBsdEhxZS92VHE1ZjQ1ZHpuTnNPRnc3cXhEWHRTeVBJU1pWUVVYWlNrVVNwbTBVdis0Z2o5L2tyaXhRVWRiME1sR2xtNlpkVHBQUTlZb1o1bUJ3PT0K",
+      "url": "https://downloads.drayhq.com/v0.25.0/Dray_universal.app.tar.gz"
     }
   }
 }
