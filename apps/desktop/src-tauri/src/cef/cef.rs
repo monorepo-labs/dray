@@ -1340,8 +1340,16 @@ pub fn browser_move(session_id: String, id: i32, to: usize) -> Vec<TabInfo> {
             move_among(&mut tabs, from, to, |t| t.session == session_id);
         }
     }
-    publish(&session_id);
-    tabs_of(&session_id)
+    // One snapshot for both the event and the reply, so any list the frontend
+    // holds that names other tabs is newer than this reply, never older.
+    let tabs = tabs_of(&session_id);
+    if let Some(app) = APP.get() {
+        let _ = app.emit(
+            "browser_tabs",
+            TabsEvent { session_id: session_id.clone(), tabs: tabs.clone() },
+        );
+    }
+    tabs
 }
 
 /// Moves `v[from]` to place `to` among the items `mine` picks, leaving every
