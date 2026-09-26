@@ -1,6 +1,7 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Plus } from "lucide-react";
 
@@ -1705,27 +1706,36 @@ function App() {
     });
   };
 
-  /// A session opened from outside the filter — a notice card, a desktop banner
-  /// — takes the filter to its project, or the sidebar shows no row selected.
+  /// Opens a session named by a notice or a banner, which can be in any project,
+  /// and takes the filter to it — or the sidebar shows no row selected.
   ///
-  /// Keyed on the selection alone: `changeProjectFilter` moves the filter first
-  /// and only then selects inside it, so reacting to the filter too would drag
-  /// it back to the project being left. Layout for the space effect's reason.
-  const lastSelected = useRef(selectedSessionId);
-  useLayoutEffect(() => {
-    const previous = lastSelected.current;
-    lastSelected.current = selectedSessionId;
-    if (!projectFilter || !selectedSessionId) return;
-    const openPath =
-      selectedSession?.projectPath ??
-      sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
+  /// Only once the select has landed: a rollback puts the old session back, and
+  /// following that would undo a filter switch the reader just made. A detached
+  /// project has no filter entry, so its session widens to All Projects.
+  const openFromNotice = async (sessionId: string) => {
+    const previous = selectedSessionId;
+    if (!(await handleSelectSessionIndexItem(sessionId)) || !projectFilter) return;
+    const path = sessionIndexItems.find((i) => i.sessionId === sessionId)?.projectPath;
     // Outside the space, the space effect below closes it instead.
-    if (!openPath || openPath === projectFilter || !sessionInSpace(projects, space, openPath)) return;
+    if (!path || path === projectFilter || !sessionInSpace(projects, space, path)) return;
+    const next = spaceProjects.some((p) => p.path === path) ? path : null;
     filterSelection.current[projectFilter] = previous;
-    setProjectFilter(openPath);
-    handleSelectProject(openPath);
+    setProjectFilter(next);
+    if (next) handleSelectProject(next);
+  };
+
+  // A ref, since the listener is registered once and the handler reads state.
+  const openFromNoticeRef = useRef(openFromNotice);
+  openFromNoticeRef.current = openFromNotice;
+  // The reader clicked a desktop banner. Rust has already raised the window.
+  useEffect(() => {
+    const unlisten = listen<string>("notification_activated", (event) => {
+      goToSession(() => void openFromNoticeRef.current(event.payload));
+    });
+    return () => void unlisten.then((f) => f());
+    // `goToSession` only closes pages through stable setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSessionId]);
+  }, []);
 
   /// Declares a space, and reports it only where one is actually made.
   ///
@@ -2797,13 +2807,13 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
+      onSelect={(id) => goToSession(() => void openFromNotice(id))}
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a
       // standing pick, and opening the pane stores "changes" on its own.
       onOpenPr={(id) => {
-        void handleSelectSessionIndexItem(id);
+        void openFromNotice(id);
         showPanel("pr", id);
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}

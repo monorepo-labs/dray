@@ -2388,25 +2388,6 @@ useEffect(
   [],
 );
 
-// A ref rather than a dep, unlike the two above: this handler closes over the
-// index and the status map to restore what the session was started with, so a
-// listener registered once would go on selecting sessions with the state the
-// app had at mount.
-const selectSessionRef = useRef(handleSelectSessionIndexItem);
-selectSessionRef.current = handleSelectSessionIndexItem;
-
-// The reader clicked a desktop banner. Rust has already raised the window; the
-// only thing left is to go to the session it was about.
-useEffect(() => {
-  const listenerPromise = listen<string>("notification_activated", (event) => {
-    void selectSessionRef.current(event.payload);
-  });
-
-  return () => {
-    listenerPromise.then((unlisten) => unlisten());
-  };
-}, []);
-
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
     const { sessionId, status, modified } = event.payload;
