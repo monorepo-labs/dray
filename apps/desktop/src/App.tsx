@@ -1705,6 +1705,28 @@ function App() {
     });
   };
 
+  /// A session opened from outside the filter — a notice card, a desktop banner
+  /// — takes the filter to its project, or the sidebar shows no row selected.
+  ///
+  /// Keyed on the selection alone: `changeProjectFilter` moves the filter first
+  /// and only then selects inside it, so reacting to the filter too would drag
+  /// it back to the project being left. Layout for the space effect's reason.
+  const lastSelected = useRef(selectedSessionId);
+  useLayoutEffect(() => {
+    const previous = lastSelected.current;
+    lastSelected.current = selectedSessionId;
+    if (!projectFilter || !selectedSessionId) return;
+    const openPath =
+      selectedSession?.projectPath ??
+      sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
+    // Outside the space, the space effect below closes it instead.
+    if (!openPath || openPath === projectFilter || !sessionInSpace(projects, space, openPath)) return;
+    filterSelection.current[projectFilter] = previous;
+    setProjectFilter(openPath);
+    handleSelectProject(openPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
+
   /// Declares a space, and reports it only where one is actually made.
   ///
   /// The check is duplicated outside the updater rather than read from inside
