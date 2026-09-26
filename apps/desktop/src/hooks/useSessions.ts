@@ -16,7 +16,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
-import { hiddenChildren, noticeTarget } from "@/lib/crew";
+import { hiddenChildren } from "@/lib/crew";
 import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
@@ -2404,25 +2404,6 @@ useEffect(
     }),
   [],
 );
-
-// A ref rather than a dep, unlike the two above: this handler closes over the
-// index and the status map to restore what the session was started with, so a
-// listener registered once would go on selecting sessions with the state the
-// app had at mount.
-const selectSessionRef = useRef(handleSelectSessionIndexItem);
-selectSessionRef.current = handleSelectSessionIndexItem;
-
-// The reader clicked a desktop banner. Rust has already raised the window; the
-// only thing left is to go to the session it was about.
-useEffect(() => {
-  const listenerPromise = listen<string>("notification_activated", (event) => {
-    void selectSessionRef.current(noticeTarget(sessionIndexItemsRef.current, event.payload));
-  });
-
-  return () => {
-    listenerPromise.then((unlisten) => unlisten());
-  };
-}, []);
 
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {

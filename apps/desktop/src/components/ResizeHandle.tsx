@@ -133,7 +133,16 @@ export function useResizable({
   /// are inside the chat column rather than beside it.
   pane?: Pane;
 }): { style: CSSProperties; handle: ReactNode } {
-  const [stored, setStored] = useState(() => readLocalStorage(storageKey, initial));
+  const read = () => readLocalStorage(storageKey, initial);
+  const [stored, setStored] = useState(read);
+  // The key moves under a mounted pane — the right panel follows the selected
+  // session without remounting — so the width is re-read during render, or the
+  // new session draws one frame at the old one's width.
+  const [readFor, setReadFor] = useState(storageKey);
+  if (readFor !== storageKey) {
+    setReadFor(storageKey);
+    setStored(read());
+  }
   const from = useRef<{ x: number; width: number } | null>(null);
 
   // One range for everything here, so what is drawn, what the keys move and
