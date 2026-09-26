@@ -105,6 +105,8 @@ export default function SettingsPage({
   onMoveProject,
   autoHideSidebar,
   onAutoHideSidebarChange,
+  autoHidePanel,
+  onAutoHidePanelChange,
   integrations,
   updateStatus,
   updateManual,
@@ -140,6 +142,8 @@ export default function SettingsPage({
   /// a value that effect never sees.
   autoHideSidebar: boolean;
   onAutoHideSidebarChange: (next: boolean) => void;
+  autoHidePanel: boolean;
+  onAutoHidePanelChange: (next: boolean) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
@@ -177,9 +181,15 @@ export default function SettingsPage({
               <ZoomRow />
             </Section>
             <Section>
-              <AutoHideSidebarRow
+              <AutoHideRow
+                label="Auto-hide sidebar in Browser View"
                 checked={autoHideSidebar}
                 onChange={onAutoHideSidebarChange}
+              />
+              <AutoHideRow
+                label="Auto-hide side panel in Browser View"
+                checked={autoHidePanel}
+                onChange={onAutoHidePanelChange}
               />
             </Section>
           </>
@@ -717,13 +727,15 @@ function AnalyticsRow({
   );
 }
 
-/// Whether the Browser view takes the sidebar with it. Appearance rather than
-/// Integrations: the setting is about what the window does with its own chrome,
-/// not about the browser.
-function AutoHideSidebarRow({
+/// Whether the Browser view takes a pane of chrome with it. Appearance rather
+/// than Integrations: the setting is about what the window does with its own
+/// chrome, not about the browser.
+function AutoHideRow({
+  label,
   checked,
   onChange,
 }: {
+  label: string;
   checked: boolean;
   onChange: (next: boolean) => void;
 }) {
@@ -732,9 +744,9 @@ function AutoHideSidebarRow({
   return (
     <SettingRow
       id={id}
-      // "Auto" carries what the sentence under it used to: the sidebar comes
-      // back on its own on the way out.
-      label="Auto-hide sidebar in Browser View"
+      // "Auto" carries what the sentence under it used to: the pane comes back
+      // on its own on the way out.
+      label={label}
     >
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </SettingRow>

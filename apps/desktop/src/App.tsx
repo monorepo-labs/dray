@@ -280,6 +280,9 @@ function App() {
     "ade.autoHideSidebarInBrowser",
     true,
   );
+  // The right pane's half of the same bargain, its own switch since a reader
+  // may want the pane beside a page where the sidebar is only in the way.
+  const [autoHidePanel, setAutoHidePanel] = useLocalStorage("ade.autoHidePanelInBrowser", true);
   // Whether the reader has been told the app does that. Written once and never
   // cleared, the same bargain `splitLearned` makes below.
   const [autoHideNoticed, setAutoHideNoticed] = useLocalStorage(
@@ -1167,9 +1170,9 @@ function App() {
   const pendingBrowserTab = usePendingTab(selectedSessionId ?? "");
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
-  // on it closes the pane, every time and whatever tab the pane was on: the
-  // reader came for the full width. Nothing keeps it closed — ⌘E brings it
-  // back beside the page — and the next arrival closes it again.
+  // on it closes the pane, whatever tab the pane was on: the reader came for
+  // the full width. ⌘E brings it back beside the page, and leaving gives back
+  // a pane the arrival took — the sidebar's rule, under its own switch.
   const fullBrowserOpen = !issuesOpen && viewTab === "browser";
   const lastViewTab = useRef(viewTab);
   // Set only where arriving on the browser is what collapsed the sidebar, so
@@ -1177,10 +1180,28 @@ function App() {
   // drops the claim for the same reason: a sidebar they closed by hand while
   // reading a page is theirs, not ours to give back.
   const hidForBrowser = useRef(false);
+  // The pane's claim names the key it was closed under, since the pane is per
+  // session: a reader who switched session on the page gets no pane opened on
+  // a session that never had one.
+  const panelHidForBrowser = useRef<string | null>(null);
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
-    if (viewTab === "browser" && was !== "browser") setPanelOpen(false);
+
+    const panelMove = sidebarMove({
+      from: was,
+      to: viewTab,
+      enabled: autoHidePanel,
+      collapsed: !panelOpen,
+      claimed: !!panelKey && panelHidForBrowser.current === panelKey,
+    });
+    if (panelMove === "hide") {
+      panelHidForBrowser.current = panelKey;
+      setPanelOpen(false);
+    } else if (panelMove === "restore") {
+      setPanelOpen(true);
+    }
+    if (was === "browser" && viewTab !== "browser") panelHidForBrowser.current = null;
 
     // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
     // pure and tested: `collapsed` is a dep this effect only *reads*, so the
@@ -1214,6 +1235,9 @@ function App() {
   }, [
     viewTab,
     setPanelOpen,
+    panelOpen,
+    panelKey,
+    autoHidePanel,
     collapsed,
     setCollapsed,
     autoHideSidebar,
@@ -1246,7 +1270,12 @@ function App() {
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
 
-  const togglePanel = () => setPanelOpen((prev) => !prev);
+  // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
+  // hand is the reader's.
+  const togglePanel = () => {
+    panelHidForBrowser.current = null;
+    setPanelOpen((prev) => !prev);
+  };
 
   // Moves along the visible row, wrapping. Off `tabs` rather than `PANEL_TABS`,
   // so a session with no PR tab cycles through two and never lands on one that
@@ -2779,6 +2808,8 @@ function App() {
       onMoveProject={moveProject}
       autoHideSidebar={autoHideSidebar}
       onAutoHideSidebarChange={setAutoHideSidebar}
+      autoHidePanel={autoHidePanel}
+      onAutoHidePanelChange={setAutoHidePanel}
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}

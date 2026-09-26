@@ -1,6 +1,7 @@
 import type { ViewTab } from "@/components/layout/ViewTabs";
 
-/// What arriving at or leaving the Browser view does to the sidebar.
+/// What arriving at or leaving the Browser view does to the sidebar, and to
+/// the right pane, which takes the same rule under its own switch.
 ///
 /// A pure function rather than two branches in `App`'s effect, because the
 /// whole rule is which transition is which and the effect that holds it re-runs
