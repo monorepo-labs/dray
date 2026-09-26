@@ -110,6 +110,7 @@ export function useChatColumnFloor(single: boolean, beside = 0) {
 /// beside it.
 export function useResizable({
   storageKey,
+  fallbackKey,
   initial,
   min,
   edge,
@@ -118,6 +119,10 @@ export function useResizable({
   floor,
 }: {
   storageKey: string;
+  /// Read where `storageKey` holds nothing, and written beside it on every
+  /// commit — so a pane keyed per session opens a session never resized at the
+  /// width the reader last chose anywhere.
+  fallbackKey?: string;
   initial: number;
   min: number;
   edge: Edge;
@@ -133,7 +138,21 @@ export function useResizable({
   /// are inside the chat column rather than beside it.
   pane?: Pane;
 }): { style: CSSProperties; handle: ReactNode } {
-  const [stored, setStored] = useState(() => readLocalStorage(storageKey, initial));
+  const read = () =>
+    readLocalStorage(storageKey, fallbackKey ? readLocalStorage(fallbackKey, initial) : initial);
+  const [stored, setStored] = useState(read);
+  // The key moves under a mounted pane — the right panel follows the selected
+  // session without remounting — so the width is re-read during render, or the
+  // new session draws one frame at the old one's width.
+  const [readFor, setReadFor] = useState(storageKey);
+  if (readFor !== storageKey) {
+    setReadFor(storageKey);
+    setStored(read());
+  }
+  const save = (next: number) => {
+    writeLocalStorage(storageKey, next);
+    if (fallbackKey) writeLocalStorage(fallbackKey, next);
+  };
   const from = useRef<{ x: number; width: number } | null>(null);
 
   // One range for everything here, so what is drawn, what the keys move and
@@ -166,7 +185,7 @@ export function useResizable({
 
   const commit = (next: number) => {
     setStored(next);
-    writeLocalStorage(storageKey, next);
+    save(next);
   };
 
   // Ends a drag however it stops — released, cancelled by the OS, or capture
@@ -176,7 +195,7 @@ export function useResizable({
   const end = () => {
     if (!from.current) return;
     from.current = null;
-    writeLocalStorage(storageKey, width);
+    save(width);
   };
 
   // Arrows widen and narrow, Home resets: the pointer's three verbs, since a

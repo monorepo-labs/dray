@@ -241,6 +241,9 @@ type RightPanelProps = {
   /// action belonging to whatever the pane is showing rather than to one tab —
   /// the issues page's "Work on it" is the only one today.
   actions?: React.ReactNode;
+  /// Keys the pane's width, so each session keeps the width it was dragged
+  /// to. Absent on the issues page, which has one width of its own.
+  widthKey?: string;
   /// A word in the top strip in place of the tab row.
   ///
   /// For a pane with one thing in it and no second thing to switch to. A row of
@@ -303,11 +306,15 @@ export default function RightPanel({
   cwd,
   actions,
   heading,
+  widthKey,
   children,
 }: RightPanelProps) {
   // 32rem, the width this pane opened at before it could be dragged.
   const { style, handle } = useResizable({
-    storageKey: "ade.rightPanelWidth",
+    // ponytail: one key per session, never pruned; ~60 bytes each, sweep on
+    // delete if localStorage ever gets tight.
+    storageKey: widthKey ? `ade.rightPanelWidth.${widthKey}` : "ade.rightPanelWidth",
+    fallbackKey: widthKey ? "ade.rightPanelWidth" : undefined,
     initial: 512,
     min: PANEL_MIN,
     edge: "left",
