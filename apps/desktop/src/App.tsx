@@ -1755,9 +1755,9 @@ function App() {
   /// A notice or banner click. A hidden session is drawn in its parent's crew,
   /// so it opens the parent — where the parent still exists.
   const openNotice = async (id: string) => {
-    // Nothing is claimed until `openFromNotice` selects, so a click or filter
-    // move landing during the lookups wins and this gives up.
-    const nav = navGen.current;
+    // Claimed by bumping before the lookups, so any move landing during them —
+    // a click, a filter switch, a second notice — wins and this gives up.
+    const nav = ++navGen.current;
     const gen = filterGen.current;
     const item = await indexItem(id);
     const parent = item?.hidden && item.parentSessionId ? await indexItem(item.parentSessionId) : null;
