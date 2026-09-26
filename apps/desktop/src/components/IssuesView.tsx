@@ -30,6 +30,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -59,7 +60,10 @@ import type {
   IssueState,
   IssueStateKind,
   IssueTracker,
+  LinearFilter,
+  TrackerAccount,
 } from "@/types/events";
+import { sameFilter, toSaved, workspaceName, type RepoFilter } from "@/lib/linearWorkspace";
 
 /// The page's search field. Named so ⌘⇧F can reach it — the same trick the
 /// sidebar's own field uses, and for the same reason: the chord has to be able
@@ -150,6 +154,13 @@ export default function IssuesView({
   onPick,
   onWorkOn,
   refreshRef,
+  linearWorkspaces = [],
+  projectWorkspace = null,
+  project = null,
+  onAddWorkspace,
+  repoFilter = null,
+  repoName = null,
+  onSaveRepoFilter,
 }: {
   /// The page is the thing on screen. Hidden pages do not read, for the reason
   /// the right panel's own `active` exists.
@@ -176,6 +187,22 @@ export default function IssuesView({
   /// chord — it has to pick between this page and the right panel, and only it
   /// knows which one the reader is looking at.
   refreshRef?: MutableRefObject<(() => void) | null>;
+  /// Every connected Linear workspace, the default first.
+  linearWorkspaces?: TrackerAccount[];
+  /// The Linear workspace the composer's project reads — what this page opens
+  /// on. `null` is the default.
+  projectWorkspace?: string | null;
+  /// Opens wherever another Linear workspace is added.
+  onAddWorkspace?: () => void;
+  /// What the composer's repo opens its issues narrowed to, if it saved a
+  /// filter. Applied only while the page is on that repo's workspace.
+  repoFilter?: RepoFilter | null;
+  /// The composer's repo, named in the filter menu's save and clear rows.
+  repoName?: string | null;
+  /// Saves the page's current narrowing as that repo's default, or clears it.
+  onSaveRepoFilter?: (filter: LinearFilter | null) => void;
+  /// The composer's project, which a workspace picked on the menu belongs to.
+  project?: string | null;
 }) {
   // **The pick is honoured, connected or not**, where this used to be resolved
   // against what was actually behind it. The switch below is drawn either way
@@ -191,8 +218,38 @@ export default function IssuesView({
   /// read, and with one connected this is the ordinary state of the other.
   const needsConnecting = !connected[tracker];
 
+  /// A workspace picked on this page's own menu, **for the project it was
+  /// picked under**. The page opens on the project's workspace and the menu
+  /// looks elsewhere for this visit only; moving to a project that reads
+  /// another workspace puts the page back on that one, since a pick carried
+  /// across would list one project's issues under another's composer.
+  ///
+  /// Keyed by the project itself, never its workspace: two repos reading one
+  /// workspace are still two repos. And honoured only while the workspace is
+  /// connected — one disconnected under the page otherwise pins it to a
+  /// workspace nothing can read, with the menu gone once one is left.
+  const [viewing, setViewing] = useState<{ under: string | null; id: string | null } | null>(
+    null,
+  );
+  const viewed =
+    viewing &&
+    viewing.under === project &&
+    (viewing.id === null || linearWorkspaces.some((w) => w.workspaceId === viewing.id))
+      ? viewing
+      : null;
+  const workspace = viewed ? viewed.id : projectWorkspace;
+  /// Whether the page is on the repo's own workspace — the only one its saved
+  /// filter means anything in, and so the only one it can be saved from.
+  const onRepoWorkspace = tracker === "linear" && workspace === projectWorkspace;
+
   const { issues, settled, filters, query, setQuery, loading, loaded, unavailable, refresh } =
-    useIssues(active && !needsConnecting, tracker);
+    useIssues(
+      active && !needsConnecting,
+      tracker,
+      workspace,
+      project,
+      onRepoWorkspace ? repoFilter : null,
+    );
 
   // Kept current rather than set once: `refresh` is re-made whenever the hook
   // re-runs, and a handle captured at mount would close over a stale one.
@@ -347,7 +404,37 @@ export default function IssuesView({
             </>
           )}
 
-          <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
+          {tracker === "linear" && (
+            <WorkspaceMenu
+              workspace={workspace}
+              workspaces={linearWorkspaces}
+              onPick={(id) => setViewing({ under: project, id })}
+              onAdd={onAddWorkspace}
+            />
+          )}
+
+          <FilterMenu
+            query={query}
+            filters={filters}
+            tracker={tracker}
+            onChange={set}
+            save={
+              onRepoWorkspace && workspace && repoName && onSaveRepoFilter
+                ? {
+                    repoName,
+                    saved: repoFilter,
+                    onSave: (filter) =>
+                      onSaveRepoFilter(
+                        toSaved(
+                          filter,
+                          workspace,
+                          filters?.teams.find((t) => t.id === filter?.teamId)?.name ?? null,
+                        ),
+                      ),
+                  }
+                : undefined
+            }
+          />
 
           {/* Last, and it narrows nothing — same corner and same chord as the
               right panel's, which is the point: the chord means "re-read what I
@@ -895,6 +982,68 @@ function RepoMenu({
   );
 }
 
+/// Which Linear workspace the page is reading, on its face — `RepoMenu`'s
+/// reading one tracker over, since a workspace is the whole list the same way a
+/// repository is. Drawn only once there are two: with one there is nothing to
+/// pick, and a second is added from Settings, which the menu's last row opens.
+function WorkspaceMenu({
+  workspace,
+  workspaces,
+  onPick,
+  onAdd,
+}: {
+  workspace: string | null;
+  workspaces: TrackerAccount[];
+  onPick: (workspace: string | null) => void;
+  onAdd?: () => void;
+}) {
+  if (workspaces.length < 2) return null;
+
+  // `null` is the default, which Rust lists first — and the only way to name
+  // a default Linear has not identified, which has no id of its own.
+  const current = workspace ?? workspaces[0]?.workspaceId ?? null;
+  const name = workspaceName(workspaces, current);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sidebar-accent px-2.5 py-1 text-ui text-sidebar-accent-foreground transition-colors"
+        >
+          <LinearIcon className="size-3.5" />
+          <span className="max-w-40 truncate">{name}</span>
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuLabel>Workspace</DropdownMenuLabel>
+        {workspaces.map((option, i) => (
+          <DropdownMenuCheckboxItem
+            key={option.workspaceId ?? `default-${i}`}
+            checked={(option.workspaceId ?? null) === current}
+            // A pick, never a toggle: there is no "no workspace" to clear to,
+            // the same reading the repository menu takes.
+            onCheckedChange={() => onPick(option.workspaceId ?? null)}
+          >
+            {option.orgName}
+          </DropdownMenuCheckboxItem>
+        ))}
+        {onAdd && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onAdd}>
+              <Plus className="size-3.5" />
+              Add workspace…
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /// Which label the GitHub half is narrowed to, on its face.
 ///
 /// Wears its value like `RepoMenu` above rather than folding into the sliders
@@ -972,11 +1121,19 @@ function FilterMenu({
   filters,
   tracker,
   onChange,
+  save,
 }: {
   query: IssueQuery;
-  filters: { teams: IssueGroup[]; projects: IssueGroup[] } | null;
+  filters: { teams: IssueGroup[]; projects: IssueGroup[]; labels: IssueLabel[] } | null;
   tracker: IssueTracker;
   onChange: (patch: Partial<IssueQuery>) => void;
+  /// The composer's repo and the default it saved, where the page is on that
+  /// repo's workspace. Absent otherwise, and the save rows go with it.
+  save?: {
+    repoName: string;
+    saved: RepoFilter | null;
+    onSave: (filter: RepoFilter | null) => void;
+  };
 }) {
   const github = tracker === "github";
 
@@ -987,12 +1144,22 @@ function FilterMenu({
   // against a different object. So the trigger does not draw there.
   const teams = !github && filters && filters.teams.length > 1 ? filters.teams : [];
   const projects = !github && filters && filters.projects.length > 1 ? filters.projects : [];
-  const narrowed = !!query.teamId || !!query.projectId;
+  // One label is still a choice, unlike one team: narrowing to it drops every
+  // issue that does not carry it. GitHub's labels have their own menu.
+  const labels = !github && filters ? filters.labels : [];
+  const narrowed = !!query.teamId || !!query.projectId || query.labels.length > 0;
+
+  /// What this page would save as the repo's default: team and labels, never a
+  /// Linear project — those end, and a repo pinned to one reads empty after.
+  const current: RepoFilter = { teamId: query.teamId, labels: query.labels };
+  const canSave =
+    !!save && (!!current.teamId || current.labels.length > 0) && !sameFilter(current, save.saved);
+  const canClear = !!save?.saved;
 
   // Nothing left to narrow by. A trigger that opens an empty menu is worse than
   // no trigger, and a single-team workspace is the ordinary case here — as is
   // GitHub, whose two controls both stand on the row.
-  if (!teams.length && !projects.length) return null;
+  if (!teams.length && !projects.length && !labels.length && !canClear) return null;
 
   return (
     <DropdownMenu>
@@ -1011,7 +1178,8 @@ function FilterMenu({
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-56">
+      {/* Scrolls: a workspace's labels can run to dozens. */}
+      <DropdownMenuContent align="end" className="max-h-[70vh] w-56 overflow-y-auto">
         {teams.length > 0 && (
           <>
             <DropdownMenuLabel>Team</DropdownMenuLabel>
@@ -1055,6 +1223,57 @@ function FilterMenu({
                 {project.name}
               </DropdownMenuCheckboxItem>
             ))}
+          </>
+        )}
+
+        {labels.length > 0 && (
+          <>
+            {(teams.length > 0 || projects.length > 0) && <DropdownMenuSeparator />}
+            <DropdownMenuLabel>Labels</DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={query.labels.length === 0}
+              onCheckedChange={() => onChange({ labels: [] })}
+            >
+              Any label
+            </DropdownMenuCheckboxItem>
+            {labels.map((label) => (
+              <DropdownMenuCheckboxItem
+                key={label.name}
+                checked={query.labels.includes(label.name)}
+                // Several at once, matching any — so the menu stays open for
+                // the next tick rather than closing after each.
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={(on) =>
+                  onChange({
+                    labels: on
+                      ? [...query.labels, label.name]
+                      : query.labels.filter((name) => name !== label.name),
+                  })
+                }
+              >
+                {/* The chip's own dot, so a pale colour is lifted on the
+                    light theme and a missing one still draws — the GitHub
+                    label menu's reading. */}
+                <IssueLabelChip label={label} dot />
+                <span className="truncate">{label.name}</span>
+              </DropdownMenuCheckboxItem>
+            ))}
+          </>
+        )}
+
+        {save && (canSave || canClear) && (
+          <>
+            <DropdownMenuSeparator />
+            {canSave && (
+              <DropdownMenuItem onSelect={() => save.onSave(current)}>
+                Save as default for {save.repoName}
+              </DropdownMenuItem>
+            )}
+            {canClear && (
+              <DropdownMenuItem onSelect={() => save.onSave(null)}>
+                Clear {save.repoName}'s default
+              </DropdownMenuItem>
+            )}
           </>
         )}
       </DropdownMenuContent>

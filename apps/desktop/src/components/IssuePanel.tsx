@@ -4,7 +4,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronRight, ExternalLink, Unlink } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
-import { IssueFile, IssueImage } from "@/components/IssueAsset";
+import { IssueFile, IssueImage, IssueWorkspaceContext } from "@/components/IssueAsset";
+import { detailSlot } from "@/hooks/useIssues";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
 import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
@@ -28,13 +29,17 @@ const UNAVAILABLE: Record<IssueUnavailable["kind"], string> = {
   // both kinds of link, and the page is where both are connected.
   not_connected: "Connect a tracker on the Issues page to see this issue.",
   unauthorized:
-    "Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.",
+    "Linear rejected the key saved for this workspace. Disconnect it in Settings, then add it again with a new key.",
   offline: "Could not reach Linear.",
+  not_found: "",
   other: "",
 };
 
 function errorText(error: IssueUnavailable): string {
-  return UNAVAILABLE[error.kind] || (error.kind === "other" ? error.detail : "");
+  return (
+    UNAVAILABLE[error.kind] ||
+    (error.kind === "other" || error.kind === "not_found" ? error.detail : "")
+  );
 }
 
 /// What a status or priority write names, taken from **both** halves the row
@@ -46,8 +51,17 @@ function errorText(error: IssueUnavailable): string {
 /// spellings differ after a team move, where a session linked to `DRA-53` reads
 /// back an issue that now calls itself `ENG-12` — and a write keyed off the
 /// response then patches a cache entry nobody reads.
+///
+/// The workspace likewise: the *detail's*, where the issue was read and so the
+/// key a write must go out with, while `slot` is the *link's*, where the panel
+/// reads the answer back.
 function target(link: IssueRef, detail: IssueDetail) {
-  return { id: detail.id, identifier: link.identifier };
+  return {
+    id: detail.id,
+    identifier: link.identifier,
+    workspace: detail.workspace,
+    slot: detailSlot(link.identifier, link.workspace),
+  };
 }
 
 /// Uploads inside a description, drawn rather than linked.
@@ -118,7 +132,7 @@ export default function IssuePanel({
   details: Record<string, IssueDetail>;
   loading: boolean;
   unavailable: IssueUnavailable | null;
-  onUnlink: (sessionId: string, key: string) => void;
+  onUnlink: (sessionId: string, key: string, workspace: string | null) => void;
 }) {
   if (!issues.length) {
     return (
@@ -134,16 +148,20 @@ export default function IssuePanel({
 
       {issues.map((issue, i) => (
         <IssueRow
-          key={issue.id}
+          // By slot: a blind link's id is its identifier, and two workspaces'
+          // `ENG-12` would otherwise share a key.
+          key={detailSlot(issue.id, issue.workspace)}
           issue={issue}
-          detail={details[issue.identifier] ?? null}
+          detail={details[detailSlot(issue.identifier, issue.workspace)] ?? null}
           loading={loading}
           // Newest tag last, and the first row open: a session tagged once has
           // its issue open, and one tagged three times opens on the oldest —
           // which is the one it was started against.
           defaultOpen={i === 0}
           collapsible={issues.length > 1}
-          onUnlink={sessionId ? () => onUnlink(sessionId, issue.id) : undefined}
+          onUnlink={
+            sessionId ? () => onUnlink(sessionId, issue.id, issue.workspace ?? null) : undefined
+          }
         />
       ))}
     </div>
@@ -362,7 +380,9 @@ function IssueBody({ detail, loading }: { detail: IssueDetail | null; loading: b
 
       {detail.description ? (
         <div className="text-chat">
-          <Markdown components={ASSETS}>{detail.description}</Markdown>
+          <IssueWorkspaceContext.Provider value={detail.workspace ?? null}>
+            <Markdown components={ASSETS}>{detail.description}</Markdown>
+          </IssueWorkspaceContext.Provider>
         </div>
       ) : (
         <p className="text-ui text-muted-foreground">No description.</p>

@@ -14,12 +14,13 @@
 //! repository beside it, and a prompt is full of them.
 //!
 //! Two halves, and they answer different questions. The **connection** is the
-//! account: Linear's is a personal API key in `credentials.json`, GitHub's is
-//! `gh`'s own token and nothing of ours. Both are workspace-wide — no project
-//! is bound to a team — though the GitHub half reads one *repository* at a
-//! time, since a number is only addressable within one. The **link** is per
-//! session, recorded on its index entry, and it is what draws the panel's tab
-//! and what a tag resolves to.
+//! account: Linear's is one personal API key per workspace in
+//! `credentials.json`, GitHub's is `gh`'s own token and nothing of ours. A
+//! project — or the Space it is filed in — may pin one Linear workspace, and
+//! everything else reads the default; no project is bound to a *team*. The
+//! GitHub half reads one *repository* at a time, since a number is only
+//! addressable within one. The **link** is per session, recorded on its index
+//! entry, and it is what draws the panel's tab and what a tag resolves to.
 
 #[path = "github.rs"]
 pub mod github;
@@ -89,6 +90,14 @@ pub struct IssueRef {
     pub identifier: String,
     pub title: String,
     pub url: String,
+    /// The Linear workspace (`organization.id`) it was read from. A hint, not
+    /// the address: a link written before there could be two has none, and an
+    /// older build rewriting the index drops it, so a read without one falls
+    /// back through [`key_order`]. Left off the wire when absent, so an index
+    /// written before the field reads back byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workspace: Option<String>,
 }
 
 /// Where an issue has got to, folded from the tracker's own vocabulary.
@@ -241,6 +250,12 @@ pub struct Issue {
     /// whether anybody has started is the row asking to be clicked through.
     #[serde(default)]
     pub pull_requests: Vec<u32>,
+    /// The Linear workspace this row was read from, stamped by the command that
+    /// read it — `linear.rs` is handed a key and never learns whose. `None`
+    /// under GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workspace: Option<String>,
 }
 
 impl Issue {
@@ -253,6 +268,7 @@ impl Issue {
             identifier: self.identifier.clone(),
             title: self.title.clone(),
             url: self.url.clone(),
+            workspace: self.workspace.clone(),
         }
     }
 }
@@ -327,6 +343,12 @@ pub struct IssueQuery {
     /// id, since that is what `gh issue list --label` takes and what a label is
     /// addressed by on GitHub.
     pub label: Option<String>,
+    /// Linear labels by name, matching an issue carrying **any** of them — a
+    /// repo pinned to Backend, Web and Landing lists all three. Linear's alone:
+    /// GitHub narrows by the single `label` above. By name rather than id,
+    /// since Linear files one label per team under a shared name and its API,
+    /// unlike its UI, does not fold them together.
+    pub labels: Vec<String>,
     /// Which half of the workspace to read: the unfinished issues, or the done
     /// and cancelled ones.
     ///
@@ -337,6 +359,9 @@ pub struct IssueQuery {
     /// makes that possible: a read that never happens costs nothing, and the
     /// two answers cache under separate keys.
     pub settled: bool,
+    /// Which Linear workspace to read, by `organization.id`. `None` is the
+    /// default workspace; ignored under GitHub.
+    pub workspace: Option<String>,
 }
 
 /// The filter row's options, read once per connection rather than per keystroke.
@@ -381,6 +406,17 @@ pub struct TrackerAccount {
     pub user_id: String,
     pub user_name: String,
     pub org_name: String,
+    /// Linear's `organization.id`, which is what tells one connected workspace
+    /// from another. `None` under GitHub, and on an account cached before there
+    /// could be two — which is what sends [`linear_workspaces`] to ask again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workspace_id: Option<String>,
+    /// The workspace's slug in its URLs, `linear.app/<url_key>/…`. For matching
+    /// a link back to its workspace and nothing else: an admin can rename it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url_key: Option<String>,
 }
 
 /// Why there is nothing to show.
@@ -398,6 +434,10 @@ pub enum IssueUnavailable {
     Unauthorized,
     /// The workspace could not be reached — offline, or the API is down.
     Offline(String),
+    /// The tracker answered, and has no such issue. Apart from `Other` because
+    /// it is the one failure that lets a lookup go on to another workspace:
+    /// anything else might hide the right issue behind a refusal.
+    NotFound(String),
     Other(String),
 }
 
@@ -420,10 +460,10 @@ impl std::fmt::Display for IssueUnavailable {
             ),
             Self::Unauthorized => write!(
                 f,
-                "Linear rejected the stored key. Reconnect it in Dray's settings."
+                "Linear rejected the key stored for this workspace. Reconnect it in Dray's settings."
             ),
             Self::Offline(detail) => write!(f, "Could not reach Linear: {detail}"),
-            Self::Other(detail) => write!(f, "{detail}"),
+            Self::NotFound(detail) | Self::Other(detail) => write!(f, "{detail}"),
         }
     }
 }
@@ -459,9 +499,13 @@ const CREDENTIALS_FILE: &str = "credentials.json";
 /// Serializes writers, like every other whole-file rewrite here.
 static CREDENTIALS_LOCK: Mutex<()> = Mutex::const_new(());
 
-/// What Linear's key is filed under, on disk. GitHub's credential is `gh`'s own
-/// and Dray stores none, so this is the only entry.
+/// What the **default** Linear workspace's key is filed under, on disk. The
+/// only entry an older build knows to read, which is why the default never
+/// leaves it. GitHub's credential is `gh`'s own and Dray stores none.
 const LINEAR_CREDENTIAL: &str = "linear";
+
+/// Every further Linear workspace is filed as `linear/<organization id>`.
+const LINEAR_EXTRA_PREFIX: &str = "linear/";
 
 async fn credentials_path() -> Result<PathBuf, String> {
     get_home_app_dir()
@@ -484,21 +528,395 @@ async fn read_credentials() -> HashMap<String, String> {
     })
 }
 
-/// Linear's key, or `None` where nothing is stored.
-///
-/// Unreadable reads as *not connected* rather than as an error — the cure is
-/// the same either way, which is to connect again.
-pub async fn read_key() -> Option<String> {
-    read_credentials()
-        .await
-        .get(LINEAR_CREDENTIAL)
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty())
+/// One connected Linear workspace, key included. Never handed to the frontend:
+/// [`TrackerAccount`] is the half that is.
+#[derive(Debug, Clone)]
+struct LinearWorkspace {
+    /// `linear` for the default, `linear/<org id>` for the rest.
+    entry: String,
+    key: String,
+    account: TrackerAccount,
+    /// Other entries filing this same workspace, with their keys, from the same
+    /// read — what an older build can leave beside the default.
+    also: Vec<(String, String)>,
 }
 
-/// [`read_key`] for a read that cannot go on without one.
-async fn linear_key() -> Result<String, IssueUnavailable> {
-    read_key().await.ok_or(IssueUnavailable::NotConnected)
+impl LinearWorkspace {
+    fn id(&self) -> Option<&str> {
+        self.account.workspace_id.as_deref()
+    }
+}
+
+fn extra_entry(workspace: &str) -> String {
+    format!("{LINEAR_EXTRA_PREFIX}{workspace}")
+}
+
+/// The stored Linear keys by entry: the default first, the rest in entry order
+/// so every reader agrees which one is promoted next. An empty key reads as
+/// absent, the same as a missing entry.
+fn linear_entries(creds: &HashMap<String, String>) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = creds
+        .iter()
+        .filter(|(entry, _)| *entry == LINEAR_CREDENTIAL || entry.starts_with(LINEAR_EXTRA_PREFIX))
+        .map(|(entry, key)| (entry.clone(), key.trim().to_string()))
+        .filter(|(_, key)| !key.is_empty())
+        .collect();
+    entries.sort_by(|(a, _), (b, _)| {
+        (a != LINEAR_CREDENTIAL, a).cmp(&(b != LINEAR_CREDENTIAL, b))
+    });
+    entries
+}
+
+/// Moves the next workspace into the default slot where that slot is empty and
+/// others are connected. Answers whether anything moved.
+///
+/// Everything here leans on one invariant — if any Linear workspace is
+/// connected, `linear` holds one — and two things break it: disconnecting the
+/// default, and an older build disconnecting, since the default is the only
+/// entry it knows to remove.
+fn repair_default(creds: &mut HashMap<String, String>) -> bool {
+    let Some((entry, key)) = linear_entries(creds).into_iter().next() else {
+        return false;
+    };
+    if entry == LINEAR_CREDENTIAL {
+        return false;
+    }
+
+    creds.remove(&entry);
+    creds.insert(LINEAR_CREDENTIAL.to_string(), key);
+    true
+}
+
+/// Replaces `account`'s cached row, matched on workspace.
+fn remember(accounts: &mut Vec<TrackerAccount>, account: TrackerAccount) {
+    accounts.retain(|known| known.workspace_id != account.workspace_id);
+    accounts.push(account);
+}
+
+/// A key's fingerprint: enough to tell two keys apart, never enough to be one.
+fn fingerprint(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(key.as_bytes())
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// How long a key Linear would not verify is left alone before it is asked
+/// again. Every Linear command lists the workspaces, so without this a revoked
+/// key costs a `viewer` round trip on each picker keystroke and each image.
+const VERIFY_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Keys whose verify failed, by fingerprint, and when. In memory only: a
+/// restart is a fair moment to ask again.
+static FAILED_VERIFY: std::sync::Mutex<Vec<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn failed_recently(print: &str) -> bool {
+    let failed = FAILED_VERIFY.lock().unwrap_or_else(|e| e.into_inner());
+    failed
+        .iter()
+        .any(|(seen, at)| seen == print && at.elapsed() < VERIFY_RETRY)
+}
+
+/// [`linear::verify`], skipped for a key that failed within [`VERIFY_RETRY`].
+async fn verify_unless_failed(key: &str) -> Result<TrackerAccount, IssueUnavailable> {
+    if failed_recently(&fingerprint(key)) {
+        return Err(IssueUnavailable::Other("failed a moment ago".into()));
+    }
+    linear::verify(key).await
+}
+
+fn note_failed(print: String) {
+    let mut failed = FAILED_VERIFY.lock().unwrap_or_else(|e| e.into_inner());
+    failed.retain(|(seen, at)| *seen != print && at.elapsed() < VERIFY_RETRY);
+    failed.push((print, std::time::Instant::now()));
+}
+
+/// Whether an account came from Linear rather than standing in for a key it
+/// would not answer for. Only a verified account is ever remembered as the
+/// default's: a stand-in written there would never be asked about again.
+fn verified(account: &TrackerAccount) -> bool {
+    account.workspace_id.is_some() && !account.user_id.is_empty()
+}
+
+/// Every connected Linear workspace, the default first.
+///
+/// `credentials.json` says what is connected and `settings.json` only
+/// remembers whose each key is. An entry with no remembered account — one
+/// written before there could be two, or one an older build wiped by rewriting
+/// settings without the field — is asked of Linear once and remembered, so this
+/// reaches the network only the first time. The default's account is trusted
+/// only for the key it was learned from (`linear_account_key`). A key Linear
+/// will not answer for still lists, under whatever is known about it, rather
+/// than vanishing: its settings row is where the reader disconnects it, and it
+/// is not asked again for [`VERIFY_RETRY`].
+///
+/// Unreadable credentials read as *not connected* rather than as an error — the
+/// cure is the same either way, which is to connect again.
+async fn linear_workspaces() -> Vec<LinearWorkspace> {
+    let mut creds = read_credentials().await;
+    if repair_default(&mut creds) {
+        let _guard = CREDENTIALS_LOCK.lock().await;
+        // Re-read under the lock, so the repair is written only if it still
+        // holds against whatever landed in between.
+        creds = read_credentials().await;
+        if repair_default(&mut creds) {
+            if let Err(e) = write_credentials(&creds).await {
+                eprintln!("[credentials repair err] {e}");
+            }
+        }
+    }
+
+    let cached = settings::read().await;
+    let mut learned: Vec<(bool, TrackerAccount, String)> = Vec::new();
+    let mut workspaces: Vec<LinearWorkspace> = Vec::new();
+
+    for (entry, key) in linear_entries(&creds) {
+        let is_default = entry == LINEAR_CREDENTIAL;
+        let named = entry.strip_prefix(LINEAR_EXTRA_PREFIX).map(str::to_string);
+
+        let remembered = if is_default {
+            let same_key = cached.linear_account_key.as_deref() == Some(fingerprint(&key).as_str());
+            cached.linear_account.clone().filter(|account| same_key && verified(account))
+        } else {
+            cached
+                .linear_workspaces
+                .iter()
+                .find(|account| account.workspace_id == named)
+                .cloned()
+        };
+
+        let account = match remembered {
+            Some(account) => account,
+            None => match verify_unless_failed(&key).await {
+                Ok(account) => {
+                    learned.push((is_default, account.clone(), fingerprint(&key)));
+                    account
+                }
+                Err(e) => {
+                    if !failed_recently(&fingerprint(&key)) {
+                        eprintln!("[linear workspace {entry}] {e:?}");
+                        note_failed(fingerprint(&key));
+                    }
+                    TrackerAccount {
+                        tracker: IssueTracker::Linear,
+                        user_id: String::new(),
+                        user_name: String::new(),
+                        org_name: cached
+                            .linear_account
+                            .as_ref()
+                            .filter(|_| is_default)
+                            .map(|account| account.org_name.clone())
+                            .unwrap_or_else(|| "Linear".to_string()),
+                        workspace_id: named,
+                        url_key: None,
+                    }
+                }
+            },
+        };
+
+        // One workspace connected twice — an older build reconnecting the
+        // default with a key for a workspace already filed as an extra — lists
+        // once, under the default.
+        if let Some(seen) = workspaces
+            .iter_mut()
+            .find(|seen| account.workspace_id.is_some() && seen.account.workspace_id == account.workspace_id)
+        {
+            seen.also.push((entry, key));
+            continue;
+        }
+
+        workspaces.push(LinearWorkspace { entry, key, account, also: Vec::new() });
+    }
+
+    if !learned.is_empty() {
+        let written = settings::update(|next| {
+            for (is_default, account, print) in learned {
+                if is_default {
+                    next.linear_account = Some(account.clone());
+                    next.linear_account_key = Some(print);
+                }
+                remember(&mut next.linear_workspaces, account);
+            }
+        })
+        .await;
+        if let Err(e) = written {
+            eprintln!("[settings write err] linear workspaces not remembered: {e:#}");
+        }
+    }
+
+    workspaces
+}
+
+/// The named workspace, or the default where `None`. A workspace that is named
+/// and not connected answers nothing, never the default instead: the reader
+/// asked about one workspace and must not be answered from another.
+fn pick<'a>(all: &'a [LinearWorkspace], workspace: Option<&str>) -> Option<&'a LinearWorkspace> {
+    match workspace {
+        None => all.first(),
+        Some(id) => all.iter().find(|w| w.id() == Some(id)),
+    }
+}
+
+/// The workspace, and so the key, a read that names one (or means the default)
+/// goes out with.
+async fn linear_workspace(workspace: Option<&str>) -> Result<LinearWorkspace, IssueUnavailable> {
+    pick(&linear_workspaces().await, workspace)
+        .cloned()
+        .ok_or(IssueUnavailable::NotConnected)
+}
+
+/// The order to try workspaces in when nothing names one for certain: each
+/// preferred id as given, then the default, then the rest. An id nothing is
+/// connected under is skipped, and nothing is tried twice.
+fn key_order<'a>(all: &'a [LinearWorkspace], preferred: &[Option<&str>]) -> Vec<&'a LinearWorkspace> {
+    let named = preferred
+        .iter()
+        .flatten()
+        .filter_map(|id| all.iter().find(|w| w.id() == Some(*id)));
+
+    let mut order: Vec<&LinearWorkspace> = Vec::new();
+    for workspace in named.chain(all.iter()) {
+        if !order.iter().any(|seen| seen.entry == workspace.entry) {
+            order.push(workspace);
+        }
+    }
+    order
+}
+
+/// The workspace slug a Linear issue URL carries: `acme` in
+/// `https://linear.app/acme/issue/ENG-12/…`.
+fn url_key_of(url: &str) -> Option<&str> {
+    let slug = url.strip_prefix("https://linear.app/")?.split('/').next()?;
+    (!slug.is_empty()).then_some(slug)
+}
+
+/// Which connected workspace a Linear URL belongs to, by its slug.
+fn workspace_of_url(all: &[LinearWorkspace], url: &str) -> Option<String> {
+    let slug = url_key_of(url)?;
+    all.iter()
+        .find(|w| w.account.url_key.as_deref() == Some(slug))
+        .and_then(|w| w.id().map(str::to_string))
+}
+
+/// A project's own pin, else its Space's, else `None` for the default.
+///
+/// A pin naming a workspace that is no longer connected is skipped rather than
+/// honoured, so it falls through to the next level instead of reading as
+/// nothing at all. Stated again in the frontend's `linearWorkspace.ts`, which
+/// needs the answer to open the issues page; neither side can call the other.
+pub fn pinned_workspace(
+    project: Option<&crate::projects::Project>,
+    space_pins: &std::collections::BTreeMap<String, String>,
+    connected: &[&str],
+) -> Option<String> {
+    let project = project?;
+    let usable = |pin: &String| connected.contains(&pin.as_str());
+
+    project
+        .linear_workspace
+        .as_ref()
+        .filter(|pin| usable(pin))
+        .or_else(|| {
+            project
+                .space
+                .as_ref()
+                .and_then(|space| space_pins.get(space))
+                .filter(|pin| usable(pin))
+        })
+        .cloned()
+}
+
+/// [`pinned_workspace`] for the project a directory sits in. A worktree sits
+/// inside its project, so a session's own `cwd` is enough.
+async fn pinned_for_dir(dir: &str, all: &[LinearWorkspace]) -> Option<String> {
+    if all.len() < 2 {
+        return None;
+    }
+
+    let projects = crate::projects::list_projects().await.ok()?;
+    let space_pins = settings::read().await.linear_space_pins;
+    let connected: Vec<&str> = all.iter().filter_map(LinearWorkspace::id).collect();
+
+    pinned_workspace(
+        crate::projects::project_for_dir(&projects, dir),
+        &space_pins,
+        &connected,
+    )
+}
+
+/// The workspace a link written without asking Linear belongs to: the one its
+/// URL names, else the one its session's project reads. Recorded as an explicit
+/// id, so moving the default later does not move the link with it.
+pub async fn workspace_for_link(url: Option<&str>, dir: &str) -> Option<String> {
+    let all = linear_workspaces().await;
+
+    if let Some(by_url) = url.and_then(|url| workspace_of_url(&all, url)) {
+        return Some(by_url);
+    }
+
+    match pinned_for_dir(dir, &all).await {
+        Some(pinned) => Some(pinned),
+        None => all.first().and_then(|w| w.id().map(str::to_string)),
+    }
+}
+
+/// The connected workspace a Linear issue URL names by its slug, if any —
+/// what narrows `dray issue unlink --url` to one workspace's link.
+pub async fn workspace_named_by_url(url: &str) -> Option<String> {
+    workspace_of_url(&linear_workspaces().await, url)
+}
+
+/// Stamps where an issue was read from. `linear.rs` is handed a key and never
+/// learns whose, so the caller that chose the key is the one that can say.
+fn stamp(mut detail: IssueDetail, workspace: &LinearWorkspace) -> IssueDetail {
+    detail.issue.workspace = workspace.id().map(str::to_string);
+    detail
+}
+
+/// The issue a link or a tag names, looked for across `order`.
+///
+/// **Linear's own id first, in every workspace**, before any identifier: a UUID
+/// names one issue everywhere, so it cannot be answered by the wrong one, where
+/// `ENG-12` can exist in two workspaces. Only then the identifier, in order —
+/// and past a workspace only when it answers **not found**. A refusal, a rate
+/// limit or an outage there says nothing about where the issue lives, and
+/// moving on would link another workspace's `ENG-12` in its place.
+async fn find_linear(
+    order: &[&LinearWorkspace],
+    identifier: &str,
+    id: Option<&str>,
+) -> Result<IssueDetail, IssueUnavailable> {
+    let mut first_err = None;
+
+    if let Some(id) = id.filter(|id| linear::is_stable_id(id)) {
+        for workspace in order {
+            match linear::get_issue_by_id(&workspace.key, id, identifier).await {
+                Ok(Some(detail)) => return Ok(stamp(detail, workspace)),
+                Ok(None) => {}
+                Err(e @ IssueUnavailable::Offline(_)) => return Err(e),
+                // Safe to go on: no other workspace can answer for this id.
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+    }
+
+    for workspace in order {
+        match linear::get_issue_by_identifier(&workspace.key, identifier).await {
+            Ok(detail) => return Ok(stamp(detail, workspace)),
+            Err(e @ IssueUnavailable::NotFound(_)) => {
+                first_err.get_or_insert(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(first_err.unwrap_or(IssueUnavailable::NotConnected))
 }
 
 /// Writes the file whole at `0600`, the mode riding the temp file's create —
@@ -519,24 +937,102 @@ fn write_credentials_at(
         .map_err(|e| format!("could not write the credentials file: {e}"))
 }
 
-async fn write_key(key: &str) -> Result<(), String> {
+/// Files `key` under `entry`, replacing whatever was there.
+async fn write_key(entry: &str, key: &str) -> Result<(), String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
 
     let mut next = read_credentials().await;
-    next.insert(LINEAR_CREDENTIAL.to_string(), key.to_string());
+    next.insert(entry.to_string(), key.to_string());
 
     write_credentials(&next).await
 }
 
-async fn delete_key() -> Result<(), String> {
+/// What Disconnect asks of the credentials file. Every key here was read
+/// before the lock was taken, which is the whole difficulty: a Make default or
+/// a reconnect can land in between.
+struct Removal<'a> {
+    /// Every entry filed for the workspace, the listed one first, each with
+    /// the key it held then. One holding anything else now is left alone.
+    entries: Vec<(String, &'a str)>,
+    /// `linear/<id>`, where the workspace has an id.
+    own_entry: Option<String>,
+    /// Every other listed workspace's key.
+    others: Vec<&'a str>,
+}
+
+/// Removes every entry filed for one workspace, promoting the next into the
+/// default slot where the default was among them. Answers the key now in the
+/// default slot, so the caller can say whose it is.
+///
+/// Every entry, not the one listed: an older build reconnecting the default can
+/// leave the same workspace under `linear` and `linear/<id>` both, and removing
+/// one would promote the other straight back.
+async fn delete_keys(removal: &Removal<'_>) -> Result<Option<String>, String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
 
     let mut next = read_credentials().await;
+    let removed = remove_checked(&mut next, removal)?;
+    repair_default(&mut next);
+    let default = next.get(LINEAR_CREDENTIAL).map(|key| key.trim().to_string());
+
     // Already gone is what the caller asked for, and rewriting the file to say
     // the same thing is work with no reader.
-    if next.remove(LINEAR_CREDENTIAL).is_none() {
-        return Ok(());
+    if removed {
+        write_credentials(&next).await?;
     }
+    Ok(default)
+}
+
+/// [`delete_keys`]'s removal, apart from the file. Answers whether anything
+/// was removed.
+///
+/// The caller clears the workspace's pins next, so what matters is whether it
+/// is gone afterwards, and that is judged on the result rather than entry by
+/// entry. It is still connected if its key is still anywhere (a Make default
+/// moved it), if its listed entry holds a key no other workspace had (it was
+/// reconnected there), or if its own `linear/<id>` holds anything (it was
+/// reconnected as an extra). Any of those is refused and nothing is written.
+/// Another workspace's key in its listed entry is not: that is a promotion
+/// after another Disconnect already removed it.
+fn remove_checked(creds: &mut HashMap<String, String>, removal: &Removal) -> Result<bool, String> {
+    let mut next = creds.clone();
+    let mut removed = false;
+    for (entry, key) in &removal.entries {
+        if next.get(entry).map(|held| held.trim()) == Some(*key) {
+            removed |= next.remove(entry).is_some();
+        }
+    }
+
+    let held = |entry: &str| next.get(entry).map(|held| held.trim()).filter(|held| !held.is_empty());
+    let (entry, key) = &removal.entries[0];
+    let moved = linear_entries(&next).iter().any(|(_, held)| held == key);
+    let replaced = held(entry).is_some_and(|held| !removal.others.contains(&held));
+    let reconnected = removal.own_entry.as_deref().and_then(held).is_some();
+    if moved || replaced || reconnected {
+        return Err("The Linear workspaces changed while that was saving. Try again.".into());
+    }
+
+    *creds = next;
+    Ok(removed)
+}
+
+/// Makes `to` the default by swapping it with the current one's entry, so an
+/// older build — which reads the default slot alone — follows the change.
+///
+/// Both keys are checked against the file under the lock first: they were read
+/// before it was taken, and a disconnect landing in between would otherwise
+/// have this write a key the reader just asked to forget back into the file.
+async fn swap_default(from: &LinearWorkspace, from_id: &str, to: &LinearWorkspace) -> Result<(), String> {
+    let _guard = CREDENTIALS_LOCK.lock().await;
+
+    let mut next = read_credentials().await;
+    let holds = |entry: &str, key: &str| next.get(entry).map(|held| held.trim()) == Some(key);
+    if !holds(LINEAR_CREDENTIAL, &from.key) || !holds(&to.entry, &to.key) {
+        return Err("The Linear workspaces changed while that was saving. Try again.".into());
+    }
+    next.remove(&to.entry);
+    next.insert(LINEAR_CREDENTIAL.to_string(), to.key.clone());
+    next.insert(extra_entry(from_id), from.key.clone());
 
     write_credentials(&next).await
 }
@@ -709,16 +1205,22 @@ pub struct ExpandedTags {
 /// passes no `--title`. `tag_text` drops the trailing space for one of these and
 /// `openIssue` reads the empty address as none, so a ⌘-click on its tag opens
 /// no page rather than one that is not there.
-fn bare_ref(identifier: String) -> IssueRef {
+fn bare_ref(identifier: String, workspace: Option<&str>) -> IssueRef {
+    // By shape, like everything else that has to name a tracker without being
+    // told one: a bare link is written down exactly when the tracker could not
+    // be asked, so the spelling is all there is to go on.
+    let tracker = IssueTracker::of(&identifier);
+
     IssueRef {
-        // By shape, like everything else that has to name a tracker without
-        // being told one: a bare link is written down exactly when the tracker
-        // could not be asked, so the spelling is all there is to go on.
-        tracker: IssueTracker::of(&identifier),
+        tracker,
         id: identifier.clone(),
         identifier,
         title: String::new(),
         url: String::new(),
+        workspace: match tracker {
+            IssueTracker::Linear => workspace.map(str::to_string),
+            IssueTracker::Github => None,
+        },
     }
 }
 
@@ -750,7 +1252,13 @@ fn bare_ref(identifier: String) -> IssueRef {
 ///
 /// Sequential rather than concurrent: a prompt carries a handful of tags at
 /// most, and one at a time keeps the order they were written in.
-pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
+///
+/// **A Linear tag is looked for in the workspace `dir`'s project reads
+/// first**, then the default, then the rest. `ENG-12` can exist in two
+/// workspaces, so the order is the whole of which one a tag means: the picker
+/// only ever offers the project's own, and a tag typed by hand is taken to mean
+/// the same.
+pub async fn expand_tags(prompt: &str, named: &[String], dir: &str) -> ExpandedTags {
     let wanted = wanted_tags(prompt, named);
 
     if wanted.is_empty() {
@@ -761,10 +1269,20 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
         };
     }
 
-    // `None` is ordinary: nobody has connected Linear. The named issues below
+    // Empty is ordinary: nobody has connected Linear. The named issues below
     // still have to reach the prompt, so this is not a return — and a GitHub
     // tag in the same prompt does not need it at all.
-    let key = read_key().await;
+    // A prompt tagging GitHub alone needs none of this, and the list can cost
+    // a Linear round trip.
+    let wants_linear = wanted
+        .iter()
+        .any(|tag| IssueTracker::of(&tag.id) == IssueTracker::Linear);
+    let all = if wants_linear { linear_workspaces().await } else { Vec::new() };
+    let pinned = pinned_for_dir(dir, &all).await;
+    let order = key_order(&all, &[pinned.as_deref()]);
+    // What a named issue nobody could resolve is filed under: the workspace it
+    // would have been looked for in first.
+    let fallback = order.first().and_then(|w| w.id());
 
     let mut resolved = Vec::with_capacity(wanted.len());
     for WantedTag { id: tag, .. } in &wanted {
@@ -773,10 +1291,7 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
         let found = match IssueTracker::of(tag) {
             // No id to try: a tag is a spelling, and the whole point of this
             // call is to find out what it names.
-            IssueTracker::Linear => match &key {
-                Some(key) => linear::get_issue(key, tag, None).await,
-                None => Err(IssueUnavailable::NotConnected),
-            },
+            IssueTracker::Linear => find_linear(&order, tag, None).await,
             IssueTracker::Github => github::get_issue(tag).await,
         };
 
@@ -792,7 +1307,7 @@ pub async fn expand_tags(prompt: &str, named: &[String]) -> ExpandedTags {
         });
     }
 
-    apply_tags(prompt, &wanted, resolved)
+    apply_tags(prompt, &wanted, resolved, fallback)
 }
 
 /// One issue this prompt is about, and how it came to be here.
@@ -853,6 +1368,7 @@ fn apply_tags(
     prompt: &str,
     wanted: &[WantedTag],
     resolved: Vec<Option<IssueRef>>,
+    workspace: Option<&str>,
 ) -> ExpandedTags {
     let mut mentioned = Vec::new();
     let mut linked = Vec::new();
@@ -866,7 +1382,7 @@ fn apply_tags(
             // a link that was asked for, so it goes in bare rather than being
             // lost — in the text already or not.
             None if !tag.named => continue,
-            None => bare_ref(tag.id.clone()),
+            None => bare_ref(tag.id.clone(), workspace),
         };
 
         // Only what the text does not already say: repeating a tag under the
@@ -897,20 +1413,26 @@ fn apply_tags(
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-/// What the settings dialog draws. `None` is a tracker nobody has connected.
+/// What the settings dialog draws.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationsView {
-    pub linear: Option<TrackerAccount>,
+    /// Every connected Linear workspace, **the default first**. Empty is
+    /// Linear not connected.
+    pub linear: Vec<TrackerAccount>,
+    /// Space name → the Linear workspace its projects read, where one is
+    /// pinned. Here rather than on a Space because a Space has no record of its
+    /// own to put it on.
+    pub linear_space_pins: std::collections::BTreeMap<String, String>,
     pub github: Option<TrackerAccount>,
 }
 
 /// The connected accounts.
 ///
 /// **Two connections that mean different things.** Linear's is read from two
-/// files at once: `credentials.json` says whether there is a key and
-/// `settings.json` remembers whose it is, so a cached account with no key
+/// files at once: `credentials.json` says which keys there are and
+/// `settings.json` remembers whose each is, so a cached account with no key
 /// behind it reads as disconnected — the key *is* the connection, and the cache
 /// only saves a round trip to draw a name. GitHub's is `gh`'s own token, which
 /// Dray neither holds nor can invalidate, so the only honest question is
@@ -920,8 +1442,11 @@ pub struct IntegrationsView {
 /// spawns nothing to find out it has not.
 #[tauri::command]
 pub async fn get_integrations() -> IntegrationsView {
-    let cached = settings::read().await.linear_account;
-    let connected = read_key().await.is_some();
+    let linear = linear_workspaces()
+        .await
+        .into_iter()
+        .map(|workspace| workspace.account)
+        .collect();
 
     let github = match crate::binpath::gh().await {
         Some(_) => github::account().await.ok(),
@@ -929,7 +1454,8 @@ pub async fn get_integrations() -> IntegrationsView {
     };
 
     IntegrationsView {
-        linear: connected.then_some(cached).flatten(),
+        linear,
+        linear_space_pins: settings::read().await.linear_space_pins,
         github,
     }
 }
@@ -945,12 +1471,16 @@ pub async fn github_repo(cwd: String) -> Option<String> {
     crate::git::github_slug(&cwd).await
 }
 
-/// Validates a personal API key, then saves it.
+/// Validates a personal API key, then saves it as a workspace.
 ///
 /// Validated first, always: a key stored without being tried is one the reader
 /// finds out about the next time they open the picker, by which point they have
 /// left settings and the failure looks like the feature being broken. The
-/// identity comes back from the same call, which is what the row draws.
+/// identity comes back from the same call, which is what the row draws — and
+/// which workspace it is, since a Linear key belongs to exactly one.
+///
+/// A key for a workspace already connected **replaces** that workspace's key
+/// rather than adding a second row: it is the same workspace, reauthorized.
 #[tauri::command]
 pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
     let key = key.trim().to_string();
@@ -964,34 +1494,166 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
                 .to_string()
         }
         IssueUnavailable::Offline(detail) => format!("Could not reach Linear: {detail}"),
-        IssueUnavailable::Other(detail) => detail,
+        IssueUnavailable::NotFound(detail) | IssueUnavailable::Other(detail) => detail,
         IssueUnavailable::NotConnected => "No key.".to_string(),
     })?;
 
-    write_key(&key).await?;
+    let Some(id) = account.workspace_id.clone() else {
+        return Err("Linear did not say which workspace that key belongs to.".into());
+    };
 
-    settings::update(|next| next.linear_account = Some(account))
-        .await
-        .map_err(|e| e.to_string())?;
+    let connected = linear_workspaces().await;
+    let is_default = match connected.first() {
+        None => true,
+        Some(default) => default.id() == Some(id.as_str()),
+    };
+    let entry = if is_default {
+        LINEAR_CREDENTIAL.to_string()
+    } else {
+        extra_entry(&id)
+    };
+
+    write_key(&entry, &key).await?;
+
+    settings::update(|next| {
+        if is_default {
+            next.linear_account = Some(account.clone());
+            next.linear_account_key = Some(fingerprint(&key));
+        }
+        remember(&mut next.linear_workspaces, account);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     // After the key and the account are both down, so this reports a connection
     // that exists rather than an attempt. The account itself is never sent —
-    // only that a tracker is now connected.
-    crate::analytics::feature_used("linear_connected");
+    // only that a tracker is now connected, or that another workspace is.
+    crate::analytics::feature_used(if connected.is_empty() {
+        "linear_connected"
+    } else {
+        "linear_workspace_added"
+    });
 
     Ok(get_integrations().await)
 }
 
-/// Forgets the key and the account. Sessions keep their linked issues: a link
-/// records what the work was about, and it stays readable — identifier and
-/// title are already on it — whether or not anyone can still reach the tracker.
+/// Forgets one workspace's key and account, and every pin naming it. Removing
+/// the default promotes the next workspace in its place.
+///
+/// `None` names the default, which is how a default Linear has never answered
+/// for — and so has no id to be named by — is disconnected at all.
+///
+/// Sessions keep their linked issues: a link records what the work was about,
+/// and it stays readable — identifier and title are already on it — whether or
+/// not anyone can still reach the tracker.
 #[tauri::command]
-pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
-    delete_key().await?;
+pub async fn disconnect_linear(workspace: Option<String>) -> Result<IntegrationsView, String> {
+    let connected = linear_workspaces().await;
+    let Some(target) = pick(&connected, workspace.as_deref()) else {
+        // Already gone is what the caller asked for.
+        return Ok(get_integrations().await);
+    };
+    let target_id = target.id().map(str::to_string);
+    let was_default = target.entry == LINEAR_CREDENTIAL;
 
-    settings::update(|next| next.linear_account = None)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut entries = vec![(target.entry.clone(), target.key.as_str())];
+    entries.extend(target.also.iter().map(|(entry, key)| (entry.clone(), key.as_str())));
+    let removal = Removal {
+        entries,
+        own_entry: target_id.as_deref().map(extra_entry),
+        others: connected
+            .iter()
+            .filter(|w| w.entry != target.entry)
+            .map(|w| w.key.as_str())
+            .collect(),
+    };
+    let new_default = delete_keys(&removal).await?;
+
+    // Whose the promoted key is, where this listing knows it for certain;
+    // otherwise nothing, and the next read asks Linear.
+    let promoted = new_default.as_deref().and_then(|key| {
+        connected
+            .iter()
+            .find(|w| w.key == key && verified(&w.account))
+            .map(|w| (w.account.clone(), fingerprint(key)))
+    });
+
+    settings::update(|next| {
+        if let Some(id) = target_id.as_deref() {
+            next.linear_workspaces
+                .retain(|account| account.workspace_id.as_deref() != Some(id));
+            next.linear_space_pins.retain(|_, pin| pin != id);
+        }
+        if was_default {
+            next.linear_account = promoted.as_ref().map(|(account, _)| account.clone());
+            next.linear_account_key = promoted.map(|(_, print)| print);
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(id) = target_id.as_deref() {
+        crate::projects::clear_linear_workspace(id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(get_integrations().await)
+}
+
+/// Makes a connected workspace the default: what an unpinned project reads.
+#[tauri::command]
+pub async fn set_default_linear_workspace(workspace: String) -> Result<IntegrationsView, String> {
+    let connected = linear_workspaces().await;
+    let Some(target) = pick(&connected, Some(&workspace)) else {
+        return Err("That Linear workspace is not connected.".into());
+    };
+    let current = &connected[0];
+    if target.entry == current.entry {
+        return Ok(get_integrations().await);
+    }
+    // The current default has to move to an entry named by its own id, and a
+    // key Linear has never answered for has none to move to.
+    let Some(current_id) = current.id() else {
+        return Err(format!(
+            "Linear has not said which workspace {}'s key belongs to. Disconnect it first.",
+            current.account.org_name
+        ));
+    };
+
+    swap_default(current, current_id, target).await?;
+
+    // Only an account Linear answered for is remembered as the default's; a
+    // stand-in there would never be asked about again.
+    let account = verified(&target.account).then(|| target.account.clone());
+    let print = account.as_ref().map(|_| fingerprint(&target.key));
+    settings::update(|next| {
+        next.linear_account = account;
+        next.linear_account_key = print;
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(get_integrations().await)
+}
+
+/// Pins a Space to a Linear workspace, or clears its pin with `None`. Every
+/// project filed in the Space reads it, unless the project pins its own.
+#[tauri::command]
+pub async fn set_space_linear_workspace(
+    space: String,
+    workspace: Option<String>,
+) -> Result<IntegrationsView, String> {
+    settings::update(|next| match workspace {
+        Some(workspace) => {
+            next.linear_space_pins.insert(space, workspace);
+        }
+        None => {
+            next.linear_space_pins.remove(&space);
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(get_integrations().await)
 }
@@ -1006,9 +1668,13 @@ pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
 pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, IssueUnavailable> {
     match query.tracker {
         IssueTracker::Linear => {
-            let key = linear_key().await?;
+            let workspace = linear_workspace(query.workspace.as_deref()).await?;
 
-            linear::list_issues(&key, &query, limit).await
+            let mut issues = linear::list_issues(&workspace.key, &query, limit).await?;
+            for issue in &mut issues {
+                issue.workspace = workspace.id().map(str::to_string);
+            }
+            Ok(issues)
         }
         // A number is only addressable within a repository, so there is no
         // workspace-wide read to fall back to — and reading every attached
@@ -1026,16 +1692,35 @@ pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, 
 /// drawing a link that already carries the tracker's own id, while the page is
 /// opening a row it just read. Passing it is what keeps an issue readable after
 /// it moves team and its identifier renumbers.
+///
+/// **A named `workspace` is the only one asked, for a link Linear resolved** —
+/// one carrying Linear's own id, which is where it was read. A blind link's
+/// workspace was a guess made without asking (`dray issue link`, a tag that did
+/// not resolve), so it only goes first, through [`key_order`]: then the
+/// workspace its `url` names, then the default, then the rest. So does a link
+/// naming none — written before there could be two, or stripped by an older
+/// build.
 #[tauri::command]
 pub async fn get_issue(
     identifier: String,
     id: Option<String>,
+    workspace: Option<String>,
+    url: Option<String>,
 ) -> Result<IssueDetail, IssueUnavailable> {
     match IssueTracker::of(&identifier) {
         IssueTracker::Linear => {
-            let key = linear_key().await?;
+            let all = linear_workspaces().await;
+            let resolved = id.as_deref().is_some_and(linear::is_stable_id);
 
-            linear::get_issue(&key, &identifier, id.as_deref()).await
+            if let Some(named) = pick(&all, workspace.as_deref()).filter(|_| resolved && workspace.is_some()) {
+                let detail = linear::get_issue(&named.key, &identifier, id.as_deref()).await?;
+                return Ok(stamp(detail, named));
+            }
+
+            let by_url = url.as_deref().and_then(|url| workspace_of_url(&all, url));
+            let order = key_order(&all, &[workspace.as_deref(), by_url.as_deref()]);
+
+            find_linear(&order, &identifier, id.as_deref()).await
         }
         // `id` goes unread: GitHub redirects a transferred issue on its own
         // side, so the identifier keeps working where a Linear one renumbers.
@@ -1066,6 +1751,7 @@ pub async fn update_issue(
     id: String,
     state_id: Option<String>,
     priority: Option<IssuePriority>,
+    workspace: Option<String>,
 ) -> Result<IssueDetail, IssueUnavailable> {
     if let IssueTracker::Github = IssueTracker::of(&identifier) {
         // **GitHub has no priority field at all**, so this is a refusal rather
@@ -1085,11 +1771,12 @@ pub async fn update_issue(
         return github::get_issue(&identifier).await;
     }
 
-    let key = linear_key().await?;
+    let workspace = linear_workspace(workspace.as_deref()).await?;
 
-    linear::update_issue(&key, &id, state_id.as_deref(), priority).await?;
+    linear::update_issue(&workspace.key, &id, state_id.as_deref(), priority).await?;
 
-    linear::get_issue(&key, &identifier, Some(&id)).await
+    let detail = linear::get_issue(&workspace.key, &identifier, Some(&id)).await?;
+    Ok(stamp(detail, &workspace))
 }
 
 /// A file uploaded to an issue, fetched with the stored key.
@@ -1118,11 +1805,32 @@ pub struct IssueAsset {
 /// nearly always are.
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 
+/// An upload is fetched with the key of the issue it came from: `workspace`,
+/// passed by the panel drawing that issue. Then the workspace the URL's first
+/// segment names, then the default, then the rest — but only past a refusal,
+/// since a key from the wrong workspace is refused and any other failure would
+/// be the same under every key.
 #[tauri::command]
-pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailable> {
-    let key = linear_key().await?;
+pub async fn fetch_issue_asset(
+    url: String,
+    workspace: Option<String>,
+) -> Result<IssueAsset, IssueUnavailable> {
+    let all = linear_workspaces().await;
+    let owner = linear::upload_org(&url);
+    let order = key_order(&all, &[workspace.as_deref(), owner.as_deref()]);
 
-    linear::fetch_asset(&key, &url, MAX_ASSET).await
+    let mut first_err = None;
+    for workspace in order {
+        match linear::fetch_asset(&workspace.key, &url, MAX_ASSET).await {
+            Ok(asset) => return Ok(asset),
+            Err(e @ IssueUnavailable::Unauthorized) => {
+                first_err.get_or_insert(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(first_err.unwrap_or(IssueUnavailable::NotConnected))
 }
 
 /// The teams and projects the filter row offers — or, under GitHub, the
@@ -1131,12 +1839,13 @@ pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailab
 pub async fn list_issue_filters(
     tracker: IssueTracker,
     repo: Option<String>,
+    workspace: Option<String>,
 ) -> Result<IssueFilters, IssueUnavailable> {
     match tracker {
         IssueTracker::Linear => {
-            let key = linear_key().await?;
+            let workspace = linear_workspace(workspace.as_deref()).await?;
 
-            linear::list_filters(&key).await
+            linear::list_filters(&workspace.key).await
         }
         // The repository decides the labels, so this read moves with the pick
         // rather than being made once per connection the way Linear's is.
@@ -1147,12 +1856,18 @@ pub async fn list_issue_filters(
 /// Untags a session. The issue itself is untouched: a link is a fact about the
 /// session, and the only write this app makes to a tracker is [`update_issue`],
 /// which a reader has to ask for by name.
+///
+/// **Exactly the row the panel drew** — its id and its workspace, `None`
+/// included — since the panel holds the whole link. A row written before
+/// workspaces names none, and read as "any workspace" it took a same-identifier
+/// link from another workspace with it.
 #[tauri::command]
 pub async fn unlink_issue(
     session_id: String,
     key: String,
+    workspace: Option<String>,
 ) -> Result<Vec<IssueRef>, IssueUnavailable> {
-    store::unlink_session_issue(&session_id, &key)
+    store::unlink_exact_session_issue(&session_id, &key, workspace.as_deref())
         .await
         .map_err(IssueUnavailable::other)
 }
@@ -1168,6 +1883,7 @@ mod tests {
             identifier: identifier.into(),
             title: title.into(),
             url: format!("https://linear.app/x/issue/{identifier}"),
+            workspace: None,
         }
     }
 
@@ -1177,7 +1893,7 @@ mod tests {
         // No tracker connected, a revoked key, an unreachable Linear — every
         // one of them arrives here as `None`, and this is the case that used to
         // drop the issue and answer identically to success.
-        let out = apply_tags("do the thing", &wanted, vec![None]);
+        let out = apply_tags("do the thing", &wanted, vec![None], None);
 
         assert!(
             out.prompt.contains("#DRA-53"),
@@ -1196,7 +1912,7 @@ mod tests {
     fn a_tag_the_reader_typed_is_left_where_it_is() {
         let prompt = "look at #DRA-53 please";
         let wanted = wanted_tags(prompt, &[]);
-        let out = apply_tags(prompt, &wanted, vec![None]);
+        let out = apply_tags(prompt, &wanted, vec![None], None);
 
         // Already in the text, so nothing is appended and nothing is doubled.
         assert_eq!(out.prompt, prompt);
@@ -1214,7 +1930,7 @@ mod tests {
     fn a_tag_the_reader_typed_is_mentioned_but_never_linked() {
         let prompt = "this is unrelated to #DRA-53";
         let wanted = wanted_tags(prompt, &[]);
-        let out = apply_tags(prompt, &wanted, vec![Some(issue_ref("DRA-53", "Tracker"))]);
+        let out = apply_tags(prompt, &wanted, vec![Some(issue_ref("DRA-53", "Tracker"))], None);
 
         assert_eq!(out.prompt, prompt);
         assert_eq!(out.mentioned.len(), 1);
@@ -1237,7 +1953,7 @@ mod tests {
             }]
         );
 
-        let out = apply_tags(prompt, &wanted, vec![None]);
+        let out = apply_tags(prompt, &wanted, vec![None], None);
         assert_eq!(out.prompt, prompt);
         // And the link survives the merge. Deduplicating onto the in-text entry
         // dropped it, so `--issue DRA-53` on a prompt that also wrote `#DRA-53`
@@ -1350,8 +2066,8 @@ mod tests {
         assert_eq!(IssueTracker::of("DRA-53"), IssueTracker::Linear);
         // A bare link records the identifier in both fields, so this is the
         // path that decides which tracker an unresolved tag is filed under.
-        assert_eq!(bare_ref("a/b#1".into()).tracker, IssueTracker::Github);
-        assert_eq!(bare_ref("DRA-53".into()).tracker, IssueTracker::Linear);
+        assert_eq!(bare_ref("a/b#1".into(), None).tracker, IssueTracker::Github);
+        assert_eq!(bare_ref("DRA-53".into(), None).tracker, IssueTracker::Linear);
     }
 
     /// A tag is an address and a title, and that is the whole of what the model
@@ -1394,5 +2110,278 @@ mod tests {
                 IssuePriority::None
             ]
         );
+    }
+
+    fn creds(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(entry, key)| (entry.to_string(), key.to_string()))
+            .collect()
+    }
+
+    fn workspace(entry: &str, id: &str, url_key: &str) -> LinearWorkspace {
+        LinearWorkspace {
+            entry: entry.into(),
+            key: format!("key-{id}"),
+            account: TrackerAccount {
+                tracker: IssueTracker::Linear,
+                user_id: "u".into(),
+                user_name: "U".into(),
+                org_name: id.to_uppercase(),
+                workspace_id: Some(id.into()),
+                url_key: Some(url_key.into()),
+            },
+            also: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_default_lists_first_and_the_rest_in_entry_order() {
+        let entries = linear_entries(&creds(&[
+            ("linear/zeta", "k3"),
+            ("linear", "k1"),
+            ("linear/alpha", "k2"),
+            ("openai", "not ours"),
+            ("linear/empty", "  "),
+        ]));
+
+        let names: Vec<&str> = entries.iter().map(|(entry, _)| entry.as_str()).collect();
+        assert_eq!(names, ["linear", "linear/alpha", "linear/zeta"]);
+    }
+
+    /// An older build disconnecting removes `linear` and leaves the extras it
+    /// cannot see, which would otherwise read as connected with no default.
+    #[test]
+    fn an_empty_default_slot_is_filled_from_the_next_workspace() {
+        let mut map = creds(&[("linear/beta", "kb"), ("linear/alpha", "ka")]);
+
+        assert!(repair_default(&mut map));
+        assert_eq!(map.get("linear").map(String::as_str), Some("ka"));
+        assert!(!map.contains_key("linear/alpha"));
+        assert!(map.contains_key("linear/beta"));
+
+        assert!(!repair_default(&mut map), "a filled slot moves nothing");
+        assert!(!repair_default(&mut HashMap::new()));
+    }
+
+    fn removal<'a>(entries: &[(&str, &'a str)], own: Option<&str>, others: &[&'a str]) -> Removal<'a> {
+        Removal {
+            entries: entries.iter().map(|(entry, key)| (entry.to_string(), *key)).collect(),
+            own_entry: own.map(str::to_string),
+            others: others.to_vec(),
+        }
+    }
+
+    /// Between Disconnect reading the list and deleting, a Make default can
+    /// move the key it chose into `linear`, or a reconnect can put a new key in
+    /// its entry. Either way the workspace is still connected, and clearing its
+    /// pins on the way out would lose them.
+    #[test]
+    fn a_disconnect_whose_key_moved_or_was_replaced_is_refused() {
+        let extra = removal(&[("linear/a", "ka")], Some("linear/a"), &["kb"]);
+
+        let mut moved = creds(&[("linear", "ka"), ("linear/b", "kb")]);
+        let before = moved.clone();
+        assert!(remove_checked(&mut moved, &extra).is_err());
+        assert_eq!(moved, before, "nothing is removed");
+
+        let mut replaced = creds(&[("linear", "kb"), ("linear/a", "ka2")]);
+        assert!(remove_checked(&mut replaced, &extra).is_err());
+        assert_eq!(replaced.get("linear/a").map(String::as_str), Some("ka2"));
+
+        // Gone from everywhere is what was asked for.
+        let mut gone = creds(&[("linear", "kb")]);
+        assert_eq!(remove_checked(&mut gone, &extra), Ok(false));
+
+        let mut held = creds(&[("linear", "kb"), ("linear/a", "ka")]);
+        assert_eq!(remove_checked(&mut held, &extra), Ok(true));
+        assert!(!held.contains_key("linear/a"));
+    }
+
+    /// Two Disconnects of the default: the first removes it and promotes the
+    /// next workspace into `linear`. The second finds another workspace's key
+    /// there, which is that promotion, not this workspace reconnected.
+    #[test]
+    fn a_disconnect_another_one_beat_to_it_succeeds() {
+        let default = removal(&[("linear", "ka")], Some("linear/a"), &["kb"]);
+
+        let mut promoted = creds(&[("linear", "kb")]);
+        assert_eq!(remove_checked(&mut promoted, &default), Ok(false));
+        assert_eq!(promoted.get("linear").map(String::as_str), Some("kb"));
+
+        // A key nobody listed is this workspace reauthorized.
+        let mut reauthorized = creds(&[("linear", "ka2")]);
+        assert!(remove_checked(&mut reauthorized, &default).is_err());
+    }
+
+    /// Disconnecting default A while a Make default moves B in and A is then
+    /// reconnected as an extra: `linear` holds B's key, which reads as a
+    /// promotion, but A's own entry holds a key again, so A is connected.
+    #[test]
+    fn a_default_reconnected_as_an_extra_is_not_disconnected() {
+        let default = removal(&[("linear", "ka")], Some("linear/a"), &["kb"]);
+        let mut reconnected = creds(&[("linear", "kb"), ("linear/a", "ka2")]);
+        let before = reconnected.clone();
+        assert!(remove_checked(&mut reconnected, &default).is_err());
+        assert_eq!(reconnected, before);
+    }
+
+    /// An older build's duplicate is swept with the default, but only while it
+    /// holds the key it was listed with.
+    #[test]
+    fn a_duplicate_is_swept_only_while_it_holds_its_listed_key() {
+        let default = removal(&[("linear", "ka"), ("linear/a", "kold")], Some("linear/a"), &[]);
+
+        let mut both = creds(&[("linear", "ka"), ("linear/a", "kold")]);
+        assert_eq!(remove_checked(&mut both, &default), Ok(true));
+        assert!(both.is_empty());
+
+        let mut changed = creds(&[("linear", "ka"), ("linear/a", "knew")]);
+        assert!(remove_checked(&mut changed, &default).is_err());
+        assert_eq!(changed.len(), 2, "nothing is removed");
+    }
+
+    #[test]
+    fn reconnecting_a_workspace_replaces_its_cached_account() {
+        let mut accounts = vec![workspace("linear", "a", "acme").account];
+        let mut again = workspace("linear", "a", "acme").account;
+        again.user_name = "Renamed".into();
+
+        remember(&mut accounts, again);
+        remember(&mut accounts, workspace("linear/b", "b", "jango").account);
+
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].user_name, "Renamed");
+    }
+
+    #[test]
+    fn a_named_workspace_is_the_only_one_picked() {
+        let all = [workspace("linear", "a", "acme"), workspace("linear/b", "b", "jango")];
+
+        assert_eq!(pick(&all, None).map(|w| w.entry.as_str()), Some("linear"));
+        assert_eq!(pick(&all, Some("b")).map(|w| w.entry.as_str()), Some("linear/b"));
+        assert!(pick(&all, Some("gone")).is_none(), "never the default instead");
+    }
+
+    #[test]
+    fn keys_are_tried_preferred_first_then_default_then_the_rest() {
+        let all = [
+            workspace("linear", "a", "acme"),
+            workspace("linear/b", "b", "jango"),
+            workspace("linear/c", "c", "side"),
+        ];
+        let order = |preferred: &[Option<&str>]| -> Vec<String> {
+            key_order(&all, preferred).iter().map(|w| w.entry.clone()).collect()
+        };
+
+        assert_eq!(order(&[]), ["linear", "linear/b", "linear/c"]);
+        assert_eq!(order(&[Some("c")]), ["linear/c", "linear", "linear/b"]);
+        assert_eq!(
+            order(&[None, Some("gone"), Some("b"), Some("b")]),
+            ["linear/b", "linear", "linear/c"]
+        );
+    }
+
+    #[test]
+    fn a_linear_url_names_its_workspace_by_slug() {
+        let all = [workspace("linear", "a", "acme"), workspace("linear/b", "b", "jango")];
+
+        assert_eq!(url_key_of("https://linear.app/jango/issue/JAN-4/fix-it"), Some("jango"));
+        assert_eq!(url_key_of("https://linear.app//issue/JAN-4"), None);
+        assert_eq!(url_key_of("https://github.com/a/b/issues/4"), None);
+
+        assert_eq!(
+            workspace_of_url(&all, "https://linear.app/jango/issue/JAN-4/x").as_deref(),
+            Some("b")
+        );
+        assert_eq!(workspace_of_url(&all, "https://linear.app/other/issue/X-1"), None);
+    }
+
+    fn project(space: Option<&str>, pin: Option<&str>) -> crate::projects::Project {
+        crate::projects::Project {
+            path: "/p".into(),
+            name: "p".into(),
+            space: space.map(Into::into),
+            linear_workspace: pin.map(Into::into),
+            linear_filter: None,
+            last_selected: "2026-09-24T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn a_project_pin_beats_its_space_pin_which_beats_the_default() {
+        let pins: std::collections::BTreeMap<String, String> =
+            [("JangoAI".to_string(), "jango".to_string())].into();
+        let connected = ["acme", "jango", "side"];
+        let read = |p: &crate::projects::Project| pinned_workspace(Some(p), &pins, &connected);
+
+        assert_eq!(read(&project(Some("JangoAI"), Some("side"))).as_deref(), Some("side"));
+        assert_eq!(read(&project(Some("JangoAI"), None)).as_deref(), Some("jango"));
+        assert_eq!(read(&project(Some("Personal"), None)), None);
+        assert_eq!(read(&project(None, None)), None);
+        assert_eq!(pinned_workspace(None, &pins, &connected), None);
+    }
+
+    /// A pin outliving its workspace falls through a level rather than naming
+    /// a workspace no key can read.
+    #[test]
+    fn a_pin_to_a_disconnected_workspace_is_skipped() {
+        let pins: std::collections::BTreeMap<String, String> =
+            [("JangoAI".to_string(), "jango".to_string())].into();
+
+        assert_eq!(
+            pinned_workspace(Some(&project(Some("JangoAI"), Some("gone"))), &pins, &["acme", "jango"])
+                .as_deref(),
+            Some("jango")
+        );
+        assert_eq!(
+            pinned_workspace(Some(&project(Some("JangoAI"), None)), &pins, &["acme"]),
+            None
+        );
+    }
+
+    /// The default's remembered account is trusted only for the key it was
+    /// learned from, so a fingerprint has to tell keys apart and repeat.
+    #[test]
+    fn a_fingerprint_tells_keys_apart_without_being_one() {
+        assert_eq!(fingerprint("lin_api_one"), fingerprint("lin_api_one"));
+        assert_ne!(fingerprint("lin_api_one"), fingerprint("lin_api_two"));
+        assert_eq!(fingerprint("lin_api_one").len(), 16);
+        assert!(!fingerprint("lin_api_one").contains("lin_api"));
+    }
+
+    /// A stand-in for a key Linear would not answer for must never be
+    /// remembered as the default's account.
+    #[test]
+    fn a_stand_in_account_is_not_verified() {
+        let mut stand_in = workspace("linear/b", "b", "jango").account;
+        stand_in.user_id.clear();
+
+        assert!(verified(&workspace("linear", "a", "acme").account));
+        assert!(!verified(&stand_in));
+    }
+
+    #[test]
+    fn a_bare_github_link_names_no_workspace() {
+        assert_eq!(bare_ref("DRA-53".into(), Some("a")).workspace.as_deref(), Some("a"));
+        assert_eq!(bare_ref("a/b#1".into(), Some("a")).workspace, None);
+    }
+
+    /// Files written before there could be two workspaces carry none of the new
+    /// fields, and a field that fails to parse loses the whole file.
+    #[test]
+    fn links_and_accounts_written_before_workspaces_still_read() {
+        let link: IssueRef = serde_json::from_str(
+            r#"{"tracker":"linear","id":"u","identifier":"DRA-1","title":"t","url":""}"#,
+        )
+        .unwrap();
+        assert_eq!(link.workspace, None);
+
+        let account: TrackerAccount = serde_json::from_str(
+            r#"{"tracker":"linear","userId":"u","userName":"U","orgName":"Acme"}"#,
+        )
+        .unwrap();
+        assert_eq!(account.workspace_id, None);
+        assert_eq!(account.url_key, None);
     }
 }

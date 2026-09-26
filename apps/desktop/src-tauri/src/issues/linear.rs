@@ -85,10 +85,11 @@ fn first_error(body: &Value) -> Option<String> {
 
 // ── queries ──────────────────────────────────────────────────────────────────
 
-/// Who the key belongs to. Also what validates it: there is no cheaper call,
-/// and it answers with everything the settings row draws.
+/// Who the key belongs to, and in which workspace — a personal key belongs to
+/// exactly one. Also what validates it: there is no cheaper call, and it
+/// answers with everything the settings row draws.
 const VIEWER: &str = r#"
-query{viewer{id name organization{name}}}
+query{viewer{id name organization{id name urlKey}}}
 "#;
 
 /// Every field a row draws, and none it doesn't — no description and no
@@ -176,6 +177,25 @@ pub fn is_upload(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The workspace an upload looks to belong to: the first path segment of
+/// `uploads.linear.app/<org id>/<…>`.
+///
+/// **Observed, not documented.** Every upload from one workspace shares that
+/// segment, and nothing Linear publishes says it is the organization id — so
+/// it only ever orders the keys tried, and never picks one alone.
+pub fn upload_org(url: &str) -> Option<String> {
+    if !is_upload(url) {
+        return None;
+    }
+
+    reqwest::Url::parse(url)
+        .ok()?
+        .path_segments()?
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+}
+
 /// One uploaded file as a `data:` URL.
 pub async fn fetch_asset(
     key: &str,
@@ -260,11 +280,26 @@ pub async fn fetch_asset(
 /// per *team*, so asking for it on every issue would repeat one team's answer a
 /// hundred times down the wire. Read once per connection, keyed by team key —
 /// which is what a row carries, `DRA` and not a UUID.
+///
+/// Labels ride along for the filter menu's label section. Workspace and team
+/// labels both, since a repo is as likely to be pinned to one as the other.
 const FILTERS: &str = r#"
 query{
  teams(first:100){nodes{id key name states(first:50){nodes{id name type color position}}}}
- projects(first:100){nodes{id name}}}
+ projects(first:100){nodes{id name}}
+ issueLabels(first:250){nodes{name color isGroup retiredAt} pageInfo{hasNextPage endCursor}}}
 "#;
+
+/// The labels past `FILTERS`'s first page. A workspace can hold more than one
+/// page of them, and a label cut off here is one a repo can never be pinned to.
+const LABELS: &str = r#"
+query($after:String){
+ issueLabels(first:250,after:$after){nodes{name color isGroup retiredAt} pageInfo{hasNextPage endCursor}}}
+"#;
+
+/// How many pages of labels are read at most — 5,000 labels, past which a menu
+/// has stopped being a thing to pick from.
+const MAX_LABEL_PAGES: usize = 20;
 
 /// Validates `key` and answers with whose it is.
 pub async fn verify(key: &str) -> Result<TrackerAccount, IssueUnavailable> {
@@ -273,14 +308,15 @@ pub async fn verify(key: &str) -> Result<TrackerAccount, IssueUnavailable> {
         .get("viewer")
         .ok_or_else(|| IssueUnavailable::Other("Linear answered with no account".into()))?;
 
+    let org = viewer.get("organization");
+
     Ok(TrackerAccount {
         tracker: IssueTracker::Linear,
         user_id: text(viewer, "id"),
         user_name: text(viewer, "name"),
-        org_name: viewer
-            .get("organization")
-            .map(|org| text(org, "name"))
-            .unwrap_or_default(),
+        org_name: org.map(|org| text(org, "name")).unwrap_or_default(),
+        workspace_id: org.and_then(|org| optional(org, "id")),
+        url_key: org.and_then(|org| optional(org, "urlKey")),
     })
 }
 
@@ -339,18 +375,42 @@ pub async fn get_issue(
     id: Option<&str>,
 ) -> Result<IssueDetail, IssueUnavailable> {
     if let Some(id) = id.filter(|id| is_stable_id(id)) {
-        match query(key, ISSUE_BY_ID, json!({ "id": id })).await {
-            Ok(data) => {
-                if let Some(node) = data.get("issue").filter(|node| !node.is_null()) {
-                    return read_detail(node, identifier);
-                }
-            }
+        match get_issue_by_id(key, id, identifier).await {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {}
             // Not fatal: the identifier below is a second way to ask the same
             // question, and answering it beats reporting the first attempt.
             Err(e) => eprintln!("[issue {identifier}] by id: {e:?}"),
         }
     }
 
+    get_issue_by_identifier(key, identifier).await
+}
+
+/// The issue with Linear's own `id`, or `None` where this key's workspace has
+/// no such issue. A UUID names one issue everywhere, so asking several
+/// workspaces for it can never answer with the wrong one — which is what makes
+/// it the first thing tried across workspaces.
+pub async fn get_issue_by_id(
+    key: &str,
+    id: &str,
+    identifier: &str,
+) -> Result<Option<IssueDetail>, IssueUnavailable> {
+    let data = query(key, ISSUE_BY_ID, json!({ "id": id })).await?;
+
+    match data.get("issue").filter(|node| !node.is_null()) {
+        Some(node) => read_detail(node, identifier).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The issue called `identifier` in this key's workspace. `NotFound` where it
+/// has none — kept apart from a failed read, since only a genuine miss lets a
+/// caller go on to ask another workspace.
+pub async fn get_issue_by_identifier(
+    key: &str,
+    identifier: &str,
+) -> Result<IssueDetail, IssueUnavailable> {
     let (team, number) = split_identifier(identifier).ok_or_else(|| {
         IssueUnavailable::Other(format!("{identifier} is not an issue identifier"))
     })?;
@@ -360,7 +420,7 @@ pub async fn get_issue(
     let node = nodes(&data, "issues")
         .first()
         .cloned()
-        .ok_or_else(|| IssueUnavailable::Other(format!("No issue {identifier}")))?;
+        .ok_or_else(|| IssueUnavailable::NotFound(format!("No issue {identifier}")))?;
 
     read_detail(&node, identifier)
 }
@@ -368,7 +428,7 @@ pub async fn get_issue(
 /// Whether `id` is Linear's own id rather than an identifier a blind link wrote
 /// into the same field. A UUID and a `DRA-53` cannot be confused for each other,
 /// which is the property `unlink_session_issue` already leans on.
-fn is_stable_id(id: &str) -> bool {
+pub fn is_stable_id(id: &str) -> bool {
     uuid::Uuid::try_parse(id).is_ok()
 }
 
@@ -453,10 +513,7 @@ pub async fn list_filters(key: &str) -> Result<IssueFilters, IssueUnavailable> {
     Ok(IssueFilters {
         teams: map_groups(&data, "teams"),
         projects: map_groups(&data, "projects"),
-        // Linear filters by team and project here; a label list is per team and
-        // would be a fourth section nobody asked for. The section is drawn only
-        // where this is non-empty, so leaving it so is what withholds it.
-        labels: Vec::new(),
+        labels: map_labels(&all_labels(key, &data).await),
         // A team with no key names nothing a row could join on, so it is left
         // out rather than filed under an empty string — where it would answer
         // for every row whose own team came back blank.
@@ -511,6 +568,18 @@ fn build_filter(query: &IssueQuery) -> Value {
 
     if let Some(project) = query.project_id.as_deref().filter(|id| !id.is_empty()) {
         filter.insert("project".into(), json!({ "id": { "eq": project } }));
+    }
+
+    // Any of them, by name: a repo pinned to several platforms wants issues on
+    // any one, and a same-named label in each team is one label to the reader.
+    let labels: Vec<&str> = query
+        .labels
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if !labels.is_empty() {
+        filter.insert("labels".into(), json!({ "some": { "name": { "in": labels } } }));
     }
 
     if let Some(text) = query
@@ -594,6 +663,8 @@ fn map_issue(node: &Value) -> Option<Issue> {
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),
+        // The caller knows which key it used; this function does not.
+        workspace: None,
     })
 }
 
@@ -734,6 +805,61 @@ fn map_comments(node: &Value) -> Vec<IssueComment> {
 
     comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     comments
+}
+
+/// The labels a new issue could carry, one row per name. A label group is a
+/// heading rather than a label, and a retired label can no longer be put on
+/// anything, so a filter offering either offers a row that narrows to history.
+/// Every label node, following `FILTERS`'s first page with [`LABELS`]. A later
+/// page that fails keeps what was read: a short menu beats none, and the
+/// teams and projects beside it were read fine.
+async fn all_labels(key: &str, first: &Value) -> Vec<Value> {
+    let mut found: Vec<Value> = nodes(first, "issueLabels").to_vec();
+    let mut page = first.get("issueLabels").and_then(|c| c.get("pageInfo")).cloned();
+
+    for _ in 1..MAX_LABEL_PAGES {
+        let Some(info) = page.take() else { break };
+        let more = info.get("hasNextPage").and_then(Value::as_bool).unwrap_or(false);
+        let Some(after) = info.get("endCursor").and_then(Value::as_str).filter(|_| more) else {
+            break;
+        };
+        match query(key, LABELS, json!({ "after": after })).await {
+            Ok(data) => {
+                found.extend(nodes(&data, "issueLabels").iter().cloned());
+                page = data.get("issueLabels").and_then(|c| c.get("pageInfo")).cloned();
+            }
+            Err(e) => {
+                eprintln!("[linear labels] page after {after}: {e:?}");
+                break;
+            }
+        }
+    }
+
+    found
+}
+
+fn map_labels(label_nodes: &[Value]) -> Vec<IssueLabel> {
+    let mut labels: Vec<IssueLabel> = Vec::new();
+
+    for node in label_nodes {
+        let retired = node.get("retiredAt").is_some_and(|at| !at.is_null());
+        let group = node.get("isGroup").and_then(Value::as_bool).unwrap_or(false);
+        let Some(name) = optional(node, "name") else {
+            continue;
+        };
+        // Team labels share names across teams, and the filter matches by name,
+        // so two rows reading "iOS" would be one choice drawn twice.
+        if retired || group || labels.iter().any(|seen| seen.name == name) {
+            continue;
+        }
+        labels.push(IssueLabel {
+            name,
+            color: text(node, "color"),
+        });
+    }
+
+    labels.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    labels
 }
 
 fn map_groups(data: &Value, field: &str) -> Vec<IssueGroup> {
@@ -882,6 +1008,18 @@ mod tests {
     }
 
     #[test]
+    fn an_upload_names_its_workspace_in_its_first_segment() {
+        assert_eq!(
+            upload_org("https://uploads.linear.app/org-1/file-2/img-3").as_deref(),
+            Some("org-1")
+        );
+        // Anything that would not be fetched with a key names nobody.
+        assert_eq!(upload_org("https://uploads.linear.app.evil.test/org-1/x"), None);
+        assert_eq!(upload_org("http://uploads.linear.app/org-1/x"), None);
+        assert_eq!(upload_org("https://uploads.linear.app/"), None);
+    }
+
+    #[test]
     fn only_a_uuid_is_worth_asking_linear_about() {
         // What a resolved link records.
         assert!(is_stable_id("9c1a7f2e-0b64-4c3a-9f1d-7e5b2a8c4d61"));
@@ -924,6 +1062,38 @@ mod tests {
         assert_eq!(filter["state"]["type"]["in"][0], "completed");
         assert_eq!(filter["state"]["type"]["in"][1], "canceled");
         assert!(filter["state"]["type"].get("nin").is_none());
+    }
+
+    /// A repo pinned to several labels wants issues carrying any one of them.
+    #[test]
+    fn labels_narrow_to_any_of_the_names() {
+        let filter = build_filter(&IssueQuery {
+            labels: vec!["Backend".into(), " ".into(), "Web".into()],
+            ..Default::default()
+        });
+
+        assert_eq!(
+            filter["labels"],
+            json!({ "some": { "name": { "in": ["Backend", "Web"] } } })
+        );
+        assert!(build_filter(&IssueQuery::default()).get("labels").is_none());
+    }
+
+    #[test]
+    fn the_label_menu_offers_each_usable_name_once() {
+        let data = json!({ "issueLabels": { "nodes": [
+            { "name": "iOS", "color": "#111", "isGroup": false, "retiredAt": null },
+            { "name": "Platform", "color": "#222", "isGroup": true, "retiredAt": null },
+            { "name": "Legacy", "color": "#333", "isGroup": false, "retiredAt": "2026-01-01T00:00:00Z" },
+            { "name": "iOS", "color": "#444", "isGroup": false, "retiredAt": null },
+            { "name": "android", "color": "#555", "isGroup": false },
+        ]}});
+
+        let names: Vec<String> = map_labels(nodes(&data, "issueLabels"))
+            .into_iter()
+            .map(|l| l.name)
+            .collect();
+        assert_eq!(names, ["android", "iOS"]);
     }
 
     #[test]
