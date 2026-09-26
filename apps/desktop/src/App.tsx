@@ -1061,10 +1061,24 @@ function App() {
   const prBranch = selectedSession
     ? sessionBranch(selectedSession, workStatus?.branch)
     : null;
-  // The header's way back from a hidden session, which has no sidebar row.
-  const hiddenParent = selectedSession?.hidden
-    ? sessionIndexItems.find((i) => i.sessionId === selectedSession.parentSessionId)
-    : undefined;
+  // The header's way back from a hidden session, which has no sidebar row. The
+  // loaded side first, else asked of the backend: with the sidebar on the other
+  // side of the settled split the parent is not in the list, and still exists.
+  const hiddenParentId = selectedSession?.hidden ? selectedSession.parentSessionId : null;
+  const loadedParent = sessionIndexItems.find((i) => i.sessionId === hiddenParentId);
+  const [fetchedParent, setFetchedParent] = useState<SessionIndexItem | null>(null);
+  useEffect(() => {
+    if (!hiddenParentId || loadedParent) return;
+    let live = true;
+    void invoke<SessionIndexItem | null>("session_index_item", { sessionId: hiddenParentId })
+      .then((item) => live && setFetchedParent(item))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [hiddenParentId, loadedParent]);
+  const hiddenParent =
+    loadedParent ?? (fetchedParent?.sessionId === hiddenParentId ? fetchedParent : undefined);
   // "The PR tab is on screen", read off the *pick* rather than off `activeTab`,
   // which cannot exist yet — it is derived from this hook's own answer. An
   // unset pick counts, since the derived default is the PR tab whenever there
