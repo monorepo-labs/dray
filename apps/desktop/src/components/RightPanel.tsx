@@ -253,8 +253,16 @@ type RightPanelProps = {
   /// what they act on; over a heading belonging to the thing underneath it, it
   /// cuts a title off its own body.
   heading?: string;
+  /// Which side of the chat column the pane stands on — the reader's pick in
+  /// Settings › Appearance. The border and the drag strip face the chat.
+  side?: PanelSide;
+  /// The pane reaches the window's left edge, so its top strip has to clear the
+  /// traffic lights the way the app header does when the sidebar is collapsed.
+  clearTrafficLights?: boolean;
   children: React.ReactNode;
 };
+
+export type PanelSide = "left" | "right";
 
 /// One tab's body, kept mounted while the other tab is showing. Same reasoning
 /// as `open` above: switching tabs used to unmount the changes list, so coming
@@ -303,6 +311,8 @@ export default function RightPanel({
   cwd,
   actions,
   heading,
+  side = "right",
+  clearTrafficLights = false,
   children,
 }: RightPanelProps) {
   // 32rem, the width this pane opened at before it could be dragged.
@@ -310,7 +320,7 @@ export default function RightPanel({
     storageKey: "ade.rightPanelWidth",
     initial: 512,
     min: PANEL_MIN,
-    edge: "left",
+    edge: side === "left" ? "right" : "left",
     label: "Resize the panel",
     // Dropped while closed, for the sidebar's reason: this pane hides rather
     // than unmounting, so it would go on holding width the sidebar could not
@@ -322,7 +332,8 @@ export default function RightPanel({
     <aside
       style={style}
       className={cn(
-        "relative shrink-0 flex-col border-l border-border bg-sidebar",
+        "relative shrink-0 flex-col border-border bg-sidebar",
+        side === "left" ? "border-r" : "border-l",
         // Conditional `flex` rather than `flex` plus `hidden`: both set
         // `display`, so stacking them leaves the winner to stylesheet order.
         open ? "flex" : "hidden",
@@ -336,6 +347,7 @@ export default function RightPanel({
           // at its own edge rather than draw over the transcript beside it.
           "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden px-2",
           !heading && "border-b border-border",
+          clearTrafficLights && "pl-(--traffic-lights-w)",
         )}
         data-tauri-drag-region="deep"
       >

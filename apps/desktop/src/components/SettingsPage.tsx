@@ -15,6 +15,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import AppIcon from "@/components/AppIcon";
 import LinearIcon from "@/components/LinearIcon";
 import rauchgAvatar from "@/assets/avatars/rauchg.jpg";
+import type { PanelSide } from "@/components/RightPanel";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
 import ThemeSwatches, { useRovingGroup } from "@/components/ThemeSwatches";
@@ -105,6 +106,8 @@ export default function SettingsPage({
   onMoveProject,
   autoHideSidebar,
   onAutoHideSidebarChange,
+  panelSide,
+  onPanelSideChange,
   integrations,
   updateStatus,
   updateManual,
@@ -140,6 +143,8 @@ export default function SettingsPage({
   /// a value that effect never sees.
   autoHideSidebar: boolean;
   onAutoHideSidebarChange: (next: boolean) => void;
+  panelSide: PanelSide;
+  onPanelSideChange: (next: PanelSide) => void;
   /// Owned by `App`, because the issues page and the composer read it too.
   integrations: ReturnType<typeof useIntegrations>;
   /// The updater's state, owned by `App` — the sidebar's own `UpdateRow` draws
@@ -181,6 +186,7 @@ export default function SettingsPage({
                 checked={autoHideSidebar}
                 onChange={onAutoHideSidebarChange}
               />
+              <PanelSideRow value={panelSide} onChange={onPanelSideChange} />
             </Section>
           </>
         ),
@@ -467,59 +473,74 @@ function ModeRow() {
   // mode waits in the store for the next theme that can use it.
   const mode = modeFor(theme, chosen);
 
-  const index = MODES.findIndex((m) => m.id === mode);
-  const { refs, onKeyDown } = useRovingGroup(MODES.length, index, (next) =>
-    setMode(MODES[next].id),
-  );
-
   return (
     <SettingRow
       id={id}
       asGroup
-      stacked
       label="Mode"
+      // On a dark-only theme the control gives way to the one fact, rather than
+      // three disabled segments under a sentence explaining them. The row stays,
+      // so the reader still learns why there is no light here.
+      description={!available && "This theme is dark only."}
     >
-      {/* On a dark-only theme the control gives way to the one fact, rather
-          than three disabled segments under a sentence explaining them. The
-          row stays, so the reader still learns why there is no light here. */}
-      {!available ? (
-        <p className="text-ui text-muted-foreground">This theme is dark only.</p>
-      ) : (
-      <div
-        role="radiogroup"
-        aria-labelledby={id}
-        onKeyDown={onKeyDown}
-        // Track and thumb, the way a segmented control reads everywhere: the
-        // selected one is a raised card sitting *in* a recessed rail, so the
-        // group says "one of these" before any label is read.
-        className="inline-flex w-fit gap-0.5 rounded-lg bg-muted p-0.5"
-      >
-        {MODES.map(({ id: value, label }, i) => (
-          <button
-            key={value}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={mode === value}
-            tabIndex={mode === value ? 0 : -1}
-            onClick={() => setMode(value)}
-            className={cn(
-              "rounded-[calc(var(--radius)-4px)] px-3 py-1 text-ui transition-colors",
-              "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              "cursor-pointer",
-              mode === value
-                ? "bg-card text-foreground shadow-2xs"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {available && (
+        <SegmentedRadio options={MODES} value={mode} onPick={setMode} labelledBy={id} />
       )}
     </SettingRow>
+  );
+}
+
+/// Track and thumb, the way a segmented control reads everywhere: the selected
+/// one is a raised card sitting *in* a recessed rail, so the group says "one of
+/// these" before any label is read. Shared so every pick on this page has one
+/// radius and one rail.
+function SegmentedRadio<T extends string>({
+  options,
+  value,
+  onPick,
+  labelledBy,
+}: {
+  options: readonly { id: T; label: string }[];
+  value: T;
+  onPick: (next: T) => void;
+  labelledBy: string;
+}) {
+  const index = options.findIndex((o) => o.id === value);
+  const { refs, onKeyDown } = useRovingGroup(options.length, index, (next) =>
+    onPick(options[next].id),
+  );
+
+  return (
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      onKeyDown={onKeyDown}
+      className="inline-flex w-fit gap-0.5 rounded-lg bg-muted p-0.5"
+    >
+      {options.map(({ id, label }, i) => (
+        <button
+          key={id}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
+          type="button"
+          role="radio"
+          aria-checked={value === id}
+          tabIndex={value === id ? 0 : -1}
+          onClick={() => onPick(id)}
+          className={cn(
+            "rounded-[calc(var(--radius)-4px)] px-3 py-1 text-ui transition-colors",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            "cursor-pointer",
+            value === id
+              ? "bg-card text-foreground shadow-2xs"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -737,6 +758,32 @@ function AutoHideSidebarRow({
       label="Auto-hide sidebar in Browser View"
     >
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    </SettingRow>
+  );
+}
+
+const PANEL_SIDES: { id: PanelSide; label: string }[] = [
+  { id: "left", label: "Left" },
+  { id: "right", label: "Right" },
+];
+
+function PanelSideRow({
+  value,
+  onChange,
+}: {
+  value: PanelSide;
+  onChange: (next: PanelSide) => void;
+}) {
+  const id = useId();
+
+  return (
+    <SettingRow
+      id={id}
+      asGroup
+      label="Panel side"
+      description="Where the Changes and PR panel opens beside the chat."
+    >
+      <SegmentedRadio options={PANEL_SIDES} value={value} onPick={onChange} labelledBy={id} />
     </SettingRow>
   );
 }
@@ -1161,19 +1208,13 @@ function SettingsTabs({
   );
 }
 
-/// Label and control on the top line, reason at full width underneath — and
-/// `stacked` for when even that is the wrong shape.
+/// Label and reason grouped on the left, control on the right and centred on the
+/// pair — the two lines of text are one thing, and the control answers both.
 ///
-/// Side by side was the first shape, and it broke on the widest control here: two
-/// buttons pushed the sentence into a third of the page, where four words took
-/// three lines and the row's height jumped every time the control changed. The
-/// description is prose and wants a measure; the control is a fixed thing and wants
-/// an edge to sit against.
-///
-/// `stacked` goes further and puts the control *under* the label at full width. That
-/// is for a control too wide to share a line at all — the theme swatches, the mode
-/// segments — and it is also where a picker wants to be: options ranged along one
-/// edge rather than pushed against the far one.
+/// `stacked` puts the control *under* the label at full width instead. That is for
+/// a control too wide to share a line at all — the theme swatches — and it is also
+/// where a picker wants to be: options ranged along one edge rather than pushed
+/// against the far one.
 ///
 /// `description` is optional only for a control that shows the reader the answer
 /// instead of telling them: the theme swatches, and the mode segments while they
@@ -1222,7 +1263,7 @@ function SettingRow({
   if (stacked) {
     return (
       <div className="flex flex-col gap-2.5">
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-4">
             {labelEl}
             {trailing}
@@ -1235,12 +1276,12 @@ function SettingRow({
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-4">
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex min-w-0 flex-col gap-0.5">
         {labelEl}
-        <div className="shrink-0">{children}</div>
+        {descriptionEl}
       </div>
-      {descriptionEl}
+      <div className="shrink-0">{children}</div>
     </div>
   );
 }
