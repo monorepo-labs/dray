@@ -212,6 +212,11 @@ export function activateTab(sessionId: string, id: number) {
   return invoke("browser_activate", { sessionId, id });
 }
 
+/// Moves a tab to place `to` in its session's strip.
+export function moveTab(sessionId: string, id: number, to: number) {
+  return invoke("browser_move", { sessionId, id, to });
+}
+
 export function closeTab(sessionId: string, id: number) {
   return invoke("browser_close", { sessionId, id });
 }

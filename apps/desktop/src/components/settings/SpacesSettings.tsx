@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 
+import { useDragReorder } from "@/hooks/useDragReorder";
 import { ConfirmOrKeep } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,8 +68,12 @@ export default function SpacesSettings({
   // The same question for the other list. Its own state, so asking about a
   // project cannot leave a space's row half-asked behind it.
   const [detaching, setDetaching] = useState<string | null>(null);
-  const spaceDrag = useDragReorder(spaces, onMoveSpace);
-  const projectDrag = useDragReorder(projects, (p, delta) => onMoveProject(p.path, delta));
+  const spaceDrag = useRowReorder(spaces, (name) => name, onMoveSpace);
+  const projectDrag = useRowReorder(
+    projects,
+    (p) => p.path,
+    (p, delta) => onMoveProject(p.path, delta),
+  );
 
   const commit = (previous: string, value: string) => {
     const name = value.trim();
@@ -302,115 +307,18 @@ export default function SpacesSettings({
   );
 }
 
-/// Drag-to-reorder for one list on this tab. The row follows the pointer and
-/// the rows it passes slide aside by transform, so nothing re-lays out mid-drag
-/// and the drop point is judged against where rows sat when the drag began.
-/// One move is written on release, however far the row travelled.
-///
-/// Pointer events rather than HTML drag: Tauri takes the native drag for file
-/// drops, so `dragstart` never reaches the page.
-function useDragReorder<T>(
+/// [useDragReorder] dressed as this tab's rows, with arrow keys on the grip.
+function useRowReorder<T>(
   items: T[],
+  keyOf: (item: T) => string,
   onMove: (item: T, delta: number) => Promise<void> | void,
 ) {
-  // The order after a drop, held until the write answers so the rows do not
-  // snap back for the frame it takes.
-  const [order, setOrder] = useState<T[] | null>(null);
-  // `from` and `to` index `shown`; `dy` is how far the pointer has travelled
-  // and `step` how far a row moves to make room.
-  const [drag, setDrag] = useState<{ from: number; to: number; dy: number; step: number } | null>(
-    null,
-  );
-  const list = useRef<HTMLDivElement>(null);
-  // Read at release, to tell whether the list moved under the drag.
-  const latest = useRef(items);
-  latest.current = items;
-  // Set synchronously for as long as a move is being written.
-  const pending = useRef(false);
-  const shown = order ?? items;
-
-  const start = (e: React.PointerEvent<HTMLElement>, from: number) => {
-    // Not while the last drop is still being written: the move is a relative
-    // delta, so one measured against an unconfirmed order lands wrong if that
-    // write fails.
-    if (e.button !== 0 || !list.current || pending.current) return;
-    // The row's own controls and fields answer their own presses.
-    if ((e.target as Element).closest("button:not([data-grip]), input")) return;
-    // Keeps the press from starting a text selection across the rows.
-    e.preventDefault();
-    const el = e.currentTarget;
-    const startY = e.clientY;
-    const before = shown;
-    const rects = [...list.current.children].map((row) => row.getBoundingClientRect());
-    const gap = rects.length > 1 ? rects[1].top - rects[0].bottom : 0;
-    const step = rects[from].height + gap;
-    const mids = rects.map((r) => r.top + r.height / 2);
-    // Held inside the list, so the row cannot be dragged off into nothing.
-    const minDy = rects[0].top - rects[from].top;
-    const maxDy = rects[rects.length - 1].bottom - rects[from].bottom;
-    let to = from;
-    el.setPointerCapture(e.pointerId);
-    document.body.classList.add("session-drag");
-    setDrag({ from, to, dy: 0, step });
-
-    const move = (ev: PointerEvent) => {
-      const dy = Math.min(maxDy, Math.max(minDy, ev.clientY - startY));
-      // The leading edge crossing a neighbour's middle is past the neighbour.
-      // Judged on the edge rather than the row's own middle, which the clamp
-      // stops exactly on the end rows' middles and so could never pass them.
-      const top = rects[from].top + dy;
-      const bottom = rects[from].bottom + dy;
-      to = from;
-      while (to < mids.length - 1 && bottom > mids[to + 1]) to++;
-      while (to > 0 && top < mids[to - 1]) to--;
-      setDrag({ from, to, dy, step });
-    };
-
-    const end = (ev: PointerEvent) => {
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", end);
-      el.removeEventListener("pointercancel", end);
-      document.body.classList.remove("session-drag");
-      setDrag(null);
-      // A cancelled gesture (focus lost, the OS taking the pointer) is not a
-      // drop, and a list that changed mid-drag no longer matches the indexes.
-      if (ev.type !== "pointerup" || latest.current !== before) return;
-      commit(from, to);
-    };
-
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", end);
-    el.addEventListener("pointercancel", end);
-  };
-
-  /// Draws the move at once and writes it. Both the drag and the keyboard come
-  /// through here, so neither can start one while another is unconfirmed.
-  const commit = (from: number, to: number) => {
-    // A ref, not `order`: a drag's release runs the closure from its press,
-    // which may predate a keyboard move made while it was held.
-    if (pending.current || to === from || to < 0 || to >= items.length) return;
-    const next = [...items];
-    next.splice(to, 0, ...next.splice(from, 1));
-    pending.current = true;
-    setOrder(next);
-    void Promise.resolve(onMove(items[from], to - from)).finally(() => {
-      pending.current = false;
-      setOrder(null);
-    });
-  };
-
-  const offsetOf = (i: number) => {
-    if (!drag) return 0;
-    if (i === drag.from) return drag.dy;
-    if (drag.from < drag.to && i > drag.from && i <= drag.to) return -drag.step;
-    if (drag.to < drag.from && i >= drag.to && i < drag.from) return drag.step;
-    return 0;
-  };
+  const { list, shown, drag, start, commit, offset } = useDragReorder(items, keyOf, onMove);
 
   /// Spread onto each row; `layout` is the row's own padding and gap.
   const row = (i: number, layout: string) => ({
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => start(e, i),
-    style: { transform: `translateY(${offsetOf(i)}px)` },
+    style: { transform: offset(i) },
     className: cn(
       "flex cursor-grab touch-none items-center justify-between rounded-lg border bg-linear-to-b hover:from-card/15 hover:to-card/30",
       layout,
