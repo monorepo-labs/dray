@@ -2486,6 +2486,13 @@ function App() {
                 branch={prBranch}
                 cwd={shownSession.cwd}
                 {...pullRequests}
+                // Pinned at the press: with no pick the default follows an
+                // *open* PR, so a merge would flip the pane to Changes under
+                // the reader waiting to see it land.
+                act={(number, action) => {
+                  setPanelTab("pr");
+                  return pullRequests.act(number, action);
+                }}
               />
               </MountOnce>
             </TabBody>
