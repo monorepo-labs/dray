@@ -57,6 +57,7 @@ import RightPanel, {
   PanelToggle,
   TabBody,
   tabOrder,
+  type PanelSide,
   type PanelTab,
 } from "@/components/RightPanel";
 import {
@@ -283,6 +284,9 @@ function App() {
   // The right pane's half of the same bargain, its own switch since a reader
   // may want the pane beside a page where the sidebar is only in the way.
   const [autoHidePanel, setAutoHidePanel] = useLocalStorage("ade.autoHidePanelInBrowser", true);
+  // Owned here for the same reason: `RightPanel`, the shell and the settings
+  // row all read it.
+  const [panelSide, setPanelSide] = useLocalStorage<PanelSide>("ade.panelSide", "right");
   // Whether the reader has been told the app does that. Written once and never
   // cleared, the same bargain `splitLearned` makes below.
   const [autoHideNoticed, setAutoHideNoticed] = useLocalStorage(
@@ -2185,6 +2189,15 @@ function App() {
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
 
+  // A left panel with the sidebar collapsed takes the window's left edge, and
+  // with it the traffic lights the header would otherwise clear. Fullscreen has
+  // none to clear.
+  const panelAtLeftEdge =
+    panelSide === "left" &&
+    collapsed &&
+    !fullscreen &&
+    (issuesOpen ? !!pickedIssue : !!shownSession && panelShown);
+
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew strip alike.
   const paneChat: PaneChat = {
@@ -2208,6 +2221,7 @@ function App() {
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !issuesOpen}
+      panelLeft={panelSide === "left"}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
@@ -2316,7 +2330,7 @@ function App() {
                 "flex items-center",
                 // Fullscreen has no traffic lights, so the toggle pulls back past
                 // the header's own padding to sit flush at the window edge.
-                fullscreen ? "-ml-1" : "pl-(--traffic-lights-w)",
+                fullscreen ? "-ml-1" : !panelAtLeftEdge && "pl-(--traffic-lights-w)",
               )}
             >
               {/* No dev badge beside it: the badge lives at the sidebar's
@@ -2364,6 +2378,8 @@ function App() {
         // changes and a pull request belonging to work the reader had left.
         issuesOpen ? (
           <RightPanel
+            side={panelSide}
+            clearTrafficLights={panelAtLeftEdge}
             open={!!pickedIssue}
             // A word rather than a tab row: there is one thing in this pane
             // and nothing to switch to. "Details" and not "Issue", which would
@@ -2409,6 +2425,8 @@ function App() {
         // changes tab from snapshotting the working tree in the background.
         shownSession ? (
           <RightPanel
+            side={panelSide}
+            clearTrafficLights={panelAtLeftEdge}
             open={panelShown}
             tab={activeTab}
             onTabChange={setPanelTab}
@@ -2815,6 +2833,8 @@ function App() {
       onAutoHideSidebarChange={setAutoHideSidebar}
       autoHidePanel={autoHidePanel}
       onAutoHidePanelChange={setAutoHidePanel}
+      panelSide={panelSide}
+      onPanelSideChange={setPanelSide}
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}

@@ -10,6 +10,9 @@ type AppShellProps = {
   /// Right-hand inspector, when open. Sits outside the chat column so the
   /// composer stays scoped to the conversation rather than spanning both.
   panel?: ReactNode;
+  /// Draws the panel between the sidebar and the chat column instead of at the
+  /// window's right edge.
+  panelLeft?: boolean;
   /// The crew — the sessions this conversation started — when it has any. Inside
   /// the main column so it comes and goes with the view tabs, outside the chat
   /// column for the panel's reason: a composer spanning a list of other
@@ -38,6 +41,7 @@ export default function AppShell({
   header,
   footer,
   panel,
+  panelLeft = false,
   crew,
   crewStacked = false,
   centered = false,
@@ -47,6 +51,7 @@ export default function AppShell({
   return (
     <div className="flex h-full w-full overflow-hidden">
       {sidebar}
+      {panelLeft && panel}
 
       {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
@@ -89,7 +94,7 @@ export default function AppShell({
         )}
       </div>
 
-      {panel}
+      {!panelLeft && panel}
     </div>
   );
 }
