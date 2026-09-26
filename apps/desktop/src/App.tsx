@@ -215,6 +215,7 @@ function App() {
     handleRespondPermission,
     handleAnswerQuestions,
     handleSelectSessionIndexItem,
+    selectionRequestRef,
     handleNewSession,
     markSessionUnread,
     setSessionFlags,
@@ -1751,8 +1752,13 @@ function App() {
   /// A notice or banner click. A hidden session is drawn in its parent's crew,
   /// so it opens the parent — where the parent still exists.
   const openNotice = async (id: string) => {
+    // Nothing is claimed until `openFromNotice` selects, so a click or filter
+    // move landing during the lookups wins and this gives up.
+    const claimed = selectionRequestRef.current;
+    const gen = filterGen.current;
     const item = await indexItem(id);
     const parent = item?.hidden && item.parentSessionId ? await indexItem(item.parentSessionId) : null;
+    if (selectionRequestRef.current !== claimed || gen !== filterGen.current) return;
     await openFromNotice(parent?.sessionId ?? id);
   };
 
