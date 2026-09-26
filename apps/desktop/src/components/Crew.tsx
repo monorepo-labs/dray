@@ -32,6 +32,8 @@ import type { AgentEvent, PrMark } from "@/types/events";
 /// sessions with somewhere to answer them, beside the conversation that started
 /// them.
 export const CREW_W = 320;
+/** Widest window on which an open right panel stacks the crew: a 14" MacBook. */
+export const CREW_STACK_WITH_PANEL_W = 1512;
 
 type CrewProps = {
   rows: CrewRow[];
@@ -99,7 +101,7 @@ export default function Crew({
   chat,
   stacked = false,
 }: CrewProps) {
-  return (
+  const list = (
     // **An edge, not a divider, and the ramp is what makes it one.** A flat
     // border is what a split draws between two places to work, and this is one
     // place with a list beside it — which is why there was none here at all for
@@ -124,9 +126,14 @@ export default function Crew({
     // end of the list rather than a status bar.
     <div
       className={cn(
-        "flex min-h-0 shrink-0 flex-col overflow-y-auto",
+        // Stacked, it must shrink to the wrapper's 40% to scroll inside it.
+        "flex min-h-0 flex-col overflow-y-auto",
+        !stacked && "shrink-0",
+        // Stacked, closed rows cap at five before scrolling: five plus the hint
+        // row (5 × h-8 + h-7), or five alone where the hint rides the first
+        // row. An open transcript takes the wrapper's 40% instead.
         stacked
-          ? "max-h-[40%] border-t border-border"
+          ? !rows.some((r) => open.has(r.item.sessionId)) && "max-h-[11.75rem] @lg:max-h-40"
           : "border-l [border-image:linear-gradient(to_bottom,transparent,var(--border))_1]",
       )}
       style={stacked ? undefined : { width: CREW_W }}
@@ -135,7 +142,7 @@ export default function Crew({
           a list rather than a workspace, and a label over five rows that each
           name themselves is a row of chrome spent on the one thing nobody has
           to be told. */}
-      {rows.map((row) => {
+      {rows.map((row, i) => {
         const id = row.item.sessionId;
         // Two ways a row is open and they draw different things. `open` holds
         // what the *reader* opened; a question opens its own row without going
@@ -165,14 +172,22 @@ export default function Crew({
               openFully && pane.session ? "min-h-64 flex-1" : "shrink-0",
             )}
           >
-            <CrewHeader
-              row={row}
-              open={openFully}
-              focused={focused}
-              pr={prFor(row.item.projectPath, row.item.branch)}
-              onToggle={() => onToggle(id)}
-              onOpenInMain={() => onOpenInMain(id)}
-            />
+            <div className="flex items-center">
+              <div className="min-w-0 flex-1">
+                <CrewHeader
+                  row={row}
+                  open={openFully}
+                  focused={focused}
+                  pr={prFor(row.item.projectPath, row.item.branch)}
+                  onToggle={() => onToggle(id)}
+                  onOpenInMain={() => onOpenInMain(id)}
+                />
+              </div>
+              {/* Stacked, the list is as wide as the composer and the first
+                  row has room to spare, so the chord rides it rather than
+                  spending a line of its own. */}
+              {stacked && i === 0 && <CrewHint className="hidden gap-2 @lg:flex" />}
+            </div>
             {(openFully || row.asking) && (
               // Dimmed rather than veiled, the grid's own reading: a scrim is
               // one more element to keep in step with the palette, where
@@ -242,17 +257,30 @@ export default function Crew({
           of it nobody is looking for. "Toggle", not "hide": the chord is the
           only way *back* too, and a hint naming one direction reads as a
           control that only goes that way. */}
-      <CrewHint />
+      <CrewHint className={cn("flex justify-between", stacked && "@lg:hidden")} />
     </div>
+  );
+
+  // Stacked, the wrapper lines the list up with the composer's column and is
+  // the container the hint's placement is asked of.
+  return stacked ? (
+    <div className="@container mx-auto flex max-h-[40%] min-h-0 w-[calc(100%-2rem)] max-w-3xl shrink-0 flex-col">
+      {list}
+    </div>
+  ) : (
+    list
   );
 }
 
-/// The chord's hint row. Also drawn alone above the composer where a narrow
-/// window has put the crew away on its own, since the reader never hid it and
-/// the chord is the only way to bring it back.
-export function CrewHint() {
+/// The chord's hint row: at the foot of the list, or beside the first row.
+function CrewHint({ className }: { className?: string }) {
   return (
-    <div className="flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
+    <div
+      className={cn(
+        "min-h-7 shrink-0 items-center px-3 text-ui text-muted-foreground/60",
+        className,
+      )}
+    >
       Toggle crew
       <ShortcutKeys ids={["crew.toggle"]} className={HINT_KEYS} />
     </div>

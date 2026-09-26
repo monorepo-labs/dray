@@ -73,7 +73,7 @@ import Sidebar, {
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
-import Crew, { CREW_W, CrewHint } from "@/components/Crew";
+import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -732,13 +732,18 @@ function App() {
   // The sidebar counts at its drawn width, since the panel yields to it and a
   // widened sidebar would otherwise leave the panel a sliver; floored at its
   // minimum, because narrowing the window clamps that width under it.
+  // Up to a 14" MacBook's width, an open panel stacks the crew even where the
+  // minimums fit: all four at their floors reads as cramped, not as fitting.
+  // That case still starts shown — it fits, it is only drawn somewhere else.
   const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
   const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
-  const crewBeside =
-    useViewportWidth() >=
+  const viewportW = useViewportWidth();
+  const crewFits =
+    viewportW >=
     CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (crewPanelOpen ? PANEL_MIN : 0);
+  const crewBeside = crewFits && !(crewPanelOpen && viewportW <= CREW_STACK_WITH_PANEL_W);
   const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
-  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewBeside);
+  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewFits);
   const crewUp = crewExists && !crewHidden;
   const crewDrawn = crewAvailable && !crewHidden;
 
@@ -2195,8 +2200,6 @@ function App() {
             active={!issuesOpen && viewTab === "chat"}
             chat={paneChat}
           />
-        ) : crewAvailable && !crewBeside ? (
-          <CrewHint />
         ) : undefined
       }
       sidebar={
