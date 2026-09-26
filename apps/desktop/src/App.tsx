@@ -1180,28 +1180,30 @@ function App() {
   // drops the claim for the same reason: a sidebar they closed by hand while
   // reading a page is theirs, not ours to give back.
   const hidForBrowser = useRef(false);
-  // The pane's claim names the key it was closed under, since the pane is per
-  // session: a reader who switched session on the page gets no pane opened on
-  // a session that never had one.
+  // The pane's claim names the key it was closed under, and restoring writes
+  // that key rather than the one on screen: the view tab is per session, so
+  // selecting a session sitting on Chat leaves the Browser view and moves
+  // `panelKey` in one render, and a claim read against the new key was lost.
   const panelHidForBrowser = useRef<string | null>(null);
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
 
+    const claim = panelHidForBrowser.current;
     const panelMove = sidebarMove({
       from: was,
       to: viewTab,
       enabled: autoHidePanel,
       collapsed: !panelOpen,
-      claimed: !!panelKey && panelHidForBrowser.current === panelKey,
+      claimed: claim !== null,
     });
     if (panelMove === "hide") {
       panelHidForBrowser.current = panelKey;
       setPanelOpen(false);
-    } else if (panelMove === "restore") {
-      setPanelOpen(true);
+    } else if (panelMove === "restore" && claim) {
+      panelHidForBrowser.current = null;
+      setPanelOpens((prev) => ({ ...prev, [claim]: true }));
     }
-    if (was === "browser" && viewTab !== "browser") panelHidForBrowser.current = null;
 
     // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
     // pure and tested: `collapsed` is a dep this effect only *reads*, so the
