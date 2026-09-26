@@ -153,6 +153,26 @@ export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
   );
 }
 
+/// `asking` with every hidden asker's ancestors added, for the sidebar. A hidden
+/// session has no row there, so a card it raised would otherwise leave its
+/// parent looking idle and the session blocked with nobody told.
+export function withHiddenAsks(
+  items: SessionIndexItem[],
+  asking: ReadonlySet<string>,
+): Set<string> {
+  const byId = new Map(items.map((i) => [i.sessionId, i]));
+  const out = new Set(asking);
+  for (const id of asking) {
+    let at = byId.get(id);
+    // `out` doubles as the cycle guard: a parent already marked stops the walk.
+    while (at?.hidden && at.parentSessionId && !out.has(at.parentSessionId)) {
+      out.add(at.parentSessionId);
+      at = byId.get(at.parentSessionId);
+    }
+  }
+  return out;
+}
+
 /// The hidden sessions `parentId` started directly. Settle, delete and worktree
 /// removal carry on to these, since nothing else on screen can reach them.
 export function hiddenChildren(items: SessionIndexItem[], parentId: string): SessionIndexItem[] {

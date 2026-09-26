@@ -135,7 +135,7 @@ import { changeRange, lastToolResult, turnChangedTree } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows, crewSeen, inSidebar } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
 import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
@@ -1027,6 +1027,11 @@ function App() {
     () => filterSessions(inSidebar(visibleSessions), search),
     [visibleSessions, search],
   );
+  // A hidden session's card lights its parent's row, the only row it has.
+  const sidebarAsking = useMemo(
+    () => withHiddenAsks(sessionIndexItems, askingSessions),
+    [sessionIndexItems, askingSessions],
+  );
 
   // The sidebar's marks: one `gh` per repo on screen rather than one per row —
   // see `usePrMarks`. Distinct paths, and the *active* list's only: a settled
@@ -1470,11 +1475,11 @@ function App() {
         projects,
         // The same reading the sidebar groups by, and withheld on the same list
         // — the walk has to step the runs the eye is looking at.
-        archivedShown ? undefined : { statusBySession, asking: askingSessions },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, askingSessions, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -1511,11 +1516,11 @@ function App() {
       sessionUnits(
         searchedSessions,
         projects,
-        archivedShown ? undefined : { statusBySession, asking: askingSessions },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, askingSessions, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
   );
   const stepGroup = (delta: number) => stepThrough(units, delta);
 
@@ -2338,7 +2343,7 @@ function App() {
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
           statusBySession={statusBySession}
-          askingSessions={askingSessions}
+          askingSessions={sidebarAsking}
           prFor={prMarks.prFor}
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the

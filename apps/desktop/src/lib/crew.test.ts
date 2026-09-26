@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crewAnchor, crewRows, crewSeen, hiddenChildren, inSidebar } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
@@ -191,6 +191,12 @@ describe("hidden sessions", () => {
 
   it("still draws it in the parent's crew", () => {
     expect(ids(crewRows(items, "a", quiet))).toContain("review");
+  });
+
+  it("lights the parent of a hidden asker, and no one else's", () => {
+    const deep = [...items, item("sub", "review", { hidden: true })];
+    expect([...withHiddenAsks(deep, new Set(["sub"]))].sort()).toEqual(["a", "review", "sub"]);
+    expect([...withHiddenAsks(deep, new Set(["shown"]))]).toEqual(["shown"]);
   });
 
   it("names only the hidden children for a cascade", () => {
