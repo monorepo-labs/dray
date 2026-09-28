@@ -899,7 +899,7 @@ const handleSendMsg = async (
       // (#364); the composer follows, or the next send asks for it again —
       // unless the reader picked another model while this send was out.
       const model = outcome.model ?? modelId;
-      const modelUnchanged = latestPick?.model === sentPick?.model;
+      const modelUnchanged = (latestPick?.model ?? modelId) === modelId;
       if (outcome.model && modelUnchanged && selectedSessionIdRef.current === sessionId) {
         setModelId(outcome.model);
       }
