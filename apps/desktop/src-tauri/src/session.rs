@@ -1047,7 +1047,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
+        touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -1132,6 +1132,13 @@ impl SessionManager {
             app,
         )
         .await?;
+
+        // fx resumes on the model it restored when it refuses the one asked for
+        // (#364), so the index written above is caught up on what is running.
+        if session.model != model {
+            touch_session_index_item(session_id, session.model.clone(), effort, permission_mode, fast)
+                .await?;
+        }
 
         // After the spawn, so a child that fails to start leaves the instruction
         // standing and the next send forks again. Cleared before the prompt goes
