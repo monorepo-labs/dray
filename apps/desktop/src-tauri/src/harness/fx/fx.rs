@@ -363,14 +363,25 @@ pub async fn init(
     // incidental**: a ladder is per model, so a level sent first is asked of the
     // model fx restored rather than the one the reader picked, and a rung the
     // new model does not have is refused for the old one's sake. Re-sending the
-    // model fx already restored is a no-op that answers ok, so this needs no
-    // comparison — and the reply is what teaches the session the new model's
-    // ladder, which is what the effort below is judged against.
+    // model fx already restored is skipped inside [`set_model`] — and the reply
+    // is what teaches the session the new model's ladder, which is what the
+    // effort below is judged against.
+    //
+    // A refusal is not fatal, for the effort's reason below: killing the child
+    // over it leaves a session that cannot be opened at all (#364). It runs on
+    // what fx restored, and that is what gets recorded.
+    let mut running = model.map(|m| m.id.clone()).unwrap_or_default();
     if !is_new_session {
         if let Some(model) = model {
             if let Err(error) = set_model(&session, model, app).await {
-                let _ = child.kill().await;
-                return Err(error);
+                if let Some(landed) = landed_model(&session) {
+                    running = landed;
+                }
+                let refusal = format!(
+                    "fx refused {}, so this session stays on {}: {error:#}",
+                    model.arg, running
+                );
+                crate::session::report_session_error(session_id, Fx, &refusal, &seq, app).await;
             }
         }
     }
@@ -407,7 +418,7 @@ pub async fn init(
         child,
         stdin: Transport::Fx(session),
         harness: Fx,
-        model: model.map(|m| m.id.clone()).unwrap_or_default(),
+        model: running,
         // What the session is running on, not what was asked for — the index
         // is written from this, and a level recorded that fx declined is the
         // whole of DRA-221's second half.
@@ -784,6 +795,14 @@ pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> R
     if let Some(provider) = provider_move(session.provider().as_deref(), model) {
         let answer = set_config(session, "provider", provider).await?;
         note_config(session, &parser::ConfigOptions::of(&answer), None, app);
+    }
+
+    // Already there, so nothing to send — and sending it is not the no-op it
+    // looks like. fx 0.0.11 cannot read grok's catalog (`fx models` answers
+    // `MalformedResponse`) and refuses every model call on that provider, the
+    // current model included, which made every grok session unresumable (#364).
+    if session.model.lock().expect("fx model poisoned").as_deref() == Some(model.arg.as_str()) {
+        return Ok(());
     }
 
     let answer = set_config(session, "model", &model.arg).await?;
