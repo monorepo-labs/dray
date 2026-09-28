@@ -890,16 +890,17 @@ const handleSendMsg = async (
     if (!isNewSession) {
       // The index now holds what was sent; only the per-model levels outlive
       // it, since the index keeps one.
-      const pickUnchanged = unsentPicks.current.get(sessionId) === sentPick;
-      if (pickUnchanged) {
+      const latestPick = unsentPicks.current.get(sessionId);
+      if (latestPick === sentPick) {
         if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
         else unsentPicks.current.delete(sessionId);
       }
       // fx may refuse the pick on a resume and run on the model it restored
       // (#364); the composer follows, or the next send asks for it again —
-      // unless the reader picked again while this send was out.
+      // unless the reader picked another model while this send was out.
       const model = outcome.model ?? modelId;
-      if (outcome.model && pickUnchanged && selectedSessionIdRef.current === sessionId) {
+      const modelUnchanged = latestPick?.model === sentPick?.model;
+      if (outcome.model && modelUnchanged && selectedSessionIdRef.current === sessionId) {
         setModelId(outcome.model);
       }
       setSessionIndexItems((prev) =>
