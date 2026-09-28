@@ -894,10 +894,14 @@ const handleSendMsg = async (
         if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
         else unsentPicks.current.delete(sessionId);
       }
+      // fx may refuse the pick on a resume and run on the model it restored
+      // (#364); the composer follows, or the next send asks for it again.
+      const model = outcome.model ?? modelId;
+      if (outcome.model && selectedSessionIdRef.current === sessionId) setModelId(outcome.model);
       setSessionIndexItems((prev) =>
         prev.map((i) =>
           i.sessionId === sessionId
-            ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
+            ? { ...i, model, effort, permissionMode, fast, modified: new Date().toISOString() }
             : i,
         ),
       );

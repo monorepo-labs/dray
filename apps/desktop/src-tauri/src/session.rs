@@ -122,6 +122,9 @@ pub struct SendOutcome {
     /// link_session_issue`]'s reason — re-tagging *replaces* an entry, so what
     /// changed is not a set the caller can apply on its own.
     pub issues: Vec<IssueRef>,
+    /// `Some` when the child is running a model other than the one sent — fx
+    /// resuming on the model it restored after refusing the pick (#364).
+    pub model: Option<ModelId>,
 }
 
 /// Whether a send has to replace the child rather than write to it.
@@ -796,6 +799,7 @@ impl SessionManager {
             // the backend-truncated title rather than guessing either.
             return Ok(SendOutcome {
                 issues: item.issues.clone(),
+                model: None,
                 snapshot: Some(SessionSnapshot {
                     index_item: item,
                     events,
@@ -1005,6 +1009,7 @@ impl SessionManager {
                             snapshot: None,
                             queued: Some(queued),
                             issues: linked,
+                            model: None,
                         });
                     }
                     // The turn ended under the read, so this send opens the next
@@ -1031,6 +1036,7 @@ impl SessionManager {
                         snapshot: None,
                         queued: Some(queued),
                         issues: linked,
+                        model: None,
                     });
                 }
             }
@@ -1134,9 +1140,12 @@ impl SessionManager {
         .await?;
 
         // fx resumes on the model it restored when it refuses the one asked for
-        // (#364), so the index written above is caught up on what is running.
-        if session.model != model {
-            touch_session_index_item(session_id, session.model.clone(), effort, permission_mode, fast)
+        // (#364), so the index written above is caught up on what is running,
+        // and the frontend is told, since it mirrors the pick it sent.
+        let landed = (session.model != model && !session.model.is_unset())
+            .then(|| session.model.clone());
+        if let Some(landed) = &landed {
+            touch_session_index_item(session_id, landed.clone(), effort, permission_mode, fast)
                 .await?;
         }
 
@@ -1160,6 +1169,7 @@ impl SessionManager {
         *slot_guard = Some(session);
         Ok(SendOutcome {
             issues: linked,
+            model: landed,
             ..Default::default()
         })
     }
