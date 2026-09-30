@@ -37,6 +37,9 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2
         version: 2.5.4
+      '@yogesharc/thinking-orbs':
+        specifier: ^0.1.1
+        version: 0.1.1(react@19.2.8)
       blobatar:
         specifier: ^2.5.0
         version: 2.5.0(react@19.2.8)
@@ -70,9 +73,6 @@ importers:
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
-      thinking-orbs:
-        specifier: ^0.2.0
-        version: 0.2.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -116,6 +116,9 @@ importers:
       '@blobatar/react':
         specifier: ^2.5.0
         version: 2.5.0(blobatar@2.5.0(react@19.2.8))(react@19.2.8)
+      '@yogesharc/thinking-orbs':
+        specifier: ^0.1.1
+        version: 0.1.1(react@19.2.8)
       blobatar:
         specifier: ^2.5.0
         version: 2.5.0(react@19.2.8)
@@ -134,9 +137,6 @@ importers:
       react-dom:
         specifier: ^19.1.0
         version: 19.2.8(react@19.2.8)
-      thinking-orbs:
-        specifier: ^0.2.0
-        version: 0.2.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4.3.3
@@ -2084,6 +2084,14 @@ packages:
   '@vitest/utils@4.1.10':
     resolution: {integrity: sha512-fy9am/HWxbaGt/Sawrp90vt6Y6jQwf1RX77cz3uwoJwJVMli/e1IEwRPnMNJ7vKfPTwo0diXifkpPvwH9v7nGA==}
 
+  '@yogesharc/thinking-orbs@0.1.1':
+    resolution: {integrity: sha512-tJsz/Zp53Bi35XnV0lEnUDbg7X2qnHnLzyovAD4yr9NzdD0aI4Jj3m4VgXeYDdwk1ncmHO6rTcuU5FEj/moLSA==}
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
+
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
     engines: {node: '>= 0.6'}
@@ -3909,12 +3917,6 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
-
-  thinking-orbs@0.2.0:
-    resolution: {integrity: sha512-CQux/YsLlB9nY60BDpZ/uW7knAvXg+U2T/gzrzuLRw8xlzfJPLXZxAg2tbbIBGp/nE2Kol1GfbMOJnoH+tcb/A==}
-    peerDependencies:
-      react: '>=18.0.0'
-      react-dom: '>=18.0.0'
 
   tiny-invariant@1.3.3:
     resolution: {integrity: sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg==}
@@ -6047,6 +6049,10 @@ snapshots:
       '@vitest/pretty-format': 4.1.10
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
+
+  '@yogesharc/thinking-orbs@0.1.1(react@19.2.8)':
+    optionalDependencies:
+      react: 19.2.8
 
   accepts@2.0.0:
     dependencies:
@@ -8232,11 +8238,6 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
-
-  thinking-orbs@0.2.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
-    dependencies:
-      react: 19.2.8
-      react-dom: 19.2.8(react@19.2.8)
 
   tiny-invariant@1.3.3: {}
 

@@ -26,11 +26,9 @@ export default function ApiRetryIndicator({
   // on the way in, so anything arriving here is worth showing.
   const cause = [status, reason].filter(Boolean).join(" ");
 
-  // `searching` so a retry reads as its own activity rather than as ordinary
-  // progress.
   return (
     <OrbLine
-      state="searching"
+      state="retrying"
       label={`Retrying — attempt ${attempt} of ${maxRetries}${cause ? ` (${cause})` : ""}`}
     />
   );

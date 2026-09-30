@@ -11,3 +11,6 @@ allowBuilds:
   # Next's image optimizer; without it `next build` warns and falls back to a
   # slower JS decoder.
   sharp: true
+
+minimumReleaseAgeExclude:
+  - '@yogesharc/thinking-orbs@0.1.1'

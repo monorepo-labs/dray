@@ -485,7 +485,7 @@ function CrewHeader({
                 aria-label="Checks running"
               />
             ) : row.busy ? (
-              <Orb state="listening" size={20} aria-label="Working" />
+              <Orb state="working" label="Working" />
             ) : (
               pr && <PrStateIcon pr={pr} strokeWidth={1.5} />
             )}

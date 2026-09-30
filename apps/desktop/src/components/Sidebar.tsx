@@ -2329,11 +2329,7 @@ function SessionRow({
                 aria-label="Checks running"
               />
             ) : status === "in_progress" ? (
-              <Orb
-                state="listening"
-                size={20}
-                aria-label="Working"
-              />
+              <Orb state="working" label="Working" />
             ) : (
               relativeTime(item.modified)
             )}
