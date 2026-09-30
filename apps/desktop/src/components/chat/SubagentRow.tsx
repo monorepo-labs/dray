@@ -39,7 +39,7 @@ export default function SubagentRow({
       {/* The orb *is* the running state, so it goes when the run ends rather
           than settling into a resting pose — a still orb next to a finished run
           reads as something that stalled. */}
-      {running && <Orb state="working" />}
+      {running && <Orb state="working" variant="gyro" />}
 
       <span
         className={cn(
