@@ -39,7 +39,7 @@ export function SplitView({ className }: { className?: string }) {
             <HeadingRow label="Group 1" />
             <SessionRow title="Window transparency" active trailing="31m" />
             <SessionRow title="Split screen multi-session" trailing="45m" />
-            <SessionRow title="Browser tab auto-opens" trailing={<Orb aria-label="Working" />} />
+            <SessionRow title="Browser tab auto-opens" trailing={<Orb />} />
             <GroupBreak />
             <HeadingRow label="ade" />
             <SessionRow title="Prepare new release" trailing="27m" />

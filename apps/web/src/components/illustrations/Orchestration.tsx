@@ -198,7 +198,7 @@ function Settling({ spin, done }: { spin: string; done: string }) {
   return (
     <span className="grid justify-items-end">
       <span className={`col-start-1 row-start-1 flex items-center ${s.spin} ${spin}`}>
-        <Orb aria-label="Working" />
+        <Orb />
       </span>
       <span className={`col-start-1 row-start-1 ${s.done} ${done}`}>now</span>
     </span>
@@ -210,7 +210,7 @@ function Settling({ spin, done }: { spin: string; done: string }) {
 function Working({ spin }: { spin: string }) {
   return (
     <span className={`flex items-center ${s.spin} ${spin}`}>
-      <Orb aria-label="Working" />
+      <Orb />
     </span>
   );
 }

@@ -28,9 +28,7 @@ export default function BackgroundTasksIndicator({
       aria-label={`Show ${count} background task${count === 1 ? "" : "s"} in the subagent panel`}
       className="flex cursor-pointer items-center gap-2 text-left"
     >
-      {/* Same 20px inline design as WorkingIndicator, `weaving` so the two
-          read as different activities at a glance. */}
-      <Orb state="weaving" size={20} aria-hidden />
+      <Orb state="background" variant="spiral" />
 
       <span className="shimmer-text text-chat">
         {count} Background Task{count === 1 ? "" : "s"}

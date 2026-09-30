@@ -362,7 +362,7 @@ export default function ToolCall({
             reason: the reader is waiting on a whole agent rather than on a
             call, and this is the one tool row where that is true. */}
         {pending && toolType === "subagent_spawn" && (
-          <Orb state="listening" size={20} aria-hidden />
+          <Orb state="working" />
         )}
 
         {/* One inline flow for a delegated run, three flex items for everything

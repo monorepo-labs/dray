@@ -732,9 +732,8 @@ export default function Chat({
 
             {/* Live rather than a settled row: rewriting the conversation into a
                 summary takes seconds on a small context and minutes on a full
-                one, with nothing else on screen to explain the wait. `shaping`
-                reads as its own activity beside `working` and `weaving`. */}
-            {compacting && <OrbLine state="shaping" label="Compacting context" />}
+                one, with nothing else on screen to explain the wait. */}
+            {compacting && <OrbLine state="compacting" label="Compacting context" />}
 
             {apiRetry && (
               <ApiRetryIndicator

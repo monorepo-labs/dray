@@ -42,7 +42,7 @@ export default function Reasoning({
           onClick={() => setOpen((prev) => !prev)}
           className="group/think flex items-center gap-1.5 text-chat text-muted-foreground"
         >
-          <Orb state="composing" size={20} aria-hidden />
+          <Orb state="reasoning" />
           <span>Thinking</span>
           {long && (
             <ChevronRight

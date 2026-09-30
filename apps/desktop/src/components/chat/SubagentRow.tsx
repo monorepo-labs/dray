@@ -38,9 +38,8 @@ export default function SubagentRow({
     >
       {/* The orb *is* the running state, so it goes when the run ends rather
           than settling into a resting pose — a still orb next to a finished run
-          reads as something that stalled. Same size and pinned theme as
-          `WorkingIndicator`, which is the other place it appears inline. */}
-      {running && <Orb state="listening" size={20} aria-hidden />}
+          reads as something that stalled. */}
+      {running && <Orb state="working" />}
 
       <span
         className={cn(

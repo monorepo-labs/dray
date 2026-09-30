@@ -2299,10 +2299,7 @@ function SessionRow({
             {/* The orb takes the timestamp's place rather than a slot of its
                 own: a row that's working right now is the one row whose "last
                 activity" reads as stale, and one indicator per row is what keeps
-                the right edge quiet. 20 is the inline-with-text preset, and
-                `theme` is pinned for the same reason as everywhere else — the
-                orb's `auto` looks for `data-theme="dark|light"` and this app
-                stamps a palette name there. */}
+                the right edge quiet. */}
             {/* Three things want this one slot, and the order is the whole of
                 the rule. Checks win: the orb says the agent is working, which
                 the reader already knows because they set it going and the
@@ -2329,11 +2326,7 @@ function SessionRow({
                 aria-label="Checks running"
               />
             ) : status === "in_progress" ? (
-              <Orb
-                state="listening"
-                size={20}
-                aria-label="Working"
-              />
+              <Orb state="working" label="Working" />
             ) : (
               relativeTime(item.modified)
             )}

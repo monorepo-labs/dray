@@ -53,7 +53,7 @@ export function Hero({ className }: { className?: string }) {
             <SessionRow title="Settings theme picker" depth={1} guides={[false]} trailing="18h" />
             <GroupBreak />
             <HeadingRow label="ade" />
-            <SessionRow title="Fix PR panel comments" trailing={<Orb aria-label="Working" />} />
+            <SessionRow title="Fix PR panel comments" trailing={<Orb />} />
             <SessionRow title="Add app speedrun" unread="add" trailing="5m" />
             <SessionRow title="Stop background tasks" active trailing="6m" />
             <GroupBreak />

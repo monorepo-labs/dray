@@ -25,7 +25,7 @@ export default function WorkingIndicator({
   const [label] = useState(() => LABELS[Math.floor(Math.random() * LABELS.length)]);
 
   return (
-    <OrbLine state="listening" label={label}>
+    <OrbLine state="working" label={label}>
       {/* Dimmer than the label and deliberately unshimmered: the count is the
           one part of this row that is really moving, so it doesn't need the
           animation to say so, and pairing the two just made the row noisy. */}
@@ -52,10 +52,7 @@ export function OrbLine({
 }) {
   return (
     <div className="flex items-center gap-2" aria-live="polite">
-      {/* 20 and 64 are separately tuned designs rather than one scaled to the
-          other, so 20 is the only inline-with-text option. Mode comes from
-          `Orb`, which is the whole reason that wrapper exists. */}
-      <Orb state={state} size={20} aria-hidden />
+      <Orb state={state} />
 
       <span className="shimmer-text text-chat">{label}</span>
 
