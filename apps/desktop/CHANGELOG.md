@@ -5,6 +5,14 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.25.2
+
+### Changed
+
+- **New thinking orbs.** The working indicators are redrawn in the
+  text colour, so they read the same on every theme and in both
+  modes. Background tasks get their own spiral.
+
 ## 0.25.1
 
 ### Fixed
