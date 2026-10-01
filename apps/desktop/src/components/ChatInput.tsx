@@ -37,7 +37,7 @@ import {
   subscribeIssueTracker,
   type Connected,
 } from "@/lib/issueTracker";
-import { registerComposer } from "@/lib/composerFocus";
+import { registerComposer, typeIntoComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
 import { selectionRange } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
@@ -525,6 +525,11 @@ export default function ChatInput({
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener("keydown", typeIntoComposer);
+    return () => document.removeEventListener("keydown", typeIntoComposer);
   }, []);
 
   // The drop target is the whole window, not the card: a file aimed at the

@@ -121,11 +121,12 @@ export function useHotkey(
 /// Somewhere a caret can be, and therefore somewhere the platform's own text
 /// chords belong. `contentEditable` counts: the markdown a doc renders is not
 /// one today, but nothing here should have to be re-read if it becomes one.
-function isTextField(target: EventTarget | null): boolean {
+export function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return (
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLInputElement ||
+    target instanceof HTMLSelectElement ||
     target.isContentEditable
   );
 }

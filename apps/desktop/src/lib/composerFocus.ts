@@ -1,3 +1,5 @@
+import { isTextField } from "@/hooks/useHotkey";
+
 /// A way to hand focus back to the composer from outside it.
 ///
 /// Dictation is the caller: the mic button lives in `ComposerToolbar`, which
@@ -39,15 +41,47 @@ export function focusComposerEnd() {
   const el = composer;
   if (!el) return;
 
-  requestAnimationFrame(() => {
-    el.focus();
+  requestAnimationFrame(() => focusAtEnd(el));
+}
 
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
+function focusAtEnd(el: HTMLElement) {
+  el.focus();
 
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  });
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+/// Where a printable key belongs to whatever has focus rather than to the
+/// composer: an open menu or dialog, where Radix typeahead reads letters.
+const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
+
+/// Sends a printable key pressed elsewhere in the app to the composer.
+///
+/// Installed on `document` by `ChatInput`, so it exists only while the Chat
+/// view has a composer. It moves focus and nothing else: WebKit re-reads the
+/// focused node between `keydown` and inserting the text, so the character
+/// lands in the box itself, with no synthetic insert to keep in step with
+/// `RichInput`'s own reading. Space is left alone, being what activates the
+/// focused row or button.
+export function typeIntoComposer(e: KeyboardEvent) {
+  const el = composer;
+  if (!el || e.defaultPrevented || e.isComposing) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key.length !== 1 || e.key === " ") return;
+
+  const target = e.target instanceof HTMLElement ? e.target : null;
+  if (isTextField(target) || target?.closest(OWNS_KEYS)) return;
+  // The question card is a `<form>` whose choices answer to keys of their own.
+  // The composer is one too, and its own buttons should still hand over.
+  const form = target?.closest("form");
+  if (form && !form.contains(el)) return;
+  // Mounted but not drawn — Settings hides the shell rather than unmounting it.
+  if (el.getClientRects().length === 0) return;
+
+  focusAtEnd(el);
 }
