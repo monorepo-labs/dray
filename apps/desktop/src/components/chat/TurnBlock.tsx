@@ -3,10 +3,11 @@ import { ChevronRight } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import EventRow from "@/components/chat/EventRow";
+import MediaRow from "@/components/chat/MediaRow";
 import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
-import { drawsSameTurn, GROUP_MIN, isToolGroup, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
+import { drawsSameTurn, GROUP_MIN, isToolGroup, segmentMedia, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
 import type { FileEdit, ToolResult } from "@/types/events";
 import { cn } from "@/lib/utils";
 
@@ -142,6 +143,9 @@ export default memo(function TurnBlock({
         ? turn.work.map(renderItem)
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
+            // Open, every row draws its own pictures; closed, they would be
+            // behind the click, so they are lifted out under the summary.
+            const media = open ? null : segmentMedia(seg.items, turn.finalText);
             return (
               <Fragment key={i}>
                 {seg.rows > 0 && (
@@ -159,6 +163,7 @@ export default memo(function TurnBlock({
                     />
                   </button>
                 )}
+                {media && media.length > 0 && <MediaRow media={media} />}
                 {open && seg.items.map(renderItem)}
                 {seg.prompt && renderItem(seg.prompt)}
               </Fragment>

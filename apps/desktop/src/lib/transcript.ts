@@ -1,5 +1,5 @@
 import { toolSummary } from "@/lib/tools";
-import type { AgentEvent, FileEdit, ToolResult, Usage } from "@/types/events";
+import type { AgentEvent, FileEdit, ImageRef, ToolResult, Usage } from "@/types/events";
 
 export type SubagentRun = {
   /// The spawning tool call's id — what the envelope correlates on, and the key
@@ -163,6 +163,47 @@ export function segmentWork(turn: Turn): TurnSegment[] {
   last.rows -= discount;
 
   return segments;
+}
+
+/// Every `dray browser record` video named in a text, absolute paths only —
+/// the asset protocol reads nothing else. Unanchored where Markdown's own test
+/// is anchored, since this searches prose and tool output rather than judging
+/// one path.
+const RECORDING_IN_TEXT =
+  /\/[^\s"'`()<>]*\/\.dray\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
+
+/// A picture or a recording, in the order the work produced them.
+export type Media = { image: ImageRef } | { video: string };
+
+/// The pictures and recordings a collapsed stretch of work would hide.
+///
+/// A screenshot the agent took is the one thing in its work the reader most
+/// wants to see and the least able to guess from "6 tool calls", so a closed
+/// segment draws these under its summary line the way a prompt draws its
+/// attachments. Read off the results sitting in `items` between the calls —
+/// a group's results are there too, held after it. `finalText` is skipped:
+/// the collapsed view already draws that message, video and all.
+export function segmentMedia(items: WorkItem[], finalText: string | null): Media[] {
+  const media: Media[] = [];
+  const seen = new Set<string>();
+  const scan = (text: string) => {
+    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      media.push({ video: path });
+    }
+  };
+  for (const item of items) {
+    if (isToolGroup(item)) continue;
+    const { payload } = item;
+    if (payload.type === "tool_call_completed") {
+      media.push(...payload.result.images.map((image) => ({ image })));
+      scan(payload.result.text);
+    } else if (payload.type === "assistant_text" && payload.text !== finalText) {
+      scan(payload.text);
+    }
+  }
+  return media;
 }
 
 export type Turn = {
