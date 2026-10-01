@@ -2117,6 +2117,9 @@ function App() {
     if (issuesOpen) return setPickedIssue(null);
     togglePanel();
   });
+  // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
+  // is a preference, and it lands wherever the pane next opens.
+  useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
   // Bound only where a crew could be drawn, since `useHotkey` claims a chord it
   // is listening for — unbound elsewhere, ⌘⇧C stays free for whatever the
   // reader rebinds onto it rather than being swallowed by a column that has
