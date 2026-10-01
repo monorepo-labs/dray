@@ -691,7 +691,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::TabSwitch { id } => {
             let id = owned(session, id)?;
-            browser_activate(session.to_string(), id)?;
+            activate(session.to_string(), id, false)?;
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {

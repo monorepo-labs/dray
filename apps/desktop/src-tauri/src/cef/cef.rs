@@ -1336,13 +1336,19 @@ pub fn browser_tabs(session_id: String) -> Vec<TabInfo> {
 
 #[tauri::command]
 pub fn browser_activate(session_id: String, id: i32) -> Result<(), String> {
+    activate(session_id, id, true)
+}
+
+/// Makes `id` the session's active tab. `focus` is the reader's pick alone:
+/// an agent's `tab <id>` must not take keys out of the composer.
+pub(crate) fn activate(session_id: String, id: i32, focus: bool) -> Result<(), String> {
     on_main(move || {
         if session_of(id).as_deref() != Some(session_id.as_str()) {
             return;
         }
         set_active(&session_id, Some(id));
         apply_layout();
-        if let Some(host) = browser_of(id).and_then(|b| b.host()) {
+        if let Some(host) = browser_of(id).and_then(|b| b.host()).filter(|_| focus) {
             host.set_focus(1);
         }
         publish(&session_id);
