@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import "./App.css";
 import Chat from "@/components/Chat";
 import ChatInput from "@/components/ChatInput";
-import ShortcutKeys from "@/components/ShortcutKeys";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import LinkDialog from "@/components/chat/LinkDialog";
@@ -73,9 +72,13 @@ import Sidebar, {
   SEARCH_INPUT_ID,
   SidebarToggle,
   filterSessions,
+  placeDrafts,
+  sessionGroups,
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
+import { useChord } from "@/hooks/useShortcuts";
+import { formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -103,7 +106,7 @@ import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { pickAttachments } from "@/hooks/useAttachments";
+import { pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
@@ -242,6 +245,8 @@ function App() {
     save: saveDraft,
     update: updateDraft,
     remove: removeDraft,
+    get: getDraft,
+    discardIfEmpty,
   } = useDrafts((e) => setError(String(e)));
   const [openDraftId, setOpenDraftId] = useState<string | null>(null);
   // Read from the text listener, which registers once, and written ahead of
@@ -281,23 +286,50 @@ function App() {
   const sendFromComposer = async (message: string, attachments: Attachment[]) => {
     const id = openDraftRef.current;
     if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
-    const prompt = drafts.find((d) => d.id === id)?.prompt ?? message;
+    const prompt = getDraft(id)?.prompt ?? message;
     openDraftRef.current = null;
     setOpenDraftId(null);
-    if (await handleSendMsg(message, attachments)) {
+    const sending = handleSendMsg(message, attachments);
+    // Taken after the send's own bump, so only a move the reader makes while
+    // it is out counts as leaving.
+    const nav = navGen.current;
+    if (await sending) {
       removeDraft(id);
       writeDraft(draftKey(id), "");
-    } else {
+    } else if (nav === navGen.current) {
+      // The composer cleared both on handing them over.
       writeDraft(draftKey(id), prompt);
+      restoreAttachments(draftKey(id), attachments);
       setOpenDraftId(id);
     }
   };
 
-  /// ⌘S on the new-task composer: its text and picks become a draft, opened in
-  /// place. An open draft already saves as it goes.
+  // A draft emptied and then left says nothing, so it goes rather than sitting
+  // in the list as an empty row. Every way out lands here, since each one
+  // moves `openDraftId`.
+  const leftDraft = useRef(openDraftId);
+  useEffect(() => {
+    const left = leftDraft.current;
+    leftDraft.current = openDraftId;
+    if (left && left !== openDraftId) discardIfEmpty(left);
+  }, [openDraftId, discardIfEmpty]);
+
+  // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
+  // lights up for a moment to say why.
+  const [draftNudge, setDraftNudge] = useState(false);
+  const nudgeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  /// ⌘S on the new-task composer: its text and picks become a draft in the
+  /// sidebar, and the composer empties for the next task.
   const saveAsDraft = () => {
+    if (openDraftId) {
+      setDraftNudge(true);
+      clearTimeout(nudgeTimer.current);
+      nudgeTimer.current = setTimeout(() => setDraftNudge(false), 2500);
+      return;
+    }
     const prompt = readDraft(null);
-    if (openDraftId || !projectPath || !prompt.trim()) return;
+    if (!projectPath || !prompt.trim()) return;
     const id = crypto.randomUUID();
     saveDraft({
       id,
@@ -311,10 +343,10 @@ function App() {
       useWorktree,
       created: new Date().toISOString(),
     });
-    writeDraft(draftKey(id), prompt);
     writeDraft(null, "");
-    setOpenDraftId(id);
+    pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
   };
+  const draftChord = useChord("composer.draft");
 
   const deleteDraft = (id: string) => {
     removeDraft(id);
@@ -1622,8 +1654,30 @@ function App() {
       void handleSelectSessionIndexItem(item.sessionId);
     }
   };
-  const stepSession = (delta: number) =>
-    stepThrough(ordered.map((i) => [i]), delta);
+  // Drafts in the order the sidebar draws them. The walk enters them only from
+  // a draft already open: a draft is set aside on purpose, so stepping from a
+  // session or a new task passes them by.
+  const orderedDrafts = useMemo(
+    () =>
+      archivedShown
+        ? []
+        : placeDrafts(
+            sessionGroups(searchedSessions, projects, undefined, false, spaceGroups),
+            sidebarDrafts,
+            projects,
+          ).flatMap((run) => (run.kind === "drafts" ? run.drafts : [])),
+    [archivedShown, searchedSessions, projects, spaceGroups, sidebarDrafts],
+  );
+  const stepSession = (delta: number) => {
+    const at = orderedDrafts.findIndex((d) => d.id === openDraftId);
+    if (at === -1) return stepThrough(ordered.map((i) => [i]), delta);
+    const next = at + delta;
+    // The top holds, as it does for sessions — reopened rather than left,
+    // since the chord's `goToSession` has already closed it. Past the last
+    // draft the walk carries on into the sessions, at their top.
+    if (next < orderedDrafts.length) return openDraft(orderedDrafts[Math.max(next, 0)].id);
+    if (ordered[0]) void handleSelectSessionIndexItem(ordered[0].sessionId);
+  };
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
@@ -1752,7 +1806,7 @@ function App() {
 
   /// The new-task composer, carrying a draft's text and picks.
   const openDraft = (id: string) => {
-    const draft = drafts.find((d) => d.id === id);
+    const draft = getDraft(id);
     if (!draft) return;
     goToSession(() => {
       restoreDraftControls(draft);
@@ -2836,11 +2890,11 @@ function App() {
           held={sendHeld}
           draftHint={
             openDraftId ? (
-              "Draft saves as you type"
+              <span className={cn("transition-colors duration-300", draftNudge && "text-foreground")}>
+                Changes auto-saved
+              </span>
             ) : (
-              <>
-                <ShortcutKeys ids={["composer.draft"]} /> to save as draft
-              </>
+              draftChord && `${formatChords([draftChord])[0].join("")} to save as draft`
             )
           }
           agentUpdate={

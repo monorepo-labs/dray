@@ -39,7 +39,10 @@ export type NoticeKind =
   | "pr"
   | "worktree-failed"
   | "issue-failed"
-  | "sidebar-auto";
+  | "sidebar-auto"
+  // ⌘S emptied the composer, so this says where the text went. Its subject is
+  // the draft's id, not a session.
+  | "draft-saved";
 
 /// How long each kind stays on screen. Read by the card to time its own progress
 /// bar, which is also what dismisses it — see [NoticeStack](../components/NoticeStack.tsx).
@@ -65,6 +68,8 @@ export const NOTICE_TTL_MS: Record<NoticeKind, number> = {
   // The long window once more: this one names a setting and where to find it,
   // and it is raised once ever — a reader who misses it never sees it again.
   "sidebar-auto": 15_000,
+  // Confirms a key the reader just pressed, with the row already in the sidebar.
+  "draft-saved": 4_000,
 };
 
 /// One in-app notice — something happened in a session the reader was not

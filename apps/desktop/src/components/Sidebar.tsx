@@ -2079,9 +2079,10 @@ const ELBOW = 10;
 /// the click. Long enough that sweeping down the list reads nothing.
 const PREFETCH_HOVER_MS = 100;
 
-/// A saved task, drawn as a session row would be with "Draft" where the
-/// timestamp sits. No rail and no hover controls: nothing has run, so there is
-/// nothing to read, pin or settle. Delete is the row menu's, like a session's.
+/// A saved task, drawn as a session row with its created time. No label says
+/// "draft": the run's own break sets it apart, and its title is the reader's
+/// raw text where a session's is a generated one. No rail and no hover
+/// controls, since nothing has run. Delete is the row menu's, like a session's.
 function DraftRow({
   draft,
   active,
@@ -2120,7 +2121,9 @@ function DraftRow({
         )}
       >
         <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
-        <span className="shrink-0 pl-2 text-ui text-muted-foreground">Draft</span>
+        <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+          {relativeTime(draft.created)}
+        </span>
       </div>
     </RowMenu>
   );
