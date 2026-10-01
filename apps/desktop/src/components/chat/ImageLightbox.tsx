@@ -96,7 +96,8 @@ export default function ImageLightbox({
           // it is open, so the keys are scoped to it without a listener that has
           // to be told when to stop caring. Escape is Radix's own.
           onKeyDown={(e) => {
-            if (!many) return;
+            // A video's seek slider answers the arrows itself.
+            if (!many || e.target instanceof HTMLInputElement) return;
             if (e.key === "ArrowLeft") {
               e.preventDefault();
               step(-1);

@@ -786,7 +786,10 @@ describe("segmentMedia", () => {
 
   /// The collapsed view already draws the final message, video and all.
   it("leaves the final message's recording to the final message", () => {
-    const media = segmentMedia([text(1, `here: ${video}`)], `here: ${video}`);
+    const media = segmentMedia(
+      [result(1, "a", `saved ${video}`, 0), text(2, `here: ${video}`)],
+      `here: ${video}`,
+    );
     expect(media).toEqual([]);
   });
 });

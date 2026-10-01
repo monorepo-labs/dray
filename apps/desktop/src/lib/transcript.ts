@@ -185,7 +185,9 @@ export type Media = { image: ImageRef } | { video: string };
 /// the collapsed view already draws that message, video and all.
 export function segmentMedia(items: WorkItem[], finalText: string | null): Media[] {
   const media: Media[] = [];
-  const seen = new Set<string>();
+  // Seeded with the final message's own, which it plays itself — wherever else
+  // in the stretch the same path turns up.
+  const seen = new Set(finalText ? [...finalText.matchAll(RECORDING_IN_TEXT)].map(([path]) => path) : []);
   const scan = (text: string) => {
     for (const [path] of text.matchAll(RECORDING_IN_TEXT)) {
       if (seen.has(path)) continue;
@@ -199,7 +201,7 @@ export function segmentMedia(items: WorkItem[], finalText: string | null): Media
     if (payload.type === "tool_call_completed") {
       media.push(...payload.result.images.map((image) => ({ image })));
       scan(payload.result.text);
-    } else if (payload.type === "assistant_text" && payload.text !== finalText) {
+    } else if (payload.type === "assistant_text") {
       scan(payload.text);
     }
   }
