@@ -100,7 +100,7 @@ default = []
 cef = ["dep:cef"]
 
 [target.'cfg(target_os = "macos")'.dependencies.cef]
-version = "151.8.0"
+version = "154.3.0"
 optional = true
 default-features = false
 
