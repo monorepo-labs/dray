@@ -73,6 +73,7 @@ export const SHORTCUTS = [
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
   { id: "panel.toggle", label: "Toggle right panel", group: "Panels and views", chord: k("e") },
+  { id: "panel.side", label: "Move panel to the other side", group: "Panels and views", chord: k("e", { alt: true }) },
   // The only way to the crew. It has no button anywhere, deliberately — the
   // column is a fixed 320px and a permanent control for it would be chrome in
   // the titlebar for a thing most conversations never have. ⌘⇧C is free of ⌘C,
