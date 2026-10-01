@@ -200,7 +200,13 @@ export function revealCaret(root: HTMLElement): void {
   if (!box?.height) {
     if (lineEnd) range.setStartAfter(node);
     range.setEnd(root, root.childNodes.length);
-    box = [...range.getClientRects()].find((rect) => rect.height > 0);
+    box = undefined;
+    for (const rect of range.getClientRects()) {
+      if (rect.height > 0) {
+        box = rect;
+        break;
+      }
+    }
   }
   if (!box) {
     root.scrollTop = root.scrollHeight;
