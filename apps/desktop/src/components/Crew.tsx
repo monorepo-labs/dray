@@ -370,6 +370,7 @@ function PendingCard({
         // keystroke in a form belonging to a session they have not chosen to
         // talk to — the same reason the row expands without selecting.
         <QuestionRequest
+          requestId={ask.requestId}
           questions={ask.questions}
           autoFocus={false}
           onAnswer={(answers) => chat.onAnswerQuestions(id, ask.requestId, answers)}

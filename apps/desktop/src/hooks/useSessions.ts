@@ -26,6 +26,7 @@ import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
+import { questionDrafts } from "@/lib/questionDrafts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -1928,6 +1929,7 @@ useEffect(() => {
                 };
               });
               dismissNotice(agentEvent.sessionId, "asking");
+              questionDrafts.delete(requestId);
             }
 
             // Busy is no longer inferred from `turn_completed` here: a result
