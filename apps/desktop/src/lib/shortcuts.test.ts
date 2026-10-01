@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { IS_MAC } from "./platform";
 import {
   chordFromKey,
+  FOLD,
   formatChords,
   isReserved,
   mayShareChord,
@@ -105,7 +106,15 @@ describe("formatChords", () => {
         { key: "ArrowUp", meta: true, shift: true, alt: false },
         { key: "ArrowDown", meta: true, shift: true, alt: false },
       ]),
-    ).toEqual([[META, "Shift", "↑↓"]]);
+    ).toEqual([[META, "Shift", "↑\u2009↓"]]);
+  });
+
+  it("keeps folded brackets apart, so the cap can split them", () => {
+    const [caps] = formatChords([
+      { key: "{", meta: true, shift: true, alt: false, code: "BracketLeft" },
+      { key: "}", meta: true, shift: true, alt: false, code: "BracketRight" },
+    ]);
+    expect(caps.at(-1)!.split(FOLD)).toEqual(["[", "]"]);
   });
 
   it("draws a bracket chord by its physical key", () => {

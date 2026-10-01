@@ -277,10 +277,14 @@ export function formatChord(chord: Chord): string[] {
 
 /// One row of caps for several chords: where they share modifiers the keys
 /// fold into one cap (`⌘ Shift ↑↓`), and where they don't each is drawn whole.
+/// Folded keys are joined by `FOLD`, which `ShortcutKeys` splits back apart so
+/// `[]` doesn't read as one rectangle.
+export const FOLD = "\u2009";
+
 export function formatChords(chords: Chord[]): string[][] {
   if (chords.length === 0) return [];
   const mods = modifierLabels(chords[0]);
   const shared = chords.every((c) => modifierLabels(c).join() === mods.join());
-  if (shared) return [[...mods, chords.map(keyLabel).join("")]];
+  if (shared) return [[...mods, chords.map(keyLabel).join(FOLD)]];
   return chords.map(formatChord);
 }
