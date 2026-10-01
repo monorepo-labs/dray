@@ -1,3 +1,5 @@
+import { Check } from "lucide-react";
+
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
 import PickerMenu from "@/components/composer/PickerMenu";
@@ -19,6 +21,7 @@ export default function IssueMentionMenu({
   issues,
   activeIndex,
   onPick,
+  tagged,
   onHover,
   bare = false,
   loading = false,
@@ -28,7 +31,9 @@ export default function IssueMentionMenu({
 }: {
   issues: Issue[];
   activeIndex: number;
-  onPick: (issue: Issue) => void;
+  onPick: (issue: Issue, keepOpen: boolean) => void;
+  /// Identifiers already tagged in the prompt. Picking one again removes it.
+  tagged: Set<string>;
   onHover: (index: number) => void;
   bare?: boolean;
   /// Whether the tracker is still being waited on. The one picker of the three
@@ -55,6 +60,7 @@ export default function IssueMentionMenu({
       bare={bare}
       loading={loading}
       emptyNote={emptyNote}
+      keepOpenHint
       header={canSwitch ? <IssueTrackerChips tracker={tracker} /> : undefined}
       renderItem={(issue) => (
         <>
@@ -72,7 +78,16 @@ export default function IssueMentionMenu({
           {/* Trailing, so it can't push the title off its own left edge — and
               absent on most rows, which is what makes it worth reading on the
               few that carry it. */}
-          <IssuePriorityIcon priority={issue.priority} className="ml-auto" />
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <IssuePriorityIcon priority={issue.priority} />
+            {/* The slot is held on every row once anything is tagged, so the
+                priority column stays one column. */}
+            {tagged.has(issue.identifier) ? (
+              <Check className="size-3.5 text-muted-foreground" aria-label="Tagged" />
+            ) : (
+              tagged.size > 0 && <span className="size-3.5" />
+            )}
+          </span>
         </>
       )}
     />

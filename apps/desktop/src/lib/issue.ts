@@ -155,6 +155,41 @@ export function applyIssue(
   };
 }
 
+/// [`applyIssue`] for a pick that keeps the list open: the tag goes in front of
+/// the token rather than over it, so the caret stays in `#query` and the list
+/// goes on filtering on what was typed.
+export function insertIssue(
+  text: string,
+  span: IssueSpan,
+  caret: number,
+  identifier: string,
+  title: string,
+): { text: string; caret: number } {
+  const tag = `${issueTag(identifier, title)} `;
+
+  return {
+    text: `${text.slice(0, span.start)}${tag}${text.slice(span.start)}`,
+    caret: caret + tag.length,
+  };
+}
+
+/// The text with `[start, end)` taken out, and one space beside it, so removing
+/// a tag leaves no double gap. The caret moves with the text it sat in.
+export function cutRange(
+  text: string,
+  caret: number,
+  start: number,
+  end: number,
+): { text: string; caret: number } {
+  if (text[end] === " ") end += 1;
+  else if (start > 0 && text[start - 1] === " ") start -= 1;
+
+  return {
+    text: text.slice(0, start) + text.slice(end),
+    caret: caret >= end ? caret - (end - start) : Math.min(caret, start),
+  };
+}
+
 /// `DRA-53` out of a token, or `null` when it isn't an identifier.
 ///
 /// The frontend's copy of Rust's `parse_identifier`, and it has to agree with

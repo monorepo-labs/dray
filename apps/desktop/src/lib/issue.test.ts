@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyIssue,
+  cutRange,
+  insertIssue,
   filterIssues,
   groupIssues,
   issueSpan,
@@ -40,6 +42,28 @@ describe("issueSpan", () => {
   it("is null when the caret is not in a token at all", () => {
     expect(issueSpan("plain words", 5)).toBeNull();
     expect(issueSpan("#DRA-53 after", 13)).toBeNull();
+  });
+});
+
+describe("picking several", () => {
+  it("adds a tag in front of the token and keeps the query open", () => {
+    const text = "fix #DR";
+    const span = issueSpan(text, text.length)!;
+    const next = insertIssue(text, span, text.length, "DRA-53", "Fix it");
+
+    expect(next.text).toBe("fix #DRA-53 Fix it #DR");
+    expect(issueSpan(next.text, next.caret)?.query).toBe("DR");
+  });
+
+  it("takes a tag back out with one of its spaces", () => {
+    const text = "fix #DRA-53 Fix it #DR";
+    const next = cutRange(text, text.length, 4, 18);
+
+    expect(next).toEqual({ text: "fix #DR", caret: 7 });
+  });
+
+  it("takes the leading space where the tag ends the text", () => {
+    expect(cutRange("fix #", 5, 4, 5)).toEqual({ text: "fix", caret: 3 });
   });
 });
 
