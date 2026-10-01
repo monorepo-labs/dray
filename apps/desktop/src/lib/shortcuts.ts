@@ -15,7 +15,7 @@ export type Chord = {
 
 export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Composer" | "Notifications";
 
-/// The one pair allowed to ship the same default chord, and why.
+/// The pairs allowed to ship the same default chord, and why.
 ///
 /// `issues.search` lives on the issues page and `composer.fast` on the composer,
 /// and the two are never on screen together — the page replaces the main column
@@ -28,8 +28,15 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// a deliberate act naming both sides: a `sharesChord: true` on a single row
 /// would let the next collision in silently.
 ///
+/// `doc.save` and `composer.draft` share ⌘S on the same terms: one is bound
+/// only while a session's docs tab is on screen, the other only on the new-task
+/// composer, which has no session and so no docs.
+///
 /// [`IssuesView`]: ../components/IssuesView.tsx
-export const SHARED_CHORDS: [string, string][] = [["issues.search", "composer.fast"]];
+export const SHARED_CHORDS: [string, string][] = [
+  ["issues.search", "composer.fast"],
+  ["doc.save", "composer.draft"],
+];
 
 /// Whether these two ids are the documented exception above.
 export function mayShareChord(a: string, b: string): boolean {
@@ -102,6 +109,7 @@ export const SHORTCUTS = [
   { id: "worktree.toggle", label: "Toggle worktree", group: "Composer", chord: k("t", { shift: true }) },
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },
   { id: "queue.send", label: "Send queued prompts now", group: "Composer", chord: k("Enter") },
+  { id: "composer.draft", label: "Save as draft", group: "Composer", chord: k("s") },
 
   { id: "notice.take", label: "Open the notification", group: "Notifications", chord: k("g") },
   { id: "notice.delete", label: "Delete worktree from notification", group: "Notifications", chord: k("d", { shift: true }) },

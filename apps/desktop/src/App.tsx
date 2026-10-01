@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import "./App.css";
 import Chat from "@/components/Chat";
 import ChatInput from "@/components/ChatInput";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import LinkDialog from "@/components/chat/LinkDialog";
@@ -122,11 +123,12 @@ import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates } from "@/hooks/useAgentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
-import type { IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
-import { appendToDraft, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { draftKey, useDrafts } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
@@ -217,6 +219,7 @@ function App() {
     handleSelectSessionIndexItem,
     navGen,
     handleNewSession,
+    restoreDraftControls,
     markSessionUnread,
     setSessionFlags,
     forkSession,
@@ -230,6 +233,94 @@ function App() {
     paneState,
     indexSide,
   } = useSessions();
+
+  // Tasks saved to start later. One is open while the new-task composer shows
+  // it: its text sits under `draftKey(id)` rather than the new-task key, and
+  // edits to the text and the picks save back as they happen.
+  const {
+    drafts,
+    save: saveDraft,
+    update: updateDraft,
+    remove: removeDraft,
+  } = useDrafts((e) => setError(String(e)));
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null);
+  // Read from the text listener, which registers once, and written ahead of
+  // state on send — see `sendFromComposer`.
+  const openDraftRef = useRef(openDraftId);
+  openDraftRef.current = openDraftId;
+  useEffect(() => {
+    if (selectedSessionId) setOpenDraftId(null);
+  }, [selectedSessionId]);
+  const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
+
+  useEffect(
+    () =>
+      onDraftWrite(() => {
+        const id = openDraftRef.current;
+        if (id) updateDraft(id, { prompt: readDraft(draftKey(id)) });
+      }),
+    [updateDraft],
+  );
+  useEffect(() => {
+    if (!openDraftId || !projectPath) return;
+    updateDraft(openDraftId, {
+      harness,
+      model: modelId,
+      effort,
+      permissionMode,
+      fast,
+      useWorktree,
+      projectPath,
+    });
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+
+  /// The composer's send. On an open draft the draft is closed *before* the
+  /// send, since the composer clears its text straight after handing it over
+  /// and that clear would otherwise be saved as the draft's prompt. It goes
+  /// once a session exists, and comes back open if none was made.
+  const sendFromComposer = async (message: string, attachments: Attachment[]) => {
+    const id = openDraftRef.current;
+    if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
+    const prompt = drafts.find((d) => d.id === id)?.prompt ?? message;
+    openDraftRef.current = null;
+    setOpenDraftId(null);
+    if (await handleSendMsg(message, attachments)) {
+      removeDraft(id);
+      writeDraft(draftKey(id), "");
+    } else {
+      writeDraft(draftKey(id), prompt);
+      setOpenDraftId(id);
+    }
+  };
+
+  /// ⌘S on the new-task composer: its text and picks become a draft, opened in
+  /// place. An open draft already saves as it goes.
+  const saveAsDraft = () => {
+    const prompt = readDraft(null);
+    if (openDraftId || !projectPath || !prompt.trim()) return;
+    const id = crypto.randomUUID();
+    saveDraft({
+      id,
+      prompt,
+      projectPath,
+      harness,
+      model: modelId,
+      effort,
+      permissionMode,
+      fast,
+      useWorktree,
+      created: new Date().toISOString(),
+    });
+    writeDraft(draftKey(id), prompt);
+    writeDraft(null, "");
+    setOpenDraftId(id);
+  };
+
+  const deleteDraft = (id: string) => {
+    removeDraft(id);
+    writeDraft(draftKey(id), "");
+    if (id === openDraftId) setOpenDraftId(null);
+  };
 
   // Whether the agent the composer is pointed at can actually be run. Null
   // while the first read is out and null when it is installed — both mean
@@ -422,7 +513,7 @@ function App() {
     // Pinned when recording starts, so a dictation survives switching sessions
     // and still lands where it was spoken. Drafts are per session, so it is
     // waiting there on the way back.
-    target: selectedSessionId,
+    target: composerKey,
     onText: (text, session) => {
       appendToDraft(session, text);
       // Straight back to typing: the words landed in a draft the reader is
@@ -430,7 +521,7 @@ function App() {
       // at the session they spoke into — a dictation outlives the screen it
       // began on, and focusing a composer holding somebody else's draft is
       // worse than not focusing at all.
-      if (session === selectedSessionId) focusComposer();
+      if (session === composerKey) focusComposer();
     },
     onNeedsModel: () => {
       setSettingsTab("transcription");
@@ -1027,6 +1118,17 @@ function App() {
     () => filterSessions(inSidebar(visibleSessions), search),
     [visibleSessions, search],
   );
+  // Narrowed the way the sessions above are, so a draft never sits under a
+  // project the list is not drawing.
+  const sidebarDrafts = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return drafts.filter(
+      (d) =>
+        sessionInSpace(projects, space, d.projectPath) &&
+        (!projectFilter || d.projectPath === projectFilter) &&
+        d.prompt.toLowerCase().includes(needle),
+    );
+  }, [drafts, projects, space, projectFilter, search]);
   // A hidden session's card lights its parent's row, the only row it has.
   const sidebarAsking = useMemo(
     () => withHiddenAsks(sessionIndexItems, askingSessions),
@@ -1644,7 +1746,19 @@ function App() {
   const goToSession = (go: () => void) => {
     setIssuesOpen(false);
     closeSettings();
+    setOpenDraftId(null);
     go();
+  };
+
+  /// The new-task composer, carrying a draft's text and picks.
+  const openDraft = (id: string) => {
+    const draft = drafts.find((d) => d.id === id);
+    if (!draft) return;
+    goToSession(() => {
+      restoreDraftControls(draft);
+      writeDraft(draftKey(id), draft.prompt);
+      setOpenDraftId(id);
+    });
   };
 
   /// Moves the whole window to another space. The screen catches up in the
@@ -2170,6 +2284,11 @@ function App() {
   useHotkey("doc.save", () => saveActiveDoc(selectedSessionId), {
     enabled: panelShown && activeTab === "docs",
   });
+  // The same ⌘S on the new-task composer, which has no session and so no docs
+  // tab; the gate says so outright rather than leaning on that.
+  useHotkey("composer.draft", saveAsDraft, {
+    enabled: !selectedSessionId && !issuesOpen && !(panelShown && activeTab === "docs"),
+  });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks
@@ -2387,6 +2506,10 @@ function App() {
           }
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
+          drafts={sidebarDrafts}
+          openDraftId={issuesOpen ? null : openDraftId}
+          onOpenDraft={openDraft}
+          onDeleteDraft={deleteDraft}
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
@@ -2631,7 +2754,7 @@ function App() {
         // unmounts crossing the empty state.
         issuesOpen || (selectedSession && viewTab !== "chat") ? null : (
         <ChatInput
-          onSend={handleSendMsg}
+          onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
           commandsLoading={slashCommandsLoading}
           cwd={composerCwd}
@@ -2662,7 +2785,7 @@ function App() {
           }
           queuedCount={queuedMessages.length}
           busy={busy}
-          sessionId={selectedSessionId}
+          sessionId={composerKey}
           isNewTask={!shownSession}
           target={composerTarget}
           issuesConnected={issuesConnected}
@@ -2711,6 +2834,15 @@ function App() {
             ) : null
           }
           held={sendHeld}
+          draftHint={
+            openDraftId ? (
+              "Draft saves as you type"
+            ) : (
+              <>
+                <ShortcutKeys ids={["composer.draft"]} /> to save as draft
+              </>
+            )
+          }
           agentUpdate={
             !selectedSessionId && (
               <AgentUpdateLine
@@ -2758,7 +2890,7 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(selectedSessionId)}
+              onAttach={() => void pickAttachments(composerKey)}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
               busy={busy}

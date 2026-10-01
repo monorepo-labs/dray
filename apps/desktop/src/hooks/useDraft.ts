@@ -22,6 +22,10 @@ import { channel } from "@/lib/channel";
 const drafts = new Map<string | null, string>();
 const changed = channel<void>();
 
+/// Hears every write to any composer's text. An open draft's autosave follows
+/// the text through this, so `App` is not re-rendered on every keystroke.
+export const onDraftWrite = changed.subscribe;
+
 /// Sets a session's draft outright. Exported for tests and for `appendToDraft`;
 /// the composer reaches it through the setter [`useDraft`] returns.
 export function writeDraft(sessionId: string | null, next: string) {
