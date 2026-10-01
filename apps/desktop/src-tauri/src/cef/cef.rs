@@ -729,6 +729,24 @@ wrap_client! {
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(DrayKeyboard::new())
         }
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(DrayFocus::new(self.session.clone()))
+        }
+    }
+}
+
+wrap_focus_handler! {
+    struct DrayFocus {
+        session: String,
+    }
+
+    impl FocusHandler {
+        /// Refused while `dray browser` drives the session: a load it starts
+        /// asks for focus, and granting it took the reader's keys out of the
+        /// composer — into a hidden view, where they went nowhere.
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> ::std::os::raw::c_int {
+            automation::driving(&self.session) as ::std::os::raw::c_int
+        }
     }
 }
 
