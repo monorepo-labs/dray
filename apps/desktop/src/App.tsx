@@ -154,9 +154,9 @@ import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
-/// ⌘⇧↑/↓ presses closer than this are one run. Above macOS key repeat
-/// (~30–80ms), and short enough that the run's landing is not felt as a wait.
-const STEP_RUN_MS = 150;
+/// ⌘⇧↑/↓ presses closer than this are one run. Quick taps land 150–250ms
+/// apart, so 150 caught key repeat alone and every tap still opened its row.
+const STEP_RUN_MS = 300;
 
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
