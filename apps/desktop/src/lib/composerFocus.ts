@@ -61,6 +61,18 @@ function focusAtEnd(el: HTMLElement) {
 /// composer: an open menu or dialog, where Radix typeahead reads letters.
 const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
 
+type Keystroke = Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
+/// Whether a keystroke is one the composer takes: a printable key with no
+/// modifier but Shift, or the platform's own paste chord. Space activates the
+/// focused row or button, so it stays where it was pressed.
+export function handsOver(e: Keystroke, mac = IS_MAC): boolean {
+  const paste =
+    (mac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v";
+  const typed = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && e.key !== " ";
+  return paste || typed;
+}
+
 /// Sends a printable key, or a paste, pressed elsewhere in the app to the
 /// composer.
 ///
@@ -68,15 +80,11 @@ const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox
 /// view has a composer. It moves focus and nothing else: WebKit re-reads the
 /// focused node between `keydown` and inserting the text, and runs ⌘V's Paste
 /// against the new focus too, so both land in the box itself and go through
-/// `RichInput`'s own handlers. Space is left alone, being what activates the
-/// focused row or button.
+/// `RichInput`'s own handlers.
 export function typeIntoComposer(e: KeyboardEvent) {
   const el = composer;
   if (!el || e.defaultPrevented || e.isComposing) return;
-  const paste =
-    (IS_MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v";
-  const typed = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && e.key !== " ";
-  if (!paste && !typed) return;
+  if (!handsOver(e)) return;
 
   const target = e.target instanceof HTMLElement ? e.target : null;
   if (isTextField(target) || target?.closest(OWNS_KEYS)) return;
