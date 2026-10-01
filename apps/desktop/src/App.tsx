@@ -31,6 +31,7 @@ const IssuesView = lazy(() => import("@/components/IssuesView"));
 const PrPanel = lazy(() => import("@/components/PrPanel"));
 const BrowserPane = lazy(() => import("@/components/browser/BrowserPane"));
 import {
+  activateTab,
   clearOpenError,
   closeTab,
   describePick,
@@ -1315,8 +1316,10 @@ function App() {
   // Moves along the visible row, wrapping. Off `tabs` rather than `PANEL_TABS`,
   // so a session with no PR tab cycles through two and never lands on one that
   // isn't drawn.
+  // With the pane shut, the Browser view's strip is the only row of tabs on
+  // screen, so ⌘⇧[ ] means that one rather than nothing.
   const stepTab = (delta: number) => {
-    if (!panelShown) return;
+    if (!panelShown) return fullBrowserOpen ? stepBrowserTab(delta) : undefined;
     const from = tabs.indexOf(activeTab);
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
@@ -2160,6 +2163,21 @@ function App() {
     }
     if (panelShown) panelRefresh?.onRefresh();
   });
+  // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
+  // The pending tab sits at the end of it, which is where the strip draws it.
+  const stepBrowserTab = (delta: number) => {
+    if (!selectedSessionId || !browserTabs || isRecording(selectedSessionId)) return;
+    const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
+    const next = browserTabs[from + delta];
+    if (!next) return;
+    if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
+    if (!next.active) void activateTab(selectedSessionId, next.id);
+  };
+  // The Diff view and an open file step their own strip on this chord, and the
+  // main column's row wins over a browser sitting beside it in the panel.
+  const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
+  useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
+  useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
   // ⌘T, the chord every browser gives a new tab. Bound only while the browser
   // is on screen, so it stays free everywhere else.
   useHotkey("browser.newTab", () => {
