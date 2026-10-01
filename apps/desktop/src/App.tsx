@@ -155,6 +155,9 @@ import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+/// ⌘⇧↑/↓ presses closer than this are one run. Quick taps land 150–250ms
+/// apart, so 150 caught key repeat alone and every tap still opened its row.
+const STEP_RUN_MS = 300;
 
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
@@ -226,6 +229,7 @@ function App() {
     deleteSession,
     removeWorktree,
     ensureLoaded,
+    setNeighbours,
     setOnScreen,
     setCrewSeen,
     paneState,
@@ -1508,9 +1512,9 @@ function App() {
   // where a group's run is one step — so from inside a group it lands on the
   // next group, or on the row past the last one, and enters a group on its
   // first pane.
-  const stepThrough = (units: SessionIndexItem[][], delta: number) => {
+  const stepTarget = (units: SessionIndexItem[][], delta: number, current: string | null) => {
     if (units.length === 0) return;
-    const from = units.findIndex((u) => u.some((i) => i.sessionId === selectedSessionId));
+    const from = units.findIndex((u) => u.some((i) => i.sessionId === current));
     // No selection is the empty composer — either direction enters at the top.
     const next =
       from === -1
@@ -1518,13 +1522,75 @@ function App() {
         : delta > 0
           ? (from + 1) % units.length
           : Math.max(from - 1, 0);
-    const item = units[next][0];
-    if (item.sessionId !== selectedSessionId) {
-      void handleSelectSessionIndexItem(item.sessionId);
-    }
+    return units[next][0].sessionId;
   };
-  const stepSession = (delta: number) =>
-    stepThrough(ordered.map((i) => [i]), delta);
+  const stepThrough = (units: SessionIndexItem[][], delta: number) => {
+    const id = stepTarget(units, delta, selectedSessionId);
+    if (id && id !== selectedSessionId) void handleSelectSessionIndexItem(id);
+  };
+  // Where ⌘⇧↑/↓ last landed. Neighbours are warmed only while the selection is
+  // still there, so a click elsewhere lets them go and a mouse open warms none.
+  const [steppedTo, setSteppedTo] = useState<string | null>(null);
+  // A press landing within `STEP_RUN_MS` of the last one moves only the
+  // sidebar's highlight, and the run opens where it stops. Opening every row a
+  // held chord passes was a read each, and marked each finished one as read
+  // unseen. A lone press still opens at once, and a collapsed sidebar opens on
+  // every press, having nothing else to show where the walk is.
+  const [pendingStep, setPendingStep] = useState<string | null>(null);
+  const stepRun = useRef<{ last: number; timer?: number }>({ last: 0 });
+  const commitStep = (id: string) => {
+    setPendingStep(null);
+    setSteppedTo(id);
+    if (id !== selectedSessionId) void handleSelectSessionIndexItem(id);
+  };
+  // The timer fires renders later, so it must reach this render's selection.
+  const commitStepRef = useRef(commitStep);
+  commitStepRef.current = commitStep;
+  const stepSession = (delta: number) => {
+    const id = stepTarget(ordered.map((i) => [i]), delta, pendingStep ?? selectedSessionId);
+    if (!id) return;
+    const run = stepRun.current;
+    const now = Date.now();
+    const fast = !collapsed && now - run.last < STEP_RUN_MS;
+    run.last = now;
+    clearTimeout(run.timer);
+    if (!fast) return commitStep(id);
+    setPendingStep(id);
+    run.timer = window.setTimeout(() => commitStepRef.current(id), STEP_RUN_MS);
+  };
+  // Any other move — a click, a notice, ⌘N — abandons a run in flight.
+  const cancelStep = () => {
+    clearTimeout(stepRun.current.timer);
+    setPendingStep(null);
+  };
+  useEffect(cancelStep, [selectedSessionId]);
+  // `goToSession`'s half, which also forgets the last press: a click on the
+  // open session moves no selection, and a press just after any move is a lone
+  // one that opens at once.
+  const endStepRun = () => {
+    stepRun.current.last = 0;
+    cancelStep();
+  };
+  // After a pause, so a held chord does not read every row it passes. Two
+  // presses either way, wrap and top hold included.
+  useEffect(() => {
+    if (!steppedTo || steppedTo !== selectedSessionId) {
+      setNeighbours([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const at = ordered.findIndex((i) => i.sessionId === steppedTo);
+      if (at === -1) return setNeighbours([]);
+      setNeighbours(
+        [1, 2, -1, -2]
+          .map((d) => ordered[d > 0 ? (at + d) % ordered.length : Math.max(at + d, 0)].sessionId)
+          .filter((id) => id !== steppedTo),
+      );
+    }, 150);
+    return () => clearTimeout(timer);
+    // `setNeighbours` is rebuilt every render; these are what move the set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steppedTo, selectedSessionId, ordered]);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
@@ -1644,9 +1710,10 @@ function App() {
   // back. The page itself is left as it was — its filters and its scroll come
   // back with it — so this is a navigation, not a dismissal. Settings cover the
   // whole window, so they close too.
-  const goToSession = (go: () => void) => {
+  const goToSession = (go: () => void, stepping = false) => {
     setIssuesOpen(false);
     closeSettings();
+    if (!stepping) endStepRun();
     go();
   };
 
@@ -2047,8 +2114,8 @@ function App() {
 
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("session.prev", () => goToSession(() => stepSession(-1)));
-  useHotkey("session.next", () => goToSession(() => stepSession(1)));
+  useHotkey("session.prev", () => goToSession(() => stepSession(-1), true));
+  useHotkey("session.next", () => goToSession(() => stepSession(1), true));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
@@ -2383,7 +2450,7 @@ function App() {
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
-          selectedSessionId={issuesOpen ? null : selectedSessionId}
+          selectedSessionId={issuesOpen ? null : (pendingStep ?? selectedSessionId)}
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}

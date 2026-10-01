@@ -2121,7 +2121,7 @@ const setCrewSeen = (ids: string[]) => {
 /// the click that follows share it rather than landing twice.
 const tailReads = useRef(new Map<string, Promise<boolean>>());
 const deletedRef = useRef(new Set<string>());
-const loadTail = (sessionId: string): Promise<boolean> => {
+const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
   const read = invoke<SessionSnapshot | null>("get_session_by_id", {
@@ -2133,8 +2133,10 @@ const loadTail = (sessionId: string): Promise<boolean> => {
       // A read outlived by a delete must not put the transcript back.
       if (deletedRef.current.has(sessionId)) return false;
       // Stamped as touched, so the count cap takes the least recently used
-      // transcript rather than the one a hover just warmed for its click.
-      lastViewedRef.current.set(sessionId, Date.now());
+      // transcript rather than the one a hover just warmed for its click. A
+      // neighbour prefetch is not, so it is the first thing out once it stops
+      // being a neighbour.
+      if (touch) lastViewedRef.current.set(sessionId, Date.now());
       upsertSession(snapshot);
       evictSessionsRef.current();
       return true;
@@ -2147,12 +2149,24 @@ const loadTail = (sessionId: string): Promise<boolean> => {
 /// Loads a transcript without selecting it — a split pane, or a sidebar row
 /// hovered long enough to be worth warming. Touches no selection ref, so a
 /// prefetch cannot be read as a move the rollback owns.
-const ensureLoaded = async (sessionId: string) => {
+const ensureLoaded = async (sessionId: string, touch = true) => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
   try {
-    await loadTail(sessionId);
+    await loadTail(sessionId, touch);
   } catch (e) {
     console.error("failed to load a transcript", e);
+  }
+};
+
+/// The sessions up to two ⌘⇧↑/↓ presses away, warmed so a press lands on a
+/// loaded transcript. Held past the count cap and the idle clock while adjacent, never
+/// stamped as touched, so they cannot push out a session the reader opened and
+/// one that stops being adjacent goes at the next sweep. Mid-turn is skipped.
+const neighboursRef = useRef<ReadonlySet<string>>(new Set());
+const setNeighbours = (ids: string[]) => {
+  neighboursRef.current = new Set(ids);
+  for (const id of ids) {
+    if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
   }
 };
 
@@ -2250,18 +2264,22 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
     );
   };
   setSessions((prev) => {
+    const neighbour = (s: SessionSnapshot) => neighboursRef.current.has(s.sessionId);
     let kept = prev.filter((s) => {
       if (held(s)) return true;
       if (s.sessionId === force?.sessionId) return false;
       // Never viewed since load counts as idle.
-      return now - viewed(s.sessionId) < IDLE_EVICT_MS;
+      return neighbour(s) || now - viewed(s.sessionId) < IDLE_EVICT_MS;
     });
-    if (kept.length > LOADED_CAP) {
+    // Neighbours sit outside the cap, or warming four would drop four the
+    // reader opened.
+    const counted = kept.filter((s) => !neighbour(s));
+    if (counted.length > LOADED_CAP) {
       const drop = new Set(
-        kept
+        counted
           .filter((s) => !held(s))
           .sort((a, b) => viewed(a.sessionId) - viewed(b.sessionId))
-          .slice(0, kept.length - LOADED_CAP)
+          .slice(0, counted.length - LOADED_CAP)
           .map((s) => s.sessionId),
       );
       kept = kept.filter((s) => !drop.has(s.sessionId));
@@ -2668,6 +2686,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
 
 }
