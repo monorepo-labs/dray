@@ -58,7 +58,9 @@ function without(columns: string[][], sessionId: string): string[][] {
 /// where the anchor is not in the grid. No cap on rows or columns: how many
 /// transcripts fit is the reader's screen's question, not this file's. A
 /// session already in the grid is *moved*: taken out first, then placed, so
-/// dragging a pane's row onto another pane rearranges rather than duplicates.
+/// dragging a pane's row onto another pane rearranges rather than duplicates —
+/// and at the centre the two trade places, since evicting the anchor from the
+/// grid is no way to rearrange it.
 export function place(
   columns: string[][],
   anchor: string,
@@ -74,6 +76,10 @@ export function place(
 
   switch (region) {
     case "center":
+      if (columns.some((c) => c.includes(dropped))) {
+        const swap = (id: string) => (id === anchor ? dropped : id === dropped ? anchor : id);
+        return columns.map((c) => c.map(swap));
+      }
       return cols.map((c, i) =>
         i === ci ? c.map((id) => (id === anchor ? dropped : id)) : c,
       );
@@ -100,6 +106,15 @@ const REGION_LABELS: Record<Region, string> = {
   right: "Open on the right",
 };
 
+/// The same drops for a pane already in the grid, which goes nowhere new.
+const MOVE_LABELS: Record<Region, string> = {
+  center: "Swap",
+  top: "Move above",
+  bottom: "Move below",
+  left: "Move to the left",
+  right: "Move to the right",
+};
+
 /// What dropping `dropped` on `anchor`'s pane at `region` would do, as the
 /// sentence the drop zone draws, or `null` where nothing would happen. `groups`
 /// is the active space's own; a group elsewhere is not on screen to drop into.
@@ -114,8 +129,11 @@ export function dropLabel(
   // Replacing a single view is opening the session, which a click already
   // does — so it is no drop at all.
   if (!target && region === "center") return null;
-  if (!place(target?.columns ?? [[anchor]], anchor, dropped, region)) return null;
-  return REGION_LABELS[region];
+  const before = target?.columns ?? [[anchor]];
+  const after = place(before, anchor, dropped, region);
+  // A pane dropped where it already sits — onto the top of the pane below it.
+  if (!after || JSON.stringify(after) === JSON.stringify(before)) return null;
+  return (before.flat().includes(dropped) ? MOVE_LABELS : REGION_LABELS)[region];
 }
 
 /// Puts `dropped` on `anchor`'s pane at `region`: into the anchor's group in

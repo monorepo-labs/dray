@@ -39,7 +39,11 @@ describe("place", () => {
 
   it("moves a session already in the grid rather than duplicating it", () => {
     expect(place([["a"], ["b"]], "a", "b", "bottom")).toEqual([["a", "b"]]);
-    expect(place([["a", "b"], ["c"]], "c", "a", "center")).toEqual([["b"], ["a"]]);
+  });
+
+  it("swaps a session already in the grid at the centre", () => {
+    expect(place([["a", "b"], ["c"]], "c", "a", "center")).toEqual([["c", "b"], ["a"]]);
+    expect(place([["a"], ["b"]], "b", "a", "center")).toEqual([["b"], ["a"]]);
   });
 });
 
@@ -53,6 +57,15 @@ describe("dropLabel", () => {
     expect(dropLabel(groups, "a", "y", "bottom")).toBe("Open below");
     expect(dropLabel(groups, "a", "y", "left")).toBe("Open on the left");
     expect(dropLabel(groups, "x", "x", "right")).toBeNull();
+  });
+
+  it("says move for a pane already in the grid, and nothing where it already sits", () => {
+    const groups = [group(1, ["a", "b"], ["c"])];
+    expect(dropLabel(groups, "c", "a", "center")).toBe("Swap");
+    expect(dropLabel(groups, "c", "a", "top")).toBe("Move above");
+    expect(dropLabel(groups, "b", "a", "top")).toBeNull();
+    expect(dropLabel(groups, "a", "b", "bottom")).toBeNull();
+    expect(dropLabel([group(1, ["a"], ["b"])], "b", "a", "left")).toBeNull();
   });
 
   it("opens whole on the empty view, whatever the region", () => {

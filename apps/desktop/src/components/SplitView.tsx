@@ -8,7 +8,7 @@ import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHasDraft } from "@/hooks/useDraft";
 import type { PaneState } from "@/hooks/useSessions";
-import { DROP_ATTR, useSessionDrag } from "@/lib/dragSession";
+import { DROP_ATTR, startSessionDrag, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename } from "@/lib/format";
 import { dropLabel, paneOrder, type Region, type SplitGroup } from "@/lib/groups";
 import { IS_MAC } from "@/lib/platform";
@@ -40,6 +40,8 @@ type SplitViewProps = {
   groups: SplitGroup[];
   onFocus: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
+  /// A pane's header let go over another pane — the sidebar row's own drop.
+  onDrop: (target: DropTarget, dropped: string) => void;
   /// Whether the view is on screen, for the focused pane's own chords.
   active: boolean;
   /// `onSendNow` interrupts the selected session, which is the focused pane —
@@ -61,6 +63,7 @@ export default function SplitView({
   groups,
   onFocus,
   onClose,
+  onDrop,
   active,
   chat,
 }: SplitViewProps) {
@@ -136,6 +139,7 @@ export default function SplitView({
                   // did draw would name a chord nothing binds.
                   showNumber={metaHeld && !focused && number <= PANE_CHORDS}
                   onClose={() => onClose(item.sessionId)}
+                  onPointerDown={(e) => startSessionDrag(e, item.sessionId, item.title, onDrop)}
                 />
                 {/* Dimmed rather than veiled: a scrim is one more element to
                     keep in step with the palette, and opacity recedes the
@@ -224,6 +228,7 @@ function PaneHeader({
   number,
   showNumber,
   onClose,
+  onPointerDown,
 }: {
   item: SessionIndexItem;
   focused: boolean;
@@ -233,10 +238,13 @@ function PaneHeader({
   /// keycap that reaches this pane — the one moment the number is useful.
   showNumber: boolean;
   onClose: () => void;
+  /// Starts the drag that swaps or moves this pane.
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
 }) {
   const branch = sessionBranch(item);
   return (
     <div
+      onPointerDown={onPointerDown}
       className={cn(
         "relative flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-ui",
         // Softened in the default light palette alone, where the full token
