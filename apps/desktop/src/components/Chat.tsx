@@ -702,6 +702,7 @@ export default function Chat({
               ask.type === "questions_asked" ? (
                 <QuestionRequest
                   key={ask.requestId}
+                  requestId={ask.requestId}
                   questions={ask.questions}
                   onAnswer={(answers) =>
                     onAnswerQuestions(session.sessionId, ask.requestId, answers)

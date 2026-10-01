@@ -15,6 +15,7 @@ import {
   QuestionnaireSubmit,
   QuestionnaireTitle,
 } from "@/components/ui/questionnaire";
+import { questionDrafts, type QuestionDraft } from "@/lib/questionDrafts";
 import type { Question } from "@/types/events";
 
 /// The agent asking the reader something, rather than asking to run something.
@@ -24,10 +25,14 @@ import type { Question } from "@/types/events";
 /// in question; the filled-in form *is* the answer, and submitting an empty one
 /// tells the agent it was ignored.
 export default function QuestionRequest({
+  requestId,
   questions,
   onAnswer,
   autoFocus = true,
 }: {
+  /// What the half-filled form is saved under, so a session switch that
+  /// unmounts the card does not take the reader's picks with it.
+  requestId: string;
   questions: Question[];
   /// Keyed by each question's verbatim text, because that is the key the
   /// harness matches on. A question the user skipped is absent rather than
@@ -41,6 +46,23 @@ export default function QuestionRequest({
   // a second submit during the round trip has nothing to answer.
   const [sent, setSent] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+
+  // Read once: after mount the form owns its state and the store only follows.
+  const [saved] = useState(() => questionDrafts.get(requestId));
+  // The box is controlled where the choices are not: a textarea's
+  // `defaultValue` is its text node, which React rewrites on every render, and
+  // the questionnaire re-renders on any DOM mutation — so the two loop forever.
+  const [text, setText] = useState(() => saved?.text ?? {});
+
+  // Deferred a tick because the primitive settles a pick in its own state —
+  // typing into the box unchecks a single-select's choice on the next commit —
+  // so the DOM read straight off the event is a step behind.
+  const persist = () => {
+    setTimeout(() => {
+      const form = formRef.current;
+      if (form) questionDrafts.set(requestId, readDraft(form, questions));
+    });
+  };
 
   // Nothing is required. Skipping is a real answer here — the harness honours a
   // partial set and only reports "did not answer" for an empty one — and
@@ -83,7 +105,9 @@ export default function QuestionRequest({
   useEffect(() => {
     if (!autoFocus || tookFocus.current) return;
     tookFocus.current = true;
-    const form = formRef.current;
+    // The active item alone: a restored card can open on a later question, and
+    // the hidden ones are inert.
+    const form = formRef.current?.querySelector("[data-slot=questionnaire-item][data-active]");
     const target =
       form?.querySelector<HTMLInputElement>(
         "[data-slot=questionnaire-choice] input"
@@ -105,6 +129,9 @@ export default function QuestionRequest({
         // badge invites reading it as that word's initial when it isn't.
         shortcuts="numbers"
         items={items}
+        defaultItem={saved?.item}
+        onItemChange={persist}
+        onChange={persist}
         onSubmit={(event) => {
           event.preventDefault();
           if (sent) return;
@@ -150,6 +177,7 @@ export default function QuestionRequest({
                 <QuestionnaireChoice
                   key={option.label}
                   value={option.label}
+                  defaultChecked={saved?.picked[question.question]?.includes(option.label)}
                   className="min-h-0 py-2"
                 >
                   <span className="font-medium">{option.label}</span>
@@ -188,6 +216,10 @@ export default function QuestionRequest({
                   render={<textarea rows={1} />}
                   aria-label="Another answer"
                   placeholder="Something else…"
+                  value={text[question.question] ?? ""}
+                  onChange={(event) =>
+                    setText((prev) => ({ ...prev, [question.question]: event.target.value }))
+                  }
                   // `sm:min-h-10` as well as `min-h-10`: the component's own
                   // base drops its touch-target floor to zero above `sm`, which
                   // is every window this app runs in.
@@ -219,7 +251,7 @@ export default function QuestionRequest({
         <QuestionnaireActions className="flex min-h-0 items-center justify-end gap-2 sm:min-h-0">
           {/* Pushes the rest right; with it hidden `justify-end` already has. */}
           <QuestionnairePrevious size="sm" disabled={sent} className="mr-auto min-h-0" />
-          <QuestionnaireSkip size="sm" disabled={sent} className="min-h-0" />
+          <QuestionnaireSkip size="sm" disabled={sent} onClick={persist} className="min-h-0" />
           <QuestionnaireNext size="sm" disabled={sent} className="min-h-0" />
           <QuestionnaireSubmit size="sm" disabled={sent} className="min-h-0">
             Send
@@ -228,6 +260,34 @@ export default function QuestionRequest({
       </Questionnaire>
     </div>
   );
+}
+
+/// The form as the reader left it, for the card to reopen on.
+///
+/// A single-select's text is kept only while no choice is picked: the box is
+/// then the answer, and restoring both would hand the answer to whichever the
+/// questionnaire registers last.
+function readDraft(form: HTMLFormElement, questions: Question[]): QuestionDraft {
+  const draft: QuestionDraft = { picked: {}, text: {} };
+  const items = form.querySelectorAll("[data-slot=questionnaire-item]");
+
+  questions.forEach((question, index) => {
+    const item = items[index];
+    if (!item) return;
+    if (item.hasAttribute("data-active")) draft.item = question.question;
+
+    const picked = Array.from(
+      item.querySelectorAll<HTMLInputElement>("[data-slot=questionnaire-choice-input]:checked"),
+      (input) => input.value,
+    );
+    draft.picked[question.question] = picked;
+    const box = item.querySelector<HTMLTextAreaElement>("[data-slot=questionnaire-input]");
+    if (box?.value && (question.multiSelect || picked.length === 0)) {
+      draft.text[question.question] = box.value;
+    }
+  });
+
+  return draft;
 }
 
 /// Reads the form back in the questions' own order.
