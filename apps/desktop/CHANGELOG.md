@@ -5,6 +5,48 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.26.0
+
+### Added
+
+- **Rename a session from its header.** Double-click the title. A
+  name you give it is kept, and no generated title replaces it.
+- **Type or paste from anywhere.** A key or ⌘V pressed while focus
+  is on the transcript, the sidebar or a panel lands in the composer.
+- **Pick several issues from the `#` list.** ⌘-click or ⌘⏎ adds one
+  and keeps the list open. Tagged issues show a check.
+- **Rearrange the split view by dragging a pane's header.** Drop it on
+  a pane to swap the two, or on an edge to move it.
+- **Screenshots and recordings show on a finished turn** without
+  opening its tool calls. Several draw as tiles that open the
+  lightbox, which now plays video.
+- **Filter GitHub issues by type** on the Issues page.
+- **⌘⌥E moves the side panel** between left and right.
+- **⌘⇧←/→ steps browser tabs.** ⌘⇧[ ] does too in the Browser view
+  while the side panel is shut.
+- **Agents can zoom the browser** with `dray browser zoom`. Needs
+  `dray` 0.8.0, which updates itself.
+
+### Changed
+
+- **The side panel hides in Diff and Files** as it does in Browser.
+  ⌘E brings it back, and Chat restores it.
+- **Stepping sessions with ⌘⇧↑/↓ is quicker.** The rows either side
+  load ahead, and a held chord opens only the row it stops on.
+- **Running subagents draw their own orb.**
+- **The browser runs Chromium 154.** It downloads once on first launch.
+- **Agents hide review sessions by default.**
+
+### Fixed
+
+- **A question card keeps its answers** when you switch session and
+  come back.
+- **The composer keeps focus while an agent drives the browser.**
+- **⇧⏎ in a long draft scrolls the new line into view.**
+- **Command colour goes once the command is deleted.**
+- **Long sessions no longer wobble** while older turns load.
+- **Paired keys in shortcut hints**, like `[ ]`, no longer touch.
+
 ## 0.25.2
 
 ### Changed
