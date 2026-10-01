@@ -369,7 +369,9 @@ mod tests {
     #[test]
     fn version_is_the_crate_build_prefix() {
         assert!(BUILD.starts_with(VERSION));
-        assert_eq!(version_dir().file_name().unwrap(), VERSION);
+        // Tests run as a dev build, so this also pins the split from the
+        // release app's `.dray/cef`.
+        assert!(version_dir().ends_with(Path::new(".dray/cef-dev").join(VERSION)));
     }
 
     #[test]
