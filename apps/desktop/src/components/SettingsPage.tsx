@@ -192,7 +192,7 @@ export default function SettingsPage({
                 onChange={onAutoHideSidebarChange}
               />
               <AutoHideRow
-                label="Auto-hide side panel in Browser View"
+                label="Auto-hide side panel outside Chat"
                 checked={autoHidePanel}
                 onChange={onAutoHidePanelChange}
               />
