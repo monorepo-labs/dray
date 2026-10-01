@@ -266,6 +266,31 @@ A prompt can name a session as `&Title (id)`, picked from the composer's `&`
 menu. The id in the parentheses is the address — use it as written rather than
 looking the session up again.
 
+## Saving work for later
+
+```bash
+dray draft new "Add retry to the upload client"   # prints the draft id
+dray draft ls                                     # this project; --all, --json
+dray draft rm <draft-id>
+dray draft start <draft-id>                       # prints the new session id
+```
+
+A draft is a task the user starts when they choose. Nothing runs and no
+worktree exists until it starts. It shows in the user's sidebar, where they
+can open it, edit it and send it themselves.
+
+Reach for it when the user asks you to note work down rather than begin it —
+"park this", "save that for later", "queue up a task". Write the prompt for
+someone who has not read your conversation, the same as for `dray new`.
+
+`draft new` takes `--project`, `--model`, `--effort`, `--harness` and `--fast`,
+inheriting from your session exactly as `dray new` does. `draft start` starts
+it as a session spawned by yours, so the depth limit and `dray ls`'s
+`spawned by` apply as usual. A draft the user saved with the worktree off
+starts in the project checkout, and the line `start` prints says so.
+
+Start or remove only drafts the user named. The list is theirs.
+
 ## Driving the browser
 
 Every session has its own browser, drawn in the app beside the chat. `dray

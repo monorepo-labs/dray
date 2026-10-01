@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
@@ -72,19 +73,32 @@ export function useDrafts(onError: (e: unknown) => void) {
     return done;
   }, []);
 
-  useEffect(() => {
-    invoke<Draft[]>("list_drafts").then(
-      // Merged, not taken whole: a draft saved while this was out is already
-      // here and on its way to the file.
-      (loaded) => publish([...loaded.filter((d) => !ref.current.some((r) => r.id === d.id)), ...ref.current]),
-      (e) => errorRef.current(e),
-    );
-  }, [publish]);
-
   const cancelPending = (id: string) => {
     clearTimeout(pending.current.get(id));
     pending.current.delete(id);
   };
+
+  /// Takes the file as the list. Read through the write queue, so a save
+  /// already on its way is on disk before the read and cannot be dropped by it.
+  /// Only a draft with an autosave still waiting keeps its local copy, being
+  /// newer than the file; one the CLI took away loses that autosave too, or it
+  /// would write the draft straight back.
+  const reload = useCallback(() => {
+    const read = queue.current.then(() => invoke<Draft[]>("list_drafts"));
+    queue.current = read.then(
+      (loaded) => {
+        for (const id of pending.current.keys()) if (!loaded.some((d) => d.id === id)) cancelPending(id);
+        publish(loaded.map((d) => (pending.current.has(d.id) ? (ref.current.find((r) => r.id === d.id) ?? d) : d)));
+      },
+      (e) => errorRef.current(e),
+    );
+  }, [publish]);
+
+  useEffect(() => {
+    reload();
+    const un = listen("drafts_changed", reload);
+    return () => void un.then((off) => off());
+  }, [reload]);
 
   /// Listed only once it is on disk, and answers whether it got there: the
   /// caller clears the composer on that answer, so a failed write leaves the

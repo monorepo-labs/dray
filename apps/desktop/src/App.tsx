@@ -256,6 +256,10 @@ function App() {
   useEffect(() => {
     if (selectedSessionId) setOpenDraftId(null);
   }, [selectedSessionId]);
+  // `dray draft rm` or `start` can take the open draft away; leave it then.
+  useEffect(() => {
+    if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);
+  }, [drafts, openDraftId]);
   const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
 
   useEffect(
