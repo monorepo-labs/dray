@@ -104,6 +104,50 @@ export function readValue(root: Node): string {
   return out;
 }
 
+/// Whether the tree draws `placed`: the same text under the same paint.
+///
+/// **The text alone can read right while the paint is wrong, because the
+/// browser decides where a typed character lands by style, not by segment.** A
+/// character typed after a coloured run goes inside its span, and one typed
+/// after the run was deleted whole still takes its colour, carried over as an
+/// inline style (#372). Adjacent runs painted alike merge on both sides, so where
+/// the browser happened to split a text node does not count as drift.
+export function paintedAs(
+  root: HTMLElement,
+  placed: Placed[],
+  classOf: (placed: Placed) => string,
+): boolean {
+  const want: { paint: string; text: string }[] = [];
+  for (const entry of placed) {
+    const className = classOf(entry);
+    const paint = entry.label !== null ? "chip" : className && `SPAN.${className}./`;
+    merge(want, paint, entry.segment.text);
+  }
+
+  const have: { paint: string; text: string }[] = [];
+  for (const { node, text } of pieces(root)) merge(have, paintOf(root, node), text);
+
+  return JSON.stringify(want) === JSON.stringify(have);
+}
+
+function merge(runs: { paint: string; text: string }[], paint: string, text: string): void {
+  const last = runs.at(-1);
+  if (last?.paint === paint) last.text += text;
+  else if (text) runs.push({ paint, text });
+}
+
+/// Every element between a node and the root, named the way `paintedAs` names
+/// a coloured run, so an inline style the browser added reads as a difference.
+function paintOf(root: Node, node: Node): string {
+  if (node instanceof HTMLElement && node.hasAttribute(TAG_ATTR)) return "chip";
+
+  let paint = "";
+  for (let el = node.parentElement; el && el !== root; el = el.parentElement) {
+    paint = `${el.tagName}.${el.className}.${el.getAttribute("style") ?? ""}/${paint}`;
+  }
+  return paint;
+}
+
 /// A DOM position as an index into the string.
 ///
 /// Measured by cloning the range rather than by walking to it, so the two
