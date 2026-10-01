@@ -79,7 +79,8 @@ export default function IssueMentionMenu({
               absent on most rows, which is what makes it worth reading on the
               few that carry it. */}
           <span className="ml-auto flex shrink-0 items-center gap-2">
-            <IssuePriorityIcon priority={issue.priority} />
+            {/* GitHub has no priority, so its rows would all draw "none". */}
+            {issue.tracker !== "github" && <IssuePriorityIcon priority={issue.priority} />}
             {/* The slot is held on every row once anything is tagged, so the
                 priority column stays one column. */}
             {tagged.has(issue.identifier) ? (
