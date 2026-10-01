@@ -1048,6 +1048,31 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             remember_viewport(session, *w, *h);
             ok(format!("{label} {w}×{h}"))
         }
+        BrowserAction::Zoom { percent } => {
+            let tab = active_tab(session)?;
+            // Chromium's own zoom range.
+            if !(25..=500).contains(&percent) {
+                return Err(format!("zoom {percent}? between 25 and 500"));
+            }
+            let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
+            // Waited on, so a busy main thread cannot leave the zoom queued
+            // behind an answer that already said it landed.
+            let (tx, rx) = oneshot::channel();
+            on_main(move || {
+                let host = browser_of(tab).and_then(|b| b.host());
+                if let Some(host) = &host {
+                    host.set_zoom_level(level);
+                }
+                let _ = tx.send(host.is_some());
+            })?;
+            if !rx.await.unwrap_or(false) {
+                return Err("that tab is gone".into());
+            }
+            // The renderer lays the page out again a frame later, and a
+            // screenshot straight after must not catch the old layout.
+            tokio::time::sleep(SETTLE).await;
+            ok(format!("zoom {percent}%"))
+        }
     }
 }
 
