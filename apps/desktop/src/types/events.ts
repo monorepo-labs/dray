@@ -1813,7 +1813,13 @@ modified: string | null, };
  * updates without a refetch. Not an `AgentEvent`: nothing here came from the
  * agent, and it must never reach the session's `.jsonl` log.
  */
-export type SessionTitleEvent = { sessionId: string, title: string, };
+export type SessionTitleEvent = { sessionId: string, title: string, 
+/**
+ * Set on the reader's rename alone. Events are not ordered against
+ * writes, so a generated title written just before a rename can arrive
+ * after it — and the listener drops an unlocked one onto a locked row.
+ */
+titleLocked: boolean, };
 
 /**
  * The settings a turn was configured with, carried on [`SessionInfo`].

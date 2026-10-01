@@ -449,7 +449,7 @@ async fn rename_session(session_id: String, title: String, app: AppHandle) -> Re
         return Err(anyhow::anyhow!("A session title cannot be empty").into());
     }
     if store::rename_session(&session_id, &title).await?.is_some() {
-        let event = title::SessionTitleEvent { session_id, title };
+        let event = title::SessionTitleEvent { session_id, title, title_locked: true };
         if let Err(e) = app.emit("session_title", &event) {
             eprintln!("[rename emit err] {e}");
         }

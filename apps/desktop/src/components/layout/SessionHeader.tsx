@@ -116,11 +116,21 @@ export default function SessionHeader({
           />
         ) : (
           // Out of the drag region: a double-click there zooms the window.
+          // Focusable, so Enter is the keyboard's way into the same edit.
           <span
+            role="button"
+            tabIndex={0}
+            aria-label={`Rename ${title}`}
             data-tauri-drag-region="false"
             onDoubleClick={() => setRenaming(session.sessionId)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setRenaming(session.sessionId);
+              }
+            }}
             // Room for the caret the field draws, so swapping in shifts nothing.
-            className="truncate pr-0.5 font-medium text-foreground"
+            className="truncate rounded-sm pr-0.5 font-medium text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             {title}
           </span>

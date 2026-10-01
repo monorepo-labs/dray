@@ -2506,13 +2506,17 @@ useEffect(() => {
 
 useEffect(() => {
   const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
-    const { sessionId, title } = event.payload;
+    const { sessionId, title, titleLocked } = event.payload;
+    // A generated title can arrive after the rename that locked the row out of
+    // order, so an unlocked one never lands on a locked row.
+    const takes = (s: { sessionId: string; titleLocked: boolean }) =>
+      s.sessionId === sessionId && (titleLocked || !s.titleLocked);
 
     setSessionIndexItems((prev) =>
-      prev.map((i) => (i.sessionId === sessionId ? { ...i, title } : i)),
+      prev.map((i) => (takes(i) ? { ...i, title, titleLocked } : i)),
     );
     setSessions((prev) =>
-      prev.map((s) => (s.sessionId === sessionId ? { ...s, title } : s)),
+      prev.map((s) => (takes(s) ? { ...s, title, titleLocked } : s)),
     );
   });
 
