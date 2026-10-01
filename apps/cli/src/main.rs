@@ -180,7 +180,7 @@ Verbs:
   find <role|text|label|placeholder|alt|title|testid|first|last|nth> <value> <verb> [arg]
   wait [<selector> | <ms>] [--url ..] [--text ..] [--load ..]
   screenshot [path] [--full] | eval <js> | console | errors
-  set viewport <w> <h> | set device <name>
+  set viewport <w> <h> | set device <name> | zoom <percent|reset>
   record start | record stop [name]
 screenshot and record lay the page out at 1440×900, or the last set viewport/device.";
 
@@ -603,6 +603,12 @@ fn act(
             }
             "device" => A::SetDevice { name: word("set device <name>")? },
             _ => return Err("set viewport <w> <h>, or set device <name>".into()),
+        },
+        "zoom" => A::Zoom {
+            percent: match word("zoom <percent|reset>")?.as_str() {
+                "reset" => 100,
+                p => p.trim_end_matches('%').parse().map_err(|_| "zoom <percent|reset>")?,
+            },
         },
         other => return Err(format!("browser {other}? {BROWSER_VERBS}")),
     };
@@ -1034,6 +1040,9 @@ mod tests {
             action(&["scroll", "down", "-100"]),
             Ok(BrowserAction::Scroll { amount, .. }) if amount == -100.0
         ));
+        assert!(matches!(action(&["zoom", "150%"]), Ok(BrowserAction::Zoom { percent: 150 })));
+        assert!(matches!(action(&["zoom", "reset"]), Ok(BrowserAction::Zoom { percent: 100 })));
+        assert!(action(&["zoom", "big"]).is_err());
         assert!(action(&["find", "text", "Submit"]).is_err());
         assert!(action(&["frob"]).is_err());
         // What clap used to refuse: a word nothing reads, a flag of another verb.

@@ -1048,6 +1048,23 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             remember_viewport(session, *w, *h);
             ok(format!("{label} {w}×{h}"))
         }
+        BrowserAction::Zoom { percent } => {
+            let tab = active_tab(session)?;
+            // Chromium's own zoom range.
+            if !(25..=500).contains(&percent) {
+                return Err(format!("zoom {percent}? between 25 and 500"));
+            }
+            let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
+            on_main(move || {
+                if let Some(host) = browser_of(tab).and_then(|b| b.host()) {
+                    host.set_zoom_level(level);
+                }
+            })?;
+            // The renderer lays the page out again a frame later, and a
+            // screenshot straight after must not catch the old layout.
+            tokio::time::sleep(SETTLE).await;
+            ok(format!("zoom {percent}%"))
+        }
     }
 }
 
