@@ -32,7 +32,9 @@ use std::path::PathBuf;
 /// damage in. See [`Envelope`] and the app's own `mismatch`, which names which
 /// half is behind so the reader — usually an agent, reading it as tool output —
 /// runs the cure that applies rather than the one that doesn't.
-pub const PROTOCOL_VERSION: u32 = 6;
+/// v7 added the draft requests, which an older app fails to parse — refused by
+/// version instead, so the answer names which half to update.
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
@@ -79,6 +81,71 @@ pub enum Request {
     SendMessage(SendMessage),
     LinkIssues(LinkIssues),
     Browser(BrowserRequest),
+    CreateDraft(CreateDraft),
+    ListDrafts(ListSessions),
+    RemoveDraft(DraftId),
+    StartDraft(StartDraft),
+}
+
+/// A task saved for later, the same thing ⌘S makes in the composer: a prompt
+/// and the picks it will start with, and no session behind it yet.
+///
+/// The picks resolve exactly as [`CreateSession`]'s do — the caller's flag,
+/// else the calling session's, else the app's default — so a draft an agent
+/// leaves behind starts the way `dray new` would have.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDraft {
+    pub prompt: String,
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub harness: Option<String>,
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub fast: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftId {
+    pub id: String,
+}
+
+/// Starts a draft as a session, which takes it off the draft list.
+///
+/// The worktree is the draft's own pick. One made by `dray draft new` always
+/// has it on; one saved in the app has whatever the reader set, so running in
+/// the main checkout only ever happens because a person asked for it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartDraft {
+    pub id: String,
+    /// The session making the call, which the new session nests under — the
+    /// same lineage `dray new` records, and the same depth cap.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+}
+
+/// What the CLI is told about a draft.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftSummary {
+    pub id: String,
+    pub prompt: String,
+    pub project_path: String,
+    pub harness: String,
+    pub model: String,
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Off only where a person saved it that way in the app.
+    pub use_worktree: bool,
+    pub created: String,
 }
 
 /// One step in a session's own browser — the tabs the app draws for it.
@@ -416,6 +483,10 @@ pub enum Response {
         base_ref: Option<String>,
     },
     Listed { sessions: Vec<SessionSummary> },
+    /// A draft written, or one taken off the list — the answer to
+    /// `CreateDraft` and `RemoveDraft` alike.
+    Draft { draft: DraftSummary },
+    Drafts { drafts: Vec<DraftSummary> },
     /// Every issue the session carries *after* the change, so the caller sees
     /// the result rather than a diff it has to apply to what it believed.
     Linked { issues: Vec<IssueLink> },

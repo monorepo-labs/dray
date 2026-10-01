@@ -1,8 +1,12 @@
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
+    events::ApprovalPolicy,
+    models::{Effort, ModelId},
+    session::Harness,
     store::{get_home_app_dir, read_json, write_atomic},
     Fail,
 };
@@ -11,10 +15,31 @@ use crate::{
 /// than in it: an older build reading a draft there would draw a session with
 /// no conversation behind it, and resuming one fails.
 ///
-/// Held as JSON the frontend shapes. Rust only needs the `id` to replace or
-/// remove an entry, and an untyped draft cannot fail a parse on a pick this
-/// build has no spelling for — the trap the index's own enums keep falling in.
+/// The file holds JSON and is read and written as JSON, so a draft carrying a
+/// pick this build cannot spell is kept whole rather than failing the file —
+/// the trap the index's own enums keep falling in. [`StoredDraft`] is the shape
+/// for the places that have to read the picks; it matches `Draft` in
+/// `useDrafts.ts` field for field.
 static DRAFTS_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Emitted when the CLI changes the list, so the sidebar follows without the
+/// reader asking. The app's own writes need none: the frontend made them.
+pub const DRAFTS_CHANGED: &str = "drafts_changed";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredDraft {
+    pub id: String,
+    pub prompt: String,
+    pub project_path: String,
+    pub harness: Harness,
+    pub model: ModelId,
+    pub effort: Option<Effort>,
+    pub permission_mode: ApprovalPolicy,
+    pub fast: bool,
+    pub use_worktree: bool,
+    pub created: String,
+}
 
 async fn drafts_path() -> Result<std::path::PathBuf> {
     Ok(get_home_app_dir().await?.join("drafts.json"))
@@ -35,6 +60,16 @@ pub async fn list_drafts() -> Result<Vec<Value>, Fail> {
     Ok(read_json(&drafts_path().await?).await?)
 }
 
+/// The drafts this build can read the picks of. One it cannot is left out of
+/// the answer and left alone in the file.
+pub async fn stored() -> Result<Vec<StoredDraft>> {
+    Ok(list_drafts()
+        .await?
+        .into_iter()
+        .filter_map(|d| serde_json::from_value(d).ok())
+        .collect())
+}
+
 /// Writes a draft, replacing the one with the same `id` or adding it at the end.
 #[tauri::command]
 pub async fn save_draft(draft: Value) -> Result<(), Fail> {
@@ -52,8 +87,18 @@ pub async fn save_draft(draft: Value) -> Result<(), Fail> {
 /// draft into a session and the reader's own delete can both reach here.
 #[tauri::command]
 pub async fn delete_draft(id: String) -> Result<(), Fail> {
+    take(&id).await?;
+    Ok(())
+}
+
+/// Removes a draft and hands back what it held, or `None` where there was none.
+pub async fn take(id: &str) -> Result<Option<Value>> {
     let _guard = DRAFTS_LOCK.lock().await;
     let mut drafts = list_drafts().await?;
-    drafts.retain(|d| id_of(d) != Some(id.as_str()));
-    Ok(write_drafts(&drafts).await?)
+    let Some(at) = drafts.iter().position(|d| id_of(d) == Some(id)) else {
+        return Ok(None);
+    };
+    let taken = drafts.remove(at);
+    write_drafts(&drafts).await?;
+    Ok(Some(taken))
 }
