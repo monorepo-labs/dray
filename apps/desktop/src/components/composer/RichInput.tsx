@@ -4,6 +4,7 @@ import { SEGMENT_COLOR, highlightSegments } from "@/lib/highlight";
 import {
   caretOf,
   diffRange,
+  paintedAs,
   selectionRange,
   placeCaret,
   readValue,
@@ -197,10 +198,10 @@ export default function RichInput({
     const next = chipSignature(placed);
 
     // Rebuilt where the chips moved, where the value arrived from outside, or
-    // where the tree has drifted from the string. Ordinary typing is none of
-    // those — the browser has already put the character in — so it reaches
-    // nothing here and the tree is left exactly as the browser left it.
-    if (arrived || next !== signature.current || readValue(el) !== value) {
+    // where the tree has drifted from the string or its paint. Ordinary typing is
+    // none of those — the browser has already put the character in — so it
+    // reaches nothing here and the tree is left exactly as the browser left it.
+    if (arrived || next !== signature.current || !paintedAs(el, placed, classOf)) {
       renderInto(el, placed, classOf);
       if (focused.current) placeCaret(el, target);
     }
