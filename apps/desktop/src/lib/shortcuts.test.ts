@@ -105,7 +105,7 @@ describe("formatChords", () => {
         { key: "ArrowUp", meta: true, shift: true, alt: false },
         { key: "ArrowDown", meta: true, shift: true, alt: false },
       ]),
-    ).toEqual([[META, "Shift", "↑↓"]]);
+    ).toEqual([[META, "Shift", "↑\u2009↓"]]);
   });
 
   it("draws a bracket chord by its physical key", () => {
