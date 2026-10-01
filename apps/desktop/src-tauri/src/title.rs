@@ -44,6 +44,10 @@ use ts_rs::TS;
 pub struct SessionTitleEvent {
     pub session_id: String,
     pub title: String,
+    /// Set on the reader's rename alone. Events are not ordered against
+    /// writes, so a generated title written just before a rename can arrive
+    /// after it — and the listener drops an unlocked one onto a locked row.
+    pub title_locked: bool,
 }
 
 /// Matches the truncation in `store::title_from_prompt`, so a generated title
@@ -529,7 +533,7 @@ pub fn spawn_title_generation(
         // emit, since the row it would update is gone.
         match crate::store::set_session_title(&session_id, &title).await {
             Ok(Some(_)) => {
-                let event = SessionTitleEvent { session_id, title };
+                let event = SessionTitleEvent { session_id, title, title_locked: false };
                 if let Err(e) = app.emit("session_title", &event) {
                     eprintln!("[title emit err] {e}");
                 }

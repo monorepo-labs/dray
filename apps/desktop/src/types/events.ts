@@ -1573,6 +1573,14 @@ worktreeName: string | null,
  */
 worktreeRemoved: boolean, title: string, 
 /**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
+/**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
  */
@@ -1705,6 +1713,14 @@ worktreeName: string | null,
  */
 worktreeRemoved: boolean, title: string, 
 /**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
+/**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
  */
@@ -1817,7 +1833,13 @@ modified: string | null, };
  * updates without a refetch. Not an `AgentEvent`: nothing here came from the
  * agent, and it must never reach the session's `.jsonl` log.
  */
-export type SessionTitleEvent = { sessionId: string, title: string, };
+export type SessionTitleEvent = { sessionId: string, title: string, 
+/**
+ * Set on the reader's rename alone. Events are not ordered against
+ * writes, so a generated title written just before a rename can arrive
+ * after it — and the listener drops an unlocked one onto a locked row.
+ */
+titleLocked: boolean, };
 
 /**
  * The settings a turn was configured with, carried on [`SessionInfo`].
