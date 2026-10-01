@@ -1,4 +1,5 @@
 import { isTextField } from "@/hooks/useHotkey";
+import { IS_MAC } from "@/lib/platform";
 
 /// A way to hand focus back to the composer from outside it.
 ///
@@ -60,19 +61,22 @@ function focusAtEnd(el: HTMLElement) {
 /// composer: an open menu or dialog, where Radix typeahead reads letters.
 const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
 
-/// Sends a printable key pressed elsewhere in the app to the composer.
+/// Sends a printable key, or a paste, pressed elsewhere in the app to the
+/// composer.
 ///
 /// Installed on `document` by `ChatInput`, so it exists only while the Chat
 /// view has a composer. It moves focus and nothing else: WebKit re-reads the
-/// focused node between `keydown` and inserting the text, so the character
-/// lands in the box itself, with no synthetic insert to keep in step with
-/// `RichInput`'s own reading. Space is left alone, being what activates the
+/// focused node between `keydown` and inserting the text, and runs ⌘V's Paste
+/// against the new focus too, so both land in the box itself and go through
+/// `RichInput`'s own handlers. Space is left alone, being what activates the
 /// focused row or button.
 export function typeIntoComposer(e: KeyboardEvent) {
   const el = composer;
   if (!el || e.defaultPrevented || e.isComposing) return;
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key.length !== 1 || e.key === " ") return;
+  const paste =
+    (IS_MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v";
+  const typed = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && e.key !== " ";
+  if (!paste && !typed) return;
 
   const target = e.target instanceof HTMLElement ? e.target : null;
   if (isTextField(target) || target?.closest(OWNS_KEYS)) return;
