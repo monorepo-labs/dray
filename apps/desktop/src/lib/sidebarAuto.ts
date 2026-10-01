@@ -33,12 +33,15 @@ export function sidebarMove({
   return null;
 }
 
-/// The right pane's half of the same rule, which differs because the pane and
-/// the view tab are both per session: selecting another session moves the view
-/// without the claimed session ever leaving its page. So a claim is given back
-/// only once its own key is on screen off the Browser view, and a hide fires
-/// only on a key that stayed put — a session reached already on the Browser,
-/// pane open, is the reader returning to it rather than arriving.
+/// The right pane's half of the same rule, which differs in two ways. It
+/// covers every view but Chat — Browser, Diff and Files all want the width —
+/// so a move between two of them is neither arriving nor leaving, and a pane
+/// opened beside one stays put. And the pane and the view tab are both per
+/// session: selecting another session moves the view without the claimed
+/// session ever leaving its page. So a claim is given back only once its own
+/// key is on screen on Chat, and a hide fires only on a key that stayed put — a
+/// session reached already on Diff, pane open, is the reader returning to it
+/// rather than arriving.
 export function panelMove({
   from,
   to,
@@ -53,9 +56,9 @@ export function panelMove({
   keyMoved: boolean;
   enabled: boolean;
   open: boolean;
-  /// Arriving at the Browser is what closed this key's pane.
+  /// Leaving Chat is what closed this key's pane.
   claimed: boolean;
 }): SidebarMove {
-  if (to !== "browser") return claimed ? "restore" : null;
-  return enabled && open && from !== "browser" && !keyMoved ? "hide" : null;
+  if (to === "chat") return claimed ? "restore" : null;
+  return enabled && open && from === "chat" && !keyMoved ? "hide" : null;
 }
