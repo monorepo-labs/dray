@@ -124,7 +124,7 @@ export default function SessionHeader({
             data-tauri-drag-region="false"
             onDoubleClick={() => setRenaming(session.sessionId)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 setRenaming(session.sessionId);
               }
