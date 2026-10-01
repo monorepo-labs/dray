@@ -189,18 +189,17 @@ export default function Chat({
   // the turns on screen a different fraction off the grid, and the rounding
   // moved them a pixel per step — a wobble for as long as backfill ran. Measured
   // in an offscreen WKWebView: snapping to device pixels instead still wobbles.
-  // The pad rides the node, since the empty state remounts it.
+  // The pad rides the node as `--snap`, since the empty state remounts it.
+  const lastTurnRef = useRef<HTMLDivElement>(null);
   const snapToPixel = () => {
     const content = contentRef.current;
-    const turns = content?.querySelectorAll<HTMLElement>("[data-turn]");
-    const last = turns?.[turns.length - 1];
+    const last = lastTurnRef.current;
     if (!content || !last) return;
-    const held = Number(content.dataset.snap ?? 0);
+    const held = parseFloat(content.style.getPropertyValue("--snap")) || 0;
     const offset = last.getBoundingClientRect().top - content.getBoundingClientRect().top - held;
     const extra = Math.max(0, Math.ceil(offset - 1e-3) - offset);
     if (Math.abs(extra - held) < 1e-3) return;
-    content.dataset.snap = String(extra);
-    content.style.paddingTop = `calc(1.5rem + ${extra}px)`;
+    content.style.setProperty("--snap", `${extra}px`);
   };
   const pin = (el: HTMLElement) => {
     snapToPixel();
@@ -657,11 +656,18 @@ export default function Chat({
           onWheel={onWheel}
           className="h-full overflow-y-auto"
         >
-          <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
-            {shownTurns.map((turn) => (
+          <div
+            ref={contentRef}
+            className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pt-[calc(1.5rem+var(--snap,0px))] pb-6"
+          >
+            {shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
-              <div key={turn.key} data-turn={turn.key}>
+              <div
+                key={turn.key}
+                data-turn={turn.key}
+                ref={i === shownTurns.length - 1 ? lastTurnRef : undefined}
+              >
                 <TurnBlock
                   turn={turn}
                   subagentById={subagentById}
