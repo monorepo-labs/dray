@@ -741,11 +741,13 @@ wrap_focus_handler! {
     }
 
     impl FocusHandler {
-        /// Refused while `dray browser` drives the session: a load it starts
-        /// asks for focus, and granting it took the reader's keys out of the
-        /// composer — into a hidden view, where they went nowhere.
-        fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> ::std::os::raw::c_int {
-            automation::driving(&self.session) as ::std::os::raw::c_int
+        /// A load `dray browser` starts asks for focus, and granting it took
+        /// the reader's keys out of the composer — into a hidden view, where
+        /// they went nowhere. Navigation alone: the reader picking a tab asks
+        /// as `SYSTEM`, and a load the page starts itself asks nothing
+        /// (measured: a link click and `back` never reach here).
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, source: FocusSource) -> ::std::os::raw::c_int {
+            (source == FocusSource::NAVIGATION && automation::driving(&self.session)) as ::std::os::raw::c_int
         }
     }
 }
