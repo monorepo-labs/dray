@@ -57,9 +57,8 @@ function focusAtEnd(el: HTMLElement) {
 }
 
 /// Where a printable key belongs to whatever has focus rather than to the
-/// composer: an open menu or dialog (Radix typeahead reads letters), and the
-/// question card, a `<form>` whose choices answer to keys of their own.
-const OWNS_KEYS = "form, [role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
+/// composer: an open menu or dialog, where Radix typeahead reads letters.
+const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
 
 /// Sends a printable key pressed elsewhere in the app to the composer.
 ///
@@ -77,6 +76,10 @@ export function typeIntoComposer(e: KeyboardEvent) {
 
   const target = e.target instanceof HTMLElement ? e.target : null;
   if (isTextField(target) || target?.closest(OWNS_KEYS)) return;
+  // The question card is a `<form>` whose choices answer to keys of their own.
+  // The composer is one too, and its own buttons should still hand over.
+  const form = target?.closest("form");
+  if (form && !form.contains(el)) return;
   // Mounted but not drawn — Settings hides the shell rather than unmounting it.
   if (el.getClientRects().length === 0) return;
 
