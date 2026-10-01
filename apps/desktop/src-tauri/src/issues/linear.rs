@@ -457,6 +457,7 @@ pub async fn list_filters(key: &str) -> Result<IssueFilters, IssueUnavailable> {
         // would be a fourth section nobody asked for. The section is drawn only
         // where this is non-empty, so leaving it so is what withholds it.
         labels: Vec::new(),
+        issue_types: Vec::new(),
         // A team with no key names nothing a row could join on, so it is left
         // out rather than filed under an empty string — where it would answer
         // for every row whose own team came back blank.
@@ -594,6 +595,7 @@ fn map_issue(node: &Value) -> Option<Issue> {
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),
+        issue_type: None,
     })
 }
 

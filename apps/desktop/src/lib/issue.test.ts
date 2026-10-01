@@ -142,6 +142,7 @@ const issue = (identifier: string, kind: IssueStateKind): Issue => ({
   project: null,
   createdAt: "2026-08-20T00:00:00Z",
   pullRequests: [],
+  issueType: null,
   updatedAt: "2026-08-27T00:00:00Z",
 });
 

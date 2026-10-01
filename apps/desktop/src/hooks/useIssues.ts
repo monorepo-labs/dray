@@ -70,6 +70,7 @@ const keyOf = (query: IssueQuery) =>
     teamId: query.teamId ?? "",
     projectId: query.projectId ?? "",
     label: query.label ?? "",
+    issueType: query.issueType ?? "",
     settled: query.settled,
   });
 
@@ -458,6 +459,7 @@ const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
   teamId: tracker === "github" ? readIssueRepo() : null,
   projectId: null,
   label: null,
+  issueType: null,
   settled: false,
 });
 
@@ -663,7 +665,10 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
 
   return {
     issues: open.issues,
-    filters,
+    // The previous repository's labels and types are not this one's, so none
+    // are offered until its own read lands — a pick made from them would narrow
+    // the new list by a name it has never heard of.
+    filters: staleFilters && filters ? { ...filters, labels: [], issueTypes: [] } : filters,
     query,
     /// Every change to the query goes through here, which is what makes the
     /// repository pick persist: `teamId` under GitHub *is* the repository, and
