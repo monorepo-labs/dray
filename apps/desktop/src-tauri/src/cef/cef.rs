@@ -691,9 +691,11 @@ fn refocus_webview(from: &NSView) {
     }
 }
 
-/// Whether the first responder sits inside any tab's view. Main thread only.
-fn browser_holds_focus() -> bool {
-    let views: Vec<usize> = TABS.lock().unwrap().iter().map(|t| t.view).filter(|v| *v != 0).collect();
+/// Whether the first responder sits inside one of the session's tab views.
+/// Main thread only.
+fn browser_holds_focus(session: &str) -> bool {
+    let views: Vec<usize> =
+        TABS.lock().unwrap().iter().filter(|t| t.session == session && t.view != 0).map(|t| t.view).collect();
     views.into_iter().any(|view| {
         let view: &NSView = unsafe { &*(view as *const NSView) };
         view.window()
@@ -1359,7 +1361,7 @@ pub(crate) fn activate(session_id: String, id: i32, focus: bool) -> Result<(), S
         if session_of(id).as_deref() != Some(session_id.as_str()) {
             return;
         }
-        let focus = focus || browser_holds_focus();
+        let focus = focus || browser_holds_focus(&session_id);
         set_active(&session_id, Some(id));
         apply_layout();
         if let Some(host) = browser_of(id).and_then(|b| b.host()).filter(|_| focus) {
