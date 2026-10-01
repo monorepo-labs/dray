@@ -1555,13 +1555,19 @@ function App() {
     setPendingStep(id);
     run.timer = window.setTimeout(() => commitStepRef.current(id), STEP_RUN_MS);
   };
-  // Any other move — a click, a notice, ⌘N — abandons a run in flight. Called
-  // from `goToSession` too, since a click on the open session moves nothing.
+  // Any other move — a click, a notice, ⌘N — abandons a run in flight.
   const cancelStep = () => {
     clearTimeout(stepRun.current.timer);
     setPendingStep(null);
   };
   useEffect(cancelStep, [selectedSessionId]);
+  // `goToSession`'s half, which also forgets the last press: a click on the
+  // open session moves no selection, and a press just after any move is a lone
+  // one that opens at once.
+  const endStepRun = () => {
+    stepRun.current.last = 0;
+    cancelStep();
+  };
   // After a pause, so a held chord does not read every row it passes. Two
   // presses either way, wrap and top hold included.
   useEffect(() => {
@@ -1701,10 +1707,10 @@ function App() {
   // back. The page itself is left as it was — its filters and its scroll come
   // back with it — so this is a navigation, not a dismissal. Settings cover the
   // whole window, so they close too.
-  const goToSession = (go: () => void) => {
+  const goToSession = (go: () => void, stepping = false) => {
     setIssuesOpen(false);
     closeSettings();
-    cancelStep();
+    if (!stepping) endStepRun();
     go();
   };
 
@@ -2105,8 +2111,8 @@ function App() {
 
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("session.prev", () => goToSession(() => stepSession(-1)));
-  useHotkey("session.next", () => goToSession(() => stepSession(1)));
+  useHotkey("session.prev", () => goToSession(() => stepSession(-1), true));
+  useHotkey("session.next", () => goToSession(() => stepSession(1), true));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
