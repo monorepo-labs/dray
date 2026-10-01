@@ -510,6 +510,24 @@ const setProjectSpace = async (path: string, space: string | null) => {
   }
 };
 
+// Re-reads the projects after a write made elsewhere — a Linear disconnect
+// clears the pins and filters naming its workspace in Rust.
+const reloadProjects = () => {
+  invoke<Project[]>("list_projects")
+    .then(setProjects)
+    .catch((e) => setError(String(e)));
+};
+
+// Pins a project to a Linear workspace, or clears its own pin with `null` so it
+// reads its space's again. Settings is the only caller.
+const setProjectLinearWorkspace = async (path: string, workspace: string | null) => {
+  try {
+    setProjects(await invoke<Project[]>("set_project_linear_workspace", { path, workspace }));
+  } catch (e) {
+    setError(String(e));
+  }
+};
+
 // Steps a project one place in the order the composer and the sidebar filter
 // both draw. Settings is the only caller.
 const moveProject = async (path: string, delta: number) => {
@@ -1378,10 +1396,13 @@ const applyIssues = (sessionId: string, issues: IssueRef[]) => {
 
 // Removes one. `key` is the tracker's own id from the row that was clicked; the
 // backend also accepts the human identifier, which is what the CLI passes.
-const unlinkIssue = async (sessionId: string, key: string) => {
+const unlinkIssue = async (sessionId: string, key: string, workspace: string | null = null) => {
   const fail = failUnlessLeft();
   try {
-    applyIssues(sessionId, await invoke<IssueRef[]>("unlink_issue", { sessionId, key }));
+    applyIssues(
+      sessionId,
+      await invoke<IssueRef[]>("unlink_issue", { sessionId, key, workspace }),
+    );
   } catch (e) {
     fail(e);
   }
@@ -2666,6 +2687,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, setProjectLinearWorkspace, reloadProjects, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
 
 }

@@ -85,10 +85,11 @@ fn first_error(body: &Value) -> Option<String> {
 
 // ── queries ──────────────────────────────────────────────────────────────────
 
-/// Who the key belongs to. Also what validates it: there is no cheaper call,
-/// and it answers with everything the settings row draws.
+/// Who the key belongs to, and in which workspace — a personal key belongs to
+/// exactly one. Also what validates it: there is no cheaper call, and it
+/// answers with everything the settings row draws.
 const VIEWER: &str = r#"
-query{viewer{id name organization{name}}}
+query{viewer{id name organization{id name urlKey}}}
 "#;
 
 /// Every field a row draws, and none it doesn't — no description and no
@@ -174,6 +175,25 @@ pub fn is_upload(url: &str) -> bool {
         .ok()
         .map(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some(UPLOADS_HOST))
         .unwrap_or(false)
+}
+
+/// The workspace an upload looks to belong to: the first path segment of
+/// `uploads.linear.app/<org id>/<…>`.
+///
+/// **Observed, not documented.** Every upload from one workspace shares that
+/// segment, and nothing Linear publishes says it is the organization id — so
+/// it only ever orders the keys tried, and never picks one alone.
+pub fn upload_org(url: &str) -> Option<String> {
+    if !is_upload(url) {
+        return None;
+    }
+
+    reqwest::Url::parse(url)
+        .ok()?
+        .path_segments()?
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
 }
 
 /// One uploaded file as a `data:` URL.
@@ -273,14 +293,15 @@ pub async fn verify(key: &str) -> Result<TrackerAccount, IssueUnavailable> {
         .get("viewer")
         .ok_or_else(|| IssueUnavailable::Other("Linear answered with no account".into()))?;
 
+    let org = viewer.get("organization");
+
     Ok(TrackerAccount {
         tracker: IssueTracker::Linear,
         user_id: text(viewer, "id"),
         user_name: text(viewer, "name"),
-        org_name: viewer
-            .get("organization")
-            .map(|org| text(org, "name"))
-            .unwrap_or_default(),
+        org_name: org.map(|org| text(org, "name")).unwrap_or_default(),
+        workspace_id: org.and_then(|org| optional(org, "id")),
+        url_key: org.and_then(|org| optional(org, "urlKey")),
     })
 }
 
@@ -339,18 +360,42 @@ pub async fn get_issue(
     id: Option<&str>,
 ) -> Result<IssueDetail, IssueUnavailable> {
     if let Some(id) = id.filter(|id| is_stable_id(id)) {
-        match query(key, ISSUE_BY_ID, json!({ "id": id })).await {
-            Ok(data) => {
-                if let Some(node) = data.get("issue").filter(|node| !node.is_null()) {
-                    return read_detail(node, identifier);
-                }
-            }
+        match get_issue_by_id(key, id, identifier).await {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {}
             // Not fatal: the identifier below is a second way to ask the same
             // question, and answering it beats reporting the first attempt.
             Err(e) => eprintln!("[issue {identifier}] by id: {e:?}"),
         }
     }
 
+    get_issue_by_identifier(key, identifier).await
+}
+
+/// The issue with Linear's own `id`, or `None` where this key's workspace has
+/// no such issue. A UUID names one issue everywhere, so asking several
+/// workspaces for it can never answer with the wrong one — which is what makes
+/// it the first thing tried across workspaces.
+pub async fn get_issue_by_id(
+    key: &str,
+    id: &str,
+    identifier: &str,
+) -> Result<Option<IssueDetail>, IssueUnavailable> {
+    let data = query(key, ISSUE_BY_ID, json!({ "id": id })).await?;
+
+    match data.get("issue").filter(|node| !node.is_null()) {
+        Some(node) => read_detail(node, identifier).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The issue called `identifier` in this key's workspace. `NotFound` where it
+/// has none — kept apart from a failed read, since only a genuine miss lets a
+/// caller go on to ask another workspace.
+pub async fn get_issue_by_identifier(
+    key: &str,
+    identifier: &str,
+) -> Result<IssueDetail, IssueUnavailable> {
     let (team, number) = split_identifier(identifier).ok_or_else(|| {
         IssueUnavailable::Other(format!("{identifier} is not an issue identifier"))
     })?;
@@ -360,7 +405,7 @@ pub async fn get_issue(
     let node = nodes(&data, "issues")
         .first()
         .cloned()
-        .ok_or_else(|| IssueUnavailable::Other(format!("No issue {identifier}")))?;
+        .ok_or_else(|| IssueUnavailable::NotFound(format!("No issue {identifier}")))?;
 
     read_detail(&node, identifier)
 }
@@ -368,7 +413,7 @@ pub async fn get_issue(
 /// Whether `id` is Linear's own id rather than an identifier a blind link wrote
 /// into the same field. A UUID and a `DRA-53` cannot be confused for each other,
 /// which is the property `unlink_session_issue` already leans on.
-fn is_stable_id(id: &str) -> bool {
+pub fn is_stable_id(id: &str) -> bool {
     uuid::Uuid::try_parse(id).is_ok()
 }
 
@@ -594,6 +639,8 @@ fn map_issue(node: &Value) -> Option<Issue> {
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),
+        // The caller knows which key it used; this function does not.
+        workspace: None,
     })
 }
 
@@ -879,6 +926,18 @@ mod tests {
         // Right host, wrong scheme: that request would put the key on the wire
         // in cleartext.
         assert!(!is_upload("http://uploads.linear.app/a/b/c.png"));
+    }
+
+    #[test]
+    fn an_upload_names_its_workspace_in_its_first_segment() {
+        assert_eq!(
+            upload_org("https://uploads.linear.app/org-1/file-2/img-3").as_deref(),
+            Some("org-1")
+        );
+        // Anything that would not be fetched with a key names nobody.
+        assert_eq!(upload_org("https://uploads.linear.app.evil.test/org-1/x"), None);
+        assert_eq!(upload_org("http://uploads.linear.app/org-1/x"), None);
+        assert_eq!(upload_org("https://uploads.linear.app/"), None);
     }
 
     #[test]

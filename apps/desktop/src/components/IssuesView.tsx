@@ -30,6 +30,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -59,7 +60,9 @@ import type {
   IssueState,
   IssueStateKind,
   IssueTracker,
+  TrackerAccount,
 } from "@/types/events";
+import { workspaceName } from "@/lib/linearWorkspace";
 
 /// The page's search field. Named so ⌘⇧F can reach it — the same trick the
 /// sidebar's own field uses, and for the same reason: the chord has to be able
@@ -150,6 +153,10 @@ export default function IssuesView({
   onPick,
   onWorkOn,
   refreshRef,
+  linearWorkspaces = [],
+  projectWorkspace = null,
+  project = null,
+  onAddWorkspace,
 }: {
   /// The page is the thing on screen. Hidden pages do not read, for the reason
   /// the right panel's own `active` exists.
@@ -176,6 +183,15 @@ export default function IssuesView({
   /// chord — it has to pick between this page and the right panel, and only it
   /// knows which one the reader is looking at.
   refreshRef?: MutableRefObject<(() => void) | null>;
+  /// Every connected Linear workspace, the default first.
+  linearWorkspaces?: TrackerAccount[];
+  /// The Linear workspace the composer's project reads — what this page opens
+  /// on. `null` is the default.
+  projectWorkspace?: string | null;
+  /// Opens wherever another Linear workspace is added.
+  onAddWorkspace?: () => void;
+  /// The composer's project, which a workspace picked on the menu belongs to.
+  project?: string | null;
 }) {
   // **The pick is honoured, connected or not**, where this used to be resolved
   // against what was actually behind it. The switch below is drawn either way
@@ -191,8 +207,29 @@ export default function IssuesView({
   /// read, and with one connected this is the ordinary state of the other.
   const needsConnecting = !connected[tracker];
 
+  /// A workspace picked on this page's own menu, **for the project it was
+  /// picked under**. The page opens on the project's workspace and the menu
+  /// looks elsewhere for this visit only; moving to a project that reads
+  /// another workspace puts the page back on that one, since a pick carried
+  /// across would list one project's issues under another's composer.
+  ///
+  /// Keyed by the project itself, never its workspace: two repos reading one
+  /// workspace are still two repos. And honoured only while the workspace is
+  /// connected — one disconnected under the page otherwise pins it to a
+  /// workspace nothing can read, with the menu gone once one is left.
+  const [viewing, setViewing] = useState<{ under: string | null; id: string | null } | null>(
+    null,
+  );
+  const viewed =
+    viewing &&
+    viewing.under === project &&
+    (viewing.id === null || linearWorkspaces.some((w) => w.workspaceId === viewing.id))
+      ? viewing
+      : null;
+  const workspace = viewed ? viewed.id : projectWorkspace;
+
   const { issues, settled, filters, query, setQuery, loading, loaded, unavailable, refresh } =
-    useIssues(active && !needsConnecting, tracker);
+    useIssues(active && !needsConnecting, tracker, workspace, project);
 
   // Kept current rather than set once: `refresh` is re-made whenever the hook
   // re-runs, and a handle captured at mount would close over a stale one.
@@ -345,6 +382,15 @@ export default function IssuesView({
                 onPick={(label) => set({ label })}
               />
             </>
+          )}
+
+          {tracker === "linear" && (
+            <WorkspaceMenu
+              workspace={workspace}
+              workspaces={linearWorkspaces}
+              onPick={(id) => setViewing({ under: project, id })}
+              onAdd={onAddWorkspace}
+            />
           )}
 
           <FilterMenu query={query} filters={filters} tracker={tracker} onChange={set} />
@@ -890,6 +936,68 @@ function RepoMenu({
             {option.name}
           </DropdownMenuCheckboxItem>
         ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/// Which Linear workspace the page is reading, on its face — `RepoMenu`'s
+/// reading one tracker over, since a workspace is the whole list the same way a
+/// repository is. Drawn only once there are two: with one there is nothing to
+/// pick, and a second is added from Settings, which the menu's last row opens.
+function WorkspaceMenu({
+  workspace,
+  workspaces,
+  onPick,
+  onAdd,
+}: {
+  workspace: string | null;
+  workspaces: TrackerAccount[];
+  onPick: (workspace: string | null) => void;
+  onAdd?: () => void;
+}) {
+  if (workspaces.length < 2) return null;
+
+  // `null` is the default, which Rust lists first — and the only way to name
+  // a default Linear has not identified, which has no id of its own.
+  const current = workspace ?? workspaces[0]?.workspaceId ?? null;
+  const name = workspaceName(workspaces, current);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sidebar-accent px-2.5 py-1 text-ui text-sidebar-accent-foreground transition-colors"
+        >
+          <LinearIcon className="size-3.5" />
+          <span className="max-w-40 truncate">{name}</span>
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuLabel>Workspace</DropdownMenuLabel>
+        {workspaces.map((option, i) => (
+          <DropdownMenuCheckboxItem
+            key={option.workspaceId ?? `default-${i}`}
+            checked={(option.workspaceId ?? null) === current}
+            // A pick, never a toggle: there is no "no workspace" to clear to,
+            // the same reading the repository menu takes.
+            onCheckedChange={() => onPick(option.workspaceId ?? null)}
+          >
+            {option.orgName}
+          </DropdownMenuCheckboxItem>
+        ))}
+        {onAdd && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onAdd}>
+              <Plus className="size-3.5" />
+              Add workspace…
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

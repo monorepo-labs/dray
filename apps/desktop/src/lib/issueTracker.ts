@@ -35,7 +35,12 @@ const bumped = channel<void>();
 export type Connected = { linear: boolean; github: boolean };
 
 export function connectedTrackers(integrations: IntegrationsView | null): Connected {
-  return { linear: !!integrations?.linear, github: !!integrations?.github };
+  // A length, never `!!`: Linear answers a list of workspaces now, and an empty
+  // array is truthy.
+  return {
+    linear: (integrations?.linear.length ?? 0) > 0,
+    github: !!integrations?.github,
+  };
 }
 
 /// The stored pick, or Linear where nothing has been stored.

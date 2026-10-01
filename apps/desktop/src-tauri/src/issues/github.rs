@@ -140,6 +140,8 @@ async fn read_account() -> Result<TrackerAccount, IssueUnavailable> {
         // in. The host is the honest answer, and it is what the settings row
         // draws where Linear draws an organisation.
         org_name: "github.com".to_string(),
+        workspace_id: None,
+        url_key: None,
     })
 }
 
@@ -501,6 +503,7 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),
+        workspace: None,
     })
 }
 

@@ -389,8 +389,37 @@ installId: string | null,
  * what saves a round trip to draw a name in the settings row. It is
  * therefore not the connection: an account here with no key behind it
  * reads as disconnected. See [`crate::issues::get_integrations`].
+ *
+ * The **default** Linear workspace's, since there can be several. Kept
+ * beside `linear_workspaces` rather than folded into it because an older
+ * build reads this field alone.
  */
 linearAccount: TrackerAccount | null, 
+/**
+ * A fingerprint of the key `linear_account` was learned from — never the
+ * key. The default slot's key can change without this file hearing of it
+ * (a settings write failing after the credential write, an older build
+ * reconnecting), and an account trusted for a key it does not describe
+ * stamps one workspace's issues as another's. A mismatch is re-verified.
+ */
+linearAccountKey: string | null, 
+/**
+ * Whose each connected Linear workspace's key is, default included.
+ *
+ * A cache and nothing more: `credentials.json` says what is connected. An
+ * older build rewriting this file drops the field — nothing here carries
+ * fields it cannot spell — and the next read asks Linear again.
+ */
+linearWorkspaces: Array<TrackerAccount>, 
+/**
+ * Space name → the Linear workspace (`organization.id`) its projects read.
+ *
+ * Here rather than in local storage beside the Space list because Rust
+ * reads it: a tag in a prompt is resolved in `send_msg`, with no frontend
+ * to ask. Lost to an older build the same way as the field above, which
+ * costs the pin and nothing else — its projects fall back to the default.
+ */
+linearSpacePins: { [key in string]: string }, 
 /**
  * Which speech-to-text model and microphone to use.
  *
@@ -787,9 +816,20 @@ name: string, isDefault: boolean, };
 export type InstallError = { "stage": "install", message: string, } | { "stage": "relaunch", message: string, };
 
 /**
- * What the settings dialog draws. `None` is a tracker nobody has connected.
+ * What the settings dialog draws.
  */
-export type IntegrationsView = { linear: TrackerAccount | null, github: TrackerAccount | null, };
+export type IntegrationsView = { 
+/**
+ * Every connected Linear workspace, **the default first**. Empty is
+ * Linear not connected.
+ */
+linear: Array<TrackerAccount>, 
+/**
+ * Space name → the Linear workspace its projects read, where one is
+ * pinned. Here rather than on a Space because a Space has no record of its
+ * own to put it on.
+ */
+linearSpacePins: { [key in string]: string }, github: TrackerAccount | null, };
 
 /**
  * One row in a list, and everything a row draws.
@@ -826,7 +866,13 @@ createdAt: string,
  * since that is what the chip says — a row that has to be opened to learn
  * whether anybody has started is the row asking to be clicked through.
  */
-pullRequests: Array<number>, };
+pullRequests: Array<number>, 
+/**
+ * The Linear workspace this row was read from, stamped by the command that
+ * read it — `linear.rs` is handed a key and never learns whose. `None`
+ * under GitHub.
+ */
+workspace?: string, };
 
 /**
  * A file uploaded to an issue, fetched with the stored key.
@@ -898,7 +944,13 @@ createdAt: string,
  * since that is what the chip says — a row that has to be opened to learn
  * whether anybody has started is the row asking to be clicked through.
  */
-pullRequests: Array<number>, };
+pullRequests: Array<number>, 
+/**
+ * The Linear workspace this row was read from, stamped by the command that
+ * read it — `linear.rs` is handed a key and never learns whose. `None`
+ * under GitHub.
+ */
+workspace?: string, };
 
 /**
  * The filter row's options, read once per connection rather than per keystroke.
@@ -982,7 +1034,12 @@ label: string | null,
  * makes that possible: a read that never happens costs nothing, and the
  * two answers cache under separate keys.
  */
-settled: boolean, };
+settled: boolean, 
+/**
+ * Which Linear workspace to read, by `organization.id`. `None` is the
+ * default workspace; ignored under GitHub.
+ */
+workspace: string | null, };
 
 /**
  * What a session records about an issue it is working on.
@@ -1003,7 +1060,15 @@ id: string,
 /**
  * What a person calls it: `DRA-53`.
  */
-identifier: string, title: string, url: string, };
+identifier: string, title: string, url: string, 
+/**
+ * The Linear workspace (`organization.id`) it was read from. A hint, not
+ * the address: a link written before there could be two has none, and an
+ * older build rewriting the index drops it, so a read without one falls
+ * back through [`key_order`]. Left off the wire when absent, so an index
+ * written before the field reads back byte for byte.
+ */
+workspace?: string, };
 
 /**
  * Whose issues to list.
@@ -1054,7 +1119,7 @@ export type IssueTracker = "linear" | "github";
  * error — where `Unauthorized` means a key that has been revoked or rotated
  * and is the one the reader has to do something about.
  */
-export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthorized" } | { "kind": "offline", "detail": string } | { "kind": "other", "detail": string };
+export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthorized" } | { "kind": "offline", "detail": string } | { "kind": "not_found", "detail": string } | { "kind": "other", "detail": string };
 
 /**
  * The payload of [`ISSUES_CHANGED`].
@@ -1351,6 +1416,13 @@ name: string,
  * leaving takes it with them.
  */
 space: string | null, 
+/**
+ * The Linear workspace (`organization.id`) this project reads, where it
+ * pins its own. `None` reads its Space's pin, then the default — see
+ * [`crate::issues::pinned_workspace`]. A tag on the project and nothing
+ * else, the same kind of record `space` is.
+ */
+linearWorkspace?: string, 
 /**
  * Which project launch reopens, and nothing else. It was the sort key too,
  * which moved every picker's rows on each pick; order is now the file's
@@ -1918,7 +1990,18 @@ export type ToolType = "shell" | "file_read" | "file_edit" | "search" | "web" | 
 /**
  * The connected account, as the settings row draws it.
  */
-export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: string, orgName: string, };
+export type TrackerAccount = { tracker: IssueTracker, userId: string, userName: string, orgName: string, 
+/**
+ * Linear's `organization.id`, which is what tells one connected workspace
+ * from another. `None` under GitHub, and on an account cached before there
+ * could be two — which is what sends [`linear_workspaces`] to ask again.
+ */
+workspaceId?: string, 
+/**
+ * The workspace's slug in its URLs, `linear.app/<url_key>/…`. For matching
+ * a link back to its workspace and nothing else: an admin can rename it.
+ */
+urlKey?: string, };
 
 /**
  * What a stop answers with.

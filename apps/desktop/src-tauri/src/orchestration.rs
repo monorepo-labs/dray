@@ -287,7 +287,7 @@ async fn link_issues(link: LinkIssues, app: &AppHandle) -> Result<Response> {
 
     // An unknown session is answered before anything is written, so a typo in
     // the id cannot half-apply a list.
-    store::get_session_index_item(&link.session_id)
+    let session = store::get_session_index_item(&link.session_id)
         .await?
         .with_context(|| format!("no session {}", link.session_id))?;
 
@@ -295,7 +295,7 @@ async fn link_issues(link: LinkIssues, app: &AppHandle) -> Result<Response> {
     let mut applied = 0usize;
     let mut failure = None;
     for input in &link.issues {
-        match apply_issue(&link, input).await {
+        match apply_issue(&link, input, &session.project_path).await {
             Ok(list) => {
                 linked = list;
                 applied += 1;
@@ -341,20 +341,41 @@ async fn link_issues(link: LinkIssues, app: &AppHandle) -> Result<Response> {
 ///
 /// Split out of [`link_issues`] so the loop there can keep hold of a failure
 /// instead of returning through it — the writes before it have already landed.
-async fn apply_issue(link: &LinkIssues, input: &IssueInput) -> Result<Vec<IssueRef>> {
+async fn apply_issue(
+    link: &LinkIssues,
+    input: &IssueInput,
+    project_path: &str,
+) -> Result<Vec<IssueRef>> {
     let identifier = issues::parse_identifier(&input.identifier)
         .with_context(|| format!("{} is not an issue identifier", input.identifier))?;
 
     if link.unlink {
-        store::unlink_session_issue(&link.session_id, &identifier).await
+        // Narrowed to one workspace's link where `--url` names it; otherwise
+        // every link the identifier matches goes, which is all it said.
+        let workspace = match input.url.as_deref() {
+            Some(url) => issues::workspace_named_by_url(url).await,
+            None => None,
+        };
+        store::unlink_session_issue(&link.session_id, &identifier, workspace.as_deref()).await
     } else {
+        // By shape: `dray issue link` asks the tracker nothing, so the
+        // identifier is the only thing that can say which one this belongs to
+        // — `owner/repo#12` is GitHub's.
+        let tracker = IssueTracker::of(&identifier);
+        // Nothing asked either, so the workspace is read off what is to hand:
+        // the URL's slug if one was passed, else the project the session runs
+        // in. Written down now so a later change of default cannot move it.
+        let workspace = match tracker {
+            IssueTracker::Linear => {
+                issues::workspace_for_link(input.url.as_deref(), project_path).await
+            }
+            IssueTracker::Github => None,
+        };
+
         store::link_session_issue(
             &link.session_id,
             IssueRef {
-                // By shape: `dray issue link` asks the tracker nothing, so
-                // the identifier is the only thing that can say which one
-                // this belongs to — `owner/repo#12` is GitHub's.
-                tracker: IssueTracker::of(&identifier),
+                tracker,
                 // No tracker call, so no stable tracker id to record. The
                 // identifier stands in: `unlink_session_issue` already
                 // matches on either, so a link made here is removable by
@@ -363,6 +384,7 @@ async fn apply_issue(link: &LinkIssues, input: &IssueInput) -> Result<Vec<IssueR
                 identifier,
                 title: input.title.clone().unwrap_or_default(),
                 url: input.url.clone().unwrap_or_default(),
+                workspace,
             },
         )
         .await

@@ -77,6 +77,9 @@ type ChatInputProps = {
   /// worktree session mentions paths inside its tree — the CLI resolves `@path`
   /// against the directory it was spawned in, and those are the same one.
   cwd?: string | null;
+  /// The Linear workspace this session's project reads, which is what the `#`
+  /// picker lists. `null` for the default.
+  linearWorkspace?: string | null;
   /// An issue tracker is connected, so `#` opens a picker. Drawn in the
   /// placeholder and nowhere else — the picker itself simply finds nothing
   /// without one.
@@ -224,6 +227,7 @@ export default function ChatInput({
   commands = [],
   commandsLoading = false,
   cwd = null,
+  linearWorkspace = null,
   issuesConnected = false,
   issueTrackers = { linear: false, github: false },
   sessions = [],
@@ -310,7 +314,7 @@ export default function ChatInput({
     issues,
     loading: issuesLoading,
     emptyNote: issuesNote,
-  } = useIssueSearch(issue?.query ?? null, tracker, cwd);
+  } = useIssueSearch(issue?.query ?? null, tracker, cwd, linearWorkspace);
 
   // The fourth, and exclusive with the other three for the same reason again:
   // the caret sits in one token, and a token opening with `&` is none of them.
