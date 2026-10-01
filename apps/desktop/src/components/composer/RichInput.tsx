@@ -8,6 +8,7 @@ import {
   placeCaret,
   readValue,
   renderInto,
+  revealCaret,
 } from "@/lib/richDom";
 import { chipSignature, placeSegments, pushEntry, type Entry, type Placed } from "@/lib/richText";
 import { cn } from "@/lib/utils";
@@ -228,6 +229,9 @@ export default function RichInput({
 
       const at = caretOf(el);
       if (at !== null) onCaretChange(at);
+      // Also where a caret placed by code — ⇧⏎, a pick — gets scrolled to,
+      // since `addRange` fires this too.
+      revealCaret(el);
     };
 
     document.addEventListener("selectionchange", onSelectionChange);

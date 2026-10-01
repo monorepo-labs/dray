@@ -176,6 +176,47 @@ export function placeCaret(root: HTMLElement, index: number): void {
   selection?.addRange(range);
 }
 
+/// Scrolls the box, and only the box, so the selection's moving end is in view.
+///
+/// The browser does this for typing but not for a selection set from code —
+/// every ⇧⏎ and pick lands that way — so a caret placed on a new line below the
+/// cap sat out of sight. Not `scrollIntoView`, which walks every scrollable
+/// ancestor and would nudge the transcript too.
+export function revealCaret(root: HTMLElement): void {
+  const selection = window.getSelection();
+  const node = selection?.focusNode;
+  if (!selection || !node || !root.contains(node)) return;
+
+  const range = document.createRange();
+  range.setStart(node, selection.focusOffset);
+  // Past a text node's closing newline the caret is on the line the next node
+  // opens, and WebKit measures it at the end of the line above — one line short.
+  const lineEnd =
+    node instanceof Text && selection.focusOffset === node.length && node.data.endsWith("\n");
+  let box: DOMRect | undefined = lineEnd ? undefined : range.getBoundingClientRect();
+  // Chromium measures a caret on a line holding no character yet as nothing. In
+  // both cases the first box after the caret stands in, being on its line, and
+  // nothing after means the caret is at the very end.
+  if (!box?.height) {
+    if (lineEnd) range.setStartAfter(node);
+    range.setEnd(root, root.childNodes.length);
+    box = [...range.getClientRects()].find((rect) => rect.height > 0);
+  }
+  if (!box) {
+    root.scrollTop = root.scrollHeight;
+    return;
+  }
+
+  // Inside the padding, so a caret scrolled to either end keeps the gap the box
+  // has at rest rather than sitting flush on its edge.
+  const style = getComputedStyle(root);
+  const inner = root.getBoundingClientRect().top + root.clientTop;
+  const top = inner + parseFloat(style.paddingTop);
+  const bottom = inner + root.clientHeight - parseFloat(style.paddingBottom);
+  if (box.top < top) root.scrollTop -= top - box.top;
+  else if (box.bottom > bottom) root.scrollTop += box.bottom - bottom;
+}
+
 /// Rebuilds the tree from the placed runs.
 ///
 /// Called only when the chips move, never on ordinary typing — see
