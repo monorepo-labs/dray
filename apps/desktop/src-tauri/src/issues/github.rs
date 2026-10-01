@@ -88,6 +88,29 @@ async fn run(cwd: &str, args: &[&str]) -> Result<String, IssueUnavailable> {
     })
 }
 
+/// [`run`] with `--json <fields>`, retried without `issueType` where this `gh`
+/// predates the field. An older `gh` refuses the whole read over one unknown
+/// field, and losing the issue type costs a chip where refusing costs the list.
+///
+/// ponytail: an older `gh` pays two spawns per read; a cached version probe is
+/// the upgrade if that ever shows.
+async fn run_json(cwd: &str, args: &[&str], fields: &str) -> Result<String, IssueUnavailable> {
+    fn with<'a>(args: &[&'a str], fields: &'a str) -> Vec<&'a str> {
+        let mut args = args.to_vec();
+        args.extend(["--json", fields]);
+        args
+    }
+
+    match run(cwd, &with(args, fields)).await {
+        Err(IssueUnavailable::Other(message))
+            if message.contains("Unknown JSON field: \"issueType\"") =>
+        {
+            run(cwd, &with(args, &fields.replace(",issueType", ""))).await
+        }
+        out => out,
+    }
+}
+
 fn parse(out: &str) -> Result<Value, IssueUnavailable> {
     serde_json::from_str(out).map_err(IssueUnavailable::other)
 }
@@ -210,8 +233,6 @@ pub async fn list_issues(
         "list",
         "-R",
         repo,
-        "--json",
-        LIST_FIELDS,
         "--limit",
         &limit,
         "--state",
@@ -232,7 +253,7 @@ pub async fn list_issues(
 
     args.extend(["--search", &search]);
 
-    let out = run(&dir, &args).await?;
+    let out = run_json(&dir, &args, LIST_FIELDS).await?;
     let rows = parse(&out)?;
 
     Ok(rows
@@ -261,11 +282,7 @@ pub async fn get_issue(identifier: &str) -> Result<IssueDetail, IssueUnavailable
     let dir = neutral_dir().await?;
     let number = number.to_string();
 
-    let out = run(
-        &dir,
-        &["issue", "view", &number, "-R", &repo, "--json", VIEW_FIELDS],
-    )
-    .await?;
+    let out = run_json(&dir, &["issue", "view", &number, "-R", &repo], VIEW_FIELDS).await?;
     let node = parse(&out)?;
 
     let issue = map_issue(&node, &repo)
@@ -397,6 +414,13 @@ async fn types_of(repo: &str) -> Vec<IssueLabel> {
             return Vec::new();
         }
     };
+
+    // GraphQL fails at exit 0 with an `errors` array, which would otherwise read
+    // as a repository with no types.
+    if let Some(errors) = body.get("errors") {
+        eprintln!("[github issue types {repo}] {errors}");
+        return Vec::new();
+    }
 
     map_issue_types(&body)
 }
