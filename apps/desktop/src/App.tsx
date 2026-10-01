@@ -2170,9 +2170,9 @@ function App() {
     if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
     if (!next.active) void activateTab(selectedSessionId, next.id);
   };
-  // The Diff and Files views step their own strip on this chord, and the main
-  // column's row wins over a browser sitting beside it in the panel.
-  const browserStep = { enabled: browserShown && viewTab !== "changes" && viewTab !== "files", skipInTextField: true };
+  // The Diff view and an open file step their own strip on this chord, and the
+  // main column's row wins over a browser sitting beside it in the panel.
+  const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
   useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
   useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
   // ⌘T, the chord every browser gives a new tab. Bound only while the browser
