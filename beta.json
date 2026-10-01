@@ -1,23 +1,23 @@
 {
-  "version": "0.25.2",
-  "notes": "### Changed\n\n- **New thinking orbs.** The working indicators are redrawn in the\n  text colour, so they read the same on every theme and in both\n  modes. Background tasks get their own spiral.",
-  "pub_date": "2026-09-30T15:55:47.514Z",
+  "version": "0.26.0",
+  "notes": "### Added\n\n- **Rename a session from its header.** Double-click the title. A\n  name you give it is kept, and no generated title replaces it.\n- **Type or paste from anywhere.** A key or ⌘V pressed while focus\n  is on the transcript, the sidebar or a panel lands in the composer.\n- **Pick several issues from the `#` list.** ⌘-click or ⌘⏎ adds one\n  and keeps the list open. Tagged issues show a check.\n- **Rearrange the split view by dragging a pane's header.** Drop it on\n  a pane to swap the two, or on an edge to move it.\n- **Screenshots and recordings show on a finished turn** without\n  opening its tool calls. Several draw as tiles that open the\n  lightbox, which now plays video.\n- **Filter GitHub issues by type** on the Issues page.\n- **⌘⌥E moves the side panel** between left and right.\n- **⌘⇧←/→ steps browser tabs.** ⌘⇧[ ] does too in the Browser view\n  while the side panel is shut.\n- **Agents can zoom the browser** with `dray browser zoom`. Needs\n  `dray` 0.8.0, which updates itself.\n\n### Changed\n\n- **The side panel hides in Diff and Files** as it does in Browser.\n  ⌘E brings it back, and Chat restores it.\n- **Stepping sessions with ⌘⇧↑/↓ is quicker.** The rows either side\n  load ahead, and a held chord opens only the row it stops on.\n- **Running subagents draw their own orb.**\n- **The browser runs Chromium 154.** It downloads once on first launch.\n- **Agents hide review sessions by default.**\n\n### Fixed\n\n- **A question card keeps its answers** when you switch session and\n  come back.\n- **The composer keeps focus while an agent drives the browser.**\n- **⇧⏎ in a long draft scrolls the new line into view.**\n- **Command colour goes once the command is deleted.**\n- **Long sessions no longer wobble** while older turns load.\n- **Paired keys in shortcut hints**, like `[ ]`, no longer touch.",
+  "pub_date": "2026-10-01T14:25:41.867Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXN0SWFHMU9kRUtHNGNWOEh1cE5iY0pKTWhXa2Y0NjRUVXRXRjVzTGhSeVNwNU5FMHdWeWV3UDBYKzYzSlRJQitETzhHQ2FNd1I1UlNKQkFIR0tNV2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNzgzNzM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjR5azRDb0JpYWROYXAzWjNTdS9NK25rUWc2NDVBUnl6a0p4MGQzQ1Z3ZG9xTnF2dVFpV1o4M3A1bU0vSURsSTBrTDlrUWlPejF0UGVZQ1VhQ25yZURnPT0K",
-      "url": "https://downloads.drayhq.com/v0.25.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJIUFJ1OWpxbUZlQVRpQ1lrZHNCV2x1all3ZUNSUzE0S1ltSDRpcjF4eVRIREpsZkJyUnZvTThtbkhjaGJGVDB0LzhxekpnY1ZQclpTNTNrT0ZYUVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODY0NzMwCWZpbGU6RHJheS5hcHAudGFyLmd6Ckd2V2xreW1odGRYYWgzckhXTmJEV3JFT2c0L1VYLzNRTml4eHBFdEhYWUhXNXBVTTV3bXd0YnZCUVphc3I5ZEZhODU1T1VBVHNFVkZSSjNLTWJvVEF3PT0K",
+      "url": "https://downloads.drayhq.com/v0.26.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXN0SWFHMU9kRUtHNGNWOEh1cE5iY0pKTWhXa2Y0NjRUVXRXRjVzTGhSeVNwNU5FMHdWeWV3UDBYKzYzSlRJQitETzhHQ2FNd1I1UlNKQkFIR0tNV2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNzgzNzM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjR5azRDb0JpYWROYXAzWjNTdS9NK25rUWc2NDVBUnl6a0p4MGQzQ1Z3ZG9xTnF2dVFpV1o4M3A1bU0vSURsSTBrTDlrUWlPejF0UGVZQ1VhQ25yZURnPT0K",
-      "url": "https://downloads.drayhq.com/v0.25.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJIUFJ1OWpxbUZlQVRpQ1lrZHNCV2x1all3ZUNSUzE0S1ltSDRpcjF4eVRIREpsZkJyUnZvTThtbkhjaGJGVDB0LzhxekpnY1ZQclpTNTNrT0ZYUVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODY0NzMwCWZpbGU6RHJheS5hcHAudGFyLmd6Ckd2V2xreW1odGRYYWgzckhXTmJEV3JFT2c0L1VYLzNRTml4eHBFdEhYWUhXNXBVTTV3bXd0YnZCUVphc3I5ZEZhODU1T1VBVHNFVkZSSjNLTWJvVEF3PT0K",
+      "url": "https://downloads.drayhq.com/v0.26.0/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXN0SWFHMU9kRUtHNGNWOEh1cE5iY0pKTWhXa2Y0NjRUVXRXRjVzTGhSeVNwNU5FMHdWeWV3UDBYKzYzSlRJQitETzhHQ2FNd1I1UlNKQkFIR0tNV2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNzgzNzM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjR5azRDb0JpYWROYXAzWjNTdS9NK25rUWc2NDVBUnl6a0p4MGQzQ1Z3ZG9xTnF2dVFpV1o4M3A1bU0vSURsSTBrTDlrUWlPejF0UGVZQ1VhQ25yZURnPT0K",
-      "url": "https://downloads.drayhq.com/v0.25.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJIUFJ1OWpxbUZlQVRpQ1lrZHNCV2x1all3ZUNSUzE0S1ltSDRpcjF4eVRIREpsZkJyUnZvTThtbkhjaGJGVDB0LzhxekpnY1ZQclpTNTNrT0ZYUVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODY0NzMwCWZpbGU6RHJheS5hcHAudGFyLmd6Ckd2V2xreW1odGRYYWgzckhXTmJEV3JFT2c0L1VYLzNRTml4eHBFdEhYWUhXNXBVTTV3bXd0YnZCUVphc3I5ZEZhODU1T1VBVHNFVkZSSjNLTWJvVEF3PT0K",
+      "url": "https://downloads.drayhq.com/v0.26.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXN0SWFHMU9kRUtHNGNWOEh1cE5iY0pKTWhXa2Y0NjRUVXRXRjVzTGhSeVNwNU5FMHdWeWV3UDBYKzYzSlRJQitETzhHQ2FNd1I1UlNKQkFIR0tNV2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNzgzNzM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjR5azRDb0JpYWROYXAzWjNTdS9NK25rUWc2NDVBUnl6a0p4MGQzQ1Z3ZG9xTnF2dVFpV1o4M3A1bU0vSURsSTBrTDlrUWlPejF0UGVZQ1VhQ25yZURnPT0K",
-      "url": "https://downloads.drayhq.com/v0.25.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJIUFJ1OWpxbUZlQVRpQ1lrZHNCV2x1all3ZUNSUzE0S1ltSDRpcjF4eVRIREpsZkJyUnZvTThtbkhjaGJGVDB0LzhxekpnY1ZQclpTNTNrT0ZYUVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODY0NzMwCWZpbGU6RHJheS5hcHAudGFyLmd6Ckd2V2xreW1odGRYYWgzckhXTmJEV3JFT2c0L1VYLzNRTml4eHBFdEhYWUhXNXBVTTV3bXd0YnZCUVphc3I5ZEZhODU1T1VBVHNFVkZSSjNLTWJvVEF3PT0K",
+      "url": "https://downloads.drayhq.com/v0.26.0/Dray_universal.app.tar.gz"
     }
   }
 }
