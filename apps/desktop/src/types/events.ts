@@ -1553,6 +1553,14 @@ worktreeName: string | null,
  */
 worktreeRemoved: boolean, title: string, 
 /**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
+/**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
  */
@@ -1684,6 +1692,14 @@ worktreeName: string | null,
  * whatever else is going on in it, not this session's work.
  */
 worktreeRemoved: boolean, title: string, 
+/**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
 /**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.

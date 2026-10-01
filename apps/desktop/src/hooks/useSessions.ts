@@ -796,6 +796,7 @@ const handleSendMsg = async (
       // overwrites it again once generation lands, so this only has to be
       // better than an empty header for the seconds in between.
       title: message.trim().replace(/\n/g, " ").slice(0, 60),
+      titleLocked: false,
       model: modelId,
       effort,
       permissionMode: stanceFor(harness, permissionMode),

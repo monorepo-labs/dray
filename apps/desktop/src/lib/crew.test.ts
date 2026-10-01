@@ -16,6 +16,7 @@ const item = (
   worktreeName: null,
   worktreeRemoved: false,
   title: sessionId,
+  titleLocked: false,
   model: "opus",
   effort: null,
   permissionMode: "auto",

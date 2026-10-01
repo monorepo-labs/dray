@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import { Check } from "lucide-react";
+import { useRef, useState } from "react";
 
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,6 +47,12 @@ export default function SessionHeader({
   // makes the check say something that stays true — including for a write that
   // resolves after the reader has moved on.
   const [copiedPath, copy] = useCopied();
+  // The session being renamed rather than a flag, for `copiedPath`'s reason:
+  // this header is reused, and a flag would open the next session in edit.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  // Drawn until `session_title` brings it back, or the old title flashes in
+  // the gap between the field closing and the event landing.
+  const [saved, setSaved] = useState<{ sessionId: string; title: string } | null>(null);
 
   if (standIn || !session) {
     return (
@@ -62,6 +70,7 @@ export default function SessionHeader({
   // a thing to read, a path is a thing to paste into a terminal, and a
   // worktree session's two differ.
   const cwd = session.cwd;
+  const title = saved?.sessionId === session.sessionId ? saved.title : session.title;
   const copied = copiedPath === cwd;
 
   return (
@@ -92,7 +101,30 @@ export default function SessionHeader({
           </>
         )}
 
-        <span className="truncate font-medium text-foreground">{session.title}</span>
+        {renaming === session.sessionId ? (
+          <TitleInput
+            title={title}
+            onSave={(next) => {
+              const { sessionId } = session;
+              setSaved({ sessionId, title: next });
+              invoke("rename_session", { sessionId, title: next }).catch((e) => {
+                console.error("rename failed", e);
+                setSaved(null);
+              });
+            }}
+            onDone={() => setRenaming(null)}
+          />
+        ) : (
+          // Out of the drag region: a double-click there zooms the window.
+          <span
+            data-tauri-drag-region="false"
+            onDoubleClick={() => setRenaming(session.sessionId)}
+            // Room for the caret the field draws, so swapping in shifts nothing.
+            className="truncate pr-0.5 font-medium text-foreground"
+          >
+            {title}
+          </span>
+        )}
       </span>
 
       {branch && (
@@ -122,5 +154,67 @@ export default function SessionHeader({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+/// The title being renamed. Enter or blur saves, Escape cancels, and an empty
+/// or unchanged title saves nothing.
+function TitleInput({
+  title,
+  onSave,
+  onDone,
+}: {
+  title: string;
+  onSave: (title: string) => void;
+  onDone: () => void;
+}) {
+  // Escape unmounts the field, and a blur fired on the way out would otherwise
+  // save what Escape meant to throw away.
+  const done = useRef(false);
+  const finish = (value: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    const next = value?.trim();
+    if (next && next !== title) onSave(next);
+    onDone();
+  };
+
+  const [value, setValue] = useState(title);
+
+  // The field is sized by an invisible copy of its own text in the same grid
+  // cell, plus `pr-0.5` for the caret — so it opens exactly as wide as the
+  // title it replaces, and never scrolls the text to fit the caret.
+  return (
+    <span className="inline-grid min-w-0 max-w-full grid-cols-[minmax(0,max-content)] font-medium text-foreground">
+      <span
+        aria-hidden
+        className="invisible col-start-1 row-start-1 overflow-hidden whitespace-pre pr-0.5"
+      >
+        {value}
+      </span>
+      <input
+        autoFocus
+        // Or its default 20-character width props the track open.
+        size={1}
+        value={value}
+        onChange={(e) => setValue(e.currentTarget.value)}
+        aria-label="Session title"
+        // Caret at the end rather than the whole title selected: a rename is
+        // usually an edit, and one stray key would otherwise erase the lot.
+        onFocus={(e) => e.currentTarget.setSelectionRange(title.length, title.length)}
+        onBlur={() => finish(value)}
+        onKeyDown={(e) => {
+          // Kept from the app's chords, and Escape from the window: unhandled,
+          // it takes a fullscreen window back to windowed.
+          e.stopPropagation();
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            finish(null);
+          }
+        }}
+        className="col-start-1 row-start-1 w-full min-w-0 bg-transparent outline-none"
+      />
+    </span>
   );
 }

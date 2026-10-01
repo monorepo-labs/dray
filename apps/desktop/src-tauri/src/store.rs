@@ -54,6 +54,13 @@ pub struct SessionIndexItem {
     #[serde(default)]
     pub worktree_removed: bool,
     pub title: String,
+    /// The reader renamed this session, so no generated title may replace it —
+    /// neither `title.rs`'s nor one a harness sends of its own (grok's
+    /// `session_info_update`), either of which can land after the rename.
+    ///
+    /// `#[serde(default)]`: an entry written before the field reads as unnamed.
+    #[serde(default)]
+    pub title_locked: bool,
     /// Remembered per session so switching between sessions restores the model
     /// the user last picked instead of resetting to a default.
     #[serde(default)]
@@ -581,6 +588,7 @@ impl SessionIndexItem {
             worktree_name: worktree_name.map(str::to_string),
             worktree_removed: false,
             title: title_from_prompt(first_prompt),
+            title_locked: false,
             model,
             effort,
             // Never set in memory; `encode_effort` mints it on the way to disk.
@@ -598,6 +606,14 @@ impl SessionIndexItem {
             hidden: false,
             unknown: Default::default(),
         }
+    }
+
+    /// Takes a generated title unless the reader has named this session.
+    pub fn take_generated_title(&mut self, title: &str) -> bool {
+        if !self.title_locked {
+            self.title = title.to_string();
+        }
+        !self.title_locked
     }
 
     /// The entry for a fork of `self`. Everything deciding *how* the agent runs
@@ -639,6 +655,8 @@ impl SessionIndexItem {
             // has one of its own and reads HEAD straight.
             worktree_removed: worktree_name.is_none() && self.worktree_removed,
             title: fork_title(&self.title),
+            // Inherited: a name the reader gave the conversation still names it.
+            title_locked: self.title_locked,
             model: self.model.clone(),
             effort: self.effort,
             // Never set in memory; `encode_effort` mints it on the way to disk.
@@ -1271,15 +1289,28 @@ pub async fn reset_in_progress_sessions() -> Result<()> {
     Ok(())
 }
 
-/// Replaces one entry's title. Returns the entry as written, or `None` if the
-/// id is unknown — a session deleted while its title was being generated.
+/// Replaces one entry's generated title. Returns the entry as written, or
+/// `None` if the id is unknown — a session deleted while its title was being
+/// generated — or the reader has renamed it, since their name wins.
 ///
 /// `modified` is left alone, like [`set_session_flags`]: it orders the sidebar,
 /// and a title landing seconds after the send would jump the session to the top
 /// of it for a reason the user never took.
 pub async fn set_session_title(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
+    let written = edit_item(session_id, |item| {
+        let took = item.take_generated_title(title);
+        (took.then(|| item.clone()), took)
+    })
+    .await?;
+    Ok(written.flatten())
+}
+
+/// The reader's own name for a session, locked against every generated title
+/// after it. `modified` is left alone for [`set_session_title`]'s reason.
+pub async fn rename_session(session_id: &str, title: &str) -> Result<Option<SessionIndexItem>> {
     update_item(session_id, |item| {
         item.title = title.to_string();
+        item.title_locked = true;
         item.clone()
     })
     .await
@@ -1936,6 +1967,7 @@ mod tests {
             "worktreeName": "calm-owl",
             "worktreeRemoved": true,
             "title": "Add the issue panel (fork)",
+            "titleLocked": true,
             "model": "gpt56_sol",
             "effort": "xhigh",
             "permissionMode": "plan",
@@ -2294,6 +2326,34 @@ mod tests {
             Harness::Grok.caps().fork_needs_cli,
             "its copy is a request, made on the child the first send spawns"
         );
+    }
+
+    /// A rename outlives every generated title landing after it, the fork
+    /// included — grok titles mid-turn and `title.rs` lands seconds late.
+    #[test]
+    fn a_renamed_session_keeps_its_name() {
+        let mut item = SessionIndexItem::new(
+            "s",
+            Harness::Grok,
+            "/p",
+            "/p",
+            None,
+            None,
+            "fix the login bug",
+            ModelId::new("grok"),
+            None,
+            ApprovalPolicy::Auto,
+            false,
+            None,
+        );
+        assert!(item.take_generated_title("Fix Login Bug"));
+        assert_eq!(item.title, "Fix Login Bug");
+
+        item.title = "Mine".into();
+        item.title_locked = true;
+        assert!(!item.take_generated_title("Something Else"));
+        assert_eq!(item.title, "Mine");
+        assert!(item.fork("f", None).title_locked);
     }
 
     /// Forking in place must not claim the parent's tree: `worktree_name` is what
