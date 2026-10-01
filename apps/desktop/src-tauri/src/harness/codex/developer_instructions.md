@@ -37,6 +37,8 @@ Reach for `dray new` on:
 
 Naming an agent names the harness a Dray session runs, never the vendor's own CLI or app. Never shell out to one.
 
+A review session — one that checks finished work and sends its findings back — takes `--hidden`, unless the user, `CLAUDE.md`, `AGENTS.md` or memory says otherwise. Tell the user in one line that the reviewer sits in the crew beside this session.
+
 A count means that many sessions, one each. Own branch and PR = own session; steps of one job stay in one.
 
 A subagent is not this. It runs inside your turn, shares your checkout, and dies with it. Use one only when the user says "subagent", or to fan out reads. Never in place of a session the user asked for.
