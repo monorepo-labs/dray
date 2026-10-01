@@ -32,11 +32,11 @@ use crate::{git, github, projects, store::get_home_app_dir};
 /// The fields a list row is read from. One string, since it is what `gh` takes
 /// and what the two callers below must not disagree about.
 const LIST_FIELDS: &str =
-    "number,title,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id";
+    "number,title,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,issueType";
 
 /// The list's fields plus what only an opened issue needs.
 const VIEW_FIELDS: &str =
-    "number,title,body,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,comments";
+    "number,title,body,url,state,assignees,author,labels,closedByPullRequestsReferences,createdAt,updatedAt,id,issueType,comments";
 
 /// Whose `gh` this is, cached for the process.
 ///
@@ -191,11 +191,19 @@ pub async fn list_issues(
     // for outright is worse than the default order they can see.
     let text = query.text.as_deref().map(str::trim).unwrap_or_default();
 
-    let search = if names_own_sort(text) {
+    let mut search = if names_own_sort(text) {
         text.to_string()
     } else {
         format!("{text} sort:created-desc").trim().to_string()
     };
+
+    // `gh issue list` has no type flag, so it rides the search like the order
+    // does. Quoted for names holding a space; `type:` here is the issue type,
+    // not issue-vs-PR, since the list already reads issues alone (measured).
+    let kind = query.issue_type.as_deref().unwrap_or_default().replace('"', "");
+    if !kind.is_empty() {
+        search.push_str(&format!(" type:\"{kind}\""));
+    }
 
     let mut args = vec![
         "issue",
@@ -337,6 +345,10 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
 /// and reading them is a different query against a different object.
 pub async fn list_filters(repo: Option<&str>) -> Result<IssueFilters, IssueUnavailable> {
     let repos = repos_of_projects().await;
+    let (labels, issue_types) = match repo.filter(|repo| !repo.is_empty()) {
+        Some(repo) => tokio::join!(labels_of(repo), types_of(repo)),
+        None => (Vec::new(), Vec::new()),
+    };
 
     Ok(IssueFilters {
         team_states: repos.iter().map(|repo| (repo.clone(), states())).collect(),
@@ -348,10 +360,76 @@ pub async fn list_filters(repo: Option<&str>) -> Result<IssueFilters, IssueUnava
             })
             .collect(),
         projects: Vec::new(),
-        labels: match repo.filter(|repo| !repo.is_empty()) {
-            Some(repo) => labels_of(repo).await,
-            None => Vec::new(),
-        },
+        labels,
+        issue_types,
+    })
+}
+
+/// The issue types a repository offers, enabled ones only, in GitHub's order.
+///
+/// Asked of the repository rather than its org, since that answers `null` for a
+/// personal repository instead of failing, and needs no owner lookup. Best
+/// effort for the labels' reason: a failure costs the menu, not the page.
+async fn types_of(repo: &str) -> Vec<IssueLabel> {
+    let (Some((owner, name)), Ok(dir)) = (repo.split_once('/'), neutral_dir().await) else {
+        return Vec::new();
+    };
+
+    let out = run(
+        &dir,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            "query=query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issueTypes(first: 25) { nodes { name color isEnabled } } } }",
+            "-f",
+            &format!("owner={owner}"),
+            "-f",
+            &format!("name={name}"),
+        ],
+    )
+    .await;
+
+    let body = match out.and_then(|out| parse(&out)) {
+        Ok(body) => body,
+        Err(e) => {
+            eprintln!("[github issue types {repo}] {e:?}");
+            return Vec::new();
+        }
+    };
+
+    map_issue_types(&body)
+}
+
+fn map_issue_types(body: &Value) -> Vec<IssueLabel> {
+    body.pointer("/data/repository/issueTypes/nodes")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|node| node.get("isEnabled").and_then(Value::as_bool) != Some(false))
+        .filter_map(map_issue_type)
+        .collect()
+}
+
+/// A type as a name and a colour. GitHub names its colours from a fixed set
+/// (`RED`, `BLUE`…) rather than hex, so they are mapped onto Primer's own.
+fn map_issue_type(node: &Value) -> Option<IssueLabel> {
+    let name = optional(node, "name")?;
+    let color = match optional(node, "color").as_deref() {
+        Some("BLUE") => "#0969da",
+        Some("GREEN") => "#1a7f37",
+        Some("YELLOW") => "#9a6700",
+        Some("ORANGE") => "#bc4c00",
+        Some("RED") => "#d1242f",
+        Some("PINK") => "#bf3989",
+        Some("PURPLE") => "#8250df",
+        _ => "#59636e",
+    };
+
+    Some(IssueLabel {
+        name,
+        color: color.to_string(),
     })
 }
 
@@ -501,6 +579,7 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),
+        issue_type: node.get("issueType").and_then(map_issue_type),
     })
 }
 
@@ -746,5 +825,26 @@ mod tests {
 
         let open = serde_json::json!({ "state": "OPEN" });
         assert_eq!(map_state(&open).id, OPEN_ID);
+    }
+
+    /// Shapes measured against `monorepo-labs/dray` and a personal repository,
+    /// which answers `issueTypes: null` rather than an error.
+    #[test]
+    fn issue_types_are_the_enabled_ones_in_hex() {
+        let body = serde_json::json!({ "data": { "repository": { "issueTypes": { "nodes": [
+            { "name": "Bug", "color": "RED", "isEnabled": true },
+            { "name": "Epic", "color": "PURPLE", "isEnabled": false },
+            { "name": "Odd", "color": "TEAL", "isEnabled": true },
+        ] } } } });
+        let types = map_issue_types(&body);
+        assert_eq!(types.len(), 2);
+        assert_eq!((types[0].name.as_str(), types[0].color.as_str()), ("Bug", "#d1242f"));
+        assert_eq!(types[1].color, "#59636e");
+
+        let personal = serde_json::json!({ "data": { "repository": { "issueTypes": null } } });
+        assert!(map_issue_types(&personal).is_empty());
+
+        let row = serde_json::json!({ "number": 1, "issueType": null });
+        assert_eq!(map_issue(&row, "a/b").unwrap().issue_type, None);
     }
 }

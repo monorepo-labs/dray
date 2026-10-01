@@ -4,6 +4,7 @@ import {
   useState,
   useSyncExternalStore,
   type MutableRefObject,
+  type ReactNode,
   type SyntheticEvent,
 } from "react";
 
@@ -15,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Shapes,
   SlidersHorizontal,
   Tag,
 } from "lucide-react";
@@ -333,11 +335,19 @@ export default function IssuesView({
               <RepoMenu
                 repo={query.teamId}
                 repos={filters?.teams ?? []}
-                // The label goes with it: labels belong to the repository, so a
-                // pick carried across would narrow the new list by a name it
-                // has never heard of and draw nothing, with a lit control as
-                // the only clue why.
-                onPick={(teamId) => set({ teamId, label: null })}
+                // The label and type go with it: both belong to the
+                // repository, so a pick carried across would narrow the new
+                // list by a name it has never heard of and draw nothing, with a
+                // lit control as the only clue why.
+                onPick={(teamId) => set({ teamId, label: null, issueType: null })}
+              />
+              <LabelMenu
+                title="Type"
+                anyText="Any type"
+                icon={<Shapes className="size-3.5" />}
+                label={query.issueType}
+                labels={filters?.issueTypes ?? []}
+                onPick={(issueType) => set({ issueType })}
               />
               <LabelMenu
                 label={query.label}
@@ -903,11 +913,19 @@ function RepoMenu({
 /// is on without saying which. The labels are the repository's own, so this
 /// draws nothing at all where that read has not landed or the repository has
 /// none — a trigger opening onto one row that clears nothing is no control.
+///
+/// Issue types are drawn by this same menu: a type is a name and a colour too.
 function LabelMenu({
+  title = "Label",
+  anyText = "All labels",
+  icon = <Tag className="size-3.5" />,
   label,
   labels,
   onPick,
 }: {
+  title?: string;
+  anyText?: string;
+  icon?: ReactNode;
   label: string | null;
   labels: IssueLabel[];
   onPick: (label: string | null) => void;
@@ -928,16 +946,16 @@ function LabelMenu({
               : "text-muted-foreground hover:text-foreground",
           )}
         >
-          {picked ? <IssueLabelChip label={picked} dot /> : <Tag className="size-3.5" />}
-          <span className="max-w-40 truncate">{label ?? "Label"}</span>
+          {picked ? <IssueLabelChip label={picked} dot /> : icon}
+          <span className="max-w-40 truncate">{label ?? title}</span>
           <ChevronDown className="size-3 opacity-60" />
         </button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="max-h-96 w-56 overflow-y-auto">
-        <DropdownMenuLabel>Label</DropdownMenuLabel>
+        <DropdownMenuLabel>{title}</DropdownMenuLabel>
         <DropdownMenuCheckboxItem checked={!label} onCheckedChange={() => onPick(null)}>
-          All labels
+          {anyText}
         </DropdownMenuCheckboxItem>
         {labels.map((option) => (
           <DropdownMenuCheckboxItem
@@ -1220,6 +1238,14 @@ function IssueRow({
         </span>
       )}
 
+      {/* The type as dot and name rather than a chip, so a `Bug` type beside a
+          `bug` label reads as two facts and not one drawn twice. */}
+      {issue.issueType && (
+        <span className="hidden shrink-0 items-center gap-1.5 text-muted-foreground lg:inline-flex">
+          <IssueLabelChip label={issue.issueType} dot />
+          {issue.issueType.name}
+        </span>
+      )}
       {/* The first few labels, in their own colours. A label is most of what
           a GitHub issue says about itself before you open it — bug, docs,
           good first issue — and the panel beside this one already draws them,

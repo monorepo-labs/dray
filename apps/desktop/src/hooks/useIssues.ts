@@ -70,6 +70,7 @@ const keyOf = (query: IssueQuery) =>
     teamId: query.teamId ?? "",
     projectId: query.projectId ?? "",
     label: query.label ?? "",
+    issueType: query.issueType ?? "",
     settled: query.settled,
   });
 
@@ -458,6 +459,7 @@ const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
   teamId: tracker === "github" ? readIssueRepo() : null,
   projectId: null,
   label: null,
+  issueType: null,
   settled: false,
 });
 

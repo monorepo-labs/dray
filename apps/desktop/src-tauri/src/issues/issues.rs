@@ -241,6 +241,10 @@ pub struct Issue {
     /// whether anybody has started is the row asking to be clicked through.
     #[serde(default)]
     pub pull_requests: Vec<u32>,
+    /// GitHub's issue type (Bug, Feature, Task…). A name and a colour, so it
+    /// reuses [`IssueLabel`]. Always `None` on Linear, which has no such field.
+    #[serde(default)]
+    pub issue_type: Option<IssueLabel>,
 }
 
 impl Issue {
@@ -327,6 +331,8 @@ pub struct IssueQuery {
     /// id, since that is what `gh issue list --label` takes and what a label is
     /// addressed by on GitHub.
     pub label: Option<String>,
+    /// One issue type's name, or `None` for any. GitHub alone.
+    pub issue_type: Option<String>,
     /// Which half of the workspace to read: the unfinished issues, or the done
     /// and cancelled ones.
     ///
@@ -355,6 +361,11 @@ pub struct IssueFilters {
     /// is simply not drawn.
     #[serde(default)]
     pub labels: Vec<IssueLabel>,
+    /// The issue types the repository's org defines, read beside the labels
+    /// and for the same reason. Empty for Linear, a personal repository, or an
+    /// org with none, and the menu is not drawn then.
+    #[serde(default)]
+    pub issue_types: Vec<IssueLabel>,
     /// Every team's workflow states, keyed by team **key** (`DRA`) — what a
     /// row carries, where `teams` above is keyed by UUID.
     ///
