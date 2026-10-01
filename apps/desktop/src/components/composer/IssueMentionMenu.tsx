@@ -32,7 +32,8 @@ export default function IssueMentionMenu({
   issues: Issue[];
   activeIndex: number;
   onPick: (issue: Issue, keepOpen: boolean) => void;
-  /// Identifiers already tagged in the prompt. Picking one again removes it.
+  /// Identifiers already tagged in the prompt, lowercased. Picking one again
+  /// removes it.
   tagged: Set<string>;
   onHover: (index: number) => void;
   bare?: boolean;
@@ -83,7 +84,7 @@ export default function IssueMentionMenu({
             {issue.tracker !== "github" && <IssuePriorityIcon priority={issue.priority} />}
             {/* The slot is held on every row once anything is tagged, so the
                 priority column stays one column. */}
-            {tagged.has(issue.identifier) ? (
+            {tagged.has(issue.identifier.toLowerCase()) ? (
               <Check className="size-3.5 text-muted-foreground" aria-label="Tagged" />
             ) : (
               tagged.size > 0 && <span className="size-3.5" />

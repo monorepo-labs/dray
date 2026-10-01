@@ -317,11 +317,18 @@ export default function ChatInput({
   // can take one back out. Read through the chip pass, which is what knows where
   // a remembered title ends. The token being typed is skipped: `#DRA-53` typed in
   // full is already a tag to the parser, and it is the query, not a pick.
+  // Lowercased, since a hand-typed `#dra-53` names the same issue as the row.
   const taggedIssues = useMemo(() => {
     if (!issue) return [];
     return placeSegments(highlightSegments(message), null).flatMap(({ segment, start }) =>
       segment.kind === "issue" && start !== issue.start
-        ? [{ identifier: (segment.inner ?? segment.text).slice(1), start, end: start + segment.text.length }]
+        ? [
+            {
+              identifier: (segment.inner ?? segment.text).slice(1).toLowerCase(),
+              start,
+              end: start + segment.text.length,
+            },
+          ]
         : [],
     );
   }, [message, issue?.start]);
@@ -426,7 +433,7 @@ export default function ChatInput({
   const pickIssue = (picked: Issue, keepOpen = false) => {
     if (!issue) return;
 
-    const placed = taggedIssues.filter((tag) => tag.identifier === picked.identifier);
+    const placed = taggedIssues.filter((tag) => tag.identifier === picked.identifier.toLowerCase());
     let next = { text: message, caret };
 
     if (placed.length > 0) {
