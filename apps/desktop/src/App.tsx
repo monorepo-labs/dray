@@ -1555,11 +1555,13 @@ function App() {
     setPendingStep(id);
     run.timer = window.setTimeout(() => commitStepRef.current(id), STEP_RUN_MS);
   };
-  // Any other move — a click, a notice, ⌘N — abandons a run in flight.
-  useEffect(() => {
+  // Any other move — a click, a notice, ⌘N — abandons a run in flight. Called
+  // from `goToSession` too, since a click on the open session moves nothing.
+  const cancelStep = () => {
     clearTimeout(stepRun.current.timer);
     setPendingStep(null);
-  }, [selectedSessionId]);
+  };
+  useEffect(cancelStep, [selectedSessionId]);
   // After a pause, so a held chord does not read every row it passes. Two
   // presses either way, wrap and top hold included.
   useEffect(() => {
@@ -1702,6 +1704,7 @@ function App() {
   const goToSession = (go: () => void) => {
     setIssuesOpen(false);
     closeSettings();
+    cancelStep();
     go();
   };
 

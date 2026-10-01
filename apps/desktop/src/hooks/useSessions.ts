@@ -2269,12 +2269,15 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
       // Never viewed since load counts as idle.
       return neighbour(s) || now - viewed(s.sessionId) < IDLE_EVICT_MS;
     });
-    if (kept.length > LOADED_CAP) {
+    // Neighbours sit outside the cap, or warming four would drop four the
+    // reader opened.
+    const counted = kept.filter((s) => !neighbour(s));
+    if (counted.length > LOADED_CAP) {
       const drop = new Set(
-        kept
-          .filter((s) => !held(s) && !neighbour(s))
+        counted
+          .filter((s) => !held(s))
           .sort((a, b) => viewed(a.sessionId) - viewed(b.sessionId))
-          .slice(0, kept.length - LOADED_CAP)
+          .slice(0, counted.length - LOADED_CAP)
           .map((s) => s.sessionId),
       );
       kept = kept.filter((s) => !drop.has(s.sessionId));
