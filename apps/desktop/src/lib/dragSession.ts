@@ -77,6 +77,7 @@ export function startSessionDrag(
   let live = false;
 
   const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return;
     if (!live) {
       if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < THRESHOLD_PX) return;
       live = true;
@@ -90,9 +91,10 @@ export function startSessionDrag(
   };
 
   const end = (ev: PointerEvent) => {
-    el.removeEventListener("pointermove", move);
-    el.removeEventListener("pointerup", end);
-    el.removeEventListener("pointercancel", end);
+    if (ev.pointerId !== pointerId) return;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
     if (!live) return;
 
     el.releasePointerCapture(pointerId);
@@ -110,7 +112,10 @@ export function startSessionDrag(
     if (over && over.sessionId !== sessionId) onDrop(over, sessionId);
   };
 
-  el.addEventListener("pointermove", move);
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", end);
+  // On the window, not the row: capture only starts past the threshold, so a
+  // press that leaves a short pane header first would release somewhere the
+  // row never hears, and these listeners would outlive the press.
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }

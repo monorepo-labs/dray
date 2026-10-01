@@ -2888,6 +2888,7 @@ function App() {
           groups={spaceGroups}
           onFocus={(id) => void handleSelectSessionIndexItem(id)}
           onClose={closeSessionPane}
+          onDrop={dropSession}
           active={!issuesOpen && viewTab === "chat"}
           chat={paneChat}
         />
