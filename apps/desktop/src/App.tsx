@@ -225,6 +225,7 @@ function App() {
     deleteSession,
     removeWorktree,
     ensureLoaded,
+    setNeighbours,
     setOnScreen,
     setCrewSeen,
     paneState,
@@ -1519,9 +1520,33 @@ function App() {
     if (item.sessionId !== selectedSessionId) {
       void handleSelectSessionIndexItem(item.sessionId);
     }
+    return item.sessionId;
   };
+  // Where ⌘⇧↑/↓ last landed. Neighbours are warmed only while the selection is
+  // still there, so a click elsewhere lets them go and a mouse open warms none.
+  const [steppedTo, setSteppedTo] = useState<string | null>(null);
   const stepSession = (delta: number) =>
-    stepThrough(ordered.map((i) => [i]), delta);
+    setSteppedTo(stepThrough(ordered.map((i) => [i]), delta) ?? null);
+  // After a pause, so a held chord does not read every row it passes. The pair
+  // is where the next press lands either way, wrap and top hold included.
+  useEffect(() => {
+    if (!steppedTo || steppedTo !== selectedSessionId) {
+      setNeighbours([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const at = ordered.findIndex((i) => i.sessionId === steppedTo);
+      if (at === -1) return setNeighbours([]);
+      setNeighbours(
+        [ordered[(at + 1) % ordered.length], ordered[Math.max(at - 1, 0)]]
+          .map((i) => i.sessionId)
+          .filter((id) => id !== steppedTo),
+      );
+    }, 150);
+    return () => clearTimeout(timer);
+    // `setNeighbours` is rebuilt every render; these are what move the pair.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steppedTo, selectedSessionId, ordered]);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
