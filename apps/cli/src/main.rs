@@ -607,7 +607,7 @@ fn act(
         "zoom" => A::Zoom {
             percent: match word("zoom <percent|reset>")?.as_str() {
                 "reset" => 100,
-                p => p.trim_end_matches('%').parse().map_err(|_| "zoom <percent|reset>")?,
+                p => p.strip_suffix('%').unwrap_or(p).parse().map_err(|_| "zoom <percent|reset>")?,
             },
         },
         other => return Err(format!("browser {other}? {BROWSER_VERBS}")),
@@ -1043,6 +1043,7 @@ mod tests {
         assert!(matches!(action(&["zoom", "150%"]), Ok(BrowserAction::Zoom { percent: 150 })));
         assert!(matches!(action(&["zoom", "reset"]), Ok(BrowserAction::Zoom { percent: 100 })));
         assert!(action(&["zoom", "big"]).is_err());
+        assert!(action(&["zoom", "150%%"]).is_err());
         assert!(action(&["find", "text", "Submit"]).is_err());
         assert!(action(&["frob"]).is_err());
         // What clap used to refuse: a word nothing reads, a flag of another verb.
