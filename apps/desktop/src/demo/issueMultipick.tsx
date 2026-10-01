@@ -23,6 +23,7 @@ function row(n: number, title: string, kind: Issue["state"]["kind"]): Issue {
     assignee: null,
     author: null,
     labels: [],
+    issueType: null,
     team: "DRA",
     project: null,
     createdAt: "2026-09-05T10:30:02Z",
