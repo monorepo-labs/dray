@@ -2156,8 +2156,8 @@ const ensureLoaded = async (sessionId: string, touch = true) => {
   }
 };
 
-/// The sessions one ⌘⇧↑/↓ press away, warmed so the press lands on a loaded
-/// transcript. Held past the count cap and the idle clock while adjacent, never
+/// The sessions up to two ⌘⇧↑/↓ presses away, warmed so a press lands on a
+/// loaded transcript. Held past the count cap and the idle clock while adjacent, never
 /// stamped as touched, so they cannot push out a session the reader opened and
 /// one that stops being adjacent goes at the next sweep. Mid-turn is skipped.
 const neighboursRef = useRef<ReadonlySet<string>>(new Set());

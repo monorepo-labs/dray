@@ -1527,8 +1527,8 @@ function App() {
   const [steppedTo, setSteppedTo] = useState<string | null>(null);
   const stepSession = (delta: number) =>
     setSteppedTo(stepThrough(ordered.map((i) => [i]), delta) ?? null);
-  // After a pause, so a held chord does not read every row it passes. The pair
-  // is where the next press lands either way, wrap and top hold included.
+  // After a pause, so a held chord does not read every row it passes. Two
+  // presses either way, wrap and top hold included.
   useEffect(() => {
     if (!steppedTo || steppedTo !== selectedSessionId) {
       setNeighbours([]);
@@ -1538,8 +1538,8 @@ function App() {
       const at = ordered.findIndex((i) => i.sessionId === steppedTo);
       if (at === -1) return setNeighbours([]);
       setNeighbours(
-        [ordered[(at + 1) % ordered.length], ordered[Math.max(at - 1, 0)]]
-          .map((i) => i.sessionId)
+        [1, 2, -1, -2]
+          .map((d) => ordered[d > 0 ? (at + d) % ordered.length : Math.max(at + d, 0)].sessionId)
           .filter((id) => id !== steppedTo),
       );
     }, 150);
