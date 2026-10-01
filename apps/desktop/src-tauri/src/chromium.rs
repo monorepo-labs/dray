@@ -102,9 +102,13 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
     let _ = app.emit("chromium_status", status);
 }
 
-/// `~/.dray/cef/`, holding one version directory at a time.
+/// `~/.dray/cef/` (`cef-dev/` under `tauri dev`), one version directory at a time.
 fn cef_dir() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join(".dray/cef")
+    // Split like the profile root: the sweep deletes every version but its
+    // own, so a dev build on a newer CEF would take the release app's
+    // framework out from under its running helpers.
+    let dir = if tauri::is_dev() { ".dray/cef-dev" } else { ".dray/cef" };
+    std::env::home_dir().unwrap_or_default().join(dir)
 }
 
 fn version_dir() -> PathBuf {
@@ -365,7 +369,7 @@ mod tests {
     #[test]
     fn version_is_the_crate_build_prefix() {
         assert!(BUILD.starts_with(VERSION));
-        assert!(version_dir().ends_with("cef/154.0.32"));
+        assert_eq!(version_dir().file_name().unwrap(), VERSION);
     }
 
     #[test]
