@@ -347,7 +347,9 @@ function App() {
       created: new Date().toISOString(),
     });
     if (!saved) return;
-    writeDraft(null, "");
+    // Only what was saved leaves: text typed while the write was out stays.
+    const now = readDraft(null);
+    writeDraft(null, now.startsWith(prompt) ? now.slice(prompt.length).trimStart() : now);
     pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
   };
   const draftChord = useChord("composer.draft");
