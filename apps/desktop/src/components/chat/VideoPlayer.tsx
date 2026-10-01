@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /// WebKit's washes the whole frame grey on hover, from a shadow root nothing
 /// here can style, and a video being checked for what changed on screen is
 /// the last thing to draw over. Controls carry their own backing instead.
-export default function VideoPlayer({ src }: { src: string }) {
+export default function VideoPlayer({ src, className }: { src: string; className?: string }) {
   const video = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -41,7 +41,7 @@ export default function VideoPlayer({ src }: { src: string }) {
         onPause={() => setPlaying(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-        className="block max-h-96 max-w-full cursor-pointer"
+        className={cn("block max-h-96 max-w-full cursor-pointer", className)}
       />
       {!playing && (
         <button
