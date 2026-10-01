@@ -183,7 +183,27 @@ export default function Chat({
   // from one the pin's own write queued — see `onScroll`. Every pin goes
   // through `pin` so the two cannot disagree.
   const pinnedTop = useRef(-1);
+
+  // Pads the top so the newest turn starts on a whole pixel. WebKit scrolls in
+  // whole pixels, so every backfill step mounting a fractional height above put
+  // the turns on screen a different fraction off the grid, and the rounding
+  // moved them a pixel per step — a wobble for as long as backfill ran. Measured
+  // in an offscreen WKWebView: snapping to device pixels instead still wobbles.
+  // The pad rides the node, since the empty state remounts it.
+  const snapToPixel = () => {
+    const content = contentRef.current;
+    const turns = content?.querySelectorAll<HTMLElement>("[data-turn]");
+    const last = turns?.[turns.length - 1];
+    if (!content || !last) return;
+    const held = Number(content.dataset.snap ?? 0);
+    const offset = last.getBoundingClientRect().top - content.getBoundingClientRect().top - held;
+    const extra = Math.max(0, Math.ceil(offset - 1e-3) - offset);
+    if (Math.abs(extra - held) < 1e-3) return;
+    content.dataset.snap = String(extra);
+    content.style.paddingTop = `calc(1.5rem + ${extra}px)`;
+  };
   const pin = (el: HTMLElement) => {
+    snapToPixel();
     el.scrollTop = el.scrollHeight;
     pinnedTop.current = el.scrollTop;
   };
@@ -407,6 +427,7 @@ export default function Chat({
     anchorBeforeStep.current = null;
     const el = scrollRef.current;
     if (!el) return;
+    snapToPixel();
     if (followRef.current) {
       pin(el);
     } else if (anchor) {
