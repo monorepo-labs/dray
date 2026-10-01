@@ -106,7 +106,8 @@ const REGION_LABELS: Record<Region, string> = {
   right: "Open on the right",
 };
 
-/// The same drops for a pane already in the grid, which goes nowhere new.
+/// The same drops for a pane already in a group on screen, which leaves where
+/// it sits. Only one in this grid swaps; one from another group replaces.
 const MOVE_LABELS: Record<Region, string> = {
   center: "Swap",
   top: "Move above",
@@ -133,7 +134,8 @@ export function dropLabel(
   const after = place(before, anchor, dropped, region);
   // A pane dropped where it already sits — onto the top of the pane below it.
   if (!after || JSON.stringify(after) === JSON.stringify(before)) return null;
-  return (before.flat().includes(dropped) ? MOVE_LABELS : REGION_LABELS)[region];
+  const moving = before.flat().includes(dropped) || (region !== "center" && !!groupOf(groups, dropped));
+  return (moving ? MOVE_LABELS : REGION_LABELS)[region];
 }
 
 /// Puts `dropped` on `anchor`'s pane at `region`: into the anchor's group in

@@ -68,6 +68,12 @@ describe("dropLabel", () => {
     expect(dropLabel([group(1, ["a"], ["b"])], "b", "a", "left")).toBeNull();
   });
 
+  it("says move for a row from another group, which leaves it", () => {
+    const groups = [group(1, ["a"], ["b"]), group(2, ["c"], ["d"])];
+    expect(dropLabel(groups, "a", "c", "right")).toBe("Move to the right");
+    expect(dropLabel(groups, "a", "c", "center")).toBe("Replace");
+  });
+
   it("opens whole on the empty view, whatever the region", () => {
     expect(dropLabel([], EMPTY_VIEW, "y", "center")).toBe("Open");
     expect(dropLabel([], EMPTY_VIEW, "y", "left")).toBe("Open");
