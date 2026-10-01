@@ -11,7 +11,13 @@ import type { IntegrationsView } from "@/types/events";
 /// read it now — the settings row, the issues page's own connect form, and the
 /// composer's placeholder — and a second copy per surface is a second answer to
 /// "are we connected" free to disagree with the first.
-export function useIntegrations(enabled: boolean) {
+export function useIntegrations(
+  enabled: boolean,
+  /// Called once a disconnect lands. Rust clears the project pins and filters
+  /// naming the workspace, and the app's copy of the projects has to hear of
+  /// it, or a reconnect revives pins the backend no longer holds.
+  onDisconnected?: () => void,
+) {
   const [integrations, setIntegrations] = useState<IntegrationsView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,19 +89,57 @@ export function useIntegrations(enabled: boolean) {
     }
   }, []);
 
-  const disconnect = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setIntegrations(await invoke<IntegrationsView>("disconnect_linear"));
-      // The other direction, and the same reason: a list read with the old key
-      // must not outlive it.
-      forgetIssues();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+  /// One write that answers with the whole view, busy while it runs and with
+  /// its refusal in `error`. `forget` is for writes that change which keys
+  /// exist, since every cached answer was read with one of them.
+  const write = useCallback(
+    async (command: string, args: Record<string, unknown>, forget: boolean) => {
+      setBusy(true);
+      setError(null);
+      try {
+        setIntegrations(await invoke<IntegrationsView>(command, args));
+        if (forget) forgetIssues();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  /// Forgets one Linear workspace — `null` for the default, which is the only
+  /// way to name one Linear never identified. The other direction from
+  /// `connect`, and the same reason: a list read with its key must not outlive
+  /// it.
+  const disconnect = useCallback(
+    async (workspace: string | null) => {
+      await write("disconnect_linear", { workspace }, true);
+      onDisconnected?.();
+    },
+    [write, onDisconnected],
+  );
+
+  /// What an unpinned project reads. Moves no key a list was read with, so the
+  /// caches stand: each is keyed by its workspace already.
+  const makeDefault = useCallback(
+    (workspace: string) => write("set_default_linear_workspace", { workspace }, false),
+    [write],
+  );
+
+  /// Pins every project in a Space to a workspace, or clears it with `null`.
+  const pinSpace = useCallback(
+    (space: string, workspace: string | null) =>
+      write("set_space_linear_workspace", { space, workspace }, false),
+    [write],
+  );
+
+  /// Re-reads the view, for a change made elsewhere that moves a Space's pin —
+  /// renaming a Space carries its pin in Rust, and nothing here saw it.
+  const reload = useCallback(() => {
+    invoke<IntegrationsView>("get_integrations")
+      .then(setIntegrations)
+      .catch((e) => console.error("[integrations]", e));
   }, []);
 
   return {
@@ -109,6 +153,9 @@ export function useIntegrations(enabled: boolean) {
     error,
     connect,
     disconnect,
+    makeDefault,
+    pinSpace,
+    reload,
     recheckGithub,
   };
 }

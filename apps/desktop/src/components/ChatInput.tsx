@@ -30,6 +30,7 @@ import { useHotkey } from "@/hooks/useHotkey";
 import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
+import type { RepoFilter } from "@/lib/linearWorkspace";
 import {
   canSwitchTracker,
   effectiveTracker,
@@ -77,6 +78,11 @@ type ChatInputProps = {
   /// worktree session mentions paths inside its tree — the CLI resolves `@path`
   /// against the directory it was spawned in, and those are the same one.
   cwd?: string | null;
+  /// The Linear workspace this session's project reads, which is what the `#`
+  /// picker lists. `null` for the default.
+  linearWorkspace?: string | null;
+  /// What this session's repo narrows the `#` picker to, if it saved a filter.
+  repoFilter?: RepoFilter | null;
   /// An issue tracker is connected, so `#` opens a picker. Drawn in the
   /// placeholder and nowhere else — the picker itself simply finds nothing
   /// without one.
@@ -224,6 +230,8 @@ export default function ChatInput({
   commands = [],
   commandsLoading = false,
   cwd = null,
+  linearWorkspace = null,
+  repoFilter = null,
   issuesConnected = false,
   issueTrackers = { linear: false, github: false },
   sessions = [],
@@ -310,7 +318,7 @@ export default function ChatInput({
     issues,
     loading: issuesLoading,
     emptyNote: issuesNote,
-  } = useIssueSearch(issue?.query ?? null, tracker, cwd);
+  } = useIssueSearch(issue?.query ?? null, tracker, cwd, linearWorkspace, repoFilter);
 
   // The fourth, and exclusive with the other three for the same reason again:
   // the caret sits in one token, and a token opening with `&` is none of them.

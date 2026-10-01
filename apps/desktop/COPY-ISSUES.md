@@ -179,6 +179,26 @@ two unrelated workspaces under one set of headings with no ordering meaning
 anything across them, since a Linear issue carries a priority and a GitHub one
 does not.
 
+**Workspace menu**, beside the filters, drawn only under Linear with **two or
+more workspaces** connected — Linear's mark and the workspace's name, filled
+like a scope chip
+
+> Workspace
+> {Acme}
+> {JangoAI}
+> Add workspace…
+
+The page opens on the workspace the composer's project reads, and this switches
+it for the visit only — it changes no pin, which is a Settings question. The
+last row opens Settings, since that is where a second key is pasted.
+
+**Work on it, from a workspace the new task's project does not read** — a tag
+carries no workspace and would resolve in the project's own, so the page says so
+instead of drafting a tag that links another issue
+
+> Could not start work
+> {ENG-12} is in {JangoAI}, but {jangoai-ios} reads {Acme}. Pin it to that workspace in Settings first.
+
 **Scope chips**
 
 > Assigned to me
@@ -204,12 +224,25 @@ there is a firehose, one repository's open issues is exactly the useful list.
 > Search issues
 
 **Filter menu** (behind the sliders icon; hidden entirely when there is nothing
-left to narrow by — a team or project list with one entry is not offered)
+left to narrow by — a team or project list with one entry is not offered, where
+one label still is, since narrowing to it drops every issue without it)
 
 > Team
 > All teams
 > Project
 > All projects
+> Labels
+> Any label
+
+Labels match **any** of those ticked, and the menu stays open between ticks.
+
+**Saving a repo's default**, below the rest, drawn only while the page is on the
+composer's repo's own workspace — the only one its team and labels mean
+anything in. Never a Linear project: those end, and a repo pinned to one reads
+empty a month later.
+
+> Save as default for {jangoai-ios}
+> Clear {jangoai-ios}'s default
 
 **Under GitHub this menu is not drawn at all.** Both of that tracker's controls
 stand on the row itself (below): the repository *is* the list rather than a
@@ -225,9 +258,9 @@ until one is picked, then that label's own colour as a dot beside its name
 
 Labels belong to the *repository*, so the options are re-read whenever the
 repository pick moves, and a repository pick clears the label with it. Drawn
-only where the repository has labels. Linear has labels too and is deliberately
-not offered them: its narrowings are team and project, and a third axis would be
-a control added to the tracker that needs it least.
+only where the repository has labels. Linear's labels live in the filter menu
+instead (Labels, above), several at once, since a repo pinned to a platform is
+most often pinned by label.
 
 **State switch**, on the left beside the scope chips, GitHub only — the same
 track-and-thumb switch the trackers use, with words rather than glyphs
@@ -333,7 +366,7 @@ this one stays a sentence and names what makes a project count
 
 **Failed read, above the list** (what was already read stays on screen)
 
-> Linear rejected the saved key. Disconnect it in Settings, then paste a new one.
+> Linear rejected the key saved for this workspace. Disconnect it in Settings, then add a new one.
 > Could not reach Linear.
 > No issue tracker connected.
 
@@ -400,6 +433,12 @@ that *does* have issues.
 > No open issues in this repository.
 > Nothing assigned to you.
 > No issue matches that.
+
+**Under a repo's saved filter** the last two say so, or the plain sentence would
+read as the workspace having nothing when it is the filter that is empty
+
+> Nothing assigned to you in this repo's filter.
+> No issue matches that in this repo's filter.
 
 Three different facts and four sentences, because collapsing them would leave
 the reader unable to tell a repository this app cannot find from one that simply
@@ -514,7 +553,7 @@ they could not be fetched:
 **Failed read**
 
 > Connect a tracker on the Issues page to see this issue.
-> Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.
+> Linear rejected the key saved for this workspace. Disconnect it in Settings, then add it again with a new key.
 > Could not reach Linear.
 
 The first names neither tracker, because this row can be either: a session
@@ -567,31 +606,87 @@ header would otherwise sit at "New session" over a list of issues.
 
 ---
 
-## Settings dialog
+## Settings dialog — Linear workspaces
 
-Drawn **only when something is connected** — connecting happens on the Issues
-page, and a settings row offering to connect something the reader has never seen
-is a row they cannot judge.
+Drawn **only when a workspace is connected** — the first one is connected on the
+Issues page, and a settings row offering to connect something the reader has
+never seen is a row they cannot judge. Every later one is added here, beside the
+list it adds to.
 
-**Label**
+**Heading**, with Linear's mark
 
-> Issue tracker
+> Linear workspaces
 
-**Subtext** — with Linear's mark beside it
+**Button**, at the heading's far end
 
-> {Acme}, as {Yogesh}
+> Add workspace
 
-**Button**
+**Which opens a field in place** — a key belongs to one workspace, so which one
+is added is whichever the key was made in, and the placeholder says so since
+there is no workspace picker to say it
 
+> lin_api_… from the workspace to add
+> Cancel
+> Connect
+
+The field's accessible name
+
+> Linear API key
+
+**Refused** — Linear answered with no workspace, which a personal key always has
+
+> Linear did not say which workspace that key belongs to.
+
+**One row per workspace**, the default first and marked
+
+> {Acme} Default
+> as {Yogesh}
+
+**A key Linear has not answered for** still lists, under what is known about it,
+since its row is where it is disconnected — including a default with no id,
+which Disconnect reaches by being the default
+
+> Linear has not answered for this key. Disconnect it, then add a new one.
+
+**Buttons** — the first only on a workspace that is not the default
+
+> Make default
 > Disconnect
 
-**Once pressed**, the row asks before it acts — the key is not recoverable from
-here, so taking it back means a trip to Linear for a new one.
+**Once Disconnect is pressed**, the row asks before it acts — the key is not
+recoverable from here, and every pin naming the workspace goes with it
 
-> Dray will forget the key. Sessions keep the issues they are tagged with.
+> Dray will forget this key and every pin to it. Sessions keep their issues.
 
 > Cancel
 > Disconnect
+
+**Make default refused** — the workspace went away, the current default was never
+identified, or a disconnect landed while the swap was saving
+
+> That Linear workspace is not connected.
+> Linear has not said which workspace {Acme}'s key belongs to. Disconnect it first.
+> The Linear workspaces changed while that was saving. Try again.
+
+**Spaces** — drawn with two or more workspaces and at least one Space
+
+> Spaces
+> Every project in a Space reads its workspace, unless the project picks its own.
+> Default ({Acme})
+
+**Projects** — drawn with two or more workspaces. The first row of each menu
+says what the project reads with no pin of its own, and from where
+
+> Projects
+> From {Jango AI} ({JangoAI})
+> Default ({Acme})
+
+**A repo's saved filter**, under its path — listed even with one workspace,
+since it is still worth seeing and clearing. Saved on the Issues page, where the
+filters are, so there is no second picker here
+
+> Issues open on {Mobile} · {iOS, Android} in {JangoAI}
+> Clear {jangoai-ios}'s issue filter
 
 ---
 

@@ -28,10 +28,51 @@ pub struct Project {
     /// leaving takes it with them.
     #[serde(default)]
     pub space: Option<String>,
+    /// The Linear workspace (`organization.id`) this project reads, where it
+    /// pins its own. `None` reads its Space's pin, then the default — see
+    /// [`crate::issues::pinned_workspace`]. A tag on the project and nothing
+    /// else, the same kind of record `space` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub linear_workspace: Option<String>,
+    /// What the issue list opens narrowed to for this repo: a Linear team,
+    /// labels, or both. A default and never a limit — one click clears it, and
+    /// tags still resolve across the whole workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub linear_filter: Option<LinearFilter>,
     /// Which project launch reopens, and nothing else. It was the sort key too,
     /// which moved every picker's rows on each pick; order is now the file's
     /// own, set by the reader in Settings.
     pub last_selected: String,
+}
+
+/// A repo's default narrowing inside one Linear workspace.
+///
+/// **Never a Linear project**: those are scoped to weeks and archive themselves
+/// on completion, so a repo pinned to one reads empty a month later. A team is
+/// who does the work and labels are what it is about, and both outlast any one
+/// piece of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct LinearFilter {
+    /// The workspace (`organization.id`) the team and labels belong to. The
+    /// filter is ignored while the project reads any other: a team id names
+    /// nothing outside its own workspace.
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub team_id: Option<String>,
+    /// The team's name as of saving, so Settings can say which team without a
+    /// read. A copy that can go stale, the bargain `IssueRef::title` makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub team_name: Option<String>,
+    /// Label names, matching any. By name for the reason `IssueQuery::labels`
+    /// gives.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 static PROJECTS_LOCK: Mutex<()> = Mutex::const_new(());
@@ -83,6 +124,8 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
             name: basename(&path),
             path,
             space: None,
+            linear_workspace: None,
+            linear_filter: None,
             last_selected: now,
         }),
     }
@@ -140,6 +183,85 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
     write_projects(&projects).await?;
 
     Ok(projects)
+}
+
+/// Pins a project to a Linear workspace, or clears its own pin with `None` so
+/// it reads its Space's again.
+#[tauri::command]
+pub async fn set_project_linear_workspace(
+    path: &str,
+    workspace: Option<String>,
+) -> Result<Vec<Project>, Fail> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    let Some(i) = projects.iter().position(|p| p.path == path) else {
+        return Ok(projects);
+    };
+
+    projects[i].linear_workspace = workspace.filter(|w| !w.is_empty());
+    write_projects(&projects).await?;
+
+    Ok(projects)
+}
+
+/// Saves a repo's default Linear filter, or clears it with `None`. A filter
+/// narrowing to nothing is the same as none, so it is stored as none.
+#[tauri::command]
+pub async fn set_project_linear_filter(
+    path: &str,
+    filter: Option<LinearFilter>,
+) -> Result<Vec<Project>, Fail> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    let Some(i) = projects.iter().position(|p| p.path == path) else {
+        return Ok(projects);
+    };
+
+    projects[i].linear_filter =
+        filter.filter(|f| f.team_id.as_deref().is_some_and(|t| !t.is_empty()) || !f.labels.is_empty());
+    write_projects(&projects).await?;
+
+    Ok(projects)
+}
+
+/// Clears every project's pin and filter to a workspace being disconnected, so
+/// a reconnect later starts from the default rather than reviving pins the
+/// reader saw go.
+pub async fn clear_linear_workspace(workspace: &str) -> Result<()> {
+    let _guard = PROJECTS_LOCK.lock().await;
+    let mut projects = list_projects().await?;
+
+    let mut cleared = false;
+    for project in &mut projects {
+        if project.linear_workspace.as_deref() == Some(workspace) {
+            project.linear_workspace = None;
+            cleared = true;
+        }
+        if project.linear_filter.as_ref().is_some_and(|f| f.workspace == workspace) {
+            project.linear_filter = None;
+            cleared = true;
+        }
+    }
+
+    if cleared {
+        write_projects(&projects).await?;
+    }
+    Ok(())
+}
+
+/// The attached project a directory sits in: the longest project path it is
+/// under, so a worktree at `<project>/.claude/worktrees/<name>` answers its
+/// project. By path component, never by string prefix, or `/x/app` would claim
+/// `/x/app-web`.
+pub fn project_for_dir<'a>(projects: &'a [Project], dir: &str) -> Option<&'a Project> {
+    let dir = std::path::Path::new(dir);
+
+    projects
+        .iter()
+        .filter(|project| dir.starts_with(&project.path))
+        .max_by_key(|project| project.path.len())
 }
 
 /// Steps a project `delta` places in the order every picker draws. Past either
@@ -207,11 +329,55 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
 
+    // The Space's Linear pin follows it, and is moved even where no project
+    // carried the tag: a Space can be pinned before anything is filed in it.
+    // **First**, so a failed move fails the rename before any tag changes —
+    // the pin and the tags land together or neither does, and the caller's
+    // record of spaces follows either way. A rename onto a Space that has its
+    // own pin keeps that one.
+    let to_name = normalize_space(to.clone());
+    // What the move actually did, recorded inside the settings write itself:
+    // a reading taken before it can be stale by the time a rollback needs it.
+    let mut moved: Option<String> = None;
+    let mut placed = false;
+    if crate::settings::read().await.linear_space_pins.contains_key(from) {
+        crate::settings::update(|next| {
+            if let Some(pin) = next.linear_space_pins.remove(from) {
+                if let Some(to) = to_name.as_ref().filter(|to| !next.linear_space_pins.contains_key(*to)) {
+                    next.linear_space_pins.insert(to.clone(), pin.clone());
+                    placed = true;
+                }
+                moved = Some(pin);
+            }
+        })
+        .await?;
+    }
+
     // A space nobody had filled yet carries no tag, so changing nothing is the
     // ordinary path for renaming one — and a rewrite that moves no value is one
     // every other reader of this file has to survive for no reason.
     if retag(&mut projects, from, to) {
-        write_projects(&projects).await?;
+        if let Err(e) = write_projects(&projects).await {
+            // Put the pin back where the tags still are. The destination loses
+            // only the pin this rename placed there, and only while it is
+            // still that one: a pin set on it since is somebody's own choice.
+            // Nor does the source lose a pin set on it since.
+            if let Some(pin) = moved {
+                let undone = crate::settings::update(|next| {
+                    if let Some(to) = to_name.as_ref().filter(|_| placed) {
+                        if next.linear_space_pins.get(to) == Some(&pin) {
+                            next.linear_space_pins.remove(to);
+                        }
+                    }
+                    next.linear_space_pins.entry(from.to_string()).or_insert(pin);
+                })
+                .await;
+                if let Err(undo) = undone {
+                    eprintln!("[settings write err] space pin not put back: {undo:#}");
+                }
+            }
+            return Err(e.into());
+        }
     }
 
     Ok(projects)
@@ -246,8 +412,51 @@ mod tests {
             path: path.into(),
             name: path.into(),
             space: space.map(Into::into),
+            linear_workspace: None,
+            linear_filter: None,
             last_selected: "2026-08-01T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn a_saved_filter_round_trips_and_an_old_project_has_none() {
+        let old: Project = serde_json::from_str(
+            r#"{"path":"/a","name":"a","lastSelected":"2026-08-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.linear_filter, None);
+
+        let filter = LinearFilter {
+            workspace: "org-1".into(),
+            team_id: None,
+            team_name: None,
+            labels: vec!["iOS".into()],
+        };
+        let json = serde_json::to_string(&filter).unwrap();
+        assert_eq!(json, r#"{"workspace":"org-1","labels":["iOS"]}"#);
+        assert_eq!(serde_json::from_str::<LinearFilter>(&json).unwrap(), filter);
+    }
+
+    #[test]
+    fn a_worktree_belongs_to_the_project_it_sits_in() {
+        let projects = vec![filed("/x/app", None), filed("/x/app-web", None)];
+
+        let at = |dir| project_for_dir(&projects, dir).map(|p| p.path.as_str());
+        assert_eq!(at("/x/app"), Some("/x/app"));
+        assert_eq!(at("/x/app/.claude/worktrees/bold-fox"), Some("/x/app"));
+        // A string prefix would hand this to `/x/app`.
+        assert_eq!(at("/x/app-web/src"), Some("/x/app-web"));
+        assert_eq!(at("/elsewhere"), None);
+    }
+
+    #[test]
+    fn the_innermost_project_wins() {
+        let projects = vec![filed("/x", None), filed("/x/inner", None)];
+
+        assert_eq!(
+            project_for_dir(&projects, "/x/inner/src").map(|p| p.path.as_str()),
+            Some("/x/inner")
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ import {
   trackerOf,
 } from "@/lib/issue";
 import { readIssueRepo, setIssueRepo } from "@/lib/issueTracker";
+import { sameFilter, type RepoFilter } from "@/lib/linearWorkspace";
 
 import type {
   Issue,
@@ -65,11 +66,16 @@ const keyOf = (query: IssueQuery) =>
     // scope-and-settled question with entirely different issues, so without it
     // flipping the chip paints Linear's list under GitHub's chip.
     tracker: query.tracker,
+    // Same reason one level down: two Linear workspaces answer one question
+    // with two workspaces' issues.
+    workspace: query.workspace ?? "",
     text: query.text ?? "",
     scope: query.scope,
     teamId: query.teamId ?? "",
     projectId: query.projectId ?? "",
     label: query.label ?? "",
+    // Sorted: which order the labels were ticked in asks nothing different.
+    labels: [...query.labels].sort().join("\n"),
     settled: query.settled,
   });
 
@@ -119,7 +125,14 @@ export function rememberIssues(query: IssueQuery, issues: Issue[], generation: n
   remember(keyOf(query), issues, generation);
 }
 
-/// Opened issues, keyed by identifier.
+/// Where an opened issue is filed, and the key its body is handed back under:
+/// its workspace and identifier, since `ENG-12` can name an issue in two Linear
+/// workspaces and a session can link both. A link with no workspace — one
+/// written before there could be two — files under the identifier alone.
+export const detailSlot = (identifier: string, workspace?: string | null) =>
+  workspace ? `${workspace}|${identifier}` : identifier;
+
+/// Opened issues, keyed by [`detailSlot`].
 ///
 /// Its own cache rather than a second use of the list's: the two hold different
 /// shapes for the same issue — a row against a whole body — and they are read on
@@ -134,11 +147,11 @@ const detailFetchedAt = new Map<string, number>();
 /// fills it much faster.
 const MAX_DETAILS = 24;
 
-function rememberDetail(identifier: string, detail: IssueDetail, generation: number) {
+function rememberDetail(slot: string, detail: IssueDetail, generation: number) {
   if (generation !== issueGeneration()) return;
 
-  detailCache.set(identifier, detail);
-  detailFetchedAt.set(identifier, Date.now());
+  detailCache.set(slot, detail);
+  detailFetchedAt.set(slot, Date.now());
 
   while (detailCache.size > MAX_DETAILS) {
     const oldest = detailCache.keys().next().value;
@@ -154,11 +167,15 @@ function split(key: string): string[] {
   return key ? key.split(",") : [];
 }
 
-function cachedDetails(identifiers: string[]): Record<string, IssueDetail> {
+/// Cached bodies for `slots`, keyed by **slot**, which is what the panel reads
+/// them by. Keyed by identifier, `ENG-12` from two workspaces collapsed onto
+/// one entry: both rows drew the same body, and a status change on one row
+/// wrote to the other's issue.
+function cachedDetails(slots: string[]): Record<string, IssueDetail> {
   const found: Record<string, IssueDetail> = {};
-  for (const identifier of identifiers) {
-    const detail = detailCache.get(identifier);
-    if (detail) found[identifier] = detail;
+  for (const slot of slots) {
+    const detail = detailCache.get(slot);
+    if (detail) found[slot] = detail;
   }
   return found;
 }
@@ -350,7 +367,19 @@ function patchCachedIssue(target: { identifier: string; id: string }, patch: Iss
 /// the response would patch an entry nobody reads and file the answer where
 /// nobody asks. The wire gets `issue.id`, the stable half, which is what Rust
 /// looks up first anyway.
-export async function updateIssue(issue: { identifier: string; id: string }, patch: IssuePatch) {
+export async function updateIssue(
+  issue: {
+    identifier: string;
+    id: string;
+    workspace?: string | null;
+    /// Where the caller reads this body back — the link's slot, which for a
+    /// link written before workspaces is not the slot the answer's own
+    /// workspace would name. Filing the answer anywhere else blanks the panel
+    /// and reads it again after every write.
+    slot?: string;
+  },
+  patch: IssuePatch,
+) {
   outstanding.set(issue.id, (outstanding.get(issue.id) ?? 0) + 1);
 
   const rollback = patchCachedIssue(issue, patch);
@@ -368,7 +397,7 @@ export async function updateIssue(issue: { identifier: string; id: string }, pat
 /// The request half, run in turn. Split out so the queueing above reads as
 /// queueing and nothing else.
 async function send(
-  issue: { identifier: string; id: string },
+  issue: { identifier: string; id: string; workspace?: string | null; slot?: string },
   patch: IssuePatch,
   rollback: Rollback,
 ) {
@@ -380,12 +409,19 @@ async function send(
       // `null` is "leave it" and `"none"` is a level in its own right, which is
       // why this cannot be a number: Linear spells no-priority `0`.
       priority: patch.priority ?? null,
+      // The workspace the issue was read from: a write goes out with that
+      // workspace's key and no other.
+      workspace: issue.workspace ?? null,
     });
 
     if (!settles(issue.id)) return;
 
     forgetIssues();
-    rememberDetail(issue.identifier, next, issueGeneration());
+    rememberDetail(
+      issue.slot ?? detailSlot(issue.identifier, issue.workspace),
+      next,
+      issueGeneration(),
+    );
   } catch (e) {
     if (!settles(issue.id)) return;
 
@@ -421,7 +457,7 @@ export function issueErrorText(error: IssueUnavailable, tracker: IssueTracker = 
   switch (error.kind) {
     case "unauthorized":
       return linear
-        ? "Linear rejected the saved key. Disconnect it in Settings, then paste a new one."
+        ? "Linear rejected the key saved for this workspace. Disconnect it in Settings, then add a new one."
         : "GitHub refused that read. Sign in again with `gh auth login`.";
     case "offline":
       return linear ? "Could not reach Linear." : "Could not reach GitHub.";
@@ -450,15 +486,23 @@ export function asUnavailable(e: unknown): IssueUnavailable {
 /// reader's own stored pick rather than left null: a number is only addressable
 /// within a repository, so a null there is not "every repo" but "nothing to
 /// read", which is what the page's own empty state says.
-const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
+const defaultQuery = (
+  tracker: IssueQuery["tracker"],
+  workspace: string | null,
+  repoFilter: RepoFilter | null = null,
+): IssueQuery => ({
   tracker,
   text: null,
   // The default is the useful one: what this person is meant to be working on.
   scope: "assigned",
-  teamId: tracker === "github" ? readIssueRepo() : null,
+  // Under Linear, the repo's saved team where it has one: a default, which the
+  // filter menu clears like any other pick.
+  teamId: tracker === "github" ? readIssueRepo() : (repoFilter?.teamId ?? null),
   projectId: null,
   label: null,
   settled: false,
+  workspace: tracker === "linear" ? workspace : null,
+  labels: tracker === "linear" ? (repoFilter?.labels ?? []) : [],
 });
 
 /// One list read, cached and debounced. The page runs two of these.
@@ -491,14 +535,15 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
   /// *tracker* change is the one key change where that is wrong: the rows are
   /// another workspace's, the headings above them have already changed, and a
   /// read that then fails leaves Linear's issues sitting under GitHub's error.
-  /// So this is dropped by tracker alone, and every other key change still
-  /// paints through.
-  const [shownTracker, setShownTracker] = useState(query.tracker);
+  /// So this is dropped by tracker — and by Linear workspace, the same switch
+  /// one level down — and every other key change still paints through.
+  const shownKey = `${query.tracker}:${query.workspace ?? ""}`;
+  const [shownTracker, setShownTracker] = useState(shownKey);
 
-  if (shownTracker !== query.tracker) {
+  if (shownTracker !== shownKey) {
     // During render rather than in an effect, which lands after paint: the
     // frame in between is exactly the one that draws the wrong tracker's rows.
-    setShownTracker(query.tracker);
+    setShownTracker(shownKey);
     setIssues(cache.get(key) ?? []);
     setAnswered(cache.has(key));
     setUnavailable(null);
@@ -582,19 +627,57 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
 /// Filters live here rather than in the view so the read and the controls that
 /// change it cannot disagree about what is on screen — the page draws what this
 /// answers and owns none of it.
-export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "linear") {
-  const [query, setQuery] = useState<IssueQuery>(() => defaultQuery(tracker));
+export function useIssues(
+  active: boolean,
+  tracker: IssueQuery["tracker"] = "linear",
+  /// The Linear workspace on screen, `null` for the default. Ignored under
+  /// GitHub.
+  workspace: string | null = null,
+  /// The composer's project. Moving to another one starts the page afresh even
+  /// where both read one workspace: a narrowing made for one repo is not the
+  /// next repo's.
+  project: string | null = null,
+  /// What the current repo's list opens narrowed to, if it saved a filter.
+  repoFilter: RepoFilter | null = null,
+) {
+  const [query, setQuery] = useState<IssueQuery>(() =>
+    defaultQuery(tracker, workspace, repoFilter),
+  );
   const [filters, setFilters] = useState<IssueFilters | null>(null);
+  /// The repo default the query was last opened on. A *different* default is
+  /// a different repo — or a default just saved — and the page moves to it; the
+  /// reader's own narrowing is left alone until then.
+  const [openedOn, setOpenedOn] = useState<RepoFilter | null>(repoFilter);
+  const [openedFor, setOpenedFor] = useState(project);
 
   // A tracker switch is a different workspace, so both the narrowing and the
   // options it was built from stop meaning anything: a Linear team id under
   // GitHub names no repository, and the filter menu would go on offering teams
-  // that are not there. Reset during render rather than in an effect, the
-  // reading `useSessionIssues` takes — an effect is a frame behind, and that
-  // frame reads Linear's list under GitHub's chip.
-  if (query.tracker !== tracker) {
-    setQuery(defaultQuery(tracker));
+  // that are not there. Moving between Linear workspaces is the same, one level
+  // down: one workspace's team ids name nothing in another. Reset during render
+  // rather than in an effect, the reading `useSessionIssues` takes — an effect
+  // is a frame behind, and that frame reads Linear's list under GitHub's chip.
+  const wantedWorkspace = tracker === "linear" ? workspace : null;
+  if (query.tracker !== tracker || query.workspace !== wantedWorkspace) {
+    setQuery(defaultQuery(tracker, workspace, repoFilter));
     setFilters(null);
+    setOpenedFor(project);
+    setOpenedOn(repoFilter);
+  } else if (openedFor !== project) {
+    setOpenedFor(project);
+    setOpenedOn(repoFilter);
+    // Linear's alone: another repo, even one reading this workspace, opens on
+    // its own default, never the previous repo's narrowing, search or project
+    // filter — the options still hold, being the workspace's. GitHub's list is
+    // a repository the reader picked on the page, which a project change says
+    // nothing about.
+    if (tracker === "linear") setQuery(defaultQuery(tracker, workspace, repoFilter));
+  } else if (!sameFilter(openedOn, repoFilter)) {
+    setOpenedOn(repoFilter);
+    // A default just saved from what is on screen already describes it, and
+    // resetting there would throw away the search text for nothing.
+    const onScreen = { teamId: query.teamId, labels: query.labels };
+    if (!sameFilter(onScreen, repoFilter)) setQuery(defaultQuery(tracker, workspace, repoFilter));
   }
   /// Bumped to force a read the query alone would not trigger — the refresh
   /// button, and a connection that just changed under the page. It is what
@@ -646,7 +729,11 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
     if (!active || (filters && !staleFilters)) return;
 
     let live = true;
-    invoke<IssueFilters>("list_issue_filters", { tracker, repo: wantedRepo })
+    invoke<IssueFilters>("list_issue_filters", {
+      tracker,
+      repo: wantedRepo,
+      workspace: wantedWorkspace,
+    })
       .then((next) => {
         if (!live) return;
         setFilters(next);
@@ -659,7 +746,7 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
     return () => {
       live = false;
     };
-  }, [active, filters, staleFilters, wantedRepo, generation, tracker]);
+  }, [active, filters, staleFilters, wantedRepo, wantedWorkspace, generation, tracker]);
 
   return {
     issues: open.issues,
@@ -711,23 +798,29 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
 /// the tab is drawn from meanwhile, so the panel has rows before this lands and
 /// keeps them if it never does.
 export function useSessionIssues(issues: IssueRef[], active: boolean) {
-  // Joined into a string so the effect's dependency is the *set* of
-  // identifiers, not the array's identity — which is fresh on every render of
-  // a session that is streaming.
-  const key = issues.map((issue) => issue.identifier).join(",");
+  // Joined into a string so the effect's dependency is the *set* of issues,
+  // not the array's identity — which is fresh on every render of a session that
+  // is streaming. By slot, so one identifier in two workspaces is two reads.
+  const key = issues.map((issue) => detailSlot(issue.identifier, issue.workspace)).join(",");
 
-  // The tracker's own id for each link, where it has one. Rebuilt on the same
-  // key rather than held in state: it is a lookup table for the read below, and
-  // nothing on screen is drawn from it.
-  const idFor = useMemo(() => {
-    const byIdentifier = new Map<string, string>();
+  // What the read below sends for each link: the tracker's own id where it has
+  // one, the workspace it was read from, and its URL for a link that names no
+  // workspace. Rebuilt on the same key rather than held in state: it is a
+  // lookup table for the read, and nothing on screen is drawn from it.
+  const argsFor = useMemo(() => {
+    const bySlot = new Map<string, Record<string, string | null>>();
     for (const issue of issues) {
-      // A blind link writes the identifier into both fields, and an id that is
-      // not the tracker's own names nothing on its side — passing it would cost
-      // a lookup that can only 404 before the fallback runs.
-      if (issue.id && issue.id !== issue.identifier) byIdentifier.set(issue.identifier, issue.id);
+      bySlot.set(detailSlot(issue.identifier, issue.workspace), {
+        identifier: issue.identifier,
+        // A blind link writes the identifier into both fields, and an id that
+        // is not the tracker's own names nothing on its side — passing it would
+        // cost a lookup that can only 404 before the fallback runs.
+        id: issue.id && issue.id !== issue.identifier ? issue.id : null,
+        workspace: issue.workspace ?? null,
+        url: issue.url || null,
+      });
     }
-    return byIdentifier;
+    return bySlot;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -751,21 +844,21 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
   useEffect(() => {
     if (!active || !key) return;
 
-    const identifiers = split(key);
+    const slots = split(key);
 
     // Whatever is already in hand goes up first, before anything is asked for.
     // Without this the panel blanked and read the whole description back on
     // every tab switch, every reselect, and every second visit to a row —
     // which is what watching it say "reading the issue…" over and over was.
-    const cached = cachedDetails(identifiers);
+    const cached = cachedDetails(slots);
     setRead({ key, details: cached });
     if (Object.keys(cached).length > 0) setUnavailable(null);
 
     // Only the ones nothing fresh is held for. A session tagged with three
     // issues, two of them read a moment ago, costs one request rather than
     // three.
-    const wanted = identifiers.filter(
-      (identifier) => Date.now() - (detailFetchedAt.get(identifier) ?? 0) >= FRESH_MS,
+    const wanted = slots.filter(
+      (slot) => Date.now() - (detailFetchedAt.get(slot) ?? 0) >= FRESH_MS,
     );
 
     if (wanted.length === 0) {
@@ -779,14 +872,14 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
     const reading = issueGeneration();
 
     Promise.all(
-      wanted.map((identifier) =>
+      wanted.map((slot) =>
         // The tracker's own id travels with the identifier where the link has
         // one. It is the stable half: an issue moved to another team renumbers,
         // and a lookup by the recorded spelling then answers "no such issue" for
         // work that is very much still there.
-        invoke<IssueDetail>("get_issue", { identifier, id: idFor.get(identifier) ?? null })
+        invoke<IssueDetail>("get_issue", argsFor.get(slot))
           .then((detail) => {
-            rememberDetail(identifier, detail, reading);
+            rememberDetail(slot, detail, reading);
             return detail;
           })
           .catch((e) => {
@@ -802,7 +895,7 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
         if (cancelled) return;
         // Rebuilt from the cache rather than merged into what is on screen, so
         // an identifier that has left the set leaves the record with it.
-        setRead({ key, details: cachedDetails(identifiers) });
+        setRead({ key, details: cachedDetails(slots) });
         if (answers.some(Boolean)) setUnavailable(null);
       })
       .finally(() => !cancelled && setLoading(false));
@@ -810,7 +903,7 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [key, active, generation, connection, idFor]);
+  }, [key, active, generation, connection, argsFor]);
 
   return {
     details: current.details,
@@ -825,9 +918,9 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
     /// flag down: the effect's own rule is "fetch what is not fresh", and
     /// dropping the stamps is what makes that rule answer yes.
     refresh: useCallback(() => {
-      for (const identifier of split(key)) {
-        detailCache.delete(identifier);
-        detailFetchedAt.delete(identifier);
+      for (const slot of split(key)) {
+        detailCache.delete(slot);
+        detailFetchedAt.delete(slot);
       }
       // The whole generation, not just these identifiers: an upload that failed
       // to fetch is cached under its own URL in another module, and Refresh is

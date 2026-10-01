@@ -52,9 +52,18 @@ describe("connectedTrackers", () => {
       orgName: "github.com",
     };
 
-    expect(connectedTrackers({ linear: null, github: account })).toEqual({
+    expect(connectedTrackers({ linear: [], linearSpacePins: {}, github: account })).toEqual({
       linear: false,
       github: true,
     });
+  });
+
+  it("reads an empty list of Linear workspaces as not connected", () => {
+    const linear = { tracker: "linear" as const, userId: "u", userName: "U", orgName: "Acme" };
+
+    expect(connectedTrackers({ linear: [], linearSpacePins: {}, github: null }).linear).toBe(false);
+    expect(connectedTrackers({ linear: [linear], linearSpacePins: {}, github: null }).linear).toBe(
+      true,
+    );
   });
 });
