@@ -125,7 +125,6 @@ type SidebarProps = {
   /// The draft the new-task composer is showing, lit like a selected row.
   openDraftId: string | null;
   onOpenDraft: (id: string) => void;
-  onDeleteDraft: (id: string) => void;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -962,7 +961,6 @@ export default function Sidebar({
   drafts,
   openDraftId,
   onOpenDraft,
-  onDeleteDraft,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
@@ -1412,7 +1410,6 @@ export default function Sidebar({
                     draft={draft}
                     active={draft.id === openDraftId}
                     onOpen={onOpenDraft}
-                    onDelete={onDeleteDraft}
                   />
                 ))}
 
@@ -1912,14 +1909,13 @@ function RowMenu({
   onMarkUnread,
   children,
 }: {
-  /// Absent on a draft, which has no conversation to copy.
-  onFork?: (worktree: boolean) => void;
+  onFork: (worktree: boolean) => void;
   /// The session's turn is in flight. The CLI forks by reading its transcript,
   /// which a live child is appending to mid-turn, so a fork taken now can
   /// inherit half a turn. `SessionManager::fork` refuses on the same question
   /// (`turn_in_flight`, which is exactly `in_progress`) and nothing wider —
   /// a session still running a background task forks fine.
-  forkDisabled?: boolean;
+  forkDisabled: boolean;
   onDelete: () => void;
   /// Absent on a row that isn't nested — there is nothing to detach from, and
   /// a disabled item on every row in the list would be noise rather than a
@@ -2004,7 +2000,6 @@ function RowMenu({
                 *runs*, not in what it copies — both carry the whole
                 conversation. Flattening them into two top-level items would put
                 the rarer choice beside Delete on every row. */}
-            {onFork && (
             <ContextMenuSub onOpenChange={setForkOpen}>
               <ContextMenuSubTrigger
                 disabled={forkDisabled}
@@ -2032,7 +2027,6 @@ function RowMenu({
                 ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
-            )}
 
             {onMarkUnread && (
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
@@ -2082,17 +2076,16 @@ const PREFETCH_HOVER_MS = 100;
 /// A saved task, drawn as a session row with its created time. No label says
 /// "draft": the run's own break sets it apart, and its title is the reader's
 /// raw text where a session's is a generated one. No rail and no hover
-/// controls, since nothing has run. Delete is the row menu's, like a session's.
+/// controls, since nothing has run. No delete either: clearing its text and
+/// leaving is how a draft goes.
 function DraftRow({
   draft,
   active,
   onOpen,
-  onDelete,
 }: {
   draft: Draft;
   active: boolean;
   onOpen: (id: string) => void;
-  onDelete: (id: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -2100,32 +2093,30 @@ function DraftRow({
   }, [active]);
 
   return (
-    <RowMenu onDelete={() => onDelete(draft.id)}>
-      <div
-        ref={ref}
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpen(draft.id)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onOpen(draft.id);
-          }
-        }}
-        className={cn(
-          "group relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-          active
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 data-[state=open]:bg-sidebar-accent/50",
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
-        <span className="shrink-0 pl-2 text-ui text-muted-foreground">
-          {relativeTime(draft.created)}
-        </span>
-      </div>
-    </RowMenu>
+    <div
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(draft.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(draft.id);
+        }
+      }}
+      className={cn(
+        "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
+      <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+        {relativeTime(draft.created)}
+      </span>
+    </div>
   );
 }
 

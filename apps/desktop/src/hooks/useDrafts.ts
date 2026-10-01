@@ -57,10 +57,19 @@ export function useDrafts(onError: (e: unknown) => void) {
     setDrafts(next);
   }, []);
 
+  /// Answers whether the write landed; a failure is reported here already.
   const enqueue = useCallback((command: string, args: Record<string, unknown>) => {
-    queue.current = queue.current.then(() =>
-      invoke<void>(command, args).catch((e) => errorRef.current(e)),
+    const done = queue.current.then(() =>
+      invoke<void>(command, args).then(
+        () => true,
+        (e) => {
+          errorRef.current(e);
+          return false;
+        },
+      ),
     );
+    queue.current = done.then(() => {});
+    return done;
   }, []);
 
   useEffect(() => {
@@ -77,11 +86,15 @@ export function useDrafts(onError: (e: unknown) => void) {
     pending.current.delete(id);
   };
 
+  /// Listed only once it is on disk, and answers whether it got there: the
+  /// caller clears the composer on that answer, so a failed write leaves the
+  /// text where the reader typed it.
   const save = useCallback(
-    (draft: Draft) => {
+    async (draft: Draft) => {
       cancelPending(draft.id);
+      if (!(await enqueue("save_draft", { draft }))) return false;
       publish([...ref.current.filter((d) => d.id !== draft.id), draft]);
-      enqueue("save_draft", { draft });
+      return true;
     },
     [publish, enqueue],
   );

@@ -131,7 +131,7 @@ import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
-import { draftKey, useDrafts } from "@/hooks/useDrafts";
+import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
@@ -279,6 +279,16 @@ function App() {
     });
   }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
 
+  // A draft emptied and then left says nothing, so it goes rather than sitting
+  // in the list as an empty row. Every way out lands here, since each one
+  // moves `openDraftId`.
+  const leftDraft = useRef(openDraftId);
+  useEffect(() => {
+    const left = leftDraft.current;
+    leftDraft.current = openDraftId;
+    if (left && left !== openDraftId) discardIfEmpty(left);
+  }, [openDraftId, discardIfEmpty]);
+
   /// The composer's send. On an open draft the draft is closed *before* the
   /// send, since the composer clears its text straight after handing it over
   /// and that clear would otherwise be saved as the draft's prompt. It goes
@@ -288,6 +298,9 @@ function App() {
     if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
     const prompt = getDraft(id)?.prompt ?? message;
     openDraftRef.current = null;
+    // A send is not leaving: an attachment-only prompt has no text, and the
+    // empty-draft sweep would delete a draft whose send may yet fail.
+    leftDraft.current = null;
     setOpenDraftId(null);
     const sending = handleSendMsg(message, attachments);
     // Taken after the send's own bump, so only a move the reader makes while
@@ -304,16 +317,6 @@ function App() {
     }
   };
 
-  // A draft emptied and then left says nothing, so it goes rather than sitting
-  // in the list as an empty row. Every way out lands here, since each one
-  // moves `openDraftId`.
-  const leftDraft = useRef(openDraftId);
-  useEffect(() => {
-    const left = leftDraft.current;
-    leftDraft.current = openDraftId;
-    if (left && left !== openDraftId) discardIfEmpty(left);
-  }, [openDraftId, discardIfEmpty]);
-
   // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
   // lights up for a moment to say why.
   const [draftNudge, setDraftNudge] = useState(false);
@@ -321,7 +324,7 @@ function App() {
 
   /// ⌘S on the new-task composer: its text and picks become a draft in the
   /// sidebar, and the composer empties for the next task.
-  const saveAsDraft = () => {
+  const saveAsDraft = async () => {
     if (openDraftId) {
       setDraftNudge(true);
       clearTimeout(nudgeTimer.current);
@@ -331,7 +334,7 @@ function App() {
     const prompt = readDraft(null);
     if (!projectPath || !prompt.trim()) return;
     const id = crypto.randomUUID();
-    saveDraft({
+    const saved = await saveDraft({
       id,
       prompt,
       projectPath,
@@ -343,16 +346,11 @@ function App() {
       useWorktree,
       created: new Date().toISOString(),
     });
+    if (!saved) return;
     writeDraft(null, "");
     pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
   };
   const draftChord = useChord("composer.draft");
-
-  const deleteDraft = (id: string) => {
-    removeDraft(id);
-    writeDraft(draftKey(id), "");
-    if (id === openDraftId) setOpenDraftId(null);
-  };
 
   // Whether the agent the composer is pointed at can actually be run. Null
   // while the first read is out and null when it is installed — both mean
@@ -1657,26 +1655,43 @@ function App() {
   // Drafts in the order the sidebar draws them. The walk enters them only from
   // a draft already open: a draft is set aside on purpose, so stepping from a
   // session or a new task passes them by.
-  const orderedDrafts = useMemo(
+  // Every sidebar row as drawn, drafts in place, with the same live reading as
+  // `ordered` so the sessions sit where the eye sees them.
+  const drawnRows = useMemo(
     () =>
       archivedShown
         ? []
         : placeDrafts(
-            sessionGroups(searchedSessions, projects, undefined, false, spaceGroups),
+            sessionGroups(
+              searchedSessions,
+              projects,
+              { statusBySession, asking: sidebarAsking },
+              false,
+              spaceGroups,
+            ),
             sidebarDrafts,
             projects,
-          ).flatMap((run) => (run.kind === "drafts" ? run.drafts : [])),
-    [archivedShown, searchedSessions, projects, spaceGroups, sidebarDrafts],
+          ).flatMap((run): { draft: Draft | null; session: SessionIndexItem | null }[] =>
+            run.kind === "drafts"
+              ? run.drafts.map((draft) => ({ draft, session: null }))
+              : run.rows.map((row) => ({ draft: null, session: row.item })),
+          ),
+    [archivedShown, searchedSessions, projects, statusBySession, sidebarAsking, spaceGroups, sidebarDrafts],
   );
   const stepSession = (delta: number) => {
-    const at = orderedDrafts.findIndex((d) => d.id === openDraftId);
+    const drafts = drawnRows.flatMap((r) => (r.draft ? [r.draft] : []));
+    const at = drafts.findIndex((d) => d.id === openDraftId);
     if (at === -1) return stepThrough(ordered.map((i) => [i]), delta);
     const next = at + delta;
-    // The top holds, as it does for sessions — reopened rather than left,
-    // since the chord's `goToSession` has already closed it. Past the last
-    // draft the walk carries on into the sessions, at their top.
-    if (next < orderedDrafts.length) return openDraft(orderedDrafts[Math.max(next, 0)].id);
-    if (ordered[0]) void handleSelectSessionIndexItem(ordered[0].sessionId);
+    if (next >= 0 && next < drafts.length) return openDraft(drafts[next].id);
+    // Off either end of the drafts, the walk leaves for the session drawn just
+    // past that end — above the first draft or below the last. Where there is
+    // none the draft holds, reopened since the chord's `goToSession` closed it.
+    const edge = drawnRows.findIndex((r) => r.draft?.id === drafts[at].id);
+    const beyond = delta > 0 ? drawnRows.slice(edge + 1) : drawnRows.slice(0, edge).reverse();
+    const session = beyond.find((r) => r.session)?.session;
+    if (session) void handleSelectSessionIndexItem(session.sessionId);
+    else openDraft(drafts[at].id);
   };
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
@@ -2340,7 +2355,7 @@ function App() {
   });
   // The same ⌘S on the new-task composer, which has no session and so no docs
   // tab; the gate says so outright rather than leaning on that.
-  useHotkey("composer.draft", saveAsDraft, {
+  useHotkey("composer.draft", () => void saveAsDraft(), {
     enabled: !selectedSessionId && !issuesOpen && !(panelShown && activeTab === "docs"),
   });
   // By position in the tab row, so a third view needs only a third line here.
@@ -2563,7 +2578,6 @@ function App() {
           drafts={sidebarDrafts}
           openDraftId={issuesOpen ? null : openDraftId}
           onOpenDraft={openDraft}
-          onDeleteDraft={deleteDraft}
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
