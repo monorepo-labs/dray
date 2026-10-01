@@ -34,6 +34,7 @@ type HotkeyOptions = {
 const APP_WIDE: ReadonlySet<ShortcutId> = new Set([
   "settings",
   "theme.next",
+  "panel.side",
   "zoom.in",
   "zoom.out",
   "zoom.reset",

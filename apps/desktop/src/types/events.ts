@@ -826,7 +826,12 @@ createdAt: string,
  * since that is what the chip says — a row that has to be opened to learn
  * whether anybody has started is the row asking to be clicked through.
  */
-pullRequests: Array<number>, };
+pullRequests: Array<number>, 
+/**
+ * GitHub's issue type (Bug, Feature, Task…). A name and a colour, so it
+ * reuses [`IssueLabel`]. Always `None` on Linear, which has no such field.
+ */
+issueType: IssueLabel | null, };
 
 /**
  * A file uploaded to an issue, fetched with the stored key.
@@ -898,7 +903,12 @@ createdAt: string,
  * since that is what the chip says — a row that has to be opened to learn
  * whether anybody has started is the row asking to be clicked through.
  */
-pullRequests: Array<number>, };
+pullRequests: Array<number>, 
+/**
+ * GitHub's issue type (Bug, Feature, Task…). A name and a colour, so it
+ * reuses [`IssueLabel`]. Always `None` on Linear, which has no such field.
+ */
+issueType: IssueLabel | null, };
 
 /**
  * The filter row's options, read once per connection rather than per keystroke.
@@ -914,6 +924,12 @@ export type IssueFilters = { teams: Array<IssueGroup>, projects: Array<IssueGrou
  * is simply not drawn.
  */
 labels: Array<IssueLabel>, 
+/**
+ * The issue types the repository's org defines, read beside the labels
+ * and for the same reason. Empty for Linear, a personal repository, or an
+ * org with none, and the menu is not drawn then.
+ */
+issueTypes: Array<IssueLabel>, 
 /**
  * Every team's workflow states, keyed by team **key** (`DRA`) — what a
  * row carries, where `teams` above is keyed by UUID.
@@ -971,6 +987,10 @@ teamId: string | null, projectId: string | null,
  * addressed by on GitHub.
  */
 label: string | null, 
+/**
+ * One issue type's name, or `None` for any. GitHub alone.
+ */
+issueType: string | null, 
 /**
  * Which half of the workspace to read: the unfinished issues, or the done
  * and cancelled ones.
@@ -1553,6 +1573,14 @@ worktreeName: string | null,
  */
 worktreeRemoved: boolean, title: string, 
 /**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
+/**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
  */
@@ -1685,6 +1713,14 @@ worktreeName: string | null,
  */
 worktreeRemoved: boolean, title: string, 
 /**
+ * The reader renamed this session, so no generated title may replace it —
+ * neither `title.rs`'s nor one a harness sends of its own (grok's
+ * `session_info_update`), either of which can land after the rename.
+ *
+ * `#[serde(default)]`: an entry written before the field reads as unnamed.
+ */
+titleLocked: boolean, 
+/**
  * Remembered per session so switching between sessions restores the model
  * the user last picked instead of resetting to a default.
  */
@@ -1797,7 +1833,13 @@ modified: string | null, };
  * updates without a refetch. Not an `AgentEvent`: nothing here came from the
  * agent, and it must never reach the session's `.jsonl` log.
  */
-export type SessionTitleEvent = { sessionId: string, title: string, };
+export type SessionTitleEvent = { sessionId: string, title: string, 
+/**
+ * Set on the reader's rename alone. Events are not ordered against
+ * writes, so a generated title written just before a rename can arrive
+ * after it — and the listener drops an unlocked one onto a locked row.
+ */
+titleLocked: boolean, };
 
 /**
  * The settings a turn was configured with, carried on [`SessionInfo`].

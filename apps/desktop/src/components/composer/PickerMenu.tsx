@@ -65,6 +65,7 @@ export default function PickerMenu<T>({
   loading = false,
   emptyNote,
   header,
+  keepOpenHint = false,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -74,7 +75,8 @@ export default function PickerMenu<T>({
   /// selected fill) belongs to this component, so no picker can drift.
   renderItem: (item: T) => ReactNode;
   activeIndex: number;
-  onPick: (item: T) => void;
+  /// `keepOpen` is a ⌘-click (Ctrl elsewhere). Only the `#` picker reads it.
+  onPick: (item: T, keepOpen: boolean) => void;
   /// Hovering *moves* the selection rather than painting a second highlight.
   /// Two independently lit rows would leave Enter and the click landing on
   /// different items, which is the one thing this list must never do.
@@ -104,6 +106,8 @@ export default function PickerMenu<T>({
   /// Whatever goes in here must keep focus in the editor — `onMouseDown` with
   /// `preventDefault` — or pressing it closes the picker it belongs to.
   header?: ReactNode;
+  /// Names ⌘⏎ in the hint row, for the one picker that keeps the list open on it.
+  keepOpenHint?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -200,6 +204,15 @@ export default function PickerMenu<T>({
         </Kbd>
         <span className="ml-0.5">select</span>
       </KbdGroup>
+      {keepOpenHint && (
+        <KbdGroup>
+          <Kbd>⌘</Kbd>
+          <Kbd>
+            <CornerDownLeft strokeWidth={2} />
+          </Kbd>
+          <span className="ml-0.5">add another</span>
+        </KbdGroup>
+      )}
     </div>
   );
 
@@ -356,7 +369,7 @@ export default function PickerMenu<T>({
                     // close the menu before the click ever lands.
                     onMouseDown={(e) => e.preventDefault()}
                     onMouseMove={(e) => handleMove(e, index)}
-                    onClick={() => onPick(item)}
+                    onClick={(e) => onPick(item, e.metaKey || e.ctrlKey)}
                     // The highlight is a veil in the bare state and a fill in
                     // the framed one, for the same reason the box around it is:
                     // bare has no surface, so this lands straight on the page,

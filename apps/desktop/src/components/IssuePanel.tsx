@@ -344,6 +344,13 @@ function IssueBody({ detail, loading }: { detail: IssueDetail | null; loading: b
           </span>
         )}
 
+        {detail.issueType && (
+          <span className="flex items-center gap-1.5">
+            <IssueLabelChip label={detail.issueType} dot />
+            {detail.issueType.name}
+          </span>
+        )}
+
         {detail.project && <span>{detail.project}</span>}
 
         {/* Last, because it is the least of the four and the one that keeps

@@ -192,7 +192,7 @@ export default function SettingsPage({
                 onChange={onAutoHideSidebarChange}
               />
               <AutoHideRow
-                label="Auto-hide side panel in Browser View"
+                label="Auto-hide side panel outside Chat"
                 checked={autoHidePanel}
                 onChange={onAutoHidePanelChange}
               />
@@ -787,6 +787,7 @@ function PanelSideRow({
   onChange: (next: PanelSide) => void;
 }) {
   const id = useId();
+  useShortcutOverrides();
 
   return (
     <SettingRow
@@ -795,7 +796,15 @@ function PanelSideRow({
       label="Panel side"
       description="Where the Changes and PR panel opens beside the chat."
     >
-      <SegmentedRadio options={PANEL_SIDES} value={value} onPick={onChange} labelledBy={id} />
+      <span className="flex items-center gap-3">
+        {/* Gone with the chord, for the Theme row's reason. */}
+        {chordFor("panel.side") && (
+          <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
+            Switch <ShortcutKeys ids={["panel.side"]} />
+          </span>
+        )}
+        <SegmentedRadio options={PANEL_SIDES} value={value} onPick={onChange} labelledBy={id} />
+      </span>
     </SettingRow>
   );
 }

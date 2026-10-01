@@ -290,6 +290,8 @@ dray browser eval "document.title"
 dray browser console                          # what the page logged since last asked; `errors` for errors alone
 dray browser set device "iPhone 15"           # or: set viewport 375 667 — what screenshots are
                                               # laid out at; the pane on screen is left alone
+dray browser zoom 150                         # page zoom, 25–500; `zoom reset` for 100. The user sees it too,
+                                              # screenshots and recordings carry it, and it holds for that site
 dray browser record start                     # record the active tab, at the screenshot size
 dray browser record stop "checkout flow"      # prints the MP4's path: checkout-flow.mp4
 dray browser tab                              # list tabs; also: tab new [url], tab <id>, tab close [id]

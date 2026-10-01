@@ -36,6 +36,7 @@ const LINEAR_ROWS: Issue[] = [
     createdAt: "2026-09-05T10:30:02Z",
     updatedAt: "2026-09-09T05:51:58Z",
     pullRequests: [143, 144],
+    issueType: null,
   },
   {
     tracker: "linear",
@@ -53,6 +54,7 @@ const LINEAR_ROWS: Issue[] = [
     createdAt: "2026-08-29T09:00:00Z",
     updatedAt: "2026-09-01T09:00:00Z",
     pullRequests: [54],
+    issueType: null,
   },
 ];
 
@@ -73,6 +75,7 @@ const GITHUB_ROWS: Issue[] = [
     createdAt: "2026-09-22T05:32:40Z",
     updatedAt: "2026-09-22T05:32:40Z",
     pullRequests: [249],
+    issueType: { name: "Feature", color: "#0969da" },
   },
   {
     tracker: "github",
@@ -90,6 +93,7 @@ const GITHUB_ROWS: Issue[] = [
     createdAt: "2026-09-01T16:56:52Z",
     updatedAt: "2026-09-18T11:00:00Z",
     pullRequests: [],
+    issueType: { name: "Bug", color: "#d1242f" },
   },
 ];
 
@@ -99,6 +103,11 @@ const FILTERS: IssueFilters = {
   labels: [
     { name: "bug", color: "#d73a4a" },
     { name: "feature", color: "#a2eeef" },
+  ],
+  issueTypes: [
+    { name: "Task", color: "#9a6700" },
+    { name: "Bug", color: "#d1242f" },
+    { name: "Feature", color: "#0969da" },
   ],
   teamStates: {},
 };
@@ -114,9 +123,10 @@ const FILTERS: IssueFilters = {
       return null;
     }
     if (cmd === "list_issues") {
-      const query = args.query as { tracker: string; settled: boolean };
+      const query = args.query as { tracker: string; settled: boolean; issueType?: string };
       if (query.settled) return [];
-      return query.tracker === "github" ? GITHUB_ROWS : LINEAR_ROWS;
+      if (query.tracker !== "github") return LINEAR_ROWS;
+      return GITHUB_ROWS.filter((row) => !query.issueType || row.issueType?.name === query.issueType);
     }
     if (cmd === "list_issue_filters") return FILTERS;
     if (cmd === "github_repo") return "monorepo-labs/dray";
