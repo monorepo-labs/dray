@@ -441,6 +441,23 @@ async fn remove_session_worktree(
     Ok(manager.remove_worktree(session_id).await?)
 }
 
+/// The reader's rename: written, locked against later generated titles, and
+/// announced on `session_title` like any other title so every row follows.
+#[tauri::command]
+async fn rename_session(session_id: String, title: String, app: AppHandle) -> Result<(), Fail> {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(anyhow::anyhow!("A session title cannot be empty").into());
+    }
+    if store::rename_session(&session_id, &title).await?.is_some() {
+        let event = title::SessionTitleEvent { session_id, title, title_locked: true };
+        if let Err(e) = app.emit("session_title", &event) {
+            eprintln!("[rename emit err] {e}");
+        }
+    }
+    Ok(())
+}
+
 /// Writes the flags, and on settle stops the session — child, its process
 /// tree, browser tabs. The stop is best-effort and after the write: the flag
 /// has landed either way, and failing the command would tell the frontend a
@@ -752,6 +769,7 @@ pub fn run() {
             git::log_branch_commits,
             work_status,
             set_session_flags,
+            rename_session,
             store::detach_session,
             delete_session,
             fork_session,

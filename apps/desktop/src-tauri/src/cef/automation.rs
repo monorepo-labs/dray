@@ -586,6 +586,7 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
             | BrowserAction::Check { .. }
             | BrowserAction::Uncheck { .. }
     );
+    let _driving = Driving::start(session);
     let tab = active_id(session);
     if let (true, Some(tab)) = (input, tab) {
         on_main(move || reveal(tab))?;
@@ -597,6 +598,32 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
         let _ = on_main(apply_layout);
     }
     answer
+}
+
+/// Sessions a `dray browser` verb is running in, one entry per verb, so
+/// `DrayFocus` can refuse Chromium focus the agent's actions would take.
+static DRIVING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct Driving(String);
+
+impl Driving {
+    fn start(session: &str) -> Self {
+        DRIVING.lock().unwrap().push(session.to_string());
+        Driving(session.to_string())
+    }
+}
+
+impl Drop for Driving {
+    fn drop(&mut self) {
+        let mut driving = DRIVING.lock().unwrap();
+        if let Some(i) = driving.iter().position(|s| *s == self.0) {
+            driving.remove(i);
+        }
+    }
+}
+
+pub fn driving(session: &str) -> bool {
+    DRIVING.lock().unwrap().iter().any(|s| s == session)
 }
 
 async fn perform(session: &str, action: BrowserAction) -> Answer {
@@ -664,7 +691,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::TabSwitch { id } => {
             let id = owned(session, id)?;
-            browser_activate(session.to_string(), id)?;
+            activate(session.to_string(), id, false)?;
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {
@@ -1047,6 +1074,31 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 })?;
             remember_viewport(session, *w, *h);
             ok(format!("{label} {w}×{h}"))
+        }
+        BrowserAction::Zoom { percent } => {
+            let tab = active_tab(session)?;
+            // Chromium's own zoom range.
+            if !(25..=500).contains(&percent) {
+                return Err(format!("zoom {percent}? between 25 and 500"));
+            }
+            let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
+            // Waited on, so a busy main thread cannot leave the zoom queued
+            // behind an answer that already said it landed.
+            let (tx, rx) = oneshot::channel();
+            on_main(move || {
+                let host = browser_of(tab).and_then(|b| b.host());
+                if let Some(host) = &host {
+                    host.set_zoom_level(level);
+                }
+                let _ = tx.send(host.is_some());
+            })?;
+            if !rx.await.unwrap_or(false) {
+                return Err("that tab is gone".into());
+            }
+            // The renderer lays the page out again a frame later, and a
+            // screenshot straight after must not catch the old layout.
+            tokio::time::sleep(SETTLE).await;
+            ok(format!("zoom {percent}%"))
         }
     }
 }

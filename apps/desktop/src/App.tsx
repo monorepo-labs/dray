@@ -31,6 +31,7 @@ const IssuesView = lazy(() => import("@/components/IssuesView"));
 const PrPanel = lazy(() => import("@/components/PrPanel"));
 const BrowserPane = lazy(() => import("@/components/browser/BrowserPane"));
 import {
+  activateTab,
   clearOpenError,
   closeTab,
   describePick,
@@ -159,6 +160,9 @@ import { buildTranscript } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+/// ⌘⇧↑/↓ presses closer than this are one run. Quick taps land 150–250ms
+/// apart, so 150 caught key repeat alone and every tap still opened its row.
+const STEP_RUN_MS = 300;
 
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
@@ -231,6 +235,7 @@ function App() {
     deleteSession,
     removeWorktree,
     ensureLoaded,
+    setNeighbours,
     setOnScreen,
     setCrewSeen,
     paneState,
@@ -1453,8 +1458,10 @@ function App() {
   // Moves along the visible row, wrapping. Off `tabs` rather than `PANEL_TABS`,
   // so a session with no PR tab cycles through two and never lands on one that
   // isn't drawn.
+  // With the pane shut, the Browser view's strip is the only row of tabs on
+  // screen, so ⌘⇧[ ] means that one rather than nothing.
   const stepTab = (delta: number) => {
-    if (!panelShown) return;
+    if (!panelShown) return fullBrowserOpen ? stepBrowserTab(delta) : undefined;
     const from = tabs.indexOf(activeTab);
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
@@ -1643,9 +1650,9 @@ function App() {
   // where a group's run is one step — so from inside a group it lands on the
   // next group, or on the row past the last one, and enters a group on its
   // first pane.
-  const stepThrough = (units: SessionIndexItem[][], delta: number) => {
+  const stepTarget = (units: SessionIndexItem[][], delta: number, current: string | null) => {
     if (units.length === 0) return;
-    const from = units.findIndex((u) => u.some((i) => i.sessionId === selectedSessionId));
+    const from = units.findIndex((u) => u.some((i) => i.sessionId === current));
     // No selection is the empty composer — either direction enters at the top.
     const next =
       from === -1
@@ -1653,14 +1660,8 @@ function App() {
         : delta > 0
           ? (from + 1) % units.length
           : Math.max(from - 1, 0);
-    const item = units[next][0];
-    if (item.sessionId !== selectedSessionId) {
-      void handleSelectSessionIndexItem(item.sessionId);
-    }
+    return units[next][0].sessionId;
   };
-  // Drafts in the order the sidebar draws them. The walk enters them only from
-  // a draft already open: a draft is set aside on purpose, so stepping from a
-  // session or a new task passes them by.
   // Every sidebar row as drawn, drafts in place, with the same live reading as
   // `ordered` so the sessions sit where the eye sees them.
   const drawnRows = useMemo(
@@ -1684,10 +1685,12 @@ function App() {
           ),
     [archivedShown, searchedSessions, projects, statusBySession, sidebarAsking, spaceGroups, sidebarDrafts],
   );
+  // The walk enters drafts only from a draft already open: a draft is set aside
+  // on purpose, so stepping from a session or a new task passes them by.
   const stepSession = (delta: number) => {
     const drafts = drawnRows.flatMap((r) => (r.draft ? [r.draft] : []));
     const at = drafts.findIndex((d) => d.id === openDraftId);
-    if (at === -1) return stepThrough(ordered.map((i) => [i]), delta);
+    if (at === -1) return stepRow(delta);
     const next = at + delta;
     if (next >= 0 && next < drafts.length) return openDraft(drafts[next].id);
     // Off either end of the drafts, the walk leaves for the session drawn just
@@ -1696,9 +1699,76 @@ function App() {
     const edge = drawnRows.findIndex((r) => r.draft?.id === drafts[at].id);
     const beyond = delta > 0 ? drawnRows.slice(edge + 1) : drawnRows.slice(0, edge).reverse();
     const session = beyond.find((r) => r.session)?.session;
-    if (session) void handleSelectSessionIndexItem(session.sessionId);
+    if (session) commitStep(session.sessionId);
     else openDraft(drafts[at].id);
   };
+  const stepThrough = (units: SessionIndexItem[][], delta: number) => {
+    const id = stepTarget(units, delta, selectedSessionId);
+    if (id && id !== selectedSessionId) void handleSelectSessionIndexItem(id);
+  };
+  // Where ⌘⇧↑/↓ last landed. Neighbours are warmed only while the selection is
+  // still there, so a click elsewhere lets them go and a mouse open warms none.
+  const [steppedTo, setSteppedTo] = useState<string | null>(null);
+  // A press landing within `STEP_RUN_MS` of the last one moves only the
+  // sidebar's highlight, and the run opens where it stops. Opening every row a
+  // held chord passes was a read each, and marked each finished one as read
+  // unseen. A lone press still opens at once, and a collapsed sidebar opens on
+  // every press, having nothing else to show where the walk is.
+  const [pendingStep, setPendingStep] = useState<string | null>(null);
+  const stepRun = useRef<{ last: number; timer?: number }>({ last: 0 });
+  const commitStep = (id: string) => {
+    setPendingStep(null);
+    setSteppedTo(id);
+    if (id !== selectedSessionId) void handleSelectSessionIndexItem(id);
+  };
+  // The timer fires renders later, so it must reach this render's selection.
+  const commitStepRef = useRef(commitStep);
+  commitStepRef.current = commitStep;
+  const stepRow = (delta: number) => {
+    const id = stepTarget(ordered.map((i) => [i]), delta, pendingStep ?? selectedSessionId);
+    if (!id) return;
+    const run = stepRun.current;
+    const now = Date.now();
+    const fast = !collapsed && now - run.last < STEP_RUN_MS;
+    run.last = now;
+    clearTimeout(run.timer);
+    if (!fast) return commitStep(id);
+    setPendingStep(id);
+    run.timer = window.setTimeout(() => commitStepRef.current(id), STEP_RUN_MS);
+  };
+  // Any other move — a click, a notice, ⌘N — abandons a run in flight.
+  const cancelStep = () => {
+    clearTimeout(stepRun.current.timer);
+    setPendingStep(null);
+  };
+  useEffect(cancelStep, [selectedSessionId]);
+  // `goToSession`'s half, which also forgets the last press: a click on the
+  // open session moves no selection, and a press just after any move is a lone
+  // one that opens at once.
+  const endStepRun = () => {
+    stepRun.current.last = 0;
+    cancelStep();
+  };
+  // After a pause, so a held chord does not read every row it passes. Two
+  // presses either way, wrap and top hold included.
+  useEffect(() => {
+    if (!steppedTo || steppedTo !== selectedSessionId) {
+      setNeighbours([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const at = ordered.findIndex((i) => i.sessionId === steppedTo);
+      if (at === -1) return setNeighbours([]);
+      setNeighbours(
+        [1, 2, -1, -2]
+          .map((d) => ordered[d > 0 ? (at + d) % ordered.length : Math.max(at + d, 0)].sessionId)
+          .filter((id) => id !== steppedTo),
+      );
+    }, 150);
+    return () => clearTimeout(timer);
+    // `setNeighbours` is rebuilt every render; these are what move the set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steppedTo, selectedSessionId, ordered]);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
@@ -1818,10 +1888,11 @@ function App() {
   // back. The page itself is left as it was — its filters and its scroll come
   // back with it — so this is a navigation, not a dismissal. Settings cover the
   // whole window, so they close too.
-  const goToSession = (go: () => void) => {
+  const goToSession = (go: () => void, stepping = false) => {
     setIssuesOpen(false);
     closeSettings();
     setOpenDraftId(null);
+    if (!stepping) endStepRun();
     go();
   };
 
@@ -2233,8 +2304,8 @@ function App() {
 
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("session.prev", () => goToSession(() => stepSession(-1)));
-  useHotkey("session.next", () => goToSession(() => stepSession(1)));
+  useHotkey("session.prev", () => goToSession(() => stepSession(-1), true));
+  useHotkey("session.next", () => goToSession(() => stepSession(1), true));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
@@ -2306,6 +2377,9 @@ function App() {
     if (issuesOpen) return setPickedIssue(null);
     togglePanel();
   });
+  // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
+  // is a preference, and it lands wherever the pane next opens.
+  useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
   // Bound only where a crew could be drawn, since `useHotkey` claims a chord it
   // is listening for — unbound elsewhere, ⌘⇧C stays free for whatever the
   // reader rebinds onto it rather than being swallowed by a column that has
@@ -2346,6 +2420,21 @@ function App() {
     }
     if (panelShown) panelRefresh?.onRefresh();
   });
+  // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
+  // The pending tab sits at the end of it, which is where the strip draws it.
+  const stepBrowserTab = (delta: number) => {
+    if (!selectedSessionId || !browserTabs || isRecording(selectedSessionId)) return;
+    const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
+    const next = browserTabs[from + delta];
+    if (!next) return;
+    if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
+    if (!next.active) void activateTab(selectedSessionId, next.id);
+  };
+  // The Diff view and an open file step their own strip on this chord, and the
+  // main column's row wins over a browser sitting beside it in the panel.
+  const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
+  useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
+  useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
   // ⌘T, the chord every browser gives a new tab. Bound only while the browser
   // is on screen, so it stays free everywhere else.
   useHotkey("browser.newTab", () => {
@@ -2556,7 +2645,7 @@ function App() {
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
-          selectedSessionId={issuesOpen ? null : selectedSessionId}
+          selectedSessionId={issuesOpen ? null : (pendingStep ?? selectedSessionId)}
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -3006,6 +3095,7 @@ function App() {
           groups={spaceGroups}
           onFocus={(id) => void handleSelectSessionIndexItem(id)}
           onClose={closeSessionPane}
+          onDrop={dropSession}
           active={!issuesOpen && viewTab === "chat"}
           chat={paneChat}
         />

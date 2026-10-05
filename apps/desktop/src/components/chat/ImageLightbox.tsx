@@ -1,12 +1,33 @@
 import { useState, type MouseEvent } from "react";
 import { Dialog } from "radix-ui";
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Play, X } from "lucide-react";
 
+import VideoPlayer from "@/components/chat/VideoPlayer";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 
-type LightboxImage = { src: string; name: string };
+export type LightboxImage = { src: string; name: string; video?: boolean };
+
+/// A picture's or a recording's thumbnail, cropped square to its box. A video
+/// shows its first frame under a play mark, since a still is otherwise
+/// indistinguishable from a screenshot of the same page.
+export function Thumb({ item, className }: { item: LightboxImage; className?: string }) {
+  if (!item.video) {
+    return <img src={item.src} alt="" loading="lazy" decoding="async" className={cn("object-cover", className)} />;
+  }
+  return (
+    <span className={cn("relative block", className)}>
+      {/* `#t` paints the first frame; `metadata` keeps it to that. */}
+      <video src={`${item.src}#t=0.001`} preload="metadata" muted playsInline className="size-full object-cover" />
+      <span className="absolute inset-0 flex items-center justify-center">
+        <span className="flex size-6 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+          <Play className="size-3 translate-x-px fill-current" />
+        </span>
+      </span>
+    </span>
+  );
+}
 
 /// The images of one message at full size, over the transcript rather than
 /// inside it.
@@ -75,7 +96,8 @@ export default function ImageLightbox({
           // it is open, so the keys are scoped to it without a listener that has
           // to be told when to stop caring. Escape is Radix's own.
           onKeyDown={(e) => {
-            if (!many) return;
+            // A video's seek slider answers the arrows itself.
+            if (!many || e.target instanceof HTMLInputElement) return;
             if (e.key === "ArrowLeft") {
               e.preventDefault();
               step(-1);
@@ -101,11 +123,17 @@ export default function ImageLightbox({
             onClick={closeOnBackdrop}
             className="flex min-h-0 w-full flex-1 items-center justify-center"
           >
-            <img
-              src={current.src}
-              alt={current.name}
-              className="max-h-[80%] max-w-[80%] rounded-lg object-contain"
-            />
+            {current.video ? (
+              // Keyed so stepping away stops it rather than carrying the
+              // playhead onto the next recording.
+              <VideoPlayer key={current.src} src={current.src} className="max-h-[75vh] max-w-[80vw]" />
+            ) : (
+              <img
+                src={current.src}
+                alt={current.name}
+                className="max-h-[80%] max-w-[80%] rounded-lg object-contain"
+              />
+            )}
           </div>
 
           {many && (
@@ -156,7 +184,7 @@ export default function ImageLightbox({
                           : "opacity-50 hover:opacity-80",
                       )}
                     >
-                      <img src={image.src} alt="" className="size-full object-cover" />
+                      <Thumb item={image} className="size-full" />
                     </button>
                   ))}
                 </div>

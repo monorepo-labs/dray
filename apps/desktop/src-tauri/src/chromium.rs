@@ -22,8 +22,8 @@ use ts_rs::TS;
 /// The CEF version the `cef` crate in Cargo.toml binds. Framework and
 /// bindings have to agree, so bumping the crate means re-pinning [`ARM64`]
 /// and [`X64`] below from `cef-builds.spotifycdn.com/index.json` as well.
-pub const VERSION: &str = "151.3.24";
-const BUILD: &str = "151.3.24+g2384915+chromium-151.0.7922.174";
+pub const VERSION: &str = "154.0.32";
+const BUILD: &str = "154.0.32+g682c378+chromium-154.0.8037.58";
 const CDN: &str = "https://cef-builds.spotifycdn.com";
 pub const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 const LIBRARY: &str = "Chromium Embedded Framework";
@@ -38,14 +38,14 @@ struct Tarball {
 
 const ARM64: Tarball = Tarball {
     platform: "macosarm64",
-    size: 130_984_661,
-    sha256: "3557fa980ce83103ec488dd2e5cc6cc51d2b890718c41005b3ef15ca5944a811",
+    size: 132_224_904,
+    sha256: "0adf18dc3c4dadf0fecdb3ce2b9d558989fa264743cdcd46e89b1b3b118dd85f",
 };
 
 const X64: Tarball = Tarball {
     platform: "macosx64",
-    size: 136_754_636,
-    sha256: "7663a7e92f1d77d04e699ccf4d8a429e5498ba7a7202d22feed274831b18b2e9",
+    size: 138_660_944,
+    sha256: "e7e17e6c899ffe6c4cb16065d6dcaf16f9735d9cd0861099558f578d40714552",
 };
 
 fn tarball() -> Option<&'static Tarball> {
@@ -102,9 +102,13 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
     let _ = app.emit("chromium_status", status);
 }
 
-/// `~/.dray/cef/`, holding one version directory at a time.
+/// `~/.dray/cef/` (`cef-dev/` under `tauri dev`), one version directory at a time.
 fn cef_dir() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join(".dray/cef")
+    // Split like the profile root: the sweep deletes every version but its
+    // own, so a dev build on a newer CEF would take the release app's
+    // framework out from under its running helpers.
+    let dir = if tauri::is_dev() { ".dray/cef-dev" } else { ".dray/cef" };
+    std::env::home_dir().unwrap_or_default().join(dir)
 }
 
 fn version_dir() -> PathBuf {
@@ -352,20 +356,22 @@ mod tests {
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
             ARM64.name(),
-            "cef_binary_151.3.24+g2384915+chromium-151.0.7922.174_macosarm64_minimal.tar.bz2"
+            "cef_binary_154.0.32+g682c378+chromium-154.0.8037.58_macosarm64_minimal.tar.bz2"
         );
         assert_eq!(
             X64.name(),
-            "cef_binary_151.3.24+g2384915+chromium-151.0.7922.174_macosx64_minimal.tar.bz2"
+            "cef_binary_154.0.32+g682c378+chromium-154.0.8037.58_macosx64_minimal.tar.bz2"
         );
-        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_151.3.24%2B"));
+        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_154.0.32%2B"));
         assert!(!ARM64.url().contains('+'));
     }
 
     #[test]
     fn version_is_the_crate_build_prefix() {
         assert!(BUILD.starts_with(VERSION));
-        assert!(version_dir().ends_with("cef/151.3.24"));
+        // Tests run as a dev build, so this also pins the split from the
+        // release app's `.dray/cef`.
+        assert!(version_dir().ends_with(Path::new(".dray/cef-dev").join(VERSION)));
     }
 
     #[test]

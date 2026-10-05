@@ -17,7 +17,20 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Apple stops notarizing whenever it updates the developer agreement until
+  # the Account Holder accepts it, and the build only finds out ~30 minutes in.
+  # Any notarytool call answers the same 403, so ask before building.
+  notary-check:
+    runs-on: macos-latest
+    steps:
+      - run: xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
   build:
+    needs: notary-check
     runs-on: macos-latest
     outputs:
       channel: ${{ steps.channel.outputs.channel }}

@@ -691,6 +691,20 @@ fn refocus_webview(from: &NSView) {
     }
 }
 
+/// Whether the first responder sits inside one of the session's tab views.
+/// Main thread only.
+fn browser_holds_focus(session: &str) -> bool {
+    let views: Vec<usize> =
+        TABS.lock().unwrap().iter().filter(|t| t.session == session && t.view != 0).map(|t| t.view).collect();
+    views.into_iter().any(|view| {
+        let view: &NSView = unsafe { &*(view as *const NSView) };
+        view.window()
+            .and_then(|w| w.firstResponder())
+            .and_then(|r| r.downcast_ref::<NSView>().map(|v| v.isDescendantOf(view)))
+            .unwrap_or(false)
+    })
+}
+
 /// Unhides a tab's view off-screen, so Chromium treats it as visible and
 /// delivers the input `dray browser` dispatches: a hidden `NSView` marks the
 /// widget hidden, and a hidden widget drops mouse and key events (measured:
@@ -728,6 +742,26 @@ wrap_client! {
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(DrayKeyboard::new())
+        }
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(DrayFocus::new(self.session.clone()))
+        }
+    }
+}
+
+wrap_focus_handler! {
+    struct DrayFocus {
+        session: String,
+    }
+
+    impl FocusHandler {
+        /// A load `dray browser` starts asks for focus, and granting it took
+        /// the reader's keys out of the composer — into a hidden view, where
+        /// they went nowhere. Navigation alone: the reader picking a tab asks
+        /// as `SYSTEM`, and a load the page starts itself asks nothing
+        /// (measured: a link click and `back` never reach here).
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, source: FocusSource) -> ::std::os::raw::c_int {
+            (source == FocusSource::NAVIGATION && automation::driving(&self.session)) as ::std::os::raw::c_int
         }
     }
 }
@@ -1316,13 +1350,21 @@ pub fn browser_tabs(session_id: String) -> Vec<TabInfo> {
 
 #[tauri::command]
 pub fn browser_activate(session_id: String, id: i32) -> Result<(), String> {
+    activate(session_id, id, true)
+}
+
+/// Makes `id` the session's active tab. `focus` is the reader's pick: an
+/// agent's `tab <id>` must not take keys out of the composer, but focus
+/// follows the switch where the reader was already typing in a page.
+pub(crate) fn activate(session_id: String, id: i32, focus: bool) -> Result<(), String> {
     on_main(move || {
         if session_of(id).as_deref() != Some(session_id.as_str()) {
             return;
         }
+        let focus = focus || browser_holds_focus(&session_id);
         set_active(&session_id, Some(id));
         apply_layout();
-        if let Some(host) = browser_of(id).and_then(|b| b.host()) {
+        if let Some(host) = browser_of(id).and_then(|b| b.host()).filter(|_| focus) {
             host.set_focus(1);
         }
         publish(&session_id);

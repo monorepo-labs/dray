@@ -208,7 +208,14 @@ export function openInBrowser(sessionId: string, url: string, newTab = false) {
   });
 }
 
+/// Marks the tab active here at once, ahead of the event saying so, or a
+/// second ⌘⇧→ pressed before it lands steps from the tab it just left.
 export function activateTab(sessionId: string, id: number) {
+  const held = tabsBySession.get(sessionId);
+  if (held?.some((t) => t.id === id)) {
+    tabsBySession.set(sessionId, held.map((t) => ({ ...t, active: t.id === id })));
+    notify();
+  }
   return invoke("browser_activate", { sessionId, id });
 }
 

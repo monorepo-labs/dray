@@ -3,7 +3,7 @@ import { Fragment } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useShortcutOverrides, chordFor } from "@/hooks/useShortcuts";
-import { formatChords, type ShortcutId } from "@/lib/shortcuts";
+import { FOLD, formatChords, type ShortcutId } from "@/lib/shortcuts";
 
 /// The caps for one or more shortcuts, read off the same store `useHotkey`
 /// binds from — so a tooltip can never name a chord the key no longer fires.
@@ -52,10 +52,10 @@ const ARROW_ICONS: Record<string, LucideIcon> = {
 };
 
 function capContent(cap: string) {
-  const chars = [...cap];
-  if (!chars.some((c) => ARROW_ICONS[c])) return cap;
-  return chars.map((c, i) => {
-    const Icon = ARROW_ICONS[c];
-    return Icon ? <Icon key={i} /> : <span key={i}>{c}</span>;
+  const keys = cap.split(FOLD);
+  if (keys.length === 1 && !ARROW_ICONS[cap]) return cap;
+  return keys.map((k, i) => {
+    const Icon = ARROW_ICONS[k];
+    return Icon ? <Icon key={i} /> : <span key={i}>{k}</span>;
   });
 }

@@ -58,8 +58,21 @@ describe("panelMove", () => {
     expect(pane({ from: "browser", to: "chat", claimed: true })).toBe("restore");
   });
 
+  it("hides on arriving at Diff or Files too", () => {
+    expect(pane({ to: "changes" })).toBe("hide");
+    expect(pane({ to: "files" })).toBe("hide");
+    expect(pane({ from: "files", to: "chat", claimed: true })).toBe("restore");
+  });
+
   it("leaves a pane opened beside the page alone", () => {
     expect(pane({ from: "browser" })).toBeNull();
+  });
+
+  // Diff → Files is neither leaving nor arriving: no restore and re-hide in
+  // between, and a pane the reader opened beside Diff stays open.
+  it("does nothing on a move between two views off Chat", () => {
+    expect(pane({ from: "changes", to: "files", open: false, claimed: true })).toBeNull();
+    expect(pane({ from: "changes", to: "files" })).toBeNull();
   });
 
   // Selecting a session already on the Browser with its pane open is the

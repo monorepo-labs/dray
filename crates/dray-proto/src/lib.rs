@@ -312,6 +312,9 @@ pub enum BrowserAction {
     SetViewport { width: u32, height: u32 },
     /// A device preset by name, as the pane's device bar lists them.
     SetDevice { name: String },
+    /// Page zoom in percent, 100 being the page's own size. The same zoom
+    /// the pane's ⌘= sets, so the reader sees it and captures carry it.
+    Zoom { percent: u32 },
     /// Start recording the active tab, at the size `screenshot` uses.
     RecordStart,
     /// Stop recording and answer the MP4's path, named after `name` where

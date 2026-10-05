@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, isToolGroup, segmentWork, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -733,5 +733,63 @@ describe("drawsSameTurn", () => {
   it("breaks when a result lands for one of the turn's calls", () => {
     const open = [prompt(1, "one", false), callStarted(2, "a")];
     expect(drawsSameTurn(view(open, 0), view([...open, result(3, "a")], 0))).toBe(false);
+  });
+});
+
+describe("segmentMedia", () => {
+  function result(seq: number, callId: string, body: string, images: number): AgentEvent {
+    return event(seq, {
+      type: "tool_call_completed",
+      callId,
+      result: {
+        text: body,
+        isError: false,
+        structured: null,
+        exitCode: null,
+        durationMs: null,
+        images: Array.from({ length: images }, (_, i) => ({
+          path: `/archived/${callId}-${i}.png`,
+          url: null,
+          mimeType: "image/png",
+        })),
+      },
+    } as AgentEventPayload);
+  }
+
+  const video = "/Users/me/.dray/browser/recordings/s1/flow.mp4";
+
+  /// A grouped run's results sit after the group in `work`, so the pictures of
+  /// calls folded into one row must still be found.
+  it("finds every picture, grouped calls included, and each recording once", () => {
+    const { turns } = buildTranscript(
+      [
+        prompt(0, "go", false),
+        callStarted(1, "a"),
+        result(2, "a", "", 1),
+        callStarted(3, "b"),
+        result(4, "b", `saved ${video}`, 2),
+        text(5, `watch ${video}.`),
+        text(6, "done"),
+        completed(7, "done"),
+      ],
+      false,
+    );
+    const [seg] = segmentWork(turns[0]);
+    const media = segmentMedia(seg.items, turns[0].finalText);
+    expect(media.map((m) => ("image" in m ? m.image.path : m.video))).toEqual([
+      "/archived/a-0.png",
+      "/archived/b-0.png",
+      "/archived/b-1.png",
+      video,
+    ]);
+  });
+
+  /// The collapsed view already draws the final message, video and all.
+  it("leaves the final message's recording to the final message", () => {
+    const media = segmentMedia(
+      [result(1, "a", `saved ${video}`, 0), text(2, `here: ${video}`)],
+      `here: ${video}`,
+    );
+    expect(media).toEqual([]);
   });
 });

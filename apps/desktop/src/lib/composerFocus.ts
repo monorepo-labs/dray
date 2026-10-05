@@ -1,3 +1,6 @@
+import { isTextField } from "@/hooks/useHotkey";
+import { IS_MAC } from "@/lib/platform";
+
 /// A way to hand focus back to the composer from outside it.
 ///
 /// Dictation is the caller: the mic button lives in `ComposerToolbar`, which
@@ -39,15 +42,58 @@ export function focusComposerEnd() {
   const el = composer;
   if (!el) return;
 
-  requestAnimationFrame(() => {
-    el.focus();
+  requestAnimationFrame(() => focusAtEnd(el));
+}
 
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
+function focusAtEnd(el: HTMLElement) {
+  el.focus();
 
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  });
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+/// Where a printable key belongs to whatever has focus rather than to the
+/// composer: an open menu or dialog, where Radix typeahead reads letters.
+const OWNS_KEYS = "[role=dialog], [role=alertdialog], [role=menu], [role=listbox]";
+
+type Keystroke = Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
+/// Whether a keystroke is one the composer takes: a printable key with no
+/// modifier but Shift, or the platform's own paste chord. Space activates the
+/// focused row or button, so it stays where it was pressed.
+export function handsOver(e: Keystroke, mac = IS_MAC): boolean {
+  const paste =
+    (mac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v";
+  const typed = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && e.key !== " ";
+  return paste || typed;
+}
+
+/// Sends a printable key, or a paste, pressed elsewhere in the app to the
+/// composer.
+///
+/// Installed on `document` by `ChatInput`, so it exists only while the Chat
+/// view has a composer. It moves focus and nothing else: WebKit re-reads the
+/// focused node between `keydown` and inserting the text, and runs ⌘V's Paste
+/// against the new focus too, so both land in the box itself and go through
+/// `RichInput`'s own handlers.
+export function typeIntoComposer(e: KeyboardEvent) {
+  const el = composer;
+  if (!el || e.defaultPrevented || e.isComposing) return;
+  if (!handsOver(e)) return;
+
+  const target = e.target instanceof HTMLElement ? e.target : null;
+  if (isTextField(target) || target?.closest(OWNS_KEYS)) return;
+  // The question card is a `<form>` whose choices answer to keys of their own.
+  // The composer is one too, and its own buttons should still hand over.
+  const form = target?.closest("form");
+  if (form && !form.contains(el)) return;
+  // Mounted but not drawn — Settings hides the shell rather than unmounting it.
+  if (el.getClientRects().length === 0) return;
+
+  focusAtEnd(el);
 }

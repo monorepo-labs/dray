@@ -104,6 +104,50 @@ export function readValue(root: Node): string {
   return out;
 }
 
+/// Whether the tree draws `placed`: the same text under the same paint.
+///
+/// **The text alone can read right while the paint is wrong, because the
+/// browser decides where a typed character lands by style, not by segment.** A
+/// character typed after a coloured run goes inside its span, and one typed
+/// after the run was deleted whole still takes its colour, carried over as an
+/// inline style (#372). Adjacent runs painted alike merge on both sides, so where
+/// the browser happened to split a text node does not count as drift.
+export function paintedAs(
+  root: HTMLElement,
+  placed: Placed[],
+  classOf: (placed: Placed) => string,
+): boolean {
+  const want: { paint: string; text: string }[] = [];
+  for (const entry of placed) {
+    const className = classOf(entry);
+    const paint = entry.label !== null ? "chip" : className && `SPAN.${className}./`;
+    merge(want, paint, entry.segment.text);
+  }
+
+  const have: { paint: string; text: string }[] = [];
+  for (const { node, text } of pieces(root)) merge(have, paintOf(root, node), text);
+
+  return JSON.stringify(want) === JSON.stringify(have);
+}
+
+function merge(runs: { paint: string; text: string }[], paint: string, text: string): void {
+  const last = runs.at(-1);
+  if (last?.paint === paint) last.text += text;
+  else if (text) runs.push({ paint, text });
+}
+
+/// Every element between a node and the root, named the way `paintedAs` names
+/// a coloured run, so an inline style the browser added reads as a difference.
+function paintOf(root: Node, node: Node): string {
+  if (node instanceof HTMLElement && node.hasAttribute(TAG_ATTR)) return "chip";
+
+  let paint = "";
+  for (let el = node.parentElement; el && el !== root; el = el.parentElement) {
+    paint = `${el.tagName}.${el.className}.${el.getAttribute("style") ?? ""}/${paint}`;
+  }
+  return paint;
+}
+
 /// A DOM position as an index into the string.
 ///
 /// Measured by cloning the range rather than by walking to it, so the two
@@ -174,6 +218,53 @@ export function placeCaret(root: HTMLElement, index: number): void {
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
+}
+
+/// Scrolls the box, and only the box, so the selection's moving end is in view.
+///
+/// The browser does this for typing but not for a selection set from code —
+/// every ⇧⏎ and pick lands that way — so a caret placed on a new line below the
+/// cap sat out of sight. Not `scrollIntoView`, which walks every scrollable
+/// ancestor and would nudge the transcript too.
+export function revealCaret(root: HTMLElement): void {
+  const selection = window.getSelection();
+  const node = selection?.focusNode;
+  if (!selection || !node || !root.contains(node)) return;
+
+  const range = document.createRange();
+  range.setStart(node, selection.focusOffset);
+  // Past a text node's closing newline the caret is on the line the next node
+  // opens, and WebKit measures it at the end of the line above — one line short.
+  const lineEnd =
+    node instanceof Text && selection.focusOffset === node.length && node.data.endsWith("\n");
+  let box: DOMRect | undefined = lineEnd ? undefined : range.getBoundingClientRect();
+  // Chromium measures a caret on a line holding no character yet as nothing. In
+  // both cases the first box after the caret stands in, being on its line, and
+  // nothing after means the caret is at the very end.
+  if (!box?.height) {
+    if (lineEnd) range.setStartAfter(node);
+    range.setEnd(root, root.childNodes.length);
+    box = undefined;
+    for (const rect of range.getClientRects()) {
+      if (rect.height > 0) {
+        box = rect;
+        break;
+      }
+    }
+  }
+  if (!box) {
+    root.scrollTop = root.scrollHeight;
+    return;
+  }
+
+  // Inside the padding, so a caret scrolled to either end keeps the gap the box
+  // has at rest rather than sitting flush on its edge.
+  const style = getComputedStyle(root);
+  const inner = root.getBoundingClientRect().top + root.clientTop;
+  const top = inner + parseFloat(style.paddingTop);
+  const bottom = inner + root.clientHeight - parseFloat(style.paddingBottom);
+  if (box.top < top) root.scrollTop -= top - box.top;
+  else if (box.bottom > bottom) root.scrollTop += box.bottom - bottom;
 }
 
 /// Rebuilds the tree from the placed runs.

@@ -965,7 +965,7 @@ async fn note_title(handles: &ReaderHandles, title: String) {
         // since the row it would update is gone.
         Ok(None) => {}
         Ok(Some(_)) => {
-            let payload = json!({"sessionId": handles.session_id, "title": title});
+            let payload = json!({"sessionId": handles.session_id, "title": title, "titleLocked": false});
             if let Err(err) = handles.app.emit("session_title", payload) {
                 eprintln!("[grok title emit err] {err}");
             }

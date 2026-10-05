@@ -29,7 +29,9 @@ import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useIssueSearch } from "@/hooks/useIssueSearch";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
-import { applyIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
+import { highlightSegments } from "@/lib/highlight";
+import { applyIssue, cutRange, insertIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
+import { placeSegments } from "@/lib/richText";
 import {
   canSwitchTracker,
   effectiveTracker,
@@ -37,7 +39,7 @@ import {
   subscribeIssueTracker,
   type Connected,
 } from "@/lib/issueTracker";
-import { registerComposer } from "@/lib/composerFocus";
+import { registerComposer, typeIntoComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
 import { selectionRange } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
@@ -315,6 +317,25 @@ export default function ChatInput({
     loading: issuesLoading,
     emptyNote: issuesNote,
   } = useIssueSearch(issue?.query ?? null, tracker, cwd);
+  // The issue tags already in the prompt, so the list can mark them and a pick
+  // can take one back out. Read through the chip pass, which is what knows where
+  // a remembered title ends. The token being typed is skipped: `#DRA-53` typed in
+  // full is already a tag to the parser, and it is the query, not a pick.
+  // Lowercased, since a hand-typed `#dra-53` names the same issue as the row.
+  const taggedIssues = useMemo(() => {
+    if (!issue) return [];
+    return placeSegments(highlightSegments(message), null).flatMap(({ segment, start }) =>
+      segment.kind === "issue" && start !== issue.start
+        ? [
+            {
+              identifier: (segment.inner ?? segment.text).slice(1).toLowerCase(),
+              start,
+              end: start + segment.text.length,
+            },
+          ]
+        : [],
+    );
+  }, [message, issue?.start]);
 
   // The fourth, and exclusive with the other three for the same reason again:
   // the caret sits in one token, and a token opening with `&` is none of them.
@@ -409,15 +430,31 @@ export default function ChatInput({
     editorRef.current?.focus();
   };
 
-  const pickIssue = (picked: Issue) => {
+  /// Picks a row, or takes its tag back out where the prompt already has one.
+  /// `keepOpen` is ⌘-click or ⌘⏎: the tag goes in and the `#query` token stays,
+  /// so the list stays up for the next pick. A plain pick consumes the token
+  /// either way, the way it always has.
+  const pickIssue = (picked: Issue, keepOpen = false) => {
     if (!issue) return;
 
-    // Nothing closes a title in the text, so the chip cannot find its end on its
-    // own — this is the one place that knows where the title stops, because it
-    // is the place that wrote it.
-    rememberIssueTitle(picked.identifier, picked.title);
+    const placed = taggedIssues.filter((tag) => tag.identifier === picked.identifier.toLowerCase());
+    let next = { text: message, caret };
 
-    const next = applyIssue(message, issue, picked.identifier, picked.title);
+    if (placed.length > 0) {
+      // Back to front, so each cut leaves the earlier offsets where they were.
+      for (const tag of placed.reverse()) next = cutRange(next.text, next.caret, tag.start, tag.end);
+      const token = keepOpen ? null : issueSpan(next.text, next.caret);
+      if (token) next = cutRange(next.text, next.caret, token.start, token.end);
+    } else {
+      // Nothing closes a title in the text, so the chip cannot find its end on
+      // its own — this is the one place that knows where the title stops,
+      // because it is the place that wrote it.
+      rememberIssueTitle(picked.identifier, picked.title);
+      next = keepOpen
+        ? insertIssue(message, issue, caret, picked.identifier, picked.title)
+        : applyIssue(message, issue, picked.identifier, picked.title);
+    }
+
     setMessage(next.text);
     setCaret(next.caret);
     editorRef.current?.focus();
@@ -434,7 +471,7 @@ export default function ChatInput({
 
   /// The keyboard's way into whichever list is drawn. A click calls the same
   /// functions directly, so the two routes cannot diverge.
-  const pickRow = (index: number) => {
+  const pickRow = (index: number, keepOpen = false) => {
     if (mention) {
       const file = files[index];
       if (file) pickFile(file);
@@ -443,7 +480,7 @@ export default function ChatInput({
 
     if (issue) {
       const picked = issues[index];
-      if (picked) pickIssue(picked);
+      if (picked) pickIssue(picked, keepOpen);
       return;
     }
 
@@ -529,6 +566,11 @@ export default function ChatInput({
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener("keydown", typeIntoComposer);
+    return () => document.removeEventListener("keydown", typeIntoComposer);
   }, []);
 
   // The drop target is the whole window, not the card: a file aimed at the
@@ -829,6 +871,7 @@ export default function ChatInput({
                 issues={issues}
                 activeIndex={active}
                 onPick={pickIssue}
+                tagged={new Set(taggedIssues.map((tag) => tag.identifier))}
                 onHover={setActiveIndex}
                 bare={isNewTask}
                 loading={issuesLoading}
@@ -984,6 +1027,15 @@ export default function ChatInput({
                       if ((e.key === "Enter" && plainEnter) || e.key === "Tab") {
                         e.preventDefault();
                         pickRow(active);
+                        return;
+                      }
+                      // ⌘⏎ picks and keeps the `#` list open. Stopped here, or
+                      // `queue.send`'s document binding on the same chord would
+                      // fire as well.
+                      if (issue && e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        pickRow(active, true);
                         return;
                       }
                     }
