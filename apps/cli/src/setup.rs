@@ -329,14 +329,18 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             }
         }
         ServiceCommand::Uninstall => {
+            // `stop`, not `disable --now`: a unit stays loaded after its file
+            // moved or went, and `disable` refuses one with no file.
+            let stopped = systemctl(true, &["stop", UNIT]);
             let file = unit_path()?;
             if !file.exists() {
-                println!("No background server is installed.");
+                let _ = systemctl(true, &["daemon-reload"]);
+                println!("{}", if stopped { "Stopped the background server." } else { "No background server is installed." });
                 return Ok(());
             }
             // The unit file stays until the server is stopped, or it would be
             // left running with nothing to manage it by.
-            if !systemctl(false, &["disable", "--now", UNIT]) {
+            if !stopped || !systemctl(true, &["disable", UNIT]) {
                 return Err("systemd would not stop the server; it is still installed".into());
             }
             std::fs::remove_file(&file).map_err(|e| format!("could not remove {}: {e}", file.display()))?;
@@ -474,12 +478,17 @@ fn multiselect(tty: &File, title: &str, items: &[(String, bool)]) -> Result<Vec<
 
         let mut key = [0u8; 3];
         let mut n = input.read(&mut key).map_err(|e| e.to_string())?;
-        // Over SSH an arrow's three bytes can arrive in two reads.
-        while n > 0 && n < 3 && key[0] == 0x1b {
+        // Over SSH an arrow's three bytes can arrive in two reads. Read on only
+        // while what came is still the start of one, so a lone Escape does
+        // not swallow the next key.
+        while matches!(&key[..n], [0x1b] | [0x1b, b'[']) {
             match input.read(&mut key[n..]).map_err(|e| e.to_string())? {
                 0 => break,
                 more => n += more,
             }
+        }
+        if key[..n].contains(&0x03) {
+            break None;
         }
         match &key[..n] {
             b"\x1b[A" | b"k" => at = (at + items.len() - 1) % items.len(),
