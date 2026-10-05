@@ -1697,12 +1697,21 @@ const deleteSession = async (sessionId: string) => {
 // created or retitled while the socket was down announced themselves to
 // nobody. An unreachable server cannot be asked for the side just picked, so
 // its last answer for that side stands in, drawn dimmed like the rest of it.
+//
+// The side being left is cached from what is on screen rather than from the
+// last read, since settling or unsettling a row moves it without a read. A
+// row the side left now holds is never restored onto this one.
 useEffect(() => {
   const servers = [LOCAL, ...connectedRemotes()];
   setSessionIndexItems((prev) => {
     let next = prev.filter((i) => servers.includes(serverOfPath(i.cwd)));
     for (const s of remoteServers()) {
-      if (!servers.includes(s.id)) next = [...next, ...(lastIndex.get(`${s.id}:${showArchived}`) ?? [])];
+      if (servers.includes(s.id)) continue;
+      const left = prev.filter((i) => serverOfPath(i.cwd) === s.id);
+      lastIndex.set(`${s.id}:${!showArchived}`, left);
+      const moved = new Set(left.map((i) => i.sessionId));
+      const kept = lastIndex.get(`${s.id}:${showArchived}`) ?? [];
+      next = [...next, ...kept.filter((i) => !moved.has(i.sessionId))];
     }
     return next;
   });

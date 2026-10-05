@@ -82,10 +82,24 @@ const armed = new Map<string, Set<ServerId>>();
 /// Each scope's last path list, kept to re-arm a server that reconnects.
 const watched = new Map<string, string[]>();
 
+const queues = new Map<string, Promise<unknown>>();
+
+/// Runs `job` after every earlier watch request for `scope`: each one replaces
+/// a server's whole set, so they must land in the order they were asked.
+function queued(scope: string, job: () => Promise<unknown> | undefined): Promise<unknown> {
+  const next = (queues.get(scope) ?? Promise.resolve()).then(job).catch(() => {});
+  queues.set(scope, next);
+  return next;
+}
+
+/// Read when the job runs, not when it is queued, so a re-arm sends the
+/// newest set rather than the one open when the server came back.
 function rearm(server: ServerId) {
-  for (const [scope, paths] of watched) {
-    const list = paths.filter((path) => serverOfPath(path) === server);
-    if (list.length) void invoke("watch_docs", { scope, paths: list }, server).catch(() => {});
+  for (const scope of watched.keys()) {
+    void queued(scope, () => {
+      const list = (watched.get(scope) ?? []).filter((path) => serverOfPath(path) === server);
+      return list.length ? invoke("watch_docs", { scope, paths: list }, server) : undefined;
+    });
   }
 }
 
@@ -94,15 +108,17 @@ function rearm(server: ServerId) {
 /// go on watching a set nothing on screen holds.
 export function watchDocs(scope: string, paths: string[]): Promise<unknown> {
   watched.set(scope, paths);
-  const by = new Map<ServerId, string[]>();
-  for (const path of paths) {
-    const server = serverOfPath(path);
-    by.set(server, [...(by.get(server) ?? []), path]);
-  }
-  for (const server of armed.get(scope) ?? []) if (!by.has(server)) by.set(server, []);
-  if (!by.size) by.set(LOCAL, []);
-  armed.set(scope, new Set([...by].flatMap(([server, list]) => (list.length ? [server] : []))));
-  return Promise.all(
-    [...by].map(([server, list]) => invoke("watch_docs", { scope, paths: list }, server).catch(() => {})),
-  );
+  return queued(scope, () => {
+    const by = new Map<ServerId, string[]>();
+    for (const path of paths) {
+      const server = serverOfPath(path);
+      by.set(server, [...(by.get(server) ?? []), path]);
+    }
+    for (const server of armed.get(scope) ?? []) if (!by.has(server)) by.set(server, []);
+    if (!by.size) by.set(LOCAL, []);
+    armed.set(scope, new Set([...by].flatMap(([server, list]) => (list.length ? [server] : []))));
+    return Promise.all(
+      [...by].map(([server, list]) => invoke("watch_docs", { scope, paths: list }, server).catch(() => {})),
+    );
+  });
 }
