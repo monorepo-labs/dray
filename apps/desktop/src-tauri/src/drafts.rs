@@ -22,6 +22,15 @@ use crate::{
 /// `useDrafts.ts` field for field.
 static DRAFTS_LOCK: Mutex<()> = Mutex::const_new(());
 
+/// Ids removed this run. An autosave already queued when the CLI removes or
+/// starts its draft would otherwise write it straight back; no caller ever
+/// saves a removed id again, so refusing them costs nothing.
+static TAKEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn taken(id: &str) -> bool {
+    TAKEN.lock().unwrap().iter().any(|t| t == id)
+}
+
 /// Emitted when the CLI changes the list, so the sidebar follows without the
 /// reader asking. The app's own writes need none: the frontend made them.
 pub const DRAFTS_CHANGED: &str = "drafts_changed";
@@ -75,6 +84,9 @@ pub async fn stored() -> Result<Vec<StoredDraft>> {
 pub async fn save_draft(draft: Value) -> Result<(), Fail> {
     let id = id_of(&draft).ok_or_else(|| anyhow!("a draft needs an id"))?.to_owned();
     let _guard = DRAFTS_LOCK.lock().await;
+    if taken(&id) {
+        return Ok(());
+    }
     let mut drafts = list_drafts().await?;
     match drafts.iter_mut().find(|d| id_of(d) == Some(id.as_str())) {
         Some(existing) => *existing = draft,
@@ -98,7 +110,15 @@ pub async fn take(id: &str) -> Result<Option<Value>> {
     let Some(at) = drafts.iter().position(|d| id_of(d) == Some(id)) else {
         return Ok(None);
     };
-    let taken = drafts.remove(at);
+    let draft = drafts.remove(at);
     write_drafts(&drafts).await?;
-    Ok(Some(taken))
+    TAKEN.lock().unwrap().push(id.to_owned());
+    Ok(Some(draft))
+}
+
+/// Puts back a draft [`take`] removed, for a start that failed.
+pub async fn restore(draft: Value) -> Result<()> {
+    let id = id_of(&draft).unwrap_or_default().to_owned();
+    TAKEN.lock().unwrap().retain(|t| *t != id);
+    save_draft(draft).await.map_err(|e| e.0)
 }

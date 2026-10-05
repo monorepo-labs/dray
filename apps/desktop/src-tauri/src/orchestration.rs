@@ -516,27 +516,50 @@ async fn list_drafts(list: ListSessions) -> Result<Response> {
     Ok(Response::Drafts { drafts: drafts.into_iter().map(summarize_draft).collect() })
 }
 
+/// Read before it is taken, so a draft this build cannot spell is refused
+/// rather than deleted unseen.
 async fn remove_draft(id: &str, app: &AppHandle) -> Result<Response> {
-    let taken = drafts::take(id).await?.with_context(|| format!("no draft {id}"))?;
+    let draft = find_draft(id).await?;
+    drafts::take(id).await?.with_context(|| format!("no draft {id}"))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    let draft: StoredDraft = serde_json::from_value(taken)
-        .context("removed, but this build cannot read what the draft held")?;
     Ok(Response::Draft { draft: summarize_draft(draft) })
 }
 
-/// Starts a draft as a session nested under the caller, then takes it off the
-/// list — after, so a start that fails leaves the draft where it was.
+async fn find_draft(id: &str) -> Result<StoredDraft> {
+    drafts::stored()
+        .await?
+        .into_iter()
+        .find(|d| d.id == id)
+        .with_context(|| format!("no draft {id}"))
+}
+
+/// Starts a draft as a session nested under the caller. The draft is taken off
+/// the list first, so two starts racing make one session, and put back if the
+/// start fails.
 ///
 /// The worktree is the draft's own pick: off only where a person saved it so in
 /// the app, which is the one way an agent can start work in the main checkout.
 async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
-    let draft = drafts::stored()
-        .await?
-        .into_iter()
-        .find(|d| d.id == start.id)
-        .with_context(|| format!("no draft {}", start.id))?;
+    let draft = find_draft(&start.id).await?;
     let parent = parent_of(start.parent_session_id.as_deref()).await?;
     check_depth(parent.as_ref()).await?;
+    let held = drafts::take(&draft.id)
+        .await?
+        .with_context(|| format!("no draft {}", draft.id))?;
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    let started = start_session(&draft, start.parent_session_id.as_deref(), app).await;
+    if started.is_err() {
+        drafts::restore(held).await.ok();
+        app.emit(DRAFTS_CHANGED, ()).ok();
+    }
+    started
+}
+
+async fn start_session(
+    draft: &StoredDraft,
+    parent: Option<&str>,
+    app: &AppHandle,
+) -> Result<Response> {
 
     let session_id = uuid::Uuid::now_v7().to_string();
     let outcome = app
@@ -547,7 +570,7 @@ async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
             &[],
             &[],
             draft.harness,
-            draft.model,
+            draft.model.clone(),
             draft.effort,
             draft.permission_mode,
             draft.fast,
@@ -557,7 +580,7 @@ async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
             None,
             None,
             true,
-            start.parent_session_id.as_deref(),
+            parent,
             false,
             None,
             app,
@@ -568,9 +591,7 @@ async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
         .map(|s| s.index_item)
         .context("the session was created but returned no index entry")?;
 
-    drafts::take(&draft.id).await?;
     app.emit(SESSION_CREATED, &item).ok();
-    app.emit(DRAFTS_CHANGED, ()).ok();
     Ok(Response::Created { session: summarize(item), base_ref: None })
 }
 
