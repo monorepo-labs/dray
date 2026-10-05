@@ -60,7 +60,7 @@ async fn dirty_count(cwd: &str) -> u32 {
 /// A directory that isn't a repo reads as an empty list rather than an error:
 /// the user is allowed to attach any folder, and the picker hides itself when
 /// there are no branches.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_branches(cwd: &str) -> Result<BranchList, Fail> {
     // `for-each-ref` is plumbing; `git branch` decorates the current entry with
     // `* ` and can paginate or colorize depending on the user's config.
@@ -251,7 +251,7 @@ pub async fn default_base(cwd: &str) -> Option<String> {
 ///
 /// Returns the branch list as it stands after the switch, so the picker
 /// re-renders from one round trip rather than following up with its own.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn checkout_branch(cwd: &str, branch: &str, stash: bool) -> Result<BranchList, Fail> {
     let list = list_branches(cwd).await?;
 
@@ -529,7 +529,7 @@ fn is_tree_id(id: &str) -> bool {
 /// Renames are detected (`-M`) rather than reported as a delete plus an add,
 /// since the panel names a file per row and two rows for one move reads as
 /// twice the work.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn changes_since(cwd: &str, baseline: &str, head: Option<&str>) -> Result<ChangeSet, Fail> {
     if !is_tree_id(baseline) {
         fail!("invalid baseline id");
@@ -754,7 +754,7 @@ const MAX_BLOB: u64 = 1 << 20;
 /// `head` must be the id [`changes_since`] returned, not a fresh snapshot: the
 /// agent may have written the file again since, and re-snapshotting here would
 /// show a diff the file list never counted.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn file_change(
     cwd: &str,
     base: &str,
@@ -1023,7 +1023,7 @@ const MAX_LOG_PAGE: u32 = 200;
 ///
 /// Empty for a directory that isn't a repo and for a branch with no commits
 /// yet — the same "not an error, just nothing to draw" the branch list takes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>, Fail> {
     let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
     let skip = format!("--skip={skip}");
@@ -1097,7 +1097,7 @@ async fn fork_point(cwd: &str) -> Option<String> {
 /// its own. And after a rebase that replays another branch's commits onto a new
 /// base, git no longer knows whose were whose. Over-reporting is the safe
 /// direction, the same reading the unpushed-commit count takes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>, Fail> {
     let limit = limit.clamp(1, MAX_LOG_PAGE).to_string();
     let skip = format!("--skip={skip}");

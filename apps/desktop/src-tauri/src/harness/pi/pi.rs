@@ -35,7 +35,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -105,7 +105,7 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Session> {
     // The session *file*, not the session id, is pi's resume handle. pi mints
     // its own id and reports it back — `session_id_not_adopted.jsonl` pins that
@@ -580,7 +580,7 @@ async fn read_stdout(
     pending: PendingPermissions,
     seq: Arc<AtomicU64>,
     context_window: Arc<AtomicU64>,
-    app: AppHandle,
+    app: Sink,
 ) -> Result<()> {
     let reader = BufReader::new(stdout);
     // Splits on `\n` alone, which is what pi's framing requires: `U+2028` and

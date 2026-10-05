@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { Check } from "lucide-react";
 import { useRef, useState } from "react";
 

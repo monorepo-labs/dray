@@ -18,11 +18,11 @@ name = "ade_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools", "macos-private-api", "protocol-asset"] }
-tauri-plugin-opener = "2"
+tauri = { version = "2", features = ["devtools", "macos-private-api", "protocol-asset"], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -39,8 +39,8 @@ ts-rs = { version = "12", features = ["serde-json-impl"] }
 # which is what separates a lock Dray may clear from one it must not.
 libc = "0.2"
 dray-proto = { path = "../../../crates/dray-proto" }
-tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-updater = { version = "2", optional = true }
 fff-search = "0.10.3"
 # Watches the docs panel's open files. Already in the tree behind `fff-search`,
 # whose index keeps itself current the same way. Not to be confused with
@@ -53,7 +53,7 @@ base64 = "0.22"
 # and the plugin drops it. `preview-macos-un` is not optional — the default
 # backend is `NSUserNotificationCenter`, which macOS no longer delivers for a
 # GUI app at all. See notifications.rs.
-notify-rust = { version = "4.18", features = ["preview-macos-un"] }
+notify-rust = { version = "4.18", features = ["preview-macos-un"], optional = true }
 
 # Linear's GraphQL API and PostHog's capture endpoint — the only two services
 # this app talks to directly, `gh` and `claude` being reached by spawning them
@@ -68,17 +68,21 @@ reqwest = { version = "0.12", default-features = false, features = [
 # authors") — its own repo, not the Handy app's; `cpal` captures the microphone
 # and `rubato` resamples it to the 16kHz mono every model here expects. Audio
 # never leaves the machine. See transcription/.
-cpal = "0.16"
-rubato = "0.16"
+cpal = { version = "0.16", optional = true }
+rubato = { version = "0.16", optional = true }
 # macOS hands a *silent* stream to a process without microphone permission
 # rather than refusing it, so nothing downstream can tell "denied" from "quiet
 # room". This is what actually raises the system prompt. See transcription/.
-tauri-plugin-macos-permissions = "2.3"
+tauri-plugin-macos-permissions = { version = "2.3", optional = true }
 futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
 sha2 = "0.10"
-tauri-plugin-window-state = "2"
+tauri-plugin-window-state = { version = "2", optional = true }
+# `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
+tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
+# The file route's query string. Already in the tree under `reqwest`'s `url`.
+form_urlencoded = { version = "1", optional = true }
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables
@@ -86,18 +90,37 @@ tauri-plugin-window-state = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 transcribe-cpp = { version = "0.2", default-features = false, features = [
   "metal",
-] }
+], optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-transcribe-cpp = { version = "0.2", default-features = false }
+transcribe-cpp = { version = "0.2", default-features = false, optional = true }
 
 # Embedded Chromium for the in-app browser, macOS only for now. Behind a
 # feature so a build without the CEF binaries on disk still compiles: the
 # `cef-dll-sys` build script downloads ~130MB and runs CMake, which is not
 # something `cargo check` should need. See cef/cef.rs.
+#
+# `desktop` is the shipped app: Tauri, its plugins and every Mac-only
+# dependency. Off, what is left is the core `dray-serve` runs — which is what
+# lets that build on a Linux box with no WebKit, ALSA or cmake. See
+# SERVE-PLAN.md.
 [features]
-default = []
-cef = ["dep:cef"]
+default = ["desktop"]
+desktop = [
+  "dep:tauri",
+  "dep:tauri-build",
+  "dep:tauri-plugin-opener",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-updater",
+  "dep:tauri-plugin-macos-permissions",
+  "dep:tauri-plugin-window-state",
+  "dep:notify-rust",
+  "dep:cpal",
+  "dep:rubato",
+  "dep:transcribe-cpp",
+]
+cef = ["desktop", "dep:cef"]
+serve = ["dep:tokio-tungstenite", "dep:form_urlencoded"]
 
 [target.'cfg(target_os = "macos")'.dependencies.cef]
 version = "154.3.0"
@@ -114,6 +137,18 @@ version = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 version = "0.3"
+
+[[bin]]
+name = "dray"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+# The core over a WebSocket, no Tauri. `required-features` keeps it out of
+# `tauri build`, which builds default features only. See SERVE-PLAN.md.
+[[bin]]
+name = "dray-serve"
+path = "src/bin/dray_serve.rs"
+required-features = ["serve"]
 
 # CEF's renderer, GPU and utility processes run this instead of the app.
 # Copied five times into `Contents/Frameworks/Dray Helper*.app` by the bundle

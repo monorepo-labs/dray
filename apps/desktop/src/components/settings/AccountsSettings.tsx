@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,

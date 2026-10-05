@@ -133,7 +133,7 @@ pub struct SettingsView {
 /// what is on disk. The two differ whenever `DRAY_NO_ANALYTICS` is set, and a
 /// switch drawn from the file there would sit at `on` while nothing was being
 /// sent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_settings() -> SettingsView {
     SettingsView {
         analytics_enabled: crate::analytics::enabled().await,

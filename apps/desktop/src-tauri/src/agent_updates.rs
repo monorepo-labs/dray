@@ -46,7 +46,7 @@ pub struct AgentCheck {
 /// Every agent that could be asked. One that could not is **absent**, never
 /// "current": the caller keeps its last answer for it, so a flaky endpoint
 /// neither hides a known update nor invents one.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_agent_updates() -> Vec<AgentCheck> {
     let checks = Harness::ALL.map(|harness| (harness, tokio::spawn(check(harness))));
     let mut out = Vec::new();
@@ -65,7 +65,7 @@ pub async fn check_agent_updates() -> Vec<AgentCheck> {
 /// an install it declines to manage, say — which the caller draws as still
 /// behind rather than as a success. `Err` carries the CLI's own last
 /// line, the only thing that names which step failed.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, String> {
     let bin = binpath::agent_binary(harness).await;
     if !bin.is_absolute() {
@@ -98,7 +98,7 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
 
 /// The same updater, in Terminal, for when the in-app run failed and the reader
 /// wants to watch it or answer something it asked.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent_in_terminal(harness: Harness) -> Result<(), String> {
     let bin = binpath::agent_binary(harness).await;
     // The enriched `PATH` rides the line: Terminal inherits launchd's when Dray

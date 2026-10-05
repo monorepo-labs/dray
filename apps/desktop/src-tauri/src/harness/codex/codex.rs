@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{ChildStdout, Command},
@@ -168,7 +168,7 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Session> {
     // Ahead of the spawn, and for one reason: everything between the spawn
     // and the kill-wrapped `open_thread` below has to be infallible, or a `?`
@@ -417,7 +417,7 @@ struct ReaderHandles {
     session_cwd: String,
     /// Shared with the session, which is what answers the cards this raises.
     pending: PendingPermissions,
-    app: AppHandle,
+    app: Sink,
 }
 
 async fn read_stdout(

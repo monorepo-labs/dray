@@ -49,7 +49,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{ChildStdout, Command},
@@ -99,7 +99,7 @@ pub async fn init(
     // again. grok's fork is one eager request rather than a spawn flag, so
     // this child makes it before resuming — see `fork_conversation`.
     fork_from: Option<&str>,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Session> {
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
     // `open_session` below has to be infallible, or a `?` returns leaving a
@@ -708,7 +708,7 @@ struct ReaderHandles {
     session_id: String,
     session_cwd: String,
     pending: PendingPermissions,
-    app: AppHandle,
+    app: Sink,
 }
 
 #[allow(clippy::too_many_arguments)]

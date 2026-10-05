@@ -279,12 +279,12 @@ fn detect() -> Vec<ExternalApp> {
 /// handful of `read_dir`s, and only the icons are dear enough to cache — so an
 /// editor installed while Dray is running shows up the next time the panel
 /// asks, instead of needing a restart the way the slash-command cache does.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_open_apps() -> Vec<ExternalApp> {
     if !cfg!(target_os = "macos") {
         return Vec::new();
     }
-    tauri::async_runtime::spawn_blocking(detect)
+    tokio::task::spawn_blocking(detect)
         .await
         .unwrap_or_default()
 }
@@ -296,7 +296,7 @@ pub async fn list_open_apps() -> Vec<ExternalApp> {
 /// Launch Services hands it whichever the path is. Nothing here reaches a
 /// shell, so injection is not the risk — but a path whose name opens with `-`
 /// parses as a flag, which `--` ends.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     let out = tokio::process::Command::new("open")
         .arg("-a")
@@ -342,7 +342,7 @@ const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
 /// `osascript -e 'tell application "Terminal" to do script …'`, which needs
 /// macOS Automation permission: that prompts, can be denied, and a denial is
 /// silent. A `.command` file needs no permission at all.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), String> {
     let binary = crate::binpath::agent_binary(harness).await;
     let mut command = sh_quote(&binary.to_string_lossy());

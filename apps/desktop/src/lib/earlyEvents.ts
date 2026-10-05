@@ -61,3 +61,16 @@ export const heldFor = (sessionId: string): AgentEvent[] => [
 export const dropHeld = (sessionId: string) => {
   earlyEvents.delete(sessionId);
 };
+
+/// Drops every held question and permission request. A server's `live_state`
+/// is the truth about which are still open, and re-sends those.
+export const dropHeldAsks = () => {
+  for (const held of earlyEvents.values()) {
+    for (const [id, event] of held) {
+      if (isAsk(event)) held.delete(id);
+    }
+  }
+};
+
+export const isAsk = (event: AgentEvent) =>
+  event.payload.type === "permission_requested" || event.payload.type === "questions_asked";

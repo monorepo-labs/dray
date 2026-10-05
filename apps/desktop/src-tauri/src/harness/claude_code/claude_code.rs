@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{ChildStdin, ChildStdout, Command},
@@ -60,7 +60,7 @@ pub async fn init(
     // The session to fork from, on the one spawn that carries out a fork. See
     // [`SessionIndexItem::fork_from`](crate::store::SessionIndexItem::fork_from).
     fork_from: Option<&str>,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Session> {
     let mut args = vec![
         "-p",
@@ -240,7 +240,7 @@ async fn read_stdout(
     pending_permissions: PendingPermissions,
     stdin: Arc<Mutex<ChildStdin>>,
     queued: QueuedMessages,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<()> {
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();

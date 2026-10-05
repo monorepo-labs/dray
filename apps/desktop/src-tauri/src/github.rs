@@ -856,7 +856,7 @@ async fn graphql(cwd: &str, query: &str, branch: Option<&str>) -> Result<String,
 /// — a branch nobody has opened a PR from is not an error. Everything that
 /// stopped us asking comes back as a typed [`PrUnavailable`], because the tab
 /// hides for one of those reasons and stays for the rest.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prs_for_branch(
     cwd: String,
     branch: String,
@@ -880,7 +880,7 @@ pub async fn prs_for_branch(
 /// The panel's recheck button, pressed by a reader who has just installed the
 /// CLI on its say-so. The absence is cached for the life of the process, so
 /// without this the install they were asked to make appears to change nothing.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn recheck_gh() -> bool {
     binpath::forget_gh();
     // The same absence, cached a second time: the issues side remembers *who*
@@ -1062,7 +1062,7 @@ struct MarksRepository {
 /// rule (a worktree session's is rebuilt from its worktree name), and building
 /// the map here would be a second copy of it. One branch can carry several, so
 /// picking which one a row draws is the caller's too.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pr_marks(cwd: String) -> Result<Vec<PrMark>, PrUnavailable> {
     pr_marks_inner(&cwd).await.map_err(unavailable)
 }
@@ -1106,7 +1106,7 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 /// merge` can fail with the merge already through (a post-merge step, a lost
 /// connection), and reporting the exit code alone tells the reader their merge
 /// failed when it is on `main`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(), String> {
     let arg = number.to_string();
 
@@ -1164,7 +1164,7 @@ async fn merged_state(cwd: &str, number: u64) -> Option<bool> {
 /// tree, so it deletes the branch of a session whose checkout has already gone.
 /// A ref that is already deleted answers 422 rather than success, so the button
 /// is gated on `head_ref_exists` instead of this call being safe to repeat.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_branch(cwd: String, number: u64) -> Result<(), String> {
     let (owner, repo) = repo_slug(&cwd).await?;
 
@@ -1206,7 +1206,7 @@ fn head_ref_to_delete(json: &str) -> Result<String, String> {
 /// Reopens a PR closed elsewhere. There is no `close_pr` beside it on purpose:
 /// this panel exists to get work landed, and abandoning a PR is a decision with
 /// a discussion attached to it, which happens on GitHub.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn reopen_pr(cwd: String, number: u64) -> Result<(), String> {
     gh(&cwd, &["pr", "reopen", &number.to_string()]).await.map(|_| ())
 }
@@ -1214,7 +1214,7 @@ pub async fn reopen_pr(cwd: String, number: u64) -> Result<(), String> {
 /// Takes a draft out of draft. The other direction (`--undo`) isn't offered:
 /// the panel's job is getting work landed, and a PR reopened as a draft is a
 /// state the reader can set on GitHub in the rare case they want it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mark_pr_ready(cwd: String, number: u64) -> Result<(), String> {
     gh(&cwd, &["pr", "ready", &number.to_string()]).await.map(|_| ())
 }

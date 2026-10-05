@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { Download, File } from "lucide-react";
 
 import ImageLightbox from "@/components/chat/ImageLightbox";

@@ -92,6 +92,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
+- `cd apps/desktop/src-tauri && cargo check --no-default-features --features serve --bin dray-serve --tests` — the headless build. **Run it after any core change**: nothing else compiles it.
 - `pnpm test` — frontend tests (vitest, node environment, no DOM). Scoped to pure logic where being wrong invisible on screen: [streaming.ts](apps/desktop/src/lib/streaming.ts), which read same committed fixtures Rust tests do; composer's caret arithmetic ([slash.ts](apps/desktop/src/lib/slash.ts), [mention.ts](apps/desktop/src/lib/mention.ts), [highlight.ts](apps/desktop/src/lib/highlight.ts)); and [theme.ts](apps/desktop/src/lib/theme.ts)'s coercion. Components not tested — no DOM here.
 
 ## Architecture: the event pipeline
@@ -107,6 +108,16 @@ Messages flow one way out to CLI and one way back in; return path = what most Ru
 **Finding the binary.** [binpath.rs](apps/desktop/src-tauri/src/binpath.rs) resolve `claude` to absolute path, cached in `OnceLock`; both spawn sites go through it. Never go back to `Command::new("claude")` — bundled `.app` launched from Finder or Dock inherit launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which hold no `claude` however globally installed, so bare name work under `pnpm tauri dev` and fail in bundle with no events arriving at all. Resolution escalate by cost: inherited `PATH`, then known install dirs (`~/.local/bin`, `~/.claude/local`, `~/.bun/bin`, `~/.npm-global/bin`, Homebrew, globbed nvm version dirs), then `$SHELL -l -c 'command -v claude'`. `-l` load-bearing — without it zsh read `.zshrc` only and miss `PATH` exported from `.zprofile`. `git` need none of this.
 
 **Worktrees.** `claude -w <name>` put tree at `<project>/.claude/worktrees/<name>` on branch `worktree-<name>`. Child must spawn at **project root** — directory not existing yet can't be `chdir`ed into, and CLI create tree and move itself in after launch. So spawn dir and session's recorded `cwd` differ for worktree sessions, only latter point at tree.
+
+## The headless server
+
+**The core runs without Tauri as `dray-serve`, and the frontend reaches it through [transport.ts](apps/desktop/src/lib/transport.ts).** Design, wire and auth in [SERVE-PLAN.md](apps/desktop/SERVE-PLAN.md). What keeps it working:
+
+- **The core never names Tauri.** Events go through [`Sink`](apps/desktop/src-tauri/src/sink.rs), whose `emit` is spelled like Tauri's; a command takes `sink: Sink` where it took `app: AppHandle`. The `SessionManager` is `session::manager()`, a static, not managed state. A core command is `#[cfg_attr(feature = "desktop", tauri::command)]`, and a new one also wants its line in `serve.rs`'s table or it answers `unknown command` remotely.
+- **`desktop` is a default feature** holding Tauri and every Mac-only dependency; `serve` is opt-in. `tauri build` builds defaults, so the release is untouched and skips `dray-serve` by its `required-features`.
+- **`DRAY_HOME` moves `~/.dray` and the orchestration socket with it.** Two processes on one data dir lose each other's index writes, so a server beside the running app needs its own.
+- **Frontend imports `invoke`/`listen` from `@/lib/transport`, never `@tauri-apps/api/core`/`event`**, and loads local files through its `fileSrc`, never `convertFileSrc`. Remotely that is the server's `/file` route, confined to attachments and recordings.
+- **A reconnect resyncs from two places**: logged events from the log tail, matched on event id because subagents restart `seq`; unlogged state from the `live_state` frame the server opens every connect with. A new piece of unlogged state the reader must see after a drop — the way an open card must be — belongs in `serve.rs`'s `Live`, or a reconnect loses it silently.
 
 ## The normalized event model
 

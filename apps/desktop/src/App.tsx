@@ -1,7 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Plus } from "lucide-react";
 

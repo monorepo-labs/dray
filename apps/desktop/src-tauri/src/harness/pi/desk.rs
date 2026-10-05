@@ -39,7 +39,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, Mutex};
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 
 use super::rpc::PiClient;
 use crate::events::AgentEvent;
@@ -118,7 +118,7 @@ pub fn open(
 /// both. `Session::kill` used to close ahead of `shutdown`, which meant every
 /// explicit kill — a respawn, a delete, a first send that failed — reached this
 /// point with nothing left to retire and left its cards up.
-pub fn end(session_id: &str, token: u64, app: &AppHandle) {
+pub fn end(session_id: &str, token: u64, app: &Sink) {
     let Some(desk) = current(session_id, token) else {
         return;
     };
@@ -142,7 +142,7 @@ fn current(session_id: &str, token: u64) -> Option<Desk> {
 /// one registered. `None` means it has been replaced or already ended, and in
 /// both cases this reader owns nothing here any more.
 ///
-/// Split from [`end`] because `end` needs an `AppHandle` to retire cards with
+/// Split from [`end`] because `end` needs a `Sink` to retire cards with
 /// and a unit test has none, while this — the guard that stops an old reader
 /// dismantling its replacement — is the half worth pinning.
 fn claim(session_id: &str, token: u64) -> Option<Desk> {
@@ -172,7 +172,7 @@ impl Desk {
         &self,
         request_id: &str,
         answers: &HashMap<String, String>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         let (reply, decided) = self.compose(request_id, answers)?;
         self.client.send(&reply)?;
@@ -196,7 +196,7 @@ impl Desk {
     /// a Stop that reported success. And `clear_queue` precedes `abort` inside
     /// [`interrupt`](super::interrupt), because aborting alone lets anything
     /// steered behind the run start the moment it ends.
-    pub async fn stop(&self, app: &AppHandle) -> Result<()> {
+    pub async fn stop(&self, app: &Sink) -> Result<()> {
         self.cancel_cards(app);
         super::interrupt(&self.client).await
     }
@@ -207,7 +207,7 @@ impl Desk {
     /// Best-effort throughout: the abort behind this is what the reader pressed
     /// and has to go out regardless, so a dialog that fails to be answered costs
     /// a stranded extension where a Stop that fails costs the session.
-    fn cancel_cards(&self, app: &AppHandle) {
+    fn cancel_cards(&self, app: &Sink) {
         for (request_id, request) in self.cancel_outstanding() {
             self.emit_decided(app, request_id, request.tool_use_id, "Stopped");
         }
@@ -216,7 +216,7 @@ impl Desk {
     /// Opens the refusal window and answers everything outstanding, leaving the
     /// cards for the caller to retire.
     ///
-    /// Split from the emit for `compose`'s reason: an `AppHandle` is the one
+    /// Split from the emit for `compose`'s reason: a `Sink` is the one
     /// thing a unit test cannot build, and everything worth pinning here — that
     /// a Stop *answers* rather than merely dropping, and that it leaves the desk
     /// open — happens on this side of the line.
@@ -249,7 +249,7 @@ impl Desk {
     /// whose writer has already broken, and the card retires reporting
     /// "Answered" for a reply that reached nothing.
     ///
-    fn retire_all(&self, app: &AppHandle) {
+    fn retire_all(&self, app: &Sink) {
         // No reply goes out, unlike a Stop's cancellation: the child this would
         // answer has gone, so a line here could only be queued behind its own
         // death and dropped.
@@ -287,7 +287,7 @@ impl Desk {
     /// removed rather than answered. Emitted and not persisted, like every other
     /// decision here — the request was never written either, since only the
     /// child that asked could answer it.
-    fn emit_decided(&self, app: &AppHandle, request_id: String, tool_use_id: String, label: &str) {
+    fn emit_decided(&self, app: &Sink, request_id: String, tool_use_id: String, label: &str) {
         let decided = AgentEvent::mint(
             self.session_id.clone(),
             crate::harness::Harness::Pi,
@@ -311,7 +311,7 @@ impl Desk {
     /// The reply and the event that retires the card, built together.
     ///
     /// Split out to be tested, like `prompt_request` next door: the emit needs
-    /// an `AppHandle` a unit test has none of, and everything worth pinning —
+    /// a `Sink` a unit test has none of, and everything worth pinning —
     /// that a dialog is taken exactly once, and that its reply is shaped by the
     /// method that asked — happens here.
     ///

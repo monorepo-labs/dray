@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";

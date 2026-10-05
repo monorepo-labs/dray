@@ -5,5 +5,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=POSTHOG_KEY");
     println!("cargo:rerun-if-env-changed=POSTHOG_HOST");
 
+    #[cfg(feature = "desktop")]
     tauri_build::build()
 }

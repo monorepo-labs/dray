@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, LazyLock};
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -235,7 +235,7 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Session> {
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
     // `open_session` below has to be infallible, or a `?` returns leaving a
@@ -487,7 +487,7 @@ async fn disable_fx_titles() {
 /// not a menu that offers the wrong thing. Nothing about an effort is worth a
 /// session for.
 /// The accepted reply rides back with them rather than being recorded here, so
-/// this answers with no `AppHandle` and can be tested without one.
+/// this answers with no `Sink` and can be tested without one.
 async fn open_effort(
     session: &FxSession,
     asked: Option<Effort>,
@@ -542,7 +542,7 @@ fn note_config(
     session: &FxSession,
     config: &parser::ConfigOptions,
     accepted: Option<Effort>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     // A reply carrying no `configOptions` at all is fx saying nothing, not fx
     // saying "no effort" — a shape this build cannot read must leave the
@@ -609,7 +609,7 @@ fn rungs(levels: Option<Vec<&str>>) -> Vec<Effort> {
         .collect()
 }
 
-fn announce_ladder(model_arg: &str, reading: Option<models::LadderReading>, app: &AppHandle) {
+fn announce_ladder(model_arg: &str, reading: Option<models::LadderReading>, app: &Sink) {
     if models::learn_ladder(model_arg, reading) {
         if let Err(err) = app.emit("models_changed", ()) {
             eprintln!("[fx models_changed emit err] {err}");
@@ -780,7 +780,7 @@ fn provider_move<'a>(current: Option<&str>, model: &'a Model) -> Option<&'a str>
 /// fx's own session record and a later `session/resume` comes back on it,
 /// captured in `provider_switch.jsonl` — and it moves the session onto that
 /// provider's own remembered model, which the call below then overrides.
-pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> Result<()> {
+pub async fn set_model(session: &FxSession, model: &Model, app: &Sink) -> Result<()> {
     if let Some(provider) = provider_move(session.provider().as_deref(), model) {
         let answer = set_config(session, "provider", provider).await?;
         note_config(session, &parser::ConfigOptions::of(&answer), None, app);
@@ -805,7 +805,7 @@ pub async fn set_model(session: &FxSession, model: &Model, app: &AppHandle) -> R
 /// The reply is handed back rather than dropped: it restates the whole list
 /// for the level fx has just taken, and that acceptance is the only proof this
 /// model has that level. [`note_effort`] is what records it, and both callers
-/// do — this one cannot, having no `AppHandle` to nudge the composer with.
+/// do — this one cannot, having no `Sink` to nudge the composer with.
 pub async fn set_effort(session: &FxSession, effort: Effort) -> Result<parser::ConfigOptions> {
     if let Some(levels) = session.efforts() {
         if !levels.contains(&effort) {
@@ -821,7 +821,7 @@ pub fn note_effort(
     session: &FxSession,
     config: &parser::ConfigOptions,
     accepted: Effort,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     note_config(session, config, Some(accepted), app);
 }
@@ -976,7 +976,7 @@ struct ReaderHandles {
     session_id: String,
     session_cwd: String,
     pending: PendingPermissions,
-    app: AppHandle,
+    app: Sink,
 }
 
 #[allow(clippy::too_many_arguments)]

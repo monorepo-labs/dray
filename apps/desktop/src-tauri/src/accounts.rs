@@ -271,7 +271,7 @@ pub struct AgentAccounts {
 /// Uncached and re-asked on every open: the reader arrives at the Accounts tab
 /// *because* they are about to change a login, so a cached answer would be
 /// stale exactly when it is being read.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_accounts(cwd: String) -> Vec<AgentAccounts> {
     futures_util::future::join_all(Harness::ALL.map(|harness| one(harness, &cwd))).await
 }
@@ -974,7 +974,7 @@ fn plausible_provider(provider: &str) -> bool {
 /// taken as given: `auth` must be an id that list holds *for this provider*,
 /// which is what stops a key field being honoured on `openai-codex`, whose only
 /// way in is OAuth.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn add_agent_account(
     harness: Harness,
     provider: Option<String>,
@@ -1178,7 +1178,7 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
 /// such subcommand, so its half is removing the record from the store this
 /// module writes the other half of — which is why it is offered on a pi row
 /// only where that store actually holds the provider.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
     let provider = provider.filter(|p| !p.is_empty());
 
@@ -1215,7 +1215,7 @@ pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Resul
 // ------------------------------------------------------------------ commands
 
 /// The ways into one harness, for the Add-account flow's second step.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_auth_options(harness: Harness, provider: Option<String>) -> Vec<AuthOption> {
     auth_options(harness, provider.as_deref())
 }
@@ -1232,7 +1232,7 @@ pub fn agent_auth_options(harness: Harness, provider: Option<String>) -> Vec<Aut
 /// Terminal.app rather than the terminal picked next door: handed a `.command`
 /// file, it is the only one measured to run it. That pick still stands for
 /// *opening a directory*, which is all the table behind it promises.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn run_agent_login(
     harness: Harness,
     provider: Option<String>,

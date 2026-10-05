@@ -10,7 +10,7 @@ use std::sync::{LazyLock, Mutex};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
@@ -32,7 +32,7 @@ pub enum SaveOutcome {
 }
 
 /// Reads one doc for the panel, or names why it can't.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_doc(path: String) -> Result<String, String> {
     let bytes = read_file_capped(&path, MAX_DOC).await?;
     // Withheld rather than mangled: `from_utf8_lossy` would swap every invalid
@@ -56,7 +56,7 @@ pub async fn read_doc(path: String) -> Result<String, String> {
 /// buy is the case it was built for, where the file was rewritten at some point
 /// while the editor sat open, which is a window of minutes rather than of the
 /// microseconds between these two calls.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_doc(
     path: String,
     text: String,
@@ -120,8 +120,8 @@ static WATCH: LazyLock<Mutex<HashMap<String, RecommendedWatcher>>> =
 /// that stream and joins its thread. Re-arming happens whenever an open set
 /// changes, which since the Files view arrived is every session switch as well,
 /// so the freeze this buys is one the reader meets while doing nothing unusual.
-#[tauri::command(async)]
-pub fn watch_docs(app: AppHandle, scope: String, paths: Vec<String>) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command(async))]
+pub fn watch_docs(app: Sink, scope: String, paths: Vec<String>) -> Result<(), String> {
     let mut held = WATCH.lock().map_err(|e| e.to_string())?;
     if paths.is_empty() {
         held.remove(&scope);

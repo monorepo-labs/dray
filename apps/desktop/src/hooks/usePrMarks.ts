@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 import { useWindowFocused } from "@/lib/focus";
 import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";

@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { fileSrc } from "@/lib/transport";
 import { memo, useMemo } from "react";
 import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
@@ -291,7 +291,7 @@ function FilePathSpan({
     return (
       <>
         {link}
-        <VideoPlayer src={convertFileSrc(path)} />
+        <VideoPlayer src={fileSrc(path)} />
       </>
     );
   }
