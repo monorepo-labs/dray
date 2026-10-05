@@ -3,6 +3,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -67,7 +68,7 @@ fn find(bin: &str) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .chain(home.iter().flat_map(|h| HOME_BIN_DIRS.map(|d| h.join(d))))
         .map(|dir| dir.join(bin))
-        .find(|p| p.is_file())
+        .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
 pub fn setup(args: Setup) -> Result<(), String> {
@@ -131,7 +132,12 @@ pub fn setup(args: Setup) -> Result<(), String> {
     }
     match service_start() {
         Ok(note) => done("Server running in the background", &note),
-        Err(why) => warn(&why),
+        // No line to paste: it would point the app at a server that is not there.
+        Err(why) => {
+            warn(&why);
+            println!("\x1b[90m└\x1b[0m");
+            return Err("the server is not running".into());
+        }
     }
     println!("\x1b[90m└\x1b[0m  In the Dray app, Add server and paste:\n\n   {}\n{}", ssh_line(), private_note());
     Ok(())
@@ -318,12 +324,23 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             println!("The server is running in the background.\n{note}");
         }
         ServiceCommand::Status => {
-            let _ = systemctl(false, &["status", UNIT, "--no-pager"]);
+            if !systemctl(false, &["status", UNIT, "--no-pager"]) {
+                return Err("the server is not running".into());
+            }
         }
         ServiceCommand::Uninstall => {
-            let _ = systemctl(false, &["disable", "--now", UNIT]);
-            let _ = std::fs::remove_file(unit_path()?);
-            let _ = systemctl(false, &["daemon-reload"]);
+            let file = unit_path()?;
+            if !file.exists() {
+                println!("No background server is installed.");
+                return Ok(());
+            }
+            // The unit file stays until the server is stopped, or it would be
+            // left running with nothing to manage it by.
+            if !systemctl(false, &["disable", "--now", UNIT]) {
+                return Err("systemd would not stop the server; it is still installed".into());
+            }
+            std::fs::remove_file(&file).map_err(|e| format!("could not remove {}: {e}", file.display()))?;
+            let _ = systemctl(true, &["daemon-reload"]);
             println!("Removed the background server.");
         }
     }
@@ -456,7 +473,14 @@ fn multiselect(tty: &File, title: &str, items: &[(String, bool)]) -> Result<Vec<
         out.write_all(frame.as_bytes()).map_err(|e| e.to_string())?;
 
         let mut key = [0u8; 3];
-        let n = input.read(&mut key).map_err(|e| e.to_string())?;
+        let mut n = input.read(&mut key).map_err(|e| e.to_string())?;
+        // Over SSH an arrow's three bytes can arrive in two reads.
+        while n > 0 && n < 3 && key[0] == 0x1b {
+            match input.read(&mut key[n..]).map_err(|e| e.to_string())? {
+                0 => break,
+                more => n += more,
+            }
+        }
         match &key[..n] {
             b"\x1b[A" | b"k" => at = (at + items.len() - 1) % items.len(),
             b"\x1b[B" | b"j" => at = (at + 1) % items.len(),
