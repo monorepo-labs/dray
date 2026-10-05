@@ -548,11 +548,17 @@ async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
         .with_context(|| format!("no draft {}", draft.id))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
     let started = start_session(&draft, start.parent_session_id.as_deref(), app).await;
-    if started.is_err() {
-        drafts::restore(held).await.ok();
-        app.emit(DRAFTS_CHANGED, ()).ok();
+    let Err(error) = started else { return started };
+    // The prompt rides the error where the draft cannot go back, so the task
+    // survives in the caller's output even with the file unwritable.
+    if let Err(lost) = drafts::restore(held).await {
+        bail!(
+            "{error:#}, and the draft could not be put back ({lost:#}). It read:\n{}",
+            draft.prompt
+        );
     }
-    started
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    Err(error)
 }
 
 async fn start_session(

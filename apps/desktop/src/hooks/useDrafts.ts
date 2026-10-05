@@ -78,21 +78,40 @@ export function useDrafts(onError: (e: unknown) => void) {
     pending.current.delete(id);
   };
 
+  // Unsaved edits to a draft the CLI took away, kept in case a start that
+  // failed puts it back.
+  const parked = useRef(new Map<string, Draft>());
+
   /// Takes the file as the list. Read through the write queue, so a save
   /// already on its way is on disk before the read and cannot be dropped by it.
   /// Only a draft with an autosave still waiting keeps its local copy, being
-  /// newer than the file; one the CLI took away loses that autosave too, or it
-  /// would write the draft straight back.
+  /// newer than the file; one the CLI took away parks it instead, and gets it
+  /// back, written, if the draft returns.
   const reload = useCallback(() => {
     const read = queue.current.then(() => invoke<Draft[]>("list_drafts"));
     queue.current = read.then(
       (loaded) => {
-        for (const id of pending.current.keys()) if (!loaded.some((d) => d.id === id)) cancelPending(id);
-        publish(loaded.map((d) => (pending.current.has(d.id) ? (ref.current.find((r) => r.id === d.id) ?? d) : d)));
+        for (const id of pending.current.keys()) {
+          if (loaded.some((d) => d.id === id)) continue;
+          const local = ref.current.find((d) => d.id === id);
+          if (local) parked.current.set(id, local);
+          cancelPending(id);
+        }
+        publish(
+          loaded.map((d) => {
+            const back = parked.current.get(d.id);
+            if (back) {
+              parked.current.delete(d.id);
+              void enqueue("save_draft", { draft: back });
+              return back;
+            }
+            return pending.current.has(d.id) ? (ref.current.find((r) => r.id === d.id) ?? d) : d;
+          }),
+        );
       },
       (e) => errorRef.current(e),
     );
-  }, [publish]);
+  }, [publish, enqueue]);
 
   useEffect(() => {
     reload();
