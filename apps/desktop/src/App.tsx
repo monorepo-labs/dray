@@ -72,9 +72,13 @@ import Sidebar, {
   SEARCH_INPUT_ID,
   SidebarToggle,
   filterSessions,
+  placeDrafts,
+  sessionGroups,
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
+import { useChord } from "@/hooks/useShortcuts";
+import { formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -102,7 +106,7 @@ import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { pickAttachments } from "@/hooks/useAttachments";
+import { pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
@@ -122,11 +126,12 @@ import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates } from "@/hooks/useAgentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
-import type { IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
-import { appendToDraft, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
@@ -220,6 +225,7 @@ function App() {
     handleSelectSessionIndexItem,
     navGen,
     handleNewSession,
+    restoreDraftControls,
     markSessionUnread,
     setSessionFlags,
     forkSession,
@@ -234,6 +240,127 @@ function App() {
     paneState,
     indexSide,
   } = useSessions();
+
+  // Tasks saved to start later. One is open while the new-task composer shows
+  // it: its text sits under `draftKey(id)` rather than the new-task key, and
+  // edits to the text and the picks save back as they happen.
+  const {
+    drafts,
+    save: saveDraft,
+    update: updateDraft,
+    remove: removeDraft,
+    get: getDraft,
+    discardIfEmpty,
+  } = useDrafts((e) => setError(String(e)));
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null);
+  // Read from the text listener, which registers once, and written ahead of
+  // state on send — see `sendFromComposer`.
+  const openDraftRef = useRef(openDraftId);
+  openDraftRef.current = openDraftId;
+  useEffect(() => {
+    if (selectedSessionId) setOpenDraftId(null);
+  }, [selectedSessionId]);
+  // `dray draft rm` or `start` can take the open draft away; leave it then.
+  useEffect(() => {
+    if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);
+  }, [drafts, openDraftId]);
+  const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
+
+  useEffect(
+    () =>
+      onDraftWrite(() => {
+        const id = openDraftRef.current;
+        if (id) updateDraft(id, { prompt: readDraft(draftKey(id)) });
+      }),
+    [updateDraft],
+  );
+  useEffect(() => {
+    if (!openDraftId || !projectPath) return;
+    updateDraft(openDraftId, {
+      harness,
+      model: modelId,
+      effort,
+      permissionMode,
+      fast,
+      useWorktree,
+      projectPath,
+    });
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+
+  // A draft emptied and then left says nothing, so it goes rather than sitting
+  // in the list as an empty row. Every way out lands here, since each one
+  // moves `openDraftId`.
+  const leftDraft = useRef(openDraftId);
+  useEffect(() => {
+    const left = leftDraft.current;
+    leftDraft.current = openDraftId;
+    if (left && left !== openDraftId) discardIfEmpty(left);
+  }, [openDraftId, discardIfEmpty]);
+
+  /// The composer's send. On an open draft the draft is closed *before* the
+  /// send, since the composer clears its text straight after handing it over
+  /// and that clear would otherwise be saved as the draft's prompt. It goes
+  /// once a session exists, and comes back open if none was made.
+  const sendFromComposer = async (message: string, attachments: Attachment[]) => {
+    const id = openDraftRef.current;
+    if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
+    const prompt = getDraft(id)?.prompt ?? message;
+    openDraftRef.current = null;
+    // A send is not leaving: an attachment-only prompt has no text, and the
+    // empty-draft sweep would delete a draft whose send may yet fail.
+    leftDraft.current = null;
+    setOpenDraftId(null);
+    const sending = handleSendMsg(message, attachments);
+    // Taken after the send's own bump, so only a move the reader makes while
+    // it is out counts as leaving.
+    const nav = navGen.current;
+    if (await sending) {
+      removeDraft(id);
+      writeDraft(draftKey(id), "");
+    } else if (nav === navGen.current) {
+      // The composer cleared both on handing them over.
+      writeDraft(draftKey(id), prompt);
+      restoreAttachments(draftKey(id), attachments);
+      setOpenDraftId(id);
+    }
+  };
+
+  // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
+  // lights up for a moment to say why.
+  const [draftNudge, setDraftNudge] = useState(false);
+  const nudgeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  /// ⌘S on the new-task composer: its text and picks become a draft in the
+  /// sidebar, and the composer empties for the next task.
+  const saveAsDraft = async () => {
+    if (openDraftId) {
+      setDraftNudge(true);
+      clearTimeout(nudgeTimer.current);
+      nudgeTimer.current = setTimeout(() => setDraftNudge(false), 2500);
+      return;
+    }
+    const prompt = readDraft(null);
+    if (!projectPath || !prompt.trim()) return;
+    const id = crypto.randomUUID();
+    const saved = await saveDraft({
+      id,
+      prompt,
+      projectPath,
+      harness,
+      model: modelId,
+      effort,
+      permissionMode,
+      fast,
+      useWorktree,
+      created: new Date().toISOString(),
+    });
+    if (!saved) return;
+    // Only what was saved leaves: text typed while the write was out stays.
+    const now = readDraft(null);
+    writeDraft(null, now.startsWith(prompt) ? now.slice(prompt.length) : now);
+    pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
+  };
+  const draftChord = useChord("composer.draft");
 
   // Whether the agent the composer is pointed at can actually be run. Null
   // while the first read is out and null when it is installed — both mean
@@ -426,7 +553,7 @@ function App() {
     // Pinned when recording starts, so a dictation survives switching sessions
     // and still lands where it was spoken. Drafts are per session, so it is
     // waiting there on the way back.
-    target: selectedSessionId,
+    target: composerKey,
     onText: (text, session) => {
       appendToDraft(session, text);
       // Straight back to typing: the words landed in a draft the reader is
@@ -434,7 +561,7 @@ function App() {
       // at the session they spoke into — a dictation outlives the screen it
       // began on, and focusing a composer holding somebody else's draft is
       // worse than not focusing at all.
-      if (session === selectedSessionId) focusComposer();
+      if (session === composerKey) focusComposer();
     },
     onNeedsModel: () => {
       setSettingsTab("transcription");
@@ -1031,6 +1158,17 @@ function App() {
     () => filterSessions(inSidebar(visibleSessions), search),
     [visibleSessions, search],
   );
+  // Narrowed the way the sessions above are, so a draft never sits under a
+  // project the list is not drawing.
+  const sidebarDrafts = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return drafts.filter(
+      (d) =>
+        sessionInSpace(projects, space, d.projectPath) &&
+        (!projectFilter || d.projectPath === projectFilter) &&
+        d.prompt.toLowerCase().includes(needle),
+    );
+  }, [drafts, projects, space, projectFilter, search]);
   // A hidden session's card lights its parent's row, the only row it has.
   const sidebarAsking = useMemo(
     () => withHiddenAsks(sessionIndexItems, askingSessions),
@@ -1523,6 +1661,46 @@ function App() {
           : Math.max(from - 1, 0);
     return units[next][0].sessionId;
   };
+  // Every sidebar row as drawn, drafts in place, with the same live reading as
+  // `ordered` so the sessions sit where the eye sees them.
+  const drawnRows = useMemo(
+    () =>
+      archivedShown
+        ? []
+        : placeDrafts(
+            sessionGroups(
+              searchedSessions,
+              projects,
+              { statusBySession, asking: sidebarAsking },
+              false,
+              spaceGroups,
+            ),
+            sidebarDrafts,
+            projects,
+          ).flatMap((run): { draft: Draft | null; session: SessionIndexItem | null }[] =>
+            run.kind === "drafts"
+              ? run.drafts.map((draft) => ({ draft, session: null }))
+              : run.rows.map((row) => ({ draft: null, session: row.item })),
+          ),
+    [archivedShown, searchedSessions, projects, statusBySession, sidebarAsking, spaceGroups, sidebarDrafts],
+  );
+  // The walk enters drafts only from a draft already open: a draft is set aside
+  // on purpose, so stepping from a session or a new task passes them by.
+  const stepSession = (delta: number) => {
+    const drafts = drawnRows.flatMap((r) => (r.draft ? [r.draft] : []));
+    const at = drafts.findIndex((d) => d.id === openDraftId);
+    if (at === -1) return stepRow(delta);
+    const next = at + delta;
+    if (next >= 0 && next < drafts.length) return openDraft(drafts[next].id);
+    // Off either end of the drafts, the walk leaves for the session drawn just
+    // past that end — above the first draft or below the last. Where there is
+    // none the draft holds, reopened since the chord's `goToSession` closed it.
+    const edge = drawnRows.findIndex((r) => r.draft?.id === drafts[at].id);
+    const beyond = delta > 0 ? drawnRows.slice(edge + 1) : drawnRows.slice(0, edge).reverse();
+    const session = beyond.find((r) => r.session)?.session;
+    if (session) commitStep(session.sessionId);
+    else openDraft(drafts[at].id);
+  };
   const stepThrough = (units: SessionIndexItem[][], delta: number) => {
     const id = stepTarget(units, delta, selectedSessionId);
     if (id && id !== selectedSessionId) void handleSelectSessionIndexItem(id);
@@ -1545,7 +1723,7 @@ function App() {
   // The timer fires renders later, so it must reach this render's selection.
   const commitStepRef = useRef(commitStep);
   commitStepRef.current = commitStep;
-  const stepSession = (delta: number) => {
+  const stepRow = (delta: number) => {
     const id = stepTarget(ordered.map((i) => [i]), delta, pendingStep ?? selectedSessionId);
     if (!id) return;
     const run = stepRun.current;
@@ -1712,8 +1890,20 @@ function App() {
   const goToSession = (go: () => void, stepping = false) => {
     setIssuesOpen(false);
     closeSettings();
+    setOpenDraftId(null);
     if (!stepping) endStepRun();
     go();
+  };
+
+  /// The new-task composer, carrying a draft's text and picks.
+  const openDraft = (id: string) => {
+    const draft = getDraft(id);
+    if (!draft) return;
+    goToSession(() => {
+      restoreDraftControls(draft);
+      writeDraft(draftKey(id), draft.prompt);
+      setOpenDraftId(id);
+    });
   };
 
   /// Moves the whole window to another space. The screen catches up in the
@@ -2257,6 +2447,11 @@ function App() {
   useHotkey("doc.save", () => saveActiveDoc(selectedSessionId), {
     enabled: panelShown && activeTab === "docs",
   });
+  // The same ⌘S on the new-task composer, which has no session and so no docs
+  // tab; the gate says so outright rather than leaning on that.
+  useHotkey("composer.draft", () => void saveAsDraft(), {
+    enabled: !selectedSessionId && !issuesOpen && !(panelShown && activeTab === "docs"),
+  });
   // By position in the tab row, so a third view needs only a third line here.
   // No-ops without a session, where there is no row to switch — and on the
   // issues page, where the row is not drawn: switching an invisible tab looks
@@ -2474,6 +2669,9 @@ function App() {
           }
           onOpenIssues={() => setIssuesOpen(true)}
           issuesOpen={issuesOpen}
+          drafts={sidebarDrafts}
+          openDraftId={issuesOpen ? null : openDraftId}
+          onOpenDraft={openDraft}
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
@@ -2718,7 +2916,7 @@ function App() {
         // unmounts crossing the empty state.
         issuesOpen || (selectedSession && viewTab !== "chat") ? null : (
         <ChatInput
-          onSend={handleSendMsg}
+          onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
           commandsLoading={slashCommandsLoading}
           cwd={composerCwd}
@@ -2749,7 +2947,7 @@ function App() {
           }
           queuedCount={queuedMessages.length}
           busy={busy}
-          sessionId={selectedSessionId}
+          sessionId={composerKey}
           isNewTask={!shownSession}
           target={composerTarget}
           issuesConnected={issuesConnected}
@@ -2798,6 +2996,15 @@ function App() {
             ) : null
           }
           held={sendHeld}
+          draftHint={
+            openDraftId ? (
+              <span className={cn("transition-colors duration-300", draftNudge && "text-foreground")}>
+                Changes auto-saved
+              </span>
+            ) : (
+              draftChord && `${formatChords([draftChord])[0].join("")} to save as draft`
+            )
+          }
           agentUpdate={
             !selectedSessionId && (
               <AgentUpdateLine
@@ -2845,7 +3052,7 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(selectedSessionId)}
+              onAttach={() => void pickAttachments(composerKey)}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
               busy={busy}

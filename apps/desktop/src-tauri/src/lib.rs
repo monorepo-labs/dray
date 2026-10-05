@@ -52,6 +52,7 @@ pub mod models;
 #[cfg(feature = "desktop")]
 pub mod notifications;
 pub mod orchestration;
+pub mod drafts;
 pub mod projects;
 #[cfg(feature = "desktop")]
 pub mod quit;
@@ -773,6 +774,9 @@ pub fn run() {
             store::list_session_index_items,
             store::get_session_by_id,
             store::get_session_page,
+            drafts::list_drafts,
+            drafts::save_draft,
+            drafts::delete_draft,
             projects::list_projects,
             projects::add_project,
             projects::remove_project,

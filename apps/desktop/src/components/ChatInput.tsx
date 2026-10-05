@@ -134,6 +134,9 @@ type ChatInputProps = {
   /// Drawn under the new-task composer, below the send hint. Informational
   /// only, unlike `notice`: it never blocks sending.
   agentUpdate?: ReactNode;
+  /// Beside the new-task composer's send hint: how to save the text as a
+  /// draft, or that the draft on screen saves itself.
+  draftHint?: ReactNode;
   /// Why sending is held, or `null`. Blocks like `notice` but is no failure:
   /// the agent's CLI is updating, and a session should start on the new one.
   held?: string | null;
@@ -238,6 +241,7 @@ export default function ChatInput({
   dictating = false,
   notice,
   agentUpdate,
+  draftHint,
   held = null,
   modelTakesImages = true,
   handoff,
@@ -1110,6 +1114,7 @@ export default function ChatInput({
                 {held ?? (
                   <>
                     Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+                    {draftHint && <span className="flex items-center gap-1">· {draftHint}</span>}
                   </>
                 )}
               </div>

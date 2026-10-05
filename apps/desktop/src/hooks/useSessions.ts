@@ -30,6 +30,7 @@ import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
+import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
@@ -722,7 +723,7 @@ const handleSendMsg = async (
   // that draws it is handed these rather than describing its paths a second
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
-) => {
+): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
 
   let sessionId = selectedSessionId;
@@ -738,7 +739,7 @@ const handleSendMsg = async (
 
   if (!cwd) {
     setError("Attach a project first.");
-    return;
+    return false;
   }
 
   if (!sessionId) {
@@ -915,7 +916,7 @@ const handleSendMsg = async (
         [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
       }));
       applySentIssues();
-      return;
+      return true;
     }
 
     const { snapshot } = outcome;
@@ -929,10 +930,11 @@ const handleSendMsg = async (
       if (!showArchived) {
         setSessionIndexItems((prev) => [...prev, snapshot]);
       }
-      return;
+      return true;
     }
 
     applySentIssues();
+    return true;
   } catch (e) {
     // A rejected invoke means the turn never started, so nothing will arrive to
     // clear the status — release it here rather than leaving the composer stuck.
@@ -959,6 +961,7 @@ const handleSendMsg = async (
       dropProvisional(sessionId, provisional);
     }
     fail(e);
+    return false;
   }
 };
 
@@ -1132,7 +1135,12 @@ const handleNewSession = () => {
 //
 // Project, branch, and the worktree flag aren't restored — the composer hides
 // all three once a session exists, and they'd only mislead the next new chat.
-const restoreSessionControls = (indexed: SessionIndexItem) => {
+const restoreSessionControls = (
+  indexed: Pick<
+    SessionIndexItem,
+    "sessionId" | "harness" | "model" | "effort" | "permissionMode" | "fast"
+  >,
+) => {
   const pick = unsentPicks.current.get(indexed.sessionId);
   const item = { ...indexed, ...pick };
   // The raw setter, like the rest of this function: a session's harness is the
@@ -1153,6 +1161,17 @@ const restoreSessionControls = (indexed: SessionIndexItem) => {
   setEffortByModel(item.effort ? { ...efforts, [restored]: item.effort } : efforts);
   setPermissionModeState(item.permissionMode);
   setFastState(item.fast);
+};
+
+/// A new task carrying a saved draft's picks. Through the raw setters, like a
+/// session's: opening a draft must not rewrite the reader's defaults. Unlike a
+/// session, project and worktree are restored too, since a draft has not
+/// started and the composer still shows both.
+const restoreDraftControls = (draft: Draft) => {
+  handleNewSession();
+  restoreSessionControls({ ...draft, sessionId: draft.id });
+  setUseWorktreeState(draft.useWorktree);
+  handleSelectProject(draft.projectPath);
 };
 
 /// Answers whether the reader ended up on the session they asked for, which is
@@ -2781,6 +2800,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
 
 }

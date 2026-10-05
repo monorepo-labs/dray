@@ -678,6 +678,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // port reaches.
         list_local_servers(session_id: String) => crate::local_servers::list_local_servers(session_id).await;
         read_attachments(paths: Vec<String>) => ok(crate::attachments::read_attachments(paths).await);
+        list_drafts() => crate::drafts::list_drafts().await;
+        save_draft(draft: Value) => crate::drafts::save_draft(draft).await;
+        delete_draft(id: String) => crate::drafts::delete_draft(id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {

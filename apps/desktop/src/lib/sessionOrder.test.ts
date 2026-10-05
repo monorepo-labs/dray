@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   filterSessions,
   isNested,
+  placeDrafts,
   sessionGroups,
   sessionRows,
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
 import type { LiveSessions } from "@/components/Sidebar";
+import type { Draft } from "@/hooks/useDrafts";
 import type { Project, SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
@@ -960,5 +962,45 @@ describe("split groups", () => {
     expect(shape(sessionGroups(items, [], undefined, false, splits))).toEqual([
       ["Group 1", ["a"]],
     ]);
+  });
+});
+
+describe("placeDrafts", () => {
+  const draft = (id: string, projectPath: string, created = "2026-10-01T00:00:00Z") =>
+    ({ id, projectPath, created }) as unknown as Draft;
+  const runs = (items: SessionIndexItem[], drafts: Draft[], projects: Project[]) =>
+    placeDrafts(sessionGroups(items, projects), drafts, projects).map((g) =>
+      g.kind === "drafts" ? `drafts ${g.projectPath}: ${g.drafts.map((d) => d.id)}` : label(g),
+    );
+
+  it("leads its project's runs, newest first", () => {
+    expect(
+      runs(
+        [item("s1", "2026-09-01", null, "/a")],
+        [draft("old", "/a", "2026-09-01"), draft("new", "/a", "2026-09-02")],
+        [project("/a")],
+      ),
+    ).toEqual(["drafts /a: new,old", "/a"]);
+  });
+
+  it("gives a project with no sessions a run at its place in the project order", () => {
+    expect(
+      runs(
+        [item("s1", "2026-09-01", null, "/a"), item("s2", "2026-09-01", null, "/c")],
+        [draft("d", "/b"), draft("x", "/gone")],
+        [project("/a"), project("/b"), project("/c")],
+      ),
+    ).toEqual(["/a", "drafts /b: d", "/c", "drafts /gone: x"]);
+  });
+
+  it("opens a split project once, ahead of its first run", () => {
+    const live: LiveSessions = { statusBySession: { s1: "completed" }, asking: new Set() };
+    const items = ["s1", "s2", "s3"].map((id) => item(id, "2026-09-01", null, "/a"));
+    const placed = placeDrafts(
+      sessionGroups(items, [project("/a")], live),
+      [draft("d", "/a")],
+      [project("/a")],
+    );
+    expect(placed.map((g) => g.kind)).toEqual(["drafts", "project", "project"]);
   });
 });
