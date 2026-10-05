@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@/types/events";
-import { missedEvents } from "./resync";
+import { mergeMissed, missedEvents } from "./resync";
 
-const ev = (id: string, seq: number) => ({ id, seq }) as unknown as AgentEvent;
+const ev = (id: string, seq: number) => ({ id, seq, payload: { type: "x" } }) as unknown as AgentEvent;
+
+describe("mergeMissed", () => {
+  it("puts what the read returned ahead of what arrived live during it", () => {
+    const held = [ev("a", 1)];
+    const current = [ev("a", 1), ev("live", 4)];
+    const fresh = [ev("b", 2), ev("c", 3)];
+    expect(mergeMissed(current, held, fresh).map((e) => e.id)).toEqual(["a", "b", "c", "live"]);
+  });
+
+  it("keeps the read's order for an event that arrived live and was also read", () => {
+    const current = [ev("a", 1), ev("c", 3)];
+    const fresh = [ev("b", 2), ev("c", 3)];
+    expect(mergeMissed(current, [ev("a", 1)], fresh).map((e) => e.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("answers the same array when nothing was missed", () => {
+    const current = [ev("a", 1)];
+    expect(mergeMissed(current, current, [ev("a", 1)])).toBe(current);
+  });
+});
 
 describe("missedEvents", () => {
   it("answers what follows the newest held event, in log order", () => {

@@ -51,8 +51,33 @@ pub const PROTOCOL: u32 = 1;
 /// would leave a transcript wrong with nothing to say so.
 const EVENT_BACKLOG: usize = 4096;
 
+/// How long a connection may take to prove itself — the `/file` head, or the
+/// handshake plus hello — before it is dropped. Everything before the token is
+/// checked is somebody unknown spending this process's memory.
+const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The most a `/file` request head may hold. Its URL carries a token and a
+/// path; nothing a real client sends comes near this.
+const FILE_HEAD_LIMIT: u64 = 16 * 1024;
+
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
+    // Two processes on one home reset each other's sessions at start, take
+    // each other's socket and rewrite one index whole, each over the other.
+    // A socket that answers is a Dray already living here.
+    let home = store::get_home_app_dir().await?;
+    for name in [dray_proto::SOCKET_NAME, dray_proto::SOCKET_NAME_DEV] {
+        let socket = home.join(name);
+        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+            anyhow::bail!(
+                "a Dray is already running on {} ({} answers). Quit it, or start \
+                 dray-serve with DRAY_HOME set to a directory of its own.",
+                home.display(),
+                socket.display()
+            );
+        }
+    }
+
     if let Err(e) = store::reset_in_progress_sessions().await {
         eprintln!("[status reset err] {e}");
     }
@@ -293,26 +318,33 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
 /// app — attached images and browser recordings — for a client elsewhere. An
 /// `<img>` cannot set a header, hence the token in the query.
 ///
-/// Confined to those two directories by **canonical** path, so neither `..`
-/// nor a symlink inside one reaches anything else.
+/// Confined to those two directories, plus videos `read_file` handed out, by
+/// **canonical** path, so neither `..` nor a symlink inside one reaches
+/// anything else.
 // ponytail: no Range support, so a long video plays but cannot seek; add it
 // when recordings are viewed remotely.
 async fn file(stream: TcpStream, token: &str) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    let target = line.split(' ').nth(1).unwrap_or_default().to_string();
-    // The rest of the head, read so closing does not reset the connection
-    // under a response the client has not finished reading.
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).await? <= 2 {
-            break;
+    // The rest of the head is read too, so closing does not reset the
+    // connection under a response the client has not finished reading.
+    let head = async {
+        reader.read_line(&mut line).await?;
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).await? <= 2 {
+                return Ok::<_, std::io::Error>(());
+            }
         }
+    };
+    tokio::time::timeout(ADMIT, head).await.context("request head timed out")??;
+    if reader.get_ref().limit() == 0 {
+        anyhow::bail!("request head over {FILE_HEAD_LIMIT} bytes");
     }
-    let mut stream = reader.into_inner();
+    let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+    let mut stream = reader.into_inner().into_inner();
 
     let query = target.split_once('?').map(|(_, q)| q).unwrap_or_default();
     let mut given = (String::new(), String::new());
@@ -350,7 +382,30 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
 /// — absent and forbidden answer alike, so the route does not say which files
 /// exist outside them.
 async fn servable(path: &str) -> Option<PathBuf> {
-    servable_under(&store::get_home_app_dir().await.ok()?, path).await
+    if let Some(real) = servable_under(&store::get_home_app_dir().await.ok()?, path).await {
+        return Some(real);
+    }
+    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let opened = OPENED_VIDEOS.lock().unwrap_or_else(|e| e.into_inner());
+    opened.contains(&real).then_some(real)
+}
+
+/// Videos the Files view opened, by canonical path — the desktop app's
+/// `allow_file` stated again. A video is too big to answer inline, so the
+/// viewer streams it through `/file`, and nothing else would let a project
+/// file through. Never shrinks, as the asset scope does not.
+static OPENED_VIDEOS: std::sync::LazyLock<Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(Default::default);
+
+async fn read_file(path: &str) -> Result<files::FileBody, String> {
+    let body = files::read_body(path).await?;
+    if let files::FileBody::Video { path } = &body {
+        OPENED_VIDEOS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(PathBuf::from(path));
+    }
+    Ok(body)
 }
 
 async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
@@ -390,26 +445,32 @@ async fn connection(
     live: Arc<Mutex<Live>>,
     token: &str,
 ) -> Result<()> {
-    let ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
-        match req.headers().get("origin").map(|o| o.to_str().unwrap_or_default()) {
-            Some(origin) if !local_origin(origin) => {
-                let mut refused = ErrorResponse::new(Some("origin not allowed".to_string()));
-                *refused.status_mut() = StatusCode::FORBIDDEN;
-                Err(refused)
+    let admitted = tokio::time::timeout(ADMIT, async {
+        let ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
+            match req.headers().get("origin").map(|o| o.to_str().unwrap_or_default()) {
+                Some(origin) if !local_origin(origin) => {
+                    let mut refused = ErrorResponse::new(Some("origin not allowed".to_string()));
+                    *refused.status_mut() = StatusCode::FORBIDDEN;
+                    Err(refused)
+                }
+                _ => Ok(resp),
             }
-            _ => Ok(resp),
+        })
+        .await
+        .context("handshake")?;
+        let (write, mut read) = ws.split();
+        loop {
+            match read.next().await {
+                Some(Ok(Message::Text(text))) => return Ok(Some((write, read, text.to_string()))),
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                _ => return Ok::<_, anyhow::Error>(None),
+            }
         }
     })
     .await
-    .context("handshake")?;
-    let (mut write, mut read) = ws.split();
-
-    let hello = loop {
-        match read.next().await {
-            Some(Ok(Message::Text(text))) => break text.to_string(),
-            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-            _ => return Ok(()),
-        }
+    .context("no hello in time")??;
+    let Some((mut write, mut read, hello)) = admitted else {
+        return Ok(());
     };
     if let Some(refusal) = judge_hello(&hello, token) {
         write
@@ -612,7 +673,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         warm_file_index(cwd: String) => files::warm_file_index(cwd).await;
         search_files(cwd: String, query: String, limit: usize) => files::search_files(cwd, query, limit).await;
         list_dir(cwd: String, dir: String) => files::list_dir(cwd, dir).await;
-        read_file(path: String) => files::read_body(&path).await;
+        read_file(path: String) => read_file(&path).await;
         // Servers listening on *this* machine, which is the one a forwarded
         // port reaches.
         list_local_servers(session_id: String) => crate::local_servers::list_local_servers(session_id).await;

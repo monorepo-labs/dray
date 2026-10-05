@@ -26,7 +26,7 @@ import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
-import { missedEvents, type LiveState } from "@/lib/resync";
+import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -2099,13 +2099,7 @@ const catchUp = async (sessionId: string) => {
   setSessions((prev) =>
     prev.map((s) => {
       if (s.sessionId !== sessionId) return s;
-      // Live events kept arriving during the read, so some are here already.
-      const have = new Set(s.events.map((e) => e.id));
-      let events = s.events;
-      for (const e of fresh) {
-        if (have.has(e.id)) continue;
-        events = [...(e.payload.type === "user_message" ? retireOldestProvisional(events) : events), e];
-      }
+      const events = mergeMissed(s.events, held, fresh);
       return events === s.events ? s : { ...s, events };
     }),
   );

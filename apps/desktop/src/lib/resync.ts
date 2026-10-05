@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@/types/events";
+import { retireOldestProvisional } from "@/lib/provisional";
 
 /// What a `dray-serve` sends on every connect: what lives in its memory and in
 /// no log. A request is only ever answerable by the child that asked, so this
@@ -23,4 +24,23 @@ export function missedEvents(held: AgentEvent[], fetched: AgentEvent[]): AgentEv
     if (ids.has(fetched[i].id)) return fetched.slice(i + 1);
   }
   return held.length === 0 ? fetched : null;
+}
+
+/// Puts `fresh` — what a log read returned — into `current`, the session's
+/// events now. The read was awaited and live events kept landing meanwhile:
+/// whatever `current` holds that `held` (taken before the read) lacked and the
+/// read did not return arrived after it, so it goes after every event the read
+/// did. Appended instead, older events sat behind newer ones and a backward
+/// walk read the wrong one as the newest.
+export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: AgentEvent[]): AgentEvent[] {
+  const have = new Set(current.map((e) => e.id));
+  if (fresh.every((e) => have.has(e.id))) return current;
+  const heldIds = new Set(held.map((e) => e.id));
+  const freshIds = new Set(fresh.map((e) => e.id));
+  let events = current.filter((e) => heldIds.has(e.id) && !freshIds.has(e.id));
+  const arrived = current.filter((e) => !heldIds.has(e.id) && !freshIds.has(e.id));
+  for (const e of fresh) {
+    events = [...(e.payload.type === "user_message" ? retireOldestProvisional(events) : events), e];
+  }
+  return [...events, ...arrived];
 }

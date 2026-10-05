@@ -136,8 +136,13 @@ in the app — attachments and browser recordings — confined to those two
 directories by canonical path, so `..` and symlinks reach nothing else. The
 token rides the query because an `<img>` cannot set a header. Absent and
 forbidden both answer 404. `fileSrc` in `transport.ts` builds the URL. No Range
-support yet, so a long video plays but cannot seek. A video opened in the Files
-view sits outside both directories and answers 404 remotely.
+support yet, so a long video plays but cannot seek. A video the Files view
+opened is let through too: `read_file` records its canonical path, the remote
+copy of the app's `allow_file` grant.
+
+Before the token is checked a connection is a stranger, so it gets 10s to send
+the `/file` head or finish the handshake and hello, and a `/file` head is capped
+at 16KB.
 
 Dispatch is a table in [serve.rs](src-tauri/src/serve.rs): name, argument
 names and types, the call — Rust cannot read a function's parameter names back,
@@ -163,7 +168,9 @@ remote client.
 `DRAY_HOME` overrides `~/.dray`, read in `get_home_app_dir` and the socket
 path. The index is rewritten whole under a *per-process* lock, so two processes
 on one data dir lose each other's writes — which is exactly a `dray-serve`
-started on a Mac whose app is running. Unset on a VPS.
+started on a Mac whose app is running. Unset on a VPS. So `run` refuses to
+start where `dray.sock` or `dray-dev.sock` in its home answers a connect, and
+names `DRAY_HOME` as the cure.
 
 The server also serves the orchestration socket, so `dray new`/`send`/`ls`
 from inside its agents reach it (`DRAY_ENDPOINT` is already injected).
@@ -175,6 +182,14 @@ quit dialog, updater, the dock badge, NSPasteboard paste, and the asset-scope
 grant in `read_file`. Commands that act on the server's own desktop —
 `open_in_app`, `list_open_apps`, `open_login_terminal`, `run_agent_login`,
 `update_agent_in_terminal`, `paste_attachments` — are left out of the table.
+
+**The native pickers too.** Attach project and attach files open the Tauri
+dialog plugin, which a plain browser has not got, and a browser's own picker
+would name files on the *client's* disk where the server needs a path on its
+own. The cure is a picker drawn over `list_dir` on the server, which is a
+product surface and belongs with the SSH-connect work. Until then
+`add_project` is reachable over the wire (the smoke script uses it) with no
+control on screen to call it.
 
 ## Frontend
 
