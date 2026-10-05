@@ -266,6 +266,11 @@ export default function RichInput({
       onInput={read}
       onFocus={() => {
         focused.current = true;
+        // A caret asked for while the box was blurred was never placed, and a
+        // programmatic `focus()` lands at the start — so a draft opened from
+        // the sidebar put the reader before their own text. A click still
+        // wins, since it sets the selection after focus does.
+        if (ref.current) placeCaret(ref.current, lastCaret.current);
       }}
       onBlur={() => {
         focused.current = false;

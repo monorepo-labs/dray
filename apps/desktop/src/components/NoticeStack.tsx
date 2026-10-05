@@ -59,6 +59,7 @@ const ACTION: Record<NoticeKind, string> = {
   // on, and opening Settings over a browser the reader just asked for the full
   // width of is the opposite of what the setting is for.
   "sidebar-auto": "Got it",
+  "draft-saved": "Dismiss",
 };
 
 /// The kinds that go somewhere when taken. Everything else is read and
@@ -94,6 +95,7 @@ const BAR: Record<NoticeKind, string> = {
   // something the reader already saw happen, so the bar stays out of the
   // palette's two loaded colours.
   "sidebar-auto": "bg-muted-foreground/40",
+  "draft-saved": "bg-muted-foreground/40",
 };
 
 /// How long the card lingers after its work is done, to say so. Long enough to

@@ -44,6 +44,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { draftTitle, type Draft } from "@/hooks/useDrafts";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
@@ -118,6 +119,12 @@ type SidebarProps = {
   /// one. Read here rather than derived from the selection, which the page
   /// deliberately leaves alone.
   issuesOpen: boolean;
+  /// Saved tasks not yet started, scoped by the caller like `items`. Drawn in
+  /// the active list only, as the first run under their project.
+  drafts: Draft[];
+  /// The draft the new-task composer is showing, lit like a selected row.
+  openDraftId: string | null;
+  onOpenDraft: (id: string) => void;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -553,6 +560,58 @@ export function sortSessions(
   );
 }
 
+/// A project's drafts, drawn as one run of their own.
+type DraftRun = { kind: "drafts"; projectPath: string; drafts: Draft[] };
+
+/// The session runs with each project's drafts placed as the first run under
+/// it — where the session will sit once it starts. A project holding drafts
+/// and no sessions gets a run of its own at its place in the project order,
+/// and an unattached one goes last.
+///
+/// Apart from [`sessionGroups`] so the ⌘⇧↑/↓ walk, which reads that, steps
+/// sessions alone: a draft opens the composer, not a transcript.
+export function placeDrafts(
+  groups: SessionGroup[],
+  drafts: Draft[],
+  projects: Project[] = [],
+): (SessionGroup | DraftRun)[] {
+  const byPath = new Map<string, Draft[]>();
+  for (const draft of [...drafts].sort((a, b) => b.created.localeCompare(a.created))) {
+    byPath.set(draft.projectPath, [...(byPath.get(draft.projectPath) ?? []), draft]);
+  }
+  const rank = (path: string) => {
+    const i = projects.findIndex((p) => p.path === path);
+    return i < 0 ? Infinity : i;
+  };
+  const run = (projectPath: string): DraftRun => ({
+    kind: "drafts",
+    projectPath,
+    drafts: byPath.get(projectPath)!,
+  });
+
+  const withSessions = new Set(
+    groups.flatMap((g) => (g.kind === "project" ? [g.projectPath] : [])),
+  );
+  const alone = [...byPath.keys()]
+    .filter((path) => !withSessions.has(path))
+    .sort((a, b) => rank(a) - rank(b));
+  const placed = new Set<string>();
+  const out: (SessionGroup | DraftRun)[] = [];
+  for (const group of groups) {
+    if (group.kind === "project") {
+      while (alone.length && rank(alone[0]) < rank(group.projectPath)) {
+        out.push(run(alone.shift()!));
+      }
+      if (byPath.has(group.projectPath) && !placed.has(group.projectPath)) {
+        placed.add(group.projectPath);
+        out.push(run(group.projectPath));
+      }
+    }
+    out.push(group);
+  }
+  return [...out, ...alone.map(run)];
+}
+
 /// That same order with each *heading's* run folded into one step, for the
 /// chord that walks headings rather than rows.
 ///
@@ -899,6 +958,9 @@ export default function Sidebar({
   updateManual,
   onInstallUpdate,
   onOpenSettings,
+  drafts,
+  openDraftId,
+  onOpenDraft,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
@@ -982,7 +1044,7 @@ export default function Sidebar({
     }
   }, [archivedShown, selectedSessionId, groups, settledLimit]);
 
-  // A prefix of `groups`, so `groupKeys` still indexes by position.
+  // A prefix of `groups`, so a run keeps its key as the window opens.
   const drawn = useMemo(() => {
     if (!archivedShown || rowCount <= settledLimit) return groups;
     let left = settledLimit;
@@ -995,6 +1057,11 @@ export default function Sidebar({
     return out;
   }, [groups, archivedShown, settledLimit, rowCount]);
   const more = archivedShown && rowCount > settledLimit;
+  // The settled list is a history, and a draft has not started.
+  const runs = useMemo(
+    () => (archivedShown ? drawn : placeDrafts(drawn, drafts, projects)),
+    [archivedShown, drawn, drafts, projects],
+  );
 
   // A window the list does not overflow fires no scroll event, so scrolling
   // alone strands every row past the first step on a tall screen — and on a
@@ -1024,14 +1091,15 @@ export default function Sidebar({
   // that did not move at all.
   const groupKeys = useMemo(() => {
     const drawn = new Map<string, number>();
-    return groups.map((group) => {
+    return runs.map((group) => {
       if (group.kind === "pinned") return "pinned";
       if (group.kind === "group") return `group ${group.id}`;
+      if (group.kind === "drafts") return `drafts ${group.projectPath}`;
       const nth = drawn.get(group.projectPath) ?? 0;
       drawn.set(group.projectPath, nth + 1);
       return `${group.projectPath} ${nth}`;
     });
-  }, [groups]);
+  }, [runs]);
 
   // A session under a repo nobody attached still has a project, so the folder
   // name stands in rather than the heading being dropped — the row has to sit
@@ -1264,10 +1332,10 @@ export default function Sidebar({
         // observer, which is one more thing to mount per step.
         onScroll={more ? openMore : undefined}
       >
-        {rowCount === 0 ? (
+        {runs.length === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          drawn.map((group, index) => {
+          runs.map((group, index) => {
             // A project heading is drawn only where the list spans projects:
             // under a filter the label above already names the one project
             // every row belongs to, and a heading repeating it would be a
@@ -1278,11 +1346,16 @@ export default function Sidebar({
             // Only the first of a project's state runs names the project. The
             // rest sit under it and repeating it on each would say the runs
             // belonged to different repos.
-            const previous = drawn[index - 1];
+            // A draft run is a project's own run, so it opens the project like
+            // one and the session run after it does not open it again.
+            const previous = runs[index - 1];
+            const underProject = group.kind === "project" || group.kind === "drafts";
             const opensProject =
-              group.kind === "project" &&
-              (previous?.kind !== "project" ||
-                previous.projectPath !== group.projectPath);
+              underProject &&
+              !(
+                (previous?.kind === "project" || previous?.kind === "drafts") &&
+                previous.projectPath === group.projectPath
+              );
 
             const heading =
               group.kind === "pinned"
@@ -1312,7 +1385,7 @@ export default function Sidebar({
                     aria-hidden
                     className={cn(
                       "shrink-0",
-                      group.kind !== "project" || opensProject ? "h-4" : "h-3",
+                      !underProject || opensProject ? "h-4" : "h-3",
                     )}
                   />
                 )}
@@ -1323,7 +1396,7 @@ export default function Sidebar({
                   // not — it spans projects, so there is nothing to point at.
                   <HeadingRow
                     onClick={
-                      group.kind === "project"
+                      underProject
                         ? () => onNewSessionInProject(group.projectPath)
                         : undefined
                     }
@@ -1331,7 +1404,16 @@ export default function Sidebar({
                   />
                 )}
 
-                {group.rows.map(({ item, depth, guides, opens }) => (
+                {group.kind === "drafts" && group.drafts.map((draft) => (
+                  <DraftRow
+                    key={draft.id}
+                    draft={draft}
+                    active={draft.id === openDraftId}
+                    onOpen={onOpenDraft}
+                  />
+                ))}
+
+                {group.kind !== "drafts" && group.rows.map(({ item, depth, guides, opens }) => (
                   <SessionRow
                     key={item.sessionId}
                     item={item}
@@ -1990,6 +2072,53 @@ const ELBOW = 10;
 /// How long the pointer rests on a row before its transcript is read ahead of
 /// the click. Long enough that sweeping down the list reads nothing.
 const PREFETCH_HOVER_MS = 100;
+
+/// A saved task, drawn as a session row with its created time. No label says
+/// "draft": the run's own break sets it apart, and its title is the reader's
+/// raw text where a session's is a generated one. No rail and no hover
+/// controls, since nothing has run. No delete either: clearing its text and
+/// leaving is how a draft goes.
+function DraftRow({
+  draft,
+  active,
+  onOpen,
+}: {
+  draft: Draft;
+  active: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  return (
+    <div
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(draft.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(draft.id);
+        }
+      }}
+      className={cn(
+        "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
+      <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+        {relativeTime(draft.created)}
+      </span>
+    </div>
+  );
+}
 
 function SessionRow({
   item,

@@ -49,6 +49,7 @@ pub mod issues;
 pub mod models;
 pub mod notifications;
 pub mod orchestration;
+pub mod drafts;
 pub mod projects;
 pub mod quit;
 pub mod session;
@@ -749,6 +750,9 @@ pub fn run() {
             store::list_session_index_items,
             store::get_session_by_id,
             store::get_session_page,
+            drafts::list_drafts,
+            drafts::save_draft,
+            drafts::delete_draft,
             projects::list_projects,
             projects::add_project,
             projects::remove_project,

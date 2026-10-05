@@ -9,6 +9,9 @@
 //! moving the app to a server changes one function and nothing here.
 
 use clap::{Args, Parser, Subcommand};
+
+mod draft;
+use draft::DraftCommand;
 use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary,
@@ -51,6 +54,9 @@ enum Command {
     /// Tag a session with the issue its work is against.
     #[command(subcommand)]
     Issue(IssueCommand),
+    /// Save tasks for later, list them, and start or remove them.
+    #[command(subcommand)]
+    Draft(DraftCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
     /// Upgrade this binary to the newest release.
@@ -261,6 +267,7 @@ fn run() -> Result<(), String> {
         Command::Send(args) => send_message(args),
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
+        Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),

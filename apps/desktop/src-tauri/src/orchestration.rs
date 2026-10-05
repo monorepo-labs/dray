@@ -18,11 +18,12 @@ use crate::{
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
     session::{Harness, SessionManager},
+    drafts::{self, StoredDraft, DRAFTS_CHANGED},
     store::{self, SessionIndexItem},
 };
 use anyhow::{bail, Context, Result};
 use dray_proto::{
-    encode_line, CreateSession, Envelope, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
+    encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
     Response, SendMessage, SessionSummary, MAX_LINE, PROTOCOL_VERSION,
 };
 use std::path::Path;
@@ -245,6 +246,10 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
         Request::SendMessage(send) => send_message(send, app).await,
         Request::LinkIssues(link) => link_issues(link, app).await,
         Request::Browser(browser) => browse(browser).await,
+        Request::CreateDraft(create) => create_draft(create, app).await,
+        Request::ListDrafts(list) => list_drafts(list).await,
+        Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
+        Request::StartDraft(start) => start_draft(start, app).await,
     }
 }
 
@@ -383,16 +388,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
         None => None,
     };
 
-    if let Some(parent) = &parent {
-        let depth = depth_of(parent).await?;
-        if depth >= MAX_DEPTH {
-            bail!(
-                "this session is {depth} levels deep already — a spawned session may create \
-                 sessions, but those may not create more. Ask the user to start the next \
-                 batch from a top-level session."
-            );
-        }
-    }
+    check_depth(parent.as_ref()).await?;
 
     // A hidden session is drawn in its parent's crew and nowhere else, so one
     // made from a terminal would be listed nowhere at all.
@@ -475,6 +471,136 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     })
 }
 
+/// Saves a task for later with the picks `dray new` would have given it, and
+/// always with a worktree: an agent that leaves work for the reader has no
+/// standing to put it in the reader's own checkout.
+async fn create_draft(create: CreateDraft, app: &AppHandle) -> Result<Response> {
+    if create.prompt.trim().is_empty() {
+        bail!("a draft needs a prompt");
+    }
+    let parent = parent_of(create.parent_session_id.as_deref()).await?;
+    let project_path = project_from(create.project_path.as_deref(), parent.as_ref())
+        .context("no project — run this inside a git repo or pass --project")?;
+    let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
+    let draft = StoredDraft {
+        id: uuid::Uuid::now_v7().to_string(),
+        prompt: create.prompt,
+        project_path,
+        harness,
+        model: resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?,
+        effort: resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?,
+        permission_mode: parent.as_ref().map(|p| p.permission_mode).unwrap_or_default(),
+        fast: resolve_fast(create.fast, parent.as_ref(), harness),
+        use_worktree: true,
+        created: crate::events::now_rfc3339(),
+    };
+    drafts::save_draft(serde_json::to_value(&draft)?).await?;
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    Ok(Response::Draft { draft: summarize_draft(draft) })
+}
+
+/// Drafts in the caller's project, or every one with `--all`, newest first.
+async fn list_drafts(list: ListSessions) -> Result<Response> {
+    let scope = if list.all {
+        None
+    } else {
+        let parent = parent_of(list.parent_session_id.as_deref()).await?;
+        project_from(list.project_path.as_deref(), parent.as_ref())
+    };
+    let mut drafts: Vec<_> = drafts::stored()
+        .await?
+        .into_iter()
+        .filter(|d| scope.as_deref().is_none_or(|p| d.project_path == p))
+        .collect();
+    drafts.sort_by(|a, b| b.created.cmp(&a.created));
+    Ok(Response::Drafts { drafts: drafts.into_iter().map(summarize_draft).collect() })
+}
+
+/// Read before it is taken, so a draft this build cannot spell is refused
+/// rather than deleted unseen.
+async fn remove_draft(id: &str, app: &AppHandle) -> Result<Response> {
+    let draft = find_draft(id).await?;
+    drafts::take(id).await?.with_context(|| format!("no draft {id}"))?;
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    Ok(Response::Draft { draft: summarize_draft(draft) })
+}
+
+async fn find_draft(id: &str) -> Result<StoredDraft> {
+    drafts::stored()
+        .await?
+        .into_iter()
+        .find(|d| d.id == id)
+        .with_context(|| format!("no draft {id}"))
+}
+
+/// Starts a draft as a session nested under the caller. The draft is taken off
+/// the list first, so two starts racing make one session, and put back if the
+/// start fails.
+///
+/// The worktree is the draft's own pick: off only where a person saved it so in
+/// the app, which is the one way an agent can start work in the main checkout.
+async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
+    let draft = find_draft(&start.id).await?;
+    let parent = parent_of(start.parent_session_id.as_deref()).await?;
+    check_depth(parent.as_ref()).await?;
+    let held = drafts::take(&draft.id)
+        .await?
+        .with_context(|| format!("no draft {}", draft.id))?;
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    let started = start_session(&draft, start.parent_session_id.as_deref(), app).await;
+    let Err(error) = started else { return started };
+    // The prompt rides the error where the draft cannot go back, so the task
+    // survives in the caller's output even with the file unwritable.
+    if let Err(lost) = drafts::restore(held).await {
+        bail!(
+            "{error:#}, and the draft could not be put back ({lost:#}). It read:\n{}",
+            draft.prompt
+        );
+    }
+    app.emit(DRAFTS_CHANGED, ()).ok();
+    Err(error)
+}
+
+async fn start_session(
+    draft: &StoredDraft,
+    parent: Option<&str>,
+    app: &AppHandle,
+) -> Result<Response> {
+
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let outcome = app
+        .state::<SessionManager>()
+        .send_msg(
+            &session_id,
+            &draft.prompt,
+            &[],
+            &[],
+            draft.harness,
+            draft.model.clone(),
+            draft.effort,
+            draft.permission_mode,
+            draft.fast,
+            &draft.project_path,
+            None,
+            draft.use_worktree,
+            None,
+            None,
+            true,
+            parent,
+            false,
+            None,
+            app,
+        )
+        .await?;
+    let item = outcome
+        .snapshot
+        .map(|s| s.index_item)
+        .context("the session was created but returned no index entry")?;
+
+    app.emit(SESSION_CREATED, &item).ok();
+    Ok(Response::Created { session: summarize(item), base_ref: None })
+}
+
 /// What `--from` starts the new worktree at: a session id, a branch, or any
 /// other ref.
 ///
@@ -555,6 +681,19 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
 /// The walk stops at the cap rather than counting on: anything past it is
 /// refused whatever the number, and stopping is what keeps an index that
 /// somehow points at itself from hanging the caller's turn.
+async fn check_depth(parent: Option<&SessionIndexItem>) -> Result<()> {
+    let Some(parent) = parent else { return Ok(()) };
+    let depth = depth_of(parent).await?;
+    if depth >= MAX_DEPTH {
+        bail!(
+            "this session is {depth} levels deep already — a spawned session may create \
+             sessions, but those may not create more. Ask the user to start the next \
+             batch from a top-level session."
+        );
+    }
+    Ok(())
+}
+
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();
@@ -800,6 +939,30 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| raw.to_string()),
     )
+}
+
+/// The calling session, or `None` for a call from a terminal. An id that names
+/// nothing is an error, since every caller then nests or scopes by it.
+async fn parent_of(id: Option<&str>) -> Result<Option<SessionIndexItem>> {
+    match id {
+        Some(id) => Ok(Some(
+            store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))?,
+        )),
+        None => Ok(None),
+    }
+}
+
+fn summarize_draft(draft: StoredDraft) -> DraftSummary {
+    DraftSummary {
+        id: draft.id,
+        prompt: draft.prompt,
+        project_path: draft.project_path,
+        harness: draft.harness.wire_name(),
+        model: draft.model.as_str().to_string(),
+        effort: draft.effort.map(|e| e.as_arg().to_string()),
+        use_worktree: draft.use_worktree,
+        created: draft.created,
+    }
 }
 
 fn summarize(item: SessionIndexItem) -> SessionSummary {
