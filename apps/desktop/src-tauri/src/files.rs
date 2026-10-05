@@ -32,6 +32,7 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
+#[cfg(feature = "desktop")]
 use tauri::Manager;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -155,7 +156,7 @@ fn index_for(cwd: &str) -> Result<SharedFilePicker> {
 /// walk overlaps with the user typing their prompt rather than starting on the
 /// keystroke that opens the picker. Purely an optimization: [`search_files`]
 /// builds the index itself if this was never called.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn warm_file_index(cwd: String) -> Result<(), Fail> {
     tokio::task::spawn_blocking(move || index_for(&cwd))
         .await
@@ -168,7 +169,7 @@ pub async fn warm_file_index(cwd: String) -> Result<(), Fail> {
 /// On `spawn_blocking` because the index is synchronous throughout — the search
 /// holds a `parking_lot` read guard across the whole scoring pass, which is not
 /// something that may be held across an await point.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn search_files(cwd: String, query: String, limit: usize) -> Result<Vec<FileMatch>, Fail> {
     Ok(tokio::task::spawn_blocking(move || search(&cwd, &query, limit))
         .await
@@ -259,7 +260,7 @@ const MAX_FILE: u64 = 4 << 20;
 ///
 /// `dir` is relative to `cwd`, empty for the root. A directory that cannot be
 /// read answers with the reason, since the tree has a row to draw it in.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_dir(cwd: String, dir: String) -> Result<Vec<DirEntry>, String> {
     let target = if dir.is_empty() {
         Path::new(&cwd).to_path_buf()
@@ -409,6 +410,7 @@ const NOT_TEXT: &str = "Not text — nothing to show.";
 /// the process — Tauri has no way to take a grant back — and this command
 /// already hands the webview any file under the cap, so streaming one the
 /// reader asked for widens nothing a page could not already read.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, String> {
     let body = read_body(&path).await?;
@@ -423,7 +425,11 @@ pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, 
 /// `read_doc`'s three checks — metadata first, a capped read, UTF-8 refused
 /// rather than mangled — against a larger cap. Media is answered before the
 /// size check, since its bytes are never text and its cap is its own.
-async fn read_body(path: &str) -> Result<FileBody, String> {
+///
+/// What `dray-serve` answers `read_file` with: there is no asset protocol to
+/// grant a video on, so a remote client gets the path and nothing to play it
+/// through until the server serves files.
+pub(crate) async fn read_body(path: &str) -> Result<FileBody, String> {
     // Judged on the link's target, or `secret.mp4` pointing at a database
     // would stream it whole past the cap. Canonical is also what the protocol
     // matches against, since it resolves links before it checks.

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { useEffect, useState } from "react";
 
 import type { Harness, SlashCommand } from "@/types/events";

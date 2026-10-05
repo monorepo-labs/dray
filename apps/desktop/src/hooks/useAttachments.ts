@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { channel } from "@/lib/channel";

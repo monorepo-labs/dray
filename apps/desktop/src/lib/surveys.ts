@@ -17,7 +17,7 @@
 // the refusal. Reading `analytics_enabled` here as well would be a second
 // reader free to disagree with the first, which is what DRA-199 was.
 import type { PostHog } from "posthog-js";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 import type { SurveyIdentity } from "@/types/events";
 

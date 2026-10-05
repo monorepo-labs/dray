@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { fileSrc, invoke } from "@/lib/transport";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
@@ -240,7 +240,7 @@ function Video({ body }: { body: { path: string } }) {
 
   return (
     <div className="flex min-h-full items-center justify-center bg-black">
-      <video src={convertFileSrc(body.path)} controls className="max-h-full max-w-full" onError={onError} />
+      <video src={fileSrc(body.path)} controls className="max-h-full max-w-full" onError={onError} />
     </div>
   );
 }

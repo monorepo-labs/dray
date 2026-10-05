@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { pushNotice } from "@/hooks/useNotices";

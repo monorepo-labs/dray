@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 import { channel } from "@/lib/channel";
 import type { AgentAvailability, Harness } from "@/types/events";

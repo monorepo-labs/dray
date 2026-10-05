@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "@/lib/transport";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -17,7 +16,7 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { hiddenChildren } from "@/lib/crew";
-import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
+import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -27,6 +26,7 @@ import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
+import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -1637,6 +1637,10 @@ const deleteSession = async (sessionId: string) => {
 // A read outlived by a second press is dropped: two reads in flight land in
 // whatever order the backend answers, and the earlier one landing last put
 // the side just left back on screen under a toggle saying otherwise.
+// Bumped by a server's `live_state`, since rows created or retitled while the
+// socket was down announced themselves to nobody.
+const [indexReload, setIndexReload] = useState(0);
+
 useEffect(() => {
   let cancelled = false;
   invoke<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
@@ -1651,7 +1655,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [showArchived])
+}, [showArchived, indexReload])
 
 useEffect(() => {
   let cancelled = false;
@@ -2089,6 +2093,92 @@ const sessionsRef = useRef(sessions);
 sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
+
+/// Appends what a session's log gained while the socket to a `dray-serve` was
+/// down. Paged back until the log meets an event already held; deltas are not
+/// logged and need nothing, being previews of what this delivers.
+const catchUp = async (sessionId: string) => {
+  const held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [];
+  const tail = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT });
+  if (!tail) return;
+  let fetched = tail.events;
+  let before = tail.olderBefore;
+  let missed = missedEvents(held, fetched);
+  while (missed === null && before != null) {
+    const older = await invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 });
+    fetched = [...older.events, ...fetched];
+    before = older.olderBefore;
+    missed = missedEvents(held, fetched);
+  }
+  // Nothing held was ever logged — a session whose only event is the
+  // provisional prompt — so the whole log is news.
+  const fresh = missed ?? fetched;
+  if (!fresh.length) return;
+
+  setSessions((prev) =>
+    prev.map((s) => {
+      if (s.sessionId !== sessionId) return s;
+      const events = mergeMissed(s.events, held, fresh);
+      return events === s.events ? s : { ...s, events };
+    }),
+  );
+  const flushed = fresh.filter((e) => e.payload.type === "user_message" && e.payload.queued).length;
+  if (flushed) {
+    setQueuedBySession((prev) =>
+      prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
+    );
+  }
+};
+
+/// A `dray-serve` sends this on every connect, the first included, and it
+/// replaces rather than adds to what is held: a card answered while the socket
+/// was down must go, and one raised meanwhile must be drawn, or an agent waits
+/// on a question nobody can see. Applied quietly — none of it is news.
+useEffect(() => {
+  const listenerPromise = listen<LiveState>("live_state", ({ payload }) => {
+    const { asks, tasks } = payload;
+    dropHeldAsks();
+    setSessions((prev) => {
+      for (const ask of asks) {
+        if (!prev.some((s) => s.sessionId === ask.sessionId)) holdEarlyEvent(ask);
+      }
+      return prev.map((s) => {
+        const kept = s.events.filter((e) => !isAsk(e));
+        const mine = asks.filter((a) => a.sessionId === s.sessionId);
+        return kept.length === s.events.length && !mine.length ? s : { ...s, events: [...kept, ...mine] };
+      });
+    });
+
+    const open: Record<string, string[]> = {};
+    for (const ask of asks) {
+      if (ask.payload.type === "permission_requested" || ask.payload.type === "questions_asked") {
+        (open[ask.sessionId] ??= []).push(ask.payload.requestId);
+      }
+    }
+    for (const id of Object.keys(asksBySessionRef.current)) {
+      if (!open[id]) dismissNotice(id, "asking");
+    }
+    setAsksBySession(open);
+    setTasksBySession(
+      Object.fromEntries(
+        tasks.flatMap((t) => (t.payload.type === "background_tasks_changed" ? [[t.sessionId, t.payload.tasks]] : [])),
+      ),
+    );
+    // Status is written to the index on every change, so the re-read below is
+    // the server's answer; a live reading held from before the drop would
+    // outrank it.
+    setStatusBySession({});
+    setIndexReload((n) => n + 1);
+
+    for (const s of sessionsRef.current) {
+      retireStreamingBlock(s.sessionId);
+      catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
+    }
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
 
 /// Every session a split view has on screen beside the selected one. Read by
 /// the listeners below, which are registered once — so a ref, written by `App`

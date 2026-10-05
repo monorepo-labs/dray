@@ -2,11 +2,13 @@ use crate::{
     events::ApprovalPolicy,
     harness::claude_code::commands::SlashCommand,
     models::{Effort, Model, ModelId},
-    session::{Harness, QueuedMessage, SendOutcome, SessionManager},
+    session::{manager, Harness, QueuedMessage, SendOutcome},
+    sink::Sink,
     store::{SessionIndexItem, SessionSnapshot, SessionStatus},
 };
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+#[cfg(feature = "desktop")]
+use tauri::{Emitter, Manager, WindowEvent};
 
 /// `anyhow::bail!` for a function returning [`Fail`]: `bail!` returns the bare
 /// `anyhow::Error`, which does not coerce, where `?` would have converted it.
@@ -27,7 +29,7 @@ pub mod binpath;
 pub mod cef;
 // Compiled without the feature too: it needs nothing of CEF's, and that is
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "desktop", target_os = "macos"))]
 pub mod chromium;
 // Without the feature too, for the same reason: its tests need no Chromium.
 #[cfg(target_os = "macos")]
@@ -47,18 +49,51 @@ pub mod harness;
 pub mod issues;
 #[path = "models/models.rs"]
 pub mod models;
+#[cfg(feature = "desktop")]
 pub mod notifications;
 pub mod orchestration;
 pub mod drafts;
 pub mod projects;
+#[cfg(feature = "desktop")]
 pub mod quit;
+#[cfg(feature = "serve")]
+pub mod serve;
 pub mod session;
 pub mod settings;
+pub mod sink;
 pub mod store;
 pub mod title;
+#[cfg(feature = "desktop")]
 #[path = "transcription/transcription.rs"]
 pub mod transcription;
+#[cfg(feature = "desktop")]
 pub mod updater;
+
+/// Whether this is a `tauri dev` build. Always false off the desktop: the dev
+/// split exists so a dev app can run beside the release one, and a server
+/// gets the same through `DRAY_HOME`.
+pub fn is_dev() -> bool {
+    #[cfg(feature = "desktop")]
+    let dev = tauri::is_dev();
+    #[cfg(not(feature = "desktop"))]
+    let dev = false;
+    dev
+}
+
+/// Spawns onto the async runtime from anywhere, including a thread that is
+/// not one of its workers — CEF's main thread calls `analytics::track`.
+/// Tauri's runtime is global for that reason; the server only ever calls from
+/// inside its own.
+pub fn spawn<F>(task: F)
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    #[cfg(feature = "desktop")]
+    tauri::async_runtime::spawn(task);
+    #[cfg(not(feature = "desktop"))]
+    tokio::spawn(task);
+}
 
 /// A command's failure as the frontend sees it: the outermost message, as a
 /// string. `anyhow::Error` cannot cross the bridge itself, and the alternative
@@ -103,7 +138,7 @@ pub fn http() -> &'static reqwest::Client {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn send_msg(
     session_id: &str,
     prompt: &str,
@@ -122,8 +157,7 @@ async fn send_msg(
     use_worktree: bool,
     worktree_name: Option<&str>,
     is_new_session: bool,
-    app: AppHandle,
-    manager: State<'_, SessionManager>,
+    sink: Sink,
 ) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
     // `Other`, which is right off the index and wrong here: this is the
@@ -141,7 +175,7 @@ async fn send_msg(
     // the webview alone, so getting here means somebody pressed send.
     analytics::track_active_day();
 
-    Ok(manager
+    Ok(manager()
         .send_msg(
             session_id,
             prompt,
@@ -170,7 +204,7 @@ async fn send_msg(
             None,
             false,
             None,
-            &app,
+            &sink,
         )
         .await?)
 }
@@ -187,7 +221,7 @@ async fn send_msg(
 /// The cure travels with the answer. A row saying "not installed" and nothing
 /// else is the errno reworded; naming the command and the page is the whole
 /// point of asking.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn agent_availability() -> Vec<AgentAvailability> {
     let mut out = Vec::new();
     for harness in harness::Harness::ALL {
@@ -269,14 +303,14 @@ struct AgentAvailability {
 /// can say. That read is cached and cheap after the first, and it answers empty
 /// rather than erroring — a reader with no provider configured is in an
 /// ordinary state, and the picker draws its own empty row for it.
-#[tauri::command]
-async fn list_models(app: AppHandle, harness: Option<harness::Harness>) -> Vec<Model> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model> {
     // Defaulted rather than required so a caller that predates the second
     // harness still gets the list it always got.
     match harness.unwrap_or(harness::Harness::ClaudeCode) {
         harness::Harness::Pi => harness::pi::models::list().await,
         harness::Harness::Fx => {
-            harness::fx::models::check_table(&app).await;
+            harness::fx::models::check_table(&sink).await;
             harness::fx::models::list().await
         }
         harness::Harness::Grok => harness::grok::models::list().await,
@@ -289,7 +323,7 @@ async fn list_models(app: AppHandle, harness: Option<harness::Harness>) -> Vec<M
 ///
 /// For the refresh a reader asks for by hand: they have just logged a provider
 /// in, and waiting out the freshness window would read as the list being wrong.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn refresh_models() {
     harness::pi::models::forget();
     // Not just `forget`: fx serves the subscription providers from static
@@ -303,7 +337,7 @@ async fn refresh_models() {
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_fx_provider(provider: String) -> Result<(), String> {
     harness::fx::models::set_provider(&provider)
         .await
@@ -316,7 +350,7 @@ async fn set_fx_provider(provider: String) -> Result<(), String> {
 /// Read-modify-write rather than a fresh struct: with a second field here one
 /// day, building this from `enabled` alone would reset whatever the caller did
 /// not name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, Fail> {
     // `update` and not read-then-write: the two steps can be interleaved by the
     // install id minting itself, whose write would then carry a snapshot taken
@@ -347,7 +381,7 @@ async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, 
 /// Takes the feature as a `String` and does not validate it. The only caller is
 /// this app's own frontend, and a list of permitted names here would be a
 /// second copy of one the call sites already are.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn track_feature(feature: String) {
     analytics::track("feature_used", serde_json::json!({ "feature": feature }));
 }
@@ -367,7 +401,7 @@ fn track_feature(feature: String) {
 /// (`skills/list`); fx publishes nothing on the wire at all, so its roots are
 /// walked on disk. Only `Other` answers none, which is the honest picker for a
 /// CLI this build has never heard of.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCommand>, Fail> {
     Ok(match harness {
         Harness::ClaudeCode => harness::claude_code::commands::list_commands(cwd).await?,
@@ -392,19 +426,19 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
 /// Takes an owned `cwd` where every command around it borrows: an async command
 /// with a borrowed argument has to return `Result`, and this cannot fail — a
 /// `Result` here would be a lie the caller then has to handle.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn head_tree(cwd: String) -> Option<String> {
     git::head_tree(&cwd).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn work_status(cwd: String) -> git::WorkStatus {
     git::work_status(&cwd).await
 }
 
 /// One session's index entry, settled or not. The frontend holds one side of
 /// the settled split, so a notice about a session on the other side asks here.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(store::get_session_index_item(session_id).await?)
 }
@@ -414,7 +448,7 @@ async fn session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>
 /// Answers for a session with no worktree too — an all-zero, `exists: false`
 /// reading — so the caller has one shape to render rather than a null to
 /// branch on.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn worktree_disposition(session_id: &str) -> Result<git::WorktreeDisposition, Fail> {
     let item = store::get_session_index_item(session_id).await?;
 
@@ -433,25 +467,24 @@ async fn worktree_disposition(session_id: &str) -> Result<git::WorktreeDispositi
 /// Returns the relocated index entry so the frontend replaces its row from
 /// what the disk holds rather than from what it hoped the write would do —
 /// `set_session_flags` makes the same bargain.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_session_worktree(
     session_id: &str,
-    manager: State<'_, SessionManager>,
 ) -> Result<SessionIndexItem, Fail> {
-    Ok(manager.remove_worktree(session_id).await?)
+    Ok(manager().remove_worktree(session_id).await?)
 }
 
 /// The reader's rename: written, locked against later generated titles, and
 /// announced on `session_title` like any other title so every row follows.
-#[tauri::command]
-async fn rename_session(session_id: String, title: String, app: AppHandle) -> Result<(), Fail> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn rename_session(session_id: String, title: String, sink: Sink) -> Result<(), Fail> {
     let title = title.trim().to_string();
     if title.is_empty() {
         return Err(anyhow::anyhow!("A session title cannot be empty").into());
     }
     if store::rename_session(&session_id, &title).await?.is_some() {
         let event = title::SessionTitleEvent { session_id, title, title_locked: true };
-        if let Err(e) = app.emit("session_title", &event) {
+        if let Err(e) = sink.emit("session_title", &event) {
             eprintln!("[rename emit err] {e}");
         }
     }
@@ -462,13 +495,12 @@ async fn rename_session(session_id: String, title: String, app: AppHandle) -> Re
 /// tree, browser tabs. The stop is best-effort and after the write: the flag
 /// has landed either way, and failing the command would tell the frontend a
 /// settle that happened did not.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn set_session_flags(
     session_id: &str,
     archived: Option<bool>,
     pinned: Option<bool>,
     hidden: Option<bool>,
-    manager: State<'_, SessionManager>,
 ) -> Result<Option<SessionIndexItem>, Fail> {
     let updated = store::set_session_flags(session_id, archived, pinned, hidden).await?;
     if updated.is_none() {
@@ -483,7 +515,7 @@ async fn set_session_flags(
     }
     if archived == Some(true) {
         for id in &settling {
-            if let Err(e) = manager.settle(id).await {
+            if let Err(e) = manager().settle(id).await {
                 eprintln!("could not stop settled session {id}: {e}");
             }
         }
@@ -494,12 +526,11 @@ async fn set_session_flags(
 /// Removes a session for good: its child, its index entry, and its log. `false`
 /// means the index never held the id, which the sidebar treats the same as a
 /// success — either way the row it was asked to remove is gone.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn delete_session(
     session_id: &str,
-    manager: State<'_, SessionManager>,
 ) -> Result<bool, Fail> {
-    Ok(manager.delete(session_id).await?)
+    Ok(manager().delete(session_id).await?)
 }
 
 /// Copies a session onto `fork_id`, to be carried on separately from the one it
@@ -514,14 +545,13 @@ async fn delete_session(
 ///
 /// Returns what the fork replays — the parent's log, already copied — so the
 /// frontend can open it without a second read.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn fork_session(
     session_id: &str,
     fork_id: &str,
     worktree: bool,
-    manager: State<'_, SessionManager>,
 ) -> Result<SessionSnapshot, Fail> {
-    let snapshot = manager.fork(session_id, fork_id, worktree).await?;
+    let snapshot = manager().fork(session_id, fork_id, worktree).await?;
 
     analytics::feature_used("fork");
 
@@ -530,13 +560,12 @@ async fn fork_session(
 
 /// Stops the in-flight turn without killing the session — the CLI aborts its
 /// tools and streaming, ends the turn, and stays alive for the next prompt.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn interrupt_session(
     session_id: &str,
-    manager: State<'_, SessionManager>,
-    app: AppHandle,
+    sink: Sink,
 ) -> Result<(), Fail> {
-    Ok(manager.interrupt(session_id, &app).await?)
+    Ok(manager().interrupt(session_id, &sink).await?)
 }
 
 /// Stops one background task without touching the rest of the session.
@@ -545,40 +574,37 @@ async fn interrupt_session(
 /// every running task alone — a task is backgrounded to outlive its turn, so
 /// killing one is its own ask. Idempotent — the CLI answers success for a task
 /// it no longer holds.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn stop_task(
     session_id: &str,
     task_id: &str,
-    manager: State<'_, SessionManager>,
 ) -> Result<(), Fail> {
-    Ok(manager.stop_task(session_id, task_id).await?)
+    Ok(manager().stop_task(session_id, task_id).await?)
 }
 
 /// Takes back the newest prompt still held for a running turn, returning its
 /// text so the composer can restore it. `None` once the flush has written it —
 /// past that point the CLI owns the prompt and there is no way to retract it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn cancel_queued(
     session_id: &str,
-    manager: State<'_, SessionManager>,
 ) -> Result<Option<QueuedMessage>, Fail> {
-    Ok(manager.cancel_queued(session_id).await)
+    Ok(manager().cancel_queued(session_id).await)
 }
 
 /// Answers a permission request the agent is blocked on. `option_id` names one
 /// of the options carried on the `permission_requested` event — the standing
 /// rule it may apply never leaves the backend, so the frontend cannot widen a
 /// grant beyond what the CLI proposed.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn respond_permission(
     session_id: &str,
     request_id: &str,
     option_id: &str,
-    manager: State<'_, SessionManager>,
-    app: AppHandle,
+    sink: Sink,
 ) -> Result<(), Fail> {
-    Ok(manager
-        .respond_permission(session_id, request_id, option_id, &app)
+    Ok(manager()
+        .respond_permission(session_id, request_id, option_id, &sink)
         .await?)
 }
 
@@ -586,16 +612,15 @@ async fn respond_permission(
 /// each question's verbatim text — the CLI matches on the string — and a
 /// question left out of it is one the user skipped, which is a real answer
 /// rather than a refusal.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn answer_questions(
     session_id: &str,
     request_id: &str,
     answers: HashMap<String, String>,
-    manager: State<'_, SessionManager>,
-    app: AppHandle,
+    sink: Sink,
 ) -> Result<(), Fail> {
-    Ok(manager
-        .answer_questions(session_id, request_id, answers, &app)
+    Ok(manager()
+        .answer_questions(session_id, request_id, answers, &sink)
         .await?)
 }
 
@@ -604,15 +629,15 @@ async fn answer_questions(
 /// reading is what retires it — and without it when they ask for the mark back
 /// from the row's menu. Returns the status as written, `None` when nothing
 /// changed: the session was not in the state that moves, or the id is unknown.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn mark_session_read(
     session_id: &str,
     read: bool,
-    manager: State<'_, SessionManager>,
 ) -> Result<Option<SessionStatus>, Fail> {
-    Ok(manager.mark_read(session_id, read).await?)
+    Ok(manager().mark_read(session_id, read).await?)
 }
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before the builder, so a panic while the app is still coming up — the
@@ -627,7 +652,6 @@ pub fn run() {
         // Saves on `RunEvent::Exit`, which plugins see before the callback
         // below ends the process with `_exit`.
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .manage(SessionManager::default())
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
         .manage(transcription::TranscriptionState::default())
@@ -678,7 +702,7 @@ pub fn run() {
             // Orchestration is a side channel: a socket that won't bind must
             // cost the feature, never the app. Logged and dropped for that
             // reason — there is nothing the reader could act on either.
-            let handle = app.handle().clone();
+            let handle = Sink::from(app.handle());
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = orchestration::serve(handle).await {
                     eprintln!("[orchestration err] {e:#}");

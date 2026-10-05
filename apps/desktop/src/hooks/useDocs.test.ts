@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The store reads files through Tauri, which does not exist in this
 // environment. Only the read is faked — every rule under test is the store's.
-vi.mock("@tauri-apps/api/core", () => ({ invoke: () => Promise.resolve("# hi") }));
+vi.mock("@/lib/transport", () => ({ invoke: () => Promise.resolve("# hi") }));
 
 import {
   closeDoc,

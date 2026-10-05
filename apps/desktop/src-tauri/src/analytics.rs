@@ -140,7 +140,7 @@ pub struct SurveyIdentity {
 ///
 /// One value rather than a consent flag the frontend pairs with a lookup of its
 /// own — see [`SurveyIdentity`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // Same order as `send`: no key compiled in is the ordinary case for a local
     // build, and checking it first keeps a build that sends nothing from
@@ -189,7 +189,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
 /// `event` is `&'static str` because every one is a literal, and taking it by
 /// value is what keeps the spawned future `'static` without an allocation.
 pub fn track(event: &'static str, properties: Value) {
-    tauri::async_runtime::spawn(send(event, None, properties));
+    crate::spawn(send(event, None, properties));
 }
 
 /// Reports `event` at most once per local day per `key`, for the life of this
@@ -214,7 +214,7 @@ pub fn track(event: &'static str, properties: Value) {
 /// disagrees with PostHog's project timezone at the edges for anyone outside
 /// it.
 pub fn track_daily(event: &'static str, key: String, properties: Value) {
-    tauri::async_runtime::spawn(send(event, Some(key), properties));
+    crate::spawn(send(event, Some(key), properties));
 }
 
 /// Whether `key` still owes a report for `day`, marking it reported if so.
@@ -266,7 +266,7 @@ fn claim_day(key: String, day: String) -> bool {
 /// A command too, for the focus half: the signal comes from `src/lib/focus.ts`,
 /// which is where the rule for reading it lives — the DOM's `focus` fires for a
 /// native menu or devtools closing too, which is not the reader arriving.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn track_active_day() {
     track_daily("active_day", "active_day".into(), json!({}));
 }

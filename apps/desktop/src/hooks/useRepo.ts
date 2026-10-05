@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 import { reconcileLog } from "@/lib/commit";
 import type { Commit } from "@/types/events";

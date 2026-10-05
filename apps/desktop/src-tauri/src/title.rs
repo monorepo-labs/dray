@@ -30,7 +30,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use ts_rs::TS;
@@ -513,7 +513,7 @@ pub fn spawn_title_generation(
     harness: Harness,
     prompt: &str,
     cwd: &str,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     let session_id = session_id.to_string();
     let prompt = prompt.to_string();

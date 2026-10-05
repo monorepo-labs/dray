@@ -929,7 +929,7 @@ pub struct IntegrationsView {
 ///
 /// Asked only where `gh` resolves, so a machine that has never had the CLI
 /// spawns nothing to find out it has not.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_integrations() -> IntegrationsView {
     let cached = settings::read().await.linear_account;
     let connected = read_key().await.is_some();
@@ -951,7 +951,7 @@ pub async fn get_integrations() -> IntegrationsView {
 /// list is *this repository's* issues, and nothing else in the frontend knows
 /// which repository a session sits in. No network — a remote is read out of the
 /// repository's own config — so the frontend caches it per directory.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn github_repo(cwd: String) -> Option<String> {
     crate::git::github_slug(&cwd).await
 }
@@ -962,7 +962,7 @@ pub async fn github_repo(cwd: String) -> Option<String> {
 /// finds out about the next time they open the picker, by which point they have
 /// left settings and the failure looks like the feature being broken. The
 /// identity comes back from the same call, which is what the row draws.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
     let key = key.trim().to_string();
     if key.is_empty() {
@@ -996,7 +996,7 @@ pub async fn connect_linear(key: String) -> Result<IntegrationsView, String> {
 /// Forgets the key and the account. Sessions keep their linked issues: a link
 /// records what the work was about, and it stays readable — identifier and
 /// title are already on it — whether or not anyone can still reach the tracker.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
     delete_key().await?;
 
@@ -1013,7 +1013,7 @@ pub async fn disconnect_linear() -> Result<IntegrationsView, String> {
 /// ask the same question with different filters — two commands would be two
 /// orderings of one list, which reads as the picker disagreeing with the page
 /// about which issue is most urgent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, IssueUnavailable> {
     match query.tracker {
         IssueTracker::Linear => {
@@ -1037,7 +1037,7 @@ pub async fn list_issues(query: IssueQuery, limit: usize) -> Result<Vec<Issue>, 
 /// drawing a link that already carries the tracker's own id, while the page is
 /// opening a row it just read. Passing it is what keeps an issue readable after
 /// it moves team and its identifier renumbers.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_issue(
     identifier: String,
     id: Option<String>,
@@ -1071,7 +1071,7 @@ pub async fn get_issue(
 /// Re-read afterwards rather than trusting the mutation's own echo: the panel
 /// draws a whole [`IssueDetail`], and one read is what keeps description,
 /// comments and the new status arriving as one answer.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_issue(
     identifier: String,
     id: String,
@@ -1129,7 +1129,7 @@ pub struct IssueAsset {
 /// nearly always are.
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailable> {
     let key = linear_key().await?;
 
@@ -1138,7 +1138,7 @@ pub async fn fetch_issue_asset(url: String) -> Result<IssueAsset, IssueUnavailab
 
 /// The teams and projects the filter row offers — or, under GitHub, the
 /// repositories, which is the same question about a different bucket.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_issue_filters(
     tracker: IssueTracker,
     repo: Option<String>,
@@ -1158,7 +1158,7 @@ pub async fn list_issue_filters(
 /// Untags a session. The issue itself is untouched: a link is a fact about the
 /// session, and the only write this app makes to a tracker is [`update_issue`],
 /// which a reader has to ask for by name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn unlink_issue(
     session_id: String,
     key: String,

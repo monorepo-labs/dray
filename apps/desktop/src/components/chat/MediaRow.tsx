@@ -1,5 +1,5 @@
+import { fileSrc } from "@/lib/transport";
 import { useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import ImageRow from "@/components/chat/ImageRow";
@@ -25,15 +25,15 @@ export default function MediaRow({ media }: { media: Media[] }) {
     return "image" in only ? (
       <ImageRow images={[only.image]} />
     ) : (
-      <VideoPlayer src={convertFileSrc(only.video)} />
+      <VideoPlayer src={fileSrc(only.video)} />
     );
   }
 
   const items = media
     .map((m) =>
       "video" in m
-        ? { src: convertFileSrc(m.video), name: basename(m.video), video: true }
-        : { src: m.image.path ? convertFileSrc(m.image.path) : m.image.url, name: m.image.path ? basename(m.image.path) : "image" },
+        ? { src: fileSrc(m.video), name: basename(m.video), video: true }
+        : { src: m.image.path ? fileSrc(m.image.path) : m.image.url, name: m.image.path ? basename(m.image.path) : "image" },
     )
     .filter((item): item is LightboxImage => Boolean(item.src));
   if (items.length === 0) return null;

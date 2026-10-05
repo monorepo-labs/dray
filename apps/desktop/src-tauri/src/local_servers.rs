@@ -12,10 +12,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::State;
 
 use crate::git::resolved;
-use crate::session::SessionManager;
+use crate::session::manager;
 use crate::store::get_session_index_item;
 
 #[derive(Serialize)]
@@ -27,12 +26,11 @@ pub struct LocalServer {
     pub mine: bool,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_local_servers(
     session_id: String,
-    manager: State<'_, SessionManager>,
 ) -> Result<Vec<LocalServer>, String> {
-    let root = manager.child_pid(&session_id).await;
+    let root = manager().child_pid(&session_id).await;
     let cwd = get_session_index_item(&session_id)
         .await
         .map_err(|e| e.to_string())?

@@ -39,7 +39,7 @@ use std::{
         Arc,
     },
 };
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::{
     io::AsyncWriteExt,
     process::{Child, ChildStdin},
@@ -374,7 +374,7 @@ async fn remove_session_worktree(item: &SessionIndexItem) -> Result<bool> {
 /// Persists a status change and tells the frontend. Failures are logged, not
 /// propagated: status is derived state, and losing one update must not take
 /// down the stdout loop that noticed it.
-pub async fn publish_status(session_id: &str, status: SessionStatus, app: &AppHandle) {
+pub async fn publish_status(session_id: &str, status: SessionStatus, app: &Sink) {
     // Read back off the write rather than recomputed here: which statuses bump
     // `modified` is `set_session_status`'s rule, and stating it twice is how the
     // sidebar and the disk drift apart.
@@ -407,6 +407,15 @@ type Slot = Arc<Mutex<Option<Session>>>;
 #[derive(Debug, Default)]
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, Slot>>,
+}
+
+/// The process's one manager. A static rather than Tauri managed state, so the
+/// desktop's commands, the orchestration socket and `dray-serve` all reach the
+/// same map without a Tauri app in between.
+pub fn manager() -> &'static SessionManager {
+    static MANAGER: std::sync::LazyLock<SessionManager> =
+        std::sync::LazyLock::new(SessionManager::default);
+    &MANAGER
 }
 
 /// The live session in a locked slot, or the error every caller answers a dead
@@ -481,7 +490,7 @@ impl SessionManager {
         // are the user's own, and a `user_message` with a sender is drawn
         // differently.
         from: Option<MessageSender>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<SendOutcome> {
         // Resolved against whichever table can name it. The two single-vendor
         // harnesses have one written here; pi's list is answered by the machine,
@@ -1308,7 +1317,7 @@ impl SessionManager {
     /// task held the session `in_progress` — the status follows the turn alone
     /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
-    pub async fn interrupt(&self, session_id: &str, app: &AppHandle) -> Result<()> {
+    pub async fn interrupt(&self, session_id: &str, app: &Sink) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts
         // Stop on screen while the backend `Session` is still a local inside
@@ -1351,7 +1360,7 @@ impl SessionManager {
         session_id: &str,
         request_id: &str,
         option_id: &str,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         let slot = self.slot(session_id).await;
         let mut guard = slot.lock().await;
@@ -1368,7 +1377,7 @@ impl SessionManager {
         session_id: &str,
         request_id: &str,
         answers: HashMap<String, String>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         // pi answers off its own desk and never touches the map below, because
         // it can ask while the map does not hold the session or while this very
@@ -1696,7 +1705,7 @@ impl Session {
         worktree_name: Option<&str>,
         is_new_session: bool,
         fork_from: Option<&str>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<Session> {
         match harness {
             Harness::ClaudeCode => {
@@ -1854,7 +1863,7 @@ impl Session {
         issues: &[IssueRef],
         baseline: Option<String>,
         from: Option<MessageSender>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         deliver_prompt(
             &self.id,
@@ -1969,7 +1978,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         let sent = deliver_prompt(
             &self.id,
@@ -2018,7 +2027,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
-        app: &AppHandle,
+        app: &Sink,
     ) {
         self.queue_msg(prompt, attachment_paths, issues, from).await;
         flush_queued(
@@ -2037,7 +2046,7 @@ impl Session {
     /// reply after this arrives from the new model, so no respawn is needed.
     /// There is no `set_effort` counterpart — the CLI rejects that subtype, and
     /// an `effort` field on this request is accepted but ignored.
-    pub async fn set_model(&mut self, model: &Model, app: &AppHandle) -> Result<()> {
+    pub async fn set_model(&mut self, model: &Model, app: &Sink) -> Result<()> {
         if let Transport::Fx(session) = &self.stdin {
             // `app` reaches fx alone, and for one reason: its reply restates
             // the new model's effort ladder, which the composer's picker has to
@@ -2124,8 +2133,8 @@ impl Session {
     ///
     /// `None` is fx's own `auto`, which nothing here can spell back onto the
     /// wire, so it is recorded and left to the next respawn.
-    pub async fn set_effort(&mut self, effort: Option<Effort>, app: &AppHandle) -> Result<()> {
-        // grok takes the same config option and needs no `AppHandle`: its
+    pub async fn set_effort(&mut self, effort: Option<Effort>, app: &Sink) -> Result<()> {
+        // grok takes the same config option and needs no `Sink`: its
         // ladder rides the handshake, per model, so the picker learns nothing
         // from a reply the list has not already told it.
         if let Transport::Grok(session) = &self.stdin {
@@ -2263,7 +2272,7 @@ impl Session {
         &mut self,
         request_id: &str,
         option_id: &str,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         let (pending, chosen) = {
             let mut guard = self
@@ -2367,7 +2376,7 @@ impl Session {
         &mut self,
         request_id: &str,
         answers: HashMap<String, String>,
-        app: &AppHandle,
+        app: &Sink,
     ) -> Result<()> {
         // Refused *before* the entry is taken, which is the whole of the
         // ordering. pi never reaches here — its answers go through
@@ -2583,7 +2592,7 @@ async fn deliver_prompt(
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
     transport: &Transport,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<String> {
     let seq = seq.fetch_add(1, Relaxed);
 
@@ -2723,7 +2732,7 @@ pub struct Ingest<'a> {
 /// properties of Dray's own event model. With a copy per harness they would
 /// drift, and the drift would be silent — a second harness whose deltas were
 /// persisted looks exactly like one whose logs are simply larger.
-pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &AppHandle) {
+pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -2937,7 +2946,7 @@ async fn apply_live_controls(
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
     fast: bool,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<()> {
     // The other side of `send_msg`'s respawn rule, read off the same table so
     // the two cannot disagree: a pick neither respawns for nor applies would
@@ -3029,7 +3038,7 @@ async fn apply_deferred(
     session_id: &str,
     harness: Harness,
     seq: &Arc<AtomicU64>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     use crate::harness::fx;
 
@@ -3089,7 +3098,7 @@ pub async fn flush_queued(
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     status: &Arc<Mutex<StatusTracker>>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     // fx drains one prompt per turn and reserves the next in `ingest`, so its
     // release is a two-lock affair the batch model has no answer to. Its own
@@ -3162,7 +3171,7 @@ async fn flush_one_per_turn(
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     status: &Arc<Mutex<StatusTracker>>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     loop {
         let (batch, deferred) = {
@@ -3262,7 +3271,7 @@ async fn deliver_batch(
     harness: Harness,
     seq: &Arc<AtomicU64>,
     transport: &Transport,
-    app: &AppHandle,
+    app: &Sink,
     delivered: &mut usize,
 ) {
     for message in batch {
@@ -3316,7 +3325,7 @@ async fn report_send_failure(
     harness: Harness,
     message: &str,
     seq: &Arc<AtomicU64>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     let message = format!("This message could not be sent: {message}");
     report_session_error(session_id, harness, &message, seq, app).await;
@@ -3334,7 +3343,7 @@ pub(crate) async fn report_session_error(
     harness: Harness,
     message: &str,
     seq: &Arc<AtomicU64>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     let agent_event = AgentEvent::mint(
         session_id.to_string(),
@@ -3375,7 +3384,7 @@ pub async fn strand_queue_on_exit(
     harness: Harness,
     queued: &QueuedMessages,
     seq: &Arc<AtomicU64>,
-    app: &AppHandle,
+    app: &Sink,
 ) {
     let stranded: Vec<QueuedMessage> = std::mem::take(&mut *queued.lock().await);
     for message in stranded {

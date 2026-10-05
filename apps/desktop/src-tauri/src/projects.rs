@@ -51,7 +51,7 @@ async fn canonical(path: &str) -> Result<String> {
 ///
 /// Unsorted on purpose: files written before order was manual were saved
 /// most-recent-first, so that is simply where an existing list starts.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_projects() -> Result<Vec<Project>, Fail> {
     Ok(read_json(&projects_path().await?).await?)
 }
@@ -69,7 +69,7 @@ async fn write_projects(projects: &[Project]) -> Result<()> {
 /// Attaches a directory at the end of the list and selects it. Re-attaching a known project is a
 /// no-op apart from the selection, so the picker's "Attach" can double as
 /// "switch to one I already have" without growing duplicates.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
     let path = canonical(path).await?;
 
@@ -94,7 +94,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
 
 /// Detaches a project. Sessions that ran in it are untouched — they keep their
 /// own recorded paths and stay in the sidebar.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
@@ -108,7 +108,7 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
 /// Stamps a project as the most recently selected, which is what launch
 /// reopens. Order is untouched. Unknown paths are ignored rather than inserted —
 /// attaching is [`add_project`]'s job.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
@@ -125,7 +125,7 @@ pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
 /// Files a project under a space, or clears it with `None`. A blank name is
 /// the same as clearing: an empty string would draw a nameless entry in the
 /// switcher that nothing could ever be moved out of.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
@@ -144,7 +144,7 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
 
 /// Steps a project `delta` places in the order every picker draws. Past either
 /// end is a no-op rather than a wrap, matching the spaces list beside it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;
@@ -202,7 +202,7 @@ fn retag(projects: &mut [Project], from: &str, to: Option<String>) -> bool {
 /// of writes half of which failed would leave tags and that record describing
 /// different worlds. Here it is one read, one edit and one write under the
 /// lock, so it either all lands or none of it does.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let mut projects = list_projects().await?;

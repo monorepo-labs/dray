@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // decided in Rust and the SDK is somebody else's, so the rules under test are
 // the ordering ones this module adds between them.
 const identity = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: () => identity() }));
+vi.mock("@/lib/transport", () => ({ invoke: () => identity() }));
 
 const posthog = { init: vi.fn(), opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn() };
 vi.mock("posthog-js", () => ({ default: posthog }));

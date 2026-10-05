@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { useEffect, useRef, useState } from "react";
 
 import type { FileMatch } from "@/types/events";

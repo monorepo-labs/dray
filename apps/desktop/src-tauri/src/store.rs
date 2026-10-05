@@ -215,7 +215,23 @@ pub async fn get_home_app_dir() -> Result<PathBuf> {
     DIR.get_or_try_init(make_home_app_dir).await.cloned()
 }
 
+/// `DRAY_HOME`, where set: a data directory other than `~/.dray`. The index is
+/// rewritten whole under a per-*process* lock, so two processes sharing one
+/// directory lose each other's writes — which is a `dray-serve` started on a
+/// Mac whose app is running. This is what lets the two sit side by side.
+pub fn home_override() -> Option<PathBuf> {
+    std::env::var_os("DRAY_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 async fn make_home_app_dir() -> Result<PathBuf> {
+    if let Some(path) = home_override() {
+        fs::create_dir_all(&path).await?;
+        restrict_to_owner(&path).await;
+        return Ok(path);
+    }
+
     let home = std::env::home_dir().context("could not resolve home directory")?;
     let path = home.join(".dray");
 
@@ -478,7 +494,7 @@ async fn write_atomic_stamped(path: &Path, contents: impl AsRef<[u8]>) -> Result
 /// The index filtered to one side of `archived` — the sidebar shows exactly one
 /// of the two at a time, so a parameter keeps it to one function rather than a
 /// pair that would drift.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_session_index_items(
     archived: bool,
 ) -> Result<Vec<SessionIndexItem>, Fail> {
@@ -950,7 +966,7 @@ pub async fn touch_session_index_item(
 ///
 /// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
 /// list, and detaching must not jump the row to the top of it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
@@ -1456,7 +1472,7 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// session is otherwise the whole log parsed twice — here and by the
 /// webview's `JSON.parse`, the dearer half at ~400ms for a 21MB log — for a
 /// transcript that draws its newest eight turns first anyway.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_session_by_id(
     session_id: &str,
     turns: Option<u32>,
@@ -1482,7 +1498,7 @@ pub async fn get_session_by_id(
 
 /// The `turns` turns written before byte `before`, for paging a transcript
 /// opened with `get_session_by_id`'s `turns` back to its first prompt.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_session_page(
     session_id: &str,
     before: u64,

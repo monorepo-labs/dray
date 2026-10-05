@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";

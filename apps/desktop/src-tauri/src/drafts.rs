@@ -64,7 +64,7 @@ fn id_of(draft: &Value) -> Option<&str> {
 }
 
 /// Every saved draft, in the order they were first saved.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_drafts() -> Result<Vec<Value>, Fail> {
     Ok(read_json(&drafts_path().await?).await?)
 }
@@ -80,7 +80,7 @@ pub async fn stored() -> Result<Vec<StoredDraft>> {
 }
 
 /// Writes a draft, replacing the one with the same `id` or adding it at the end.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_draft(draft: Value) -> Result<(), Fail> {
     let id = id_of(&draft).ok_or_else(|| anyhow!("a draft needs an id"))?.to_owned();
     let _guard = DRAFTS_LOCK.lock().await;
@@ -97,7 +97,7 @@ pub async fn save_draft(draft: Value) -> Result<(), Fail> {
 
 /// Removes a draft. An unknown id is not an error: the send that turns a
 /// draft into a session and the reader's own delete can both reach here.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_draft(id: String) -> Result<(), Fail> {
     take(&id).await?;
     Ok(())

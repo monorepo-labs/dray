@@ -17,7 +17,8 @@ use crate::{
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
-    session::{Harness, SessionManager},
+    session::{manager, Harness},
+    sink::Sink,
     drafts::{self, StoredDraft, DRAFTS_CHANGED},
     store::{self, SessionIndexItem},
 };
@@ -27,7 +28,6 @@ use dray_proto::{
     Response, SendMessage, SessionSummary, MAX_LINE, PROTOCOL_VERSION,
 };
 use std::path::Path;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
@@ -77,8 +77,14 @@ const MAX_DEPTH: usize = 2;
 /// being developed, and one path between them means whichever started last owns
 /// the channel — `bind` unlinks the other's socket, so the app left behind
 /// keeps a listener no `dray` will ever reach again.
+///
+/// Under `DRAY_HOME` the socket moves with the data, so a second process on
+/// its own directory takes no channel from the app's.
 pub fn socket_path() -> Option<std::path::PathBuf> {
-    dray_proto::socket_path(tauri::is_dev())
+    if let Some(home) = store::home_override() {
+        return Some(home.join(dray_proto::SOCKET_NAME));
+    }
+    dray_proto::socket_path(crate::is_dev())
 }
 
 /// What a spawned agent's `DRAY_ENDPOINT` is set to.
@@ -96,7 +102,7 @@ pub fn child_endpoint() -> Option<String> {
 /// Errors are logged and swallowed by the caller: orchestration is a side
 /// channel, and an app that refuses to start because a socket is in use would
 /// be trading the whole product for a feature.
-pub async fn serve(app: AppHandle) -> Result<()> {
+pub async fn serve(app: Sink) -> Result<()> {
     let path = socket_path().context("could not resolve the socket path")?;
 
     // Creates `~/.dray` and narrows it to `0700`, which is what actually
@@ -199,7 +205,7 @@ fn mismatch(theirs: u32) -> String {
 
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
-async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
+async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
 
     let mut line = String::new();
@@ -239,7 +245,7 @@ async fn handle(stream: UnixStream, app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
+async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
     match request {
         Request::CreateSession(create) => create_session(create, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
@@ -285,7 +291,7 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
 /// what it believed. One that fails stops the run: a partial tagging reported
 /// as a success is the shape of failure this protocol exists to avoid, and the
 /// ones already applied are on the session the answer names.
-async fn link_issues(link: LinkIssues, app: &AppHandle) -> Result<Response> {
+async fn link_issues(link: LinkIssues, app: &Sink) -> Result<Response> {
     if link.issues.is_empty() {
         bail!("name at least one issue, like DRA-53");
     }
@@ -374,7 +380,7 @@ async fn apply_issue(link: &LinkIssues, input: &IssueInput) -> Result<Vec<IssueR
     }
 }
 
-async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Response> {
+async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a session needs a prompt");
     }
@@ -422,7 +428,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
     };
 
     let session_id = uuid::Uuid::now_v7().to_string();
-    let manager = app.state::<SessionManager>();
+    let manager = manager();
 
     let outcome = manager
         .send_msg(
@@ -474,7 +480,7 @@ async fn create_session(create: CreateSession, app: &AppHandle) -> Result<Respon
 /// Saves a task for later with the picks `dray new` would have given it, and
 /// always with a worktree: an agent that leaves work for the reader has no
 /// standing to put it in the reader's own checkout.
-async fn create_draft(create: CreateDraft, app: &AppHandle) -> Result<Response> {
+async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a draft needs a prompt");
     }
@@ -518,7 +524,7 @@ async fn list_drafts(list: ListSessions) -> Result<Response> {
 
 /// Read before it is taken, so a draft this build cannot spell is refused
 /// rather than deleted unseen.
-async fn remove_draft(id: &str, app: &AppHandle) -> Result<Response> {
+async fn remove_draft(id: &str, app: &Sink) -> Result<Response> {
     let draft = find_draft(id).await?;
     drafts::take(id).await?.with_context(|| format!("no draft {id}"))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
@@ -539,7 +545,7 @@ async fn find_draft(id: &str) -> Result<StoredDraft> {
 ///
 /// The worktree is the draft's own pick: off only where a person saved it so in
 /// the app, which is the one way an agent can start work in the main checkout.
-async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
+async fn start_draft(start: StartDraft, app: &Sink) -> Result<Response> {
     let draft = find_draft(&start.id).await?;
     let parent = parent_of(start.parent_session_id.as_deref()).await?;
     check_depth(parent.as_ref()).await?;
@@ -564,12 +570,11 @@ async fn start_draft(start: StartDraft, app: &AppHandle) -> Result<Response> {
 async fn start_session(
     draft: &StoredDraft,
     parent: Option<&str>,
-    app: &AppHandle,
+    app: &Sink,
 ) -> Result<Response> {
 
     let session_id = uuid::Uuid::now_v7().to_string();
-    let outcome = app
-        .state::<SessionManager>()
+    let outcome = manager()
         .send_msg(
             &session_id,
             &draft.prompt,
@@ -803,7 +808,7 @@ fn resolve_fast(requested: Option<bool>, parent: Option<&SessionIndexItem>, harn
 /// review summary upward and a parent handing a child extra context are the
 /// same operation, and naming the relationship would only add a rule to get
 /// wrong — the id is the address.
-async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
+async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
     if send.prompt.trim().is_empty() {
         bail!("a message needs some text");
     }
@@ -819,7 +824,7 @@ async fn send_message(send: SendMessage, app: &AppHandle) -> Result<Response> {
     let from = sender(&send).await;
     let prompt = attribute(&send.prompt, from.as_ref());
 
-    let manager = app.state::<SessionManager>();
+    let manager = manager();
     let outcome = manager
         .send_msg(
             &target.session_id,

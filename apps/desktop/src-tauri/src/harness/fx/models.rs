@@ -45,7 +45,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use crate::sink::Sink;
 use tokio::process::Command;
 
 /// How long a cached answer stands. Expires, because `fx provider` and
@@ -72,7 +72,7 @@ pub async fn list() -> Vec<Model> {
 /// The table is cached before the probe, which is what stops a burst of reads
 /// spawning one probe each and what a failed probe — a signed-out grok, or
 /// fx's own `MalformedResponse` — leaves in place.
-pub async fn check_table(app: &AppHandle) {
+pub async fn check_table(app: &Sink) {
     let key = active_provider().await.unwrap_or_default();
     if CACHE.peek(&key).is_some() {
         return;

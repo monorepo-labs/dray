@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 /// Reports a feature the frontend owns, for the handful whose only chokepoint
 /// is a click handler — the backend reports its own.

@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "@/lib/transport";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";

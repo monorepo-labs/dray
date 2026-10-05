@@ -31,7 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
