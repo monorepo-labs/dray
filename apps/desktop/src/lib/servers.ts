@@ -15,14 +15,24 @@ const changed = channel<void>();
 function start() {
   if (started) return;
   started = true;
-  // Listen first, so a change landing during the read is not lost under it.
+  // Listen first, so a change landing during the read is not lost under it —
+  // and once one has landed, the read's older answer is not wanted at all.
+  let heard = false;
   void listen<ServerInfo[]>("servers_changed", ({ payload, server }) => {
     if (server !== LOCAL) return;
+    heard = true;
+    const was = servers;
     servers = payload;
     changed.emit();
+    // A server that restarted lost every watch it held, and nothing on screen
+    // changed to arm them again.
+    for (const s of payload) {
+      if (s.status === "connected" && was.find((w) => w.id === s.id)?.status !== "connected") rearm(s.id);
+    }
   }).then(() =>
     invoke<ServerInfo[]>("list_servers", {}, LOCAL)
       .then((list) => {
+        if (heard) return;
         servers = list;
         changed.emit();
       })
@@ -69,11 +79,21 @@ export function mergeFrom<T>(prev: T[], server: ServerId, next: T[], pathOf: (it
 }
 
 const armed = new Map<string, Set<ServerId>>();
+/// Each scope's last path list, kept to re-arm a server that reconnects.
+const watched = new Map<string, string[]>();
+
+function rearm(server: ServerId) {
+  for (const [scope, paths] of watched) {
+    const list = paths.filter((path) => serverOfPath(path) === server);
+    if (list.length) void invoke("watch_docs", { scope, paths: list }, server).catch(() => {});
+  }
+}
 
 /// `watch_docs` across servers: each server is handed its own share of
 /// `paths`, and one armed before with no share now is disarmed, or it would
 /// go on watching a set nothing on screen holds.
 export function watchDocs(scope: string, paths: string[]): Promise<unknown> {
+  watched.set(scope, paths);
   const by = new Map<ServerId, string[]>();
   for (const path of paths) {
     const server = serverOfPath(path);

@@ -1442,6 +1442,7 @@ function App() {
     issue: hasIssueTab,
     more: hasMoreTab,
     plan: hasPlanTab,
+    browser: activeServer === LOCAL,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -1834,7 +1835,8 @@ function App() {
   // or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      if (external || !selectedSessionId) {
+      // The browser is this Mac's, so a remote session's links leave the app.
+      if (external || !selectedSessionId || activeServer !== LOCAL) {
         void openUrl(url).catch(console.error);
         return;
       }
@@ -1853,7 +1855,7 @@ function App() {
         });
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen]);
+  }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen, activeServer]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto

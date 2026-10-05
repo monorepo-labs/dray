@@ -1,5 +1,5 @@
 import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
-import { mergeFrom, remoteServers, subscribeServers } from "@/lib/servers";
+import { mergeFrom, remoteServers, serverName, subscribeServers } from "@/lib/servers";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -140,6 +140,14 @@ const modelsKey = (server: ServerId, harness: Harness): string =>
   server === LOCAL ? harness : `${server}:${harness}`;
 
 const pathOfProject = (p: Project) => p.path;
+
+/// Each server's last index answer, per side (`<server>:<archived>`), so a
+/// server that cannot be asked still draws the side the reader picks.
+const lastIndex = new Map<string, SessionIndexItem[]>();
+
+/// Whether a remote server has been taken off the list since a read began.
+const removed = (server: ServerId): boolean =>
+  server !== LOCAL && !remoteServers().some((s) => s.id === server);
 
 /// Remote servers that can be asked something now.
 const connectedRemotes = (): ServerId[] =>
@@ -543,22 +551,36 @@ const moveProject = async (path: string, delta: number) => {
 };
 
 // Moves every project in one space to another, or out of any space with `null`.
-// One call, so a rename or a removal cannot half-happen: answers `false` where
-// nothing was written, which is what lets the caller keep its own record of
-// which spaces exist in step with the tags.
+// Answers `false` unless every server took it, which is what lets the caller
+// keep its own record of which spaces exist in step with the tags.
+//
+// A space is device-local and its tags live in each server's projects file,
+// so every server is retagged. One that holds the space and cannot be reached
+// refuses the whole move, since it would come back carrying the old name. One
+// that fails partway is named, and asking again finishes the job: a server
+// already retagged holds nothing under `from` and writes nothing.
 const retagSpace = async (from: string, to: string | null) => {
-  try {
-    // A space is device-local and its tags live in each server's projects
-    // file, so every server that can be reached is retagged.
-    for (const server of [LOCAL, ...connectedRemotes()]) {
-      const list = await invoke<Project[]>("retag_space", { from, to }, server);
-      setProjects((prev) => mergeFrom(prev, server, list, pathOfProject));
-    }
-    return true;
-  } catch (e) {
-    setError(String(e));
+  const unreachable = remoteServers().find(
+    (s) => s.status !== "connected" && projects.some((p) => p.space === from && serverOfPath(p.path) === s.id),
+  );
+  if (unreachable) {
+    setError(`${unreachable.name} is disconnected and holds projects in this space. Reconnect it first.`);
     return false;
   }
+  const servers = [LOCAL, ...connectedRemotes()];
+  const results = await Promise.allSettled(
+    servers.map((server) => invoke<Project[]>("retag_space", { from, to }, server)),
+  );
+  const failed: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      setProjects((prev) => mergeFrom(prev, servers[i], result.value, pathOfProject));
+    } else {
+      failed.push(`${serverName(servers[i])}: ${String(result.reason)}`);
+    }
+  });
+  if (failed.length) setError(`Could not update the space on ${failed.join("; ")}`);
+  return !failed.length;
 };
 
 // `null` is no project at all, which a space holding none is — and it has to be
@@ -1673,10 +1695,17 @@ const deleteSession = async (sessionId: string) => {
 //
 // Every server is read; a server's `live_state` reads it again, since rows
 // created or retitled while the socket was down announced themselves to
-// nobody. An unreachable server's rows are the side just left, so they go.
+// nobody. An unreachable server cannot be asked for the side just picked, so
+// its last answer for that side stands in, drawn dimmed like the rest of it.
 useEffect(() => {
   const servers = [LOCAL, ...connectedRemotes()];
-  setSessionIndexItems((prev) => prev.filter((i) => servers.includes(serverOfPath(i.cwd))));
+  setSessionIndexItems((prev) => {
+    let next = prev.filter((i) => servers.includes(serverOfPath(i.cwd)));
+    for (const s of remoteServers()) {
+      if (!servers.includes(s.id)) next = [...next, ...(lastIndex.get(`${s.id}:${showArchived}`) ?? [])];
+    }
+    return next;
+  });
   for (const server of servers) readServer(server);
 }, [showArchived])
 
@@ -1771,6 +1800,8 @@ const readServer = (server: ServerId) => {
   const archived = showArchivedRef.current;
   invoke<SessionIndexItem[]>("list_session_index_items", { archived }, server)
     .then((items) => {
+      if (removed(server)) return;
+      lastIndex.set(`${server}:${archived}`, items);
       // A read outlived by a toggle is the side just left.
       if (archived !== showArchivedRef.current) return;
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
@@ -1781,7 +1812,7 @@ const readServer = (server: ServerId) => {
     });
   if (server === LOCAL) return;
   invoke<Project[]>("list_projects", {}, server)
-    .then((list) => setProjects((prev) => mergeFrom(prev, server, list, pathOfProject)))
+    .then((list) => !removed(server) && setProjects((prev) => mergeFrom(prev, server, list, pathOfProject)))
     .catch(() => {});
 };
 
