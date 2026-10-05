@@ -1,5 +1,7 @@
 #!/bin/sh
-# Installs the `dray` CLI and its Claude Code skill.
+# Installs the `dray` CLI and its Claude Code skill. On Linux the archive also
+# carries `dray-serve`, and a first install ends in `dray setup`, which makes the
+# machine a Dray server.
 #
 # Deliberately POSIX sh, not bash: this is piped into whatever /bin/sh is, and
 # on a minimal linux image that is dash rather than bash.
@@ -10,6 +12,7 @@
 #   DRAY_INSTALL_DIR      where the binary lands (default ~/.local/bin)
 #   DRAY_VERSION          a specific release tag (default: the newest cli-v* one)
 #   DRAY_CURRENT_VERSION  the tag already installed; stop if it is the newest one
+#   DRAY_UPDATING         set by `dray update`: no setup questions afterwards
 
 set -eu
 
@@ -170,15 +173,23 @@ tar -xzf "$TMP/dray.tar.gz" -C "$TMP" || die "could not unpack the download"
 [ -f "$TMP/dray" ] || die "the archive did not contain a dray binary"
 
 mkdir -p "$INSTALL_DIR"
-chmod +x "$TMP/dray"
-# `mv` within one filesystem is atomic, so an upgrade never leaves a truncated
-# binary where a working one was. Falls back to cp across filesystems.
-mv "$TMP/dray" "$INSTALL_DIR/dray" 2>/dev/null || {
-  cp "$TMP/dray" "$INSTALL_DIR/dray"
-  chmod +x "$INSTALL_DIR/dray"
-}
-
-say "Installed $INSTALL_DIR/dray"
+# Whether *this* archive is a server release: one older than `dray setup`
+# carries no `dray-serve`, and a copy left on disk says nothing about the
+# `dray` just installed.
+SERVER=
+[ -f "$TMP/dray-serve" ] && SERVER=1
+# Whatever the archive holds: `dray` everywhere, `dray-serve` beside it on Linux.
+for bin in dray dray-serve; do
+  [ -f "$TMP/$bin" ] || continue
+  chmod +x "$TMP/$bin"
+  # `mv` within one filesystem is atomic, so an upgrade never leaves a truncated
+  # binary where a working one was. Falls back to cp across filesystems.
+  mv "$TMP/$bin" "$INSTALL_DIR/$bin" 2>/dev/null || {
+    cp "$TMP/$bin" "$INSTALL_DIR/$bin"
+    chmod +x "$INSTALL_DIR/$bin"
+  }
+  say "Installed $INSTALL_DIR/$bin"
+done
 
 install_skill
 
@@ -193,6 +204,15 @@ case ":$PATH:" in
     say "    export PATH=\"$INSTALL_DIR:\$PATH\""
     ;;
 esac
+
+# On a Linux box `dray` is only useful as a server, so a first install goes on
+# to set one up. stdin is the rest of this script under `curl | sh`, so setup
+# gets none and asks its questions on /dev/tty.
+if [ -n "$SERVER" ] && [ -z "${DRAY_UPDATING:-}" ]; then
+  say ""
+  "$INSTALL_DIR/dray" setup </dev/null
+  exit
+fi
 
 say ""
 say "Done. Run 'dray --help' to get started, with the Dray app running."

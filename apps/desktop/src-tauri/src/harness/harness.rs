@@ -430,6 +430,22 @@ mod install_tests {
         }
     }
 
+    /// `dray setup` installs agents off `dray_proto::AGENTS`, since the CLI
+    /// cannot link this crate. Both tables name every agent the same way.
+    #[test]
+    fn dray_setup_installs_what_the_app_names() {
+        assert_eq!(dray_proto::AGENTS.len(), Harness::ALL.len());
+        for harness in Harness::ALL {
+            let agent = dray_proto::AGENTS
+                .iter()
+                .find(|a| a.id == harness.wire_name())
+                .unwrap_or_else(|| panic!("{harness:?} is missing from dray_proto::AGENTS"));
+            assert_eq!(agent.name, harness.label());
+            assert_eq!(agent.install, harness.install_command());
+            assert_eq!(agent.login, harness.login_command());
+        }
+    }
+
     /// The login command is stated twice — once for the reader to copy, once
     /// as argv for the launcher — and the two must describe one command. Drift
     /// here is silent: the copied spelling still works by hand while the
@@ -874,7 +890,7 @@ impl Harness {
             Harness::Pi => "curl -fsSL https://pi.dev/install.sh | sh",
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
-            Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | sh",
+            Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | bash",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
