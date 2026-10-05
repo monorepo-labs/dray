@@ -18,6 +18,19 @@ describe("mergeMissed", () => {
     expect(mergeMissed(current, [ev("a", 1)], fresh).map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
 
+  it("retires no prompt for a user message that already arrived live", () => {
+    const user = (id: string, seq: number) => ({ id, seq, payload: { type: "user_message" } }) as unknown as AgentEvent;
+    const pending = user("provisional:2", 9);
+    const current = [ev("a", 1), pending, user("u1", 2)];
+    const fresh = [user("u1", 2), ev("b", 3)];
+    expect(mergeMissed(current, [ev("a", 1), pending], fresh).map((e) => e.id)).toEqual([
+      "a",
+      "provisional:2",
+      "u1",
+      "b",
+    ]);
+  });
+
   it("answers the same array when nothing was missed", () => {
     const current = [ev("a", 1)];
     expect(mergeMissed(current, current, [ev("a", 1)])).toBe(current);

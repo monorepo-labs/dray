@@ -40,7 +40,9 @@ export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: Ag
   let events = current.filter((e) => heldIds.has(e.id) && !freshIds.has(e.id));
   const arrived = current.filter((e) => !heldIds.has(e.id) && !freshIds.has(e.id));
   for (const e of fresh) {
-    events = [...(e.payload.type === "user_message" ? retireOldestProvisional(events) : events), e];
+    // One that arrived live already retired its own provisional prompt.
+    const retire = e.payload.type === "user_message" && !have.has(e.id);
+    events = [...(retire ? retireOldestProvisional(events) : events), e];
   }
   return [...events, ...arrived];
 }
