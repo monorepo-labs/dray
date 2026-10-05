@@ -332,7 +332,12 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             // `stop`, not `disable --now`: a unit stays loaded after its file
             // moved or went, and `disable` refuses one with no file.
             let stopped = systemctl(true, &["stop", UNIT]);
-            let file = unit_path()?;
+            // Where systemd loaded it from, which is not necessarily where
+            // this environment's XDG_CONFIG_HOME would put it.
+            let file = output("systemctl", &["--user", "show", UNIT, "--property=FragmentPath", "--value"])
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .unwrap_or(unit_path()?);
             if !file.exists() {
                 let _ = systemctl(true, &["daemon-reload"]);
                 println!("{}", if stopped { "Stopped the background server." } else { "No background server is installed." });
