@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfPath } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Plus } from "lucide-react";
 
@@ -239,6 +239,7 @@ function App() {
     setCrewSeen,
     paneState,
     indexSide,
+    activeServer,
   } = useSessions();
 
   // Tasks saved to start later. One is open while the new-task composer shows
@@ -365,16 +366,17 @@ function App() {
   // Whether the agent the composer is pointed at can actually be run. Null
   // while the first read is out and null when it is installed — both mean
   // there is nothing to say, so the composer sends as it always did.
-  const missingAgent = useMissingAgent(harness);
+  const missingAgent = useMissingAgent(harness, activeServer);
   // Held on a new task for every agent, so the session starts on the new
   // version. A live session only for pi and fx, whose update overwrites files
   // its child reads; the other three install beside the running binary.
   // Keyed on the running update alone, never on the update list, which a
   // check landing mid-update may already have cleared.
   const agentUpdates = useAgentUpdates();
-  const agentLabel = useAgentAvailability()?.find((a) => a.harness === harness)?.label ?? harness;
+  const agentLabel = useAgentAvailability(activeServer)?.find((a) => a.harness === harness)?.label ?? harness;
   const sendHeld =
     agentUpdates.running === harness &&
+    activeServer === LOCAL &&
     (!selectedSessionId || harness === "pi" || harness === "fx")
       ? `Updating ${agentLabel}. Send once it finishes.`
       : null;
@@ -398,7 +400,7 @@ function App() {
   // `useAgentAvailability` rather than `useMissingAgent`: that one answers only
   // for a CLI that is absent, and this agent's CLI ran well enough to report
   // being logged out.
-  const agents = useAgentAvailability();
+  const agents = useAgentAvailability(activeServer);
   const loggedOutAgent =
     authTurn && authTurn !== loginHandled
       ? (agents?.find((agent) => agent.harness === harness) ?? null)
@@ -576,7 +578,8 @@ function App() {
   // assigns to delete-forward in every text field — including the composer this
   // shortcut is for. Enabled always: pressed with nothing downloaded it opens
   // settings, which is the answer the reader needs rather than a dead key.
-  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true });
+  // Off for a remote session, like every Mac-only feature.
+  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true, enabled: activeServer === LOCAL });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -2461,7 +2464,7 @@ function App() {
   // split view's panes take ⌘⌥ above.
   useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
   useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
-  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
+  useHotkey("view.browser", () => !issuesOpen && activeServer === LOCAL && setViewTab("browser"));
   useHotkey("view.files", () => !issuesOpen && setViewTab("files"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
@@ -2736,7 +2739,7 @@ function App() {
             className="flex-1"
           />
 
-          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} browser={activeServer === LOCAL} />}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -2929,7 +2932,7 @@ function App() {
           }}
           dictating={recorder.state !== "idle"}
           dictation={
-            <DictateControl
+            activeServer === LOCAL && <DictateControl
               state={recorder.state}
               level={recorder.level}
               savedAudio={recorder.savedAudio}
@@ -2987,7 +2990,7 @@ function App() {
           notice={
             !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
-            ) : loggedOutAgent && authTurn && selectedSession ? (
+            ) : loggedOutAgent && authTurn && selectedSession && activeServer === LOCAL ? (
               <LoginExpiredNotice
                 agent={loggedOutAgent}
                 cwd={selectedSession.cwd}
@@ -3023,6 +3026,7 @@ function App() {
           }
           toolbar={
             <ComposerToolbar
+              server={activeServer}
               harness={harness}
               onHarnessChange={setHarness}
               models={models}
@@ -3247,8 +3251,10 @@ function App() {
       onUpdateChannelChange={setUpdateChannel}
       // Where the Accounts tab runs its probes and opens its terminal: the
       // selected session's directory, the picked project otherwise. Empty is
-      // ordinary — a new task has no session yet.
-      cwd={composerCwd ?? ""}
+      // ordinary — a new task has no session yet. This Mac's alone: the tab
+      // signs agents in through a terminal here, which a remote server's
+      // agents cannot use.
+      cwd={composerCwd && serverOfPath(composerCwd) === LOCAL ? composerCwd : ""}
     />
     </MountOnce>
     <WorktreeDialog

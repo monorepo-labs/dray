@@ -58,6 +58,8 @@ pub mod projects;
 pub mod quit;
 #[cfg(feature = "serve")]
 pub mod serve;
+#[cfg(feature = "desktop")]
+pub mod servers;
 pub mod session;
 pub mod settings;
 pub mod sink;
@@ -709,6 +711,10 @@ pub fn run() {
                 }
             });
 
+            // Remote servers connect in the background; a dead one costs its
+            // own row and nothing else.
+            tauri::async_runtime::spawn(servers::start(Sink::from(app.handle())));
+
             // Returns immediately: consent is read, and the id minted, inside
             // the task `track` spawns — so nothing on screen waits on a file
             // read and an opted-out install still sends nothing. The install
@@ -724,7 +730,37 @@ pub fn run() {
 
             Ok(())
         })
+        .register_asynchronous_uri_scheme_protocol("drayserver", |_ctx, request, responder| {
+            // `drayserver://localhost/?server=<id>&path=<path>`: a remote
+            // server's file, fetched with its token in a header.
+            let query = request.uri().query().unwrap_or_default().to_string();
+            tauri::async_runtime::spawn(async move {
+                let (mut server, mut path) = (String::new(), String::new());
+                for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+                    match &*key {
+                        "server" => server = value.into_owned(),
+                        "path" => path = value.into_owned(),
+                        _ => {}
+                    }
+                }
+                let response = match servers::fetch_file(&server, &path).await {
+                    Ok((kind, body)) => tauri::http::Response::builder()
+                        .header("Content-Type", kind)
+                        .body(body),
+                    Err(e) => {
+                        eprintln!("[drayserver {server}] {path}: {e}");
+                        tauri::http::Response::builder().status(404).body(Vec::new())
+                    }
+                };
+                responder.respond(response.unwrap_or_default());
+            });
+        })
         .invoke_handler(tauri::generate_handler![
+            servers::list_servers,
+            servers::add_server,
+            servers::remove_server,
+            servers::reconnect_servers,
+            servers::server_invoke,
             send_msg,
             attachments::read_attachments,
             attachments::paste_attachments,

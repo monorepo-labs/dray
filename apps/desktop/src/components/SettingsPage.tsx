@@ -7,6 +7,7 @@ import {
   Square3Stack3DIcon,
   PaintBrushIcon,
   KeyIcon,
+  ServerStackIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
 
@@ -50,6 +51,7 @@ import {
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
+import ServersSettings from "@/components/settings/ServersSettings";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
@@ -215,6 +217,7 @@ export default function SettingsPage({
             onMoveProject={onMoveProject}
           />
         ),
+        servers: <ServersSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
         transcription: (
           <TranscriptionSettings
@@ -1050,6 +1053,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 const SETTINGS_TABS = [
   { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
+  { id: "servers", label: "Servers", Icon: ServerStackIcon },
   { id: "accounts", label: "Accounts", Icon: KeyIcon },
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
   { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },

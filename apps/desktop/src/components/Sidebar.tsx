@@ -52,6 +52,8 @@ import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
+import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { cn } from "@/lib/utils";
 import type {
@@ -1104,6 +1106,11 @@ export default function Sidebar({
   // A session under a repo nobody attached still has a project, so the folder
   // name stands in rather than the heading being dropped — the row has to sit
   // under something.
+  // Read for the re-render alone: a server dropping or coming back moves the
+  // dimming on its rows and headings.
+  useServers();
+  const offline = (path: string) => !serverConnected(serverOfPath(path));
+
   const projectName = useMemo(() => {
     const named = new Map(projects.map((p) => [p.path, p.name]));
     return (path: string) =>
@@ -1401,6 +1408,12 @@ export default function Sidebar({
                         : undefined
                     }
                     label={heading}
+                    server={
+                      underProject && serverOfPath(group.projectPath) !== LOCAL
+                        ? serverName(serverOfPath(group.projectPath))
+                        : null
+                    }
+                    offline={underProject && offline(group.projectPath)}
                   />
                 )}
 
@@ -1428,7 +1441,9 @@ export default function Sidebar({
                     // "what did I finish today" — so everything older is held back
                     // rather than filtered out. Only there: the active list is a
                     // worklist, where an older row is still open work.
-                    faded={archivedShown && !isToday(item.modified)}
+                    // A row on a server that dropped stays listed — its agent
+                    // is still running there — and fades with its heading.
+                    faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
@@ -1653,16 +1668,38 @@ function DotTrack({
 function HeadingRow({
   onClick,
   label,
+  server = null,
+  offline = false,
 }: {
   onClick?: () => void;
   label: string;
+  /// A remote project's server, drawn as a dimmer `-name` suffix so a
+  /// hyphenated project still reads as two parts. Null for this Mac's.
+  server?: string | null;
+  offline?: boolean;
 }) {
   // `pr-0.5` is the session rows' own right inset, so the plus lands under their
   // timestamps rather than short of them.
-  const shared =
-    "flex min-h-6 items-center truncate pr-0.5 pl-2 text-ui text-muted-foreground/70";
+  const shared = cn(
+    "flex min-h-6 items-center truncate pr-0.5 pl-2 text-ui text-muted-foreground/70",
+    offline && "opacity-50",
+  );
+  const text = (
+    <span className="truncate">
+      {label}
+      {server !== null && <span className="text-muted-foreground/40">-{server}</span>}
+    </span>
+  );
+  const mark = offline && <span className="ml-2 shrink-0 text-muted-foreground/60">disconnected</span>;
 
-  if (!onClick) return <div className={shared}>{label}</div>;
+  if (!onClick) {
+    return (
+      <div className={shared}>
+        {text}
+        {mark}
+      </div>
+    );
+  }
 
   return (
     <button
@@ -1676,7 +1713,8 @@ function HeadingRow({
         "group/heading w-full cursor-pointer text-left transition-colors duration-150 hover:text-foreground/75",
       )}
     >
-      <span className="truncate">{label}</span>
+      {text}
+      {mark}
       <Plus className="ml-auto size-3.5 shrink-0 opacity-0 transition-opacity duration-150 group-hover/heading:opacity-100" />
     </button>
   );
@@ -1704,7 +1742,7 @@ function ProjectFilter({
   const entries = useMemo(
     () => [
       { path: null as string | null, name: "All Projects" },
-      ...projects.map((p) => ({ path: p.path as string | null, name: p.name })),
+      ...projects.map((p) => ({ path: p.path as string | null, name: projectLabel(p) })),
     ],
     [projects],
   );

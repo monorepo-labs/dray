@@ -1,5 +1,7 @@
 import { createContext, useContext } from "react";
 
+import { qualify, serverOfSession } from "@/lib/transport";
+
 /// Which session the transcript on screen belongs to, and where it runs.
 ///
 /// A context rather than props, because both consumers are leaves — a
@@ -22,4 +24,12 @@ export const ChatSessionContext = createContext<{
 
 export function useChatSession() {
   return useContext(ChatSessionContext);
+}
+
+/// A path an agent or its harness wrote, keyed on the server this transcript's
+/// session runs on — an attachment, a recording, a file it named. Agents name
+/// their own machine's paths.
+export function useSessionPath(): (path: string) => string {
+  const { sessionId } = useChatSession();
+  return (path) => qualify(path, serverOfSession(sessionId));
 }

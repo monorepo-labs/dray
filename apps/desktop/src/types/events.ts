@@ -1549,6 +1549,17 @@ queued: QueuedMessage | null,
  */
 issues: Array<IssueRef>, };
 
+/**
+ * A remote server as the frontend sees it. No token: that stays here.
+ */
+export type ServerInfo = { id: string, name: string, url: string, status: ServerStatus, 
+/**
+ * Why the last connect failed, in the server's words where it gave any.
+ */
+error: string | null, };
+
+export type ServerStatus = "connecting" | "connected" | "disconnected";
+
 export type SessionIndexItem = { sessionId: string, harness: Harness, 
 /**
  * Where the agent actually runs. Equals `project_path` for a normal

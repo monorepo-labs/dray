@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { LOCAL, serverOfPath } from "@/lib/transport";
 import { Check, ChevronDown, TriangleAlert } from "lucide-react";
 
 import AppIcon from "@/components/AppIcon";
@@ -35,7 +36,13 @@ const FAILED_MS = 4000;
 /// cannot do anything, and there is no cure to name — every mac has Finder, so
 /// an empty list means the scan itself found nothing rather than that the
 /// reader is missing an editor.
-export default function OpenInButton({
+/// Nothing for a path on a remote server: there is no copy on this Mac for
+/// an app here to open.
+export default function OpenInButton(props: Parameters<typeof LocalOpenInButton>[0]) {
+  return serverOfPath(props.path) === LOCAL ? <LocalOpenInButton {...props} /> : null;
+}
+
+function LocalOpenInButton({
   path,
   opener = DIR_OPENER,
   line,

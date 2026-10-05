@@ -152,13 +152,20 @@ remote client.
 
 ## Auth
 
-**A per-start token plus an Origin check, binding `127.0.0.1`.**
+**A kept token plus an Origin check, binding `127.0.0.1`.**
 
 - **Token.** A TCP port on localhost is open to every account on the machine,
   unlike `dray.sock` behind a `0700` directory, and a VPS is often shared. So
-  each start mints a 256-bit token into `<data dir>/serve-token`, `0600` from
-  its create (`store::write_private_atomic`), and the first frame must carry it.
+  the server holds a 256-bit token in `<data dir>/serve-token`, `0600` from its
+  create (`store::write_private_atomic`), and the first frame must carry it.
   Compared in equal time. It is also what remote reach will use.
+- **Kept across starts, and that reverses the first shape.** A token minted
+  per start broke every saved server on each restart, and the server runs as a
+  service that restarts on reboot, update and crash. It already sat in that
+  file for the server's whole run, so keeping it exposes it to nobody new; the
+  cost is that a leaked token stays good until rotated. A missing, empty or
+  malformed file is minted afresh, and **deleting the file rotates it** — no
+  flag.
 - **Origin.** A browser lets any page open a WebSocket to localhost, so a
   handshake carrying a non-local `Origin` is refused with 403 before a frame is
   read. No `Origin` is a non-browser client, which the token answers for.

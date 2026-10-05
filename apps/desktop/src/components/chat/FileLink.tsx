@@ -3,6 +3,7 @@ import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useChatSession } from "@/hooks/useChatSession";
 import { openPath } from "@/hooks/useDocs";
 import { openFile } from "@/lib/openWith";
+import { displayPath, LOCAL, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 
 /// A path anywhere in the chat, drawn as something that opens.
@@ -57,7 +58,8 @@ export default function FileLink({
     // means on an issue row and in the link dialog — so it goes straight to the
     // reader's own editor, line and all. A plain click stays in the app:
     // markdown in the Docs panel, everything else in the Files view.
-    if (e.metaKey || e.ctrlKey) return void openFile(path, line);
+    // A remote file has no copy on this Mac for an editor to open.
+    if ((e.metaKey || e.ctrlKey) && serverOfSession(sessionId) === LOCAL) return void openFile(path, line);
     openPath(sessionId, path, line);
   };
 
@@ -65,7 +67,7 @@ export default function FileLink({
     <span
       role="link"
       tabIndex={0}
-      title={title ?? path}
+      title={title ?? displayPath(path)}
       onClick={open}
       onKeyDown={(e) => {
         if (e.key !== "Enter" && e.key !== " ") return;

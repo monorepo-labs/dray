@@ -62,10 +62,12 @@ export const dropHeld = (sessionId: string) => {
   earlyEvents.delete(sessionId);
 };
 
-/// Drops every held question and permission request. A server's `live_state`
-/// is the truth about which are still open, and re-sends those.
-export const dropHeldAsks = () => {
-  for (const held of earlyEvents.values()) {
+/// Drops every held question and permission request of the sessions `ours`
+/// names. A server's `live_state` is the truth about which of its own are
+/// still open, and re-sends those.
+export const dropHeldAsks = (ours: (sessionId: string) => boolean) => {
+  for (const [sessionId, held] of earlyEvents) {
+    if (!ours(sessionId)) continue;
     for (const [id, event] of held) {
       if (isAsk(event)) held.delete(id);
     }

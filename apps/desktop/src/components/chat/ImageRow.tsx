@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { basename } from "@/lib/format";
+import { useSessionPath } from "@/hooks/useChatSession";
 import { cn } from "@/lib/utils";
 import type { ImageRef } from "@/types/events";
 
@@ -46,12 +47,13 @@ export default function ImageRow({
   images: ImageRef[];
   variant?: Variant;
 }) {
+  const onServer = useSessionPath();
   // Resolved once here rather than per picture, because the viewer needs the
   // same list in the same order — an index that means one picture in the row and
   // another in the lightbox is the bug this shape rules out.
   const viewable = images
     .map((image) => ({
-      src: image.path ? fileSrc(image.path) : image.url,
+      src: image.path ? fileSrc(onServer(image.path)) : image.url,
       name: image.path ? basename(image.path) : "image",
     }))
     .filter((image): image is { src: string; name: string } => Boolean(image.src));

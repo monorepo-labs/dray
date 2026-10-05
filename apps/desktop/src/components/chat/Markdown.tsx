@@ -1,4 +1,4 @@
-import { fileSrc } from "@/lib/transport";
+import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
 import { memo, useMemo } from "react";
 import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
@@ -254,7 +254,7 @@ function FilePathSpan({
   // A relative path resolves against the session's own working directory, the
   // one thing the prose does not carry; inert without one, since a path
   // resolved against wherever the app happens to run opens the wrong file.
-  const { cwd } = useChatSession();
+  const { cwd, sessionId } = useChatSession();
   if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
     const path = absolutePath(title, cwd);
     const line = Number(dataLine);
@@ -291,7 +291,7 @@ function FilePathSpan({
     return (
       <>
         {link}
-        <VideoPlayer src={fileSrc(path)} />
+        <VideoPlayer src={fileSrc(qualify(path, serverOfSession(sessionId)))} />
       </>
     );
   }

@@ -33,9 +33,13 @@ const VIEW_SHORTCUTS: Record<ViewTab, ShortcutId> = {
 export default function ViewTabs({
   tab,
   onChange,
+  browser = true,
 }: {
   tab: ViewTab;
   onChange: (tab: ViewTab) => void;
+  /// Off for a remote session: the browser is this Mac's, and Mac-only
+  /// features are offered for local sessions alone.
+  browser?: boolean;
 }) {
   return (
     // Shrinks and clips rather than holding its width: the session name beside
@@ -43,7 +47,7 @@ export default function ViewTabs({
     // narrow column, and a row that refuses to shrink pushes the panel toggle
     // out of the column and draws it over the pane next door.
     <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
-      {VIEW_TABS.map((value) => (
+      {VIEW_TABS.filter((value) => browser || value !== "browser").map((value) => (
         <Tooltip key={value}>
           <TooltipTrigger asChild>
             {/* No fill on the selected one, unlike the other two rows this

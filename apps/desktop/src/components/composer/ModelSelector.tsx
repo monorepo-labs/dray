@@ -31,7 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { invoke } from "@/lib/transport";
+import { invoke, type ServerId } from "@/lib/transport";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
@@ -188,6 +188,7 @@ function ProviderRow({
 /// already short of. It also puts the mark *on the trigger*, so the agent is
 /// readable at rest rather than only while the menu is open.
 export default function ModelSelector({
+  server,
   harness,
   onHarnessChange,
   models,
@@ -204,6 +205,8 @@ export default function ModelSelector({
   onSeedProvider,
   loadingModels,
 }: {
+  /// The server the composer sends to, whose installs the picker marks.
+  server: ServerId;
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
   models: Model[];
@@ -343,7 +346,7 @@ export default function ModelSelector({
   // `null` until the first read lands, which is why the mark is drawn from an
   // explicit `!a.available` rather than from "not found in the list": an
   // unanswered read must mark nothing, not mark everything.
-  const availability = useAgentAvailability();
+  const availability = useAgentAvailability(server);
 
   // Provider switches are serialized: each `set_fx_provider` is chained after
   // the previous, so the settings file ends on the *last* click rather than
@@ -361,7 +364,7 @@ export default function ModelSelector({
     latestProvider.current = id;
     switchQueue.current = switchQueue.current
       .catch(() => {})
-      .then(() => invoke("set_fx_provider", { provider: id }))
+      .then(() => invoke("set_fx_provider", { provider: id }, server))
       .then(
         () => {
           if (latestProvider.current === id) onReloadModels();

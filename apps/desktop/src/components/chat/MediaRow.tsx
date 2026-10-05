@@ -4,6 +4,7 @@ import { useState } from "react";
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import ImageRow from "@/components/chat/ImageRow";
 import VideoPlayer from "@/components/chat/VideoPlayer";
+import { useSessionPath } from "@/hooks/useChatSession";
 import { basename } from "@/lib/format";
 import type { Media } from "@/lib/transcript";
 
@@ -18,6 +19,7 @@ const MAX_SHOWN = 3;
 /// a stretch can hold a dozen screenshots and a dozen at reading size is a
 /// scroll standing in for one line.
 export default function MediaRow({ media }: { media: Media[] }) {
+  const onServer = useSessionPath();
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   if (media.length === 1) {
@@ -25,15 +27,15 @@ export default function MediaRow({ media }: { media: Media[] }) {
     return "image" in only ? (
       <ImageRow images={[only.image]} />
     ) : (
-      <VideoPlayer src={fileSrc(only.video)} />
+      <VideoPlayer src={fileSrc(onServer(only.video))} />
     );
   }
 
   const items = media
     .map((m) =>
       "video" in m
-        ? { src: fileSrc(m.video), name: basename(m.video), video: true }
-        : { src: m.image.path ? fileSrc(m.image.path) : m.image.url, name: m.image.path ? basename(m.image.path) : "image" },
+        ? { src: fileSrc(onServer(m.video)), name: basename(m.video), video: true }
+        : { src: m.image.path ? fileSrc(onServer(m.image.path)) : m.image.url, name: m.image.path ? basename(m.image.path) : "image" },
     )
     .filter((item): item is LightboxImage => Boolean(item.src));
   if (items.length === 0) return null;

@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -145,21 +145,33 @@ pub async fn run(port: u16) -> Result<()> {
     }
 }
 
-/// A fresh token per start, written where only this account can read it.
+/// The server's token, written where only this account can read it.
 ///
 /// Localhost is not a boundary the way `dray.sock` is: the socket sits in a
 /// `0700` directory, but a TCP port on `127.0.0.1` is open to every account on
 /// the machine, and a VPS is often shared. The file is `0600` from its create.
 async fn mint_token() -> Result<(String, PathBuf)> {
-    let token = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
     let path = store::get_home_app_dir().await?.join("serve-token");
-    store::write_private_atomic(&path, token.as_bytes())
-        .with_context(|| format!("could not write {}", path.display()))?;
+    let token = token_at(&path)?;
     Ok((token, path))
+}
+
+/// The token already in `path`, or a fresh one where it is missing or not one
+/// this server wrote. Kept across starts: the server runs as a service that
+/// restarts on reboot, update and crash, and a per-start token broke every
+/// saved server each time. Deleting the file is how a reader rotates it.
+/// Written back either way, so the file is `0600` whatever it was left at.
+fn token_at(path: &Path) -> Result<String> {
+    let kept = std::fs::read_to_string(path)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()));
+    let token = kept.unwrap_or_else(|| {
+        format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+    });
+    store::write_private_atomic(path, token.as_bytes())
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(token)
 }
 
 /// Whether a browser `Origin` names this machine. Any page can open a
@@ -316,7 +328,8 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
 
 /// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
 /// app — attached images and browser recordings — for a client elsewhere. An
-/// `<img>` cannot set a header, hence the token in the query.
+/// `<img>` cannot set a header, hence the token in the query; a client that
+/// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
 ///
 /// Confined to those two directories, plus videos `read_file` handed out, by
 /// **canonical** path, so neither `..` nor a symlink inside one reaches
@@ -328,6 +341,7 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
 
     let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
+    let mut bearer = None;
     // The rest of the head is read too, so closing does not reset the
     // connection under a response the client has not finished reading.
     let head = async {
@@ -336,6 +350,11 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
             let mut header = String::new();
             if reader.read_line(&mut header).await? <= 2 {
                 return Ok::<_, std::io::Error>(());
+            }
+            if let Some((name, value)) = header.split_once(':') {
+                if name.eq_ignore_ascii_case("authorization") {
+                    bearer = value.trim().strip_prefix("Bearer ").map(str::to_string);
+                }
             }
         }
     };
@@ -347,10 +366,12 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
     let mut stream = reader.into_inner().into_inner();
 
     let query = target.split_once('?').map(|(_, q)| q).unwrap_or_default();
-    let mut given = (String::new(), String::new());
+    // A header where the client can set one — the desktop app's proxy — so the
+    // token rides no URL; the query for an `<img>` in a plain browser.
+    let mut given = (bearer.unwrap_or_default(), String::new());
     for (key, value) in form_urlencoded::parse(query.as_bytes()) {
         match &*key {
-            "token" => given.0 = value.into_owned(),
+            "token" if given.0.is_empty() => given.0 = value.into_owned(),
             "path" => given.1 = value.into_owned(),
             _ => {}
         }
@@ -717,6 +738,28 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_start_keeps_the_token() {
+        let dir = std::env::temp_dir().join(format!("dray-serve-token-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("serve-token");
+
+        let first = token_at(&path).unwrap();
+        assert_eq!(first.len(), 64);
+        assert_eq!(token_at(&path).unwrap(), first);
+
+        for broken in ["", "not a token", &first[..32]] {
+            std::fs::write(&path, broken).unwrap();
+            let minted = token_at(&path).unwrap();
+            assert_ne!(minted, broken, "{broken:?} is not reused");
+            assert_eq!(minted.len(), 64);
+        }
+
+        std::fs::remove_file(&path).unwrap();
+        assert_ne!(token_at(&path).unwrap(), first, "deleting the file rotates");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn local_origins() {
