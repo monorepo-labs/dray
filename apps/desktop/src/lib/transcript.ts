@@ -208,6 +208,42 @@ export function segmentMedia(items: WorkItem[], finalText: string | null): Media
   return media;
 }
 
+/// `byYou` is the reader's own attachment, against anything the agent produced.
+export type SessionMedia = Media & { byYou: boolean };
+
+/// Every picture and recording in a session, newest first, for the More tab's
+/// attachment grid: what the reader attached and what the agent produced.
+/// Main thread only — a subagent's screenshots are its own working material.
+export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
+  const media: SessionMedia[] = [];
+  const seen = new Set<string>();
+  const add = (key: string, m: SessionMedia) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    media.push(m);
+  };
+  const scan = (text: string) => {
+    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
+  };
+  const images = (list: ImageRef[], byYou: boolean) => {
+    for (const image of list) {
+      const key = image.path ?? image.url;
+      if (key) add(key, { image, byYou });
+    }
+  };
+  for (const { subagent, payload } of events) {
+    if (subagent) continue;
+    // A relayed `dray send` arrives as a user message too, but another
+    // session sent it, so it counts as the agent's.
+    if (payload.type === "user_message") images(payload.images, payload.from === null);
+    else if (payload.type === "tool_call_completed") {
+      images(payload.result.images, false);
+      scan(payload.result.text);
+    } else if (payload.type === "assistant_text") scan(payload.text);
+  }
+  return media.reverse();
+}
+
 export type Turn = {
   /// The user's prompt opening this turn, absent only for a transcript that
   /// starts mid-conversation.

@@ -133,6 +133,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
@@ -155,7 +156,7 @@ import {
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
-import { buildTranscript } from "@/lib/transcript";
+import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -1313,6 +1314,10 @@ function App() {
     () => currentTodos(selectedSession?.events ?? []),
     [selectedSession?.events],
   );
+  const sessionAttachments = useMemo(
+    () => sessionMedia(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
 
   // The panel opens itself on a task list the reader has not been shown, and on
   // nothing else.
@@ -1434,7 +1439,10 @@ function App() {
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 || backgroundTasks.length > 0 || sessionTodos !== null;
+    subagents.length > 0 ||
+    backgroundTasks.length > 0 ||
+    sessionTodos !== null ||
+    sessionAttachments.length > 0;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -1450,6 +1458,15 @@ function App() {
   // stands in. Not written back, so switching to a session without a PR keeps
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
+
+  // The attachment grid reads the session's whole log, but a transcript drawn
+  // as a crew strip never pages past its tail — so the More tab pages in the
+  // rest itself while it is on screen. The main column's transcript already
+  // does, and `loadOlder` runs one read per session for the two of them.
+  const pagedForMore = panelShown && activeTab === "more" ? selectedSession : null;
+  useEffect(() => {
+    if (pagedForMore?.olderBefore != null) loadOlder(pagedForMore.sessionId);
+  }, [pagedForMore?.sessionId, pagedForMore?.olderBefore]);
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
   // hand is the reader's.
@@ -2861,6 +2878,8 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
+                media={sessionAttachments}
+                sessionId={shownSession.sessionId}
                 subagents={{
                   runs: subagents,
                   selectedId: selectedSubagentId,

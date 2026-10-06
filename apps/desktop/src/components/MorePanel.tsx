@@ -1,6 +1,13 @@
+import { useState } from "react";
+
 import SubagentPanel from "@/components/SubagentPanel";
+import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import TodoList from "@/components/chat/TodoList";
+import { basename } from "@/lib/format";
 import type { Todo } from "@/lib/todos";
+import type { SessionMedia } from "@/lib/transcript";
+import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
+import { cn } from "@/lib/utils";
 
 /// The catch-all tab: a task list at the top, the session's subagent runs under
 /// it. Sections rather than tabs of their own, because the tab row cannot grow
@@ -12,9 +19,14 @@ import type { Todo } from "@/lib/todos";
 export default function MorePanel({
   todos,
   live,
+  media,
+  sessionId,
   subagents,
 }: {
   todos: Todo[] | null;
+  /// Pictures and recordings, newest first — see `sessionMedia`.
+  media: SessionMedia[];
+  sessionId: string;
   /// Whether the session is mid-turn. The checklist's running item shimmers on
   /// this alone — a list is **kept** after the turn ends, so an item left at
   /// `in_progress` by a session that stopped would otherwise animate a claim
@@ -36,6 +48,9 @@ export default function MorePanel({
           reader has nothing to read here. Both sections are titled or neither
           is — a heading over one list and none over the other reads as the
           second belonging to the first. */}
+      {/* Untitled: a grid of pictures names itself. */}
+      {media.length > 0 && <AttachmentGrid media={media} sessionId={sessionId} />}
+
       {subagents.runs.length > 0 && (
         <>
           <SectionTitle>Background Tasks</SectionTitle>
@@ -73,6 +88,113 @@ function TodoSection({ todos, live }: { todos: Todo[]; live: boolean }) {
       <div className="px-3 pt-3 pb-3">
         <TodoList todos={todos} live={live} />
       </div>
+    </div>
+  );
+}
+
+/// Fixed rather than `auto-fill`, so two rows is a known count.
+const COLUMNS = 6;
+const MAX_TILES = COLUMNS * 2;
+
+type MediaFilter = "all" | "you" | "ai";
+const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "you", label: "You" },
+  { id: "ai", label: "AI" },
+];
+
+/// A contact sheet: pictures cropped square to their cells, each opening the
+/// transcript's own viewer to step through the whole set. Held to two rows so it
+/// never pushes Background Tasks off the pane; past that the last cell is a
+/// count opening the viewer where the cells stop.
+function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId: string }) {
+  // The open picture by its source, not its position: the list is newest first,
+  // so a screenshot landing while the viewer is open would shift every index.
+  const [openSrc, setOpenSrc] = useState<string | null>(null);
+  const [filter, setFilter] = useState<MediaFilter>("all");
+  // Outside `ChatSessionContext`, so the session's server is named here rather
+  // than through `useSessionPath`.
+  const server = serverOfSession(sessionId);
+  const items = media
+    .filter((m) => filter === "all" || m.byYou === (filter === "you"))
+    .map((m) =>
+      "video" in m
+        ? { src: fileSrc(qualify(m.video, server)), name: basename(m.video), video: true }
+        : {
+            src: m.image.path ? fileSrc(qualify(m.image.path, server)) : m.image.url,
+            name: m.image.path ? basename(m.image.path) : "image",
+          },
+    )
+    .filter((item): item is LightboxImage => Boolean(item.src));
+  const at = items.findIndex((item) => item.src === openSrc);
+  const shown = items.length > MAX_TILES ? MAX_TILES - 1 : items.length;
+  const hidden = items.length - shown;
+  // Empty cells finish the last row, so the lines run the whole width rather
+  // than stopping where the pictures do.
+  const filler = (COLUMNS - ((shown + (hidden > 0 ? 1 : 0)) % COLUMNS)) % COLUMNS;
+  const cell = "aspect-square border-b-[0.5px] border-border [&:not(:nth-child(6n))]:border-r-[0.5px]";
+
+  return (
+    <div className="flex shrink-0 flex-col gap-2 pt-3 pb-3">
+      <div role="group" aria-label="Show attachments from" className="flex gap-3 px-3">
+        {MEDIA_FILTERS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={filter === id}
+            onClick={() => {
+              setFilter(id);
+              setOpenSrc(null);
+            }}
+            className={cn(
+              "text-ui transition-colors",
+              filter === id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {items.length === 0 ? (
+        <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
+      ) : (
+        // Edge to edge, with the panel's own sides as the outer frame.
+        <div className="grid grid-cols-6 border-t-[0.5px] border-border">
+          {items.slice(0, shown).map((item) => (
+            <button
+              key={item.src}
+              type="button"
+              onClick={() => setOpenSrc(item.src)}
+              aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
+              className={cn(cell, "cursor-zoom-in overflow-hidden transition-opacity hover:opacity-90")}
+            >
+              <Thumb item={item} className="size-full" />
+            </button>
+          ))}
+          {hidden > 0 && (
+            <button
+              type="button"
+              onClick={() => setOpenSrc(items[shown].src)}
+              aria-label={`Show ${hidden} more`}
+              className={cn(
+                cell,
+                "bg-muted/60 text-chat text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+              )}
+            >
+              +{hidden}
+            </button>
+          )}
+          {Array.from({ length: filler }, (_, i) => (
+            <div key={`filler-${i}`} className={cell} />
+          ))}
+        </div>
+      )}
+      <ImageLightbox
+        images={items}
+        index={at === -1 ? null : at}
+        onIndex={(i) => setOpenSrc(items[i].src)}
+        onClose={() => setOpenSrc(null)}
+      />
     </div>
   );
 }
