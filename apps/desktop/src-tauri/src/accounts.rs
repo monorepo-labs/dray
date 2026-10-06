@@ -1239,6 +1239,13 @@ pub async fn run_agent_login(
     auth: String,
     cwd: String,
 ) -> Result<(), String> {
+    let command = login_command(harness, provider, &auth)?;
+    crate::apps::run_in_terminal(&command, &cwd).await
+}
+
+/// The sign-in command `auth` names, looked up in [`auth_options`] — a literal
+/// from that table, never text a frontend sent.
+pub fn login_command(harness: Harness, provider: Option<String>, auth: &str) -> Result<String, String> {
     let provider = provider.filter(|p| !p.is_empty());
     if let Some(provider) = provider.as_deref() {
         if !plausible_provider(provider) {
@@ -1246,13 +1253,11 @@ pub async fn run_agent_login(
         }
     }
 
-    let command = auth_options(harness, provider.as_deref())
+    auth_options(harness, provider.as_deref())
         .into_iter()
         .find(|option| option.id == auth)
         .and_then(|option| option.command)
-        .ok_or_else(|| format!("{} has no such sign-in.", harness.label()))?;
-
-    crate::apps::run_in_terminal(&command, &cwd).await
+        .ok_or_else(|| format!("{} has no such sign-in.", harness.label()))
 }
 
 #[cfg(test)]

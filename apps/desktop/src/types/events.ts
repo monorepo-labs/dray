@@ -680,6 +680,8 @@ icon: string | null, };
  */
 export type ExternalAppKind = "editor" | "terminal" | "files";
 
+export type Failure = { message: string, fix: Fix | null, };
+
 /**
  * What the viewer draws, or the sentence saying why it draws nothing.
  *
@@ -732,6 +734,11 @@ newText: string | null,
  * reason instead of drawing an empty diff and looking broken.
  */
 unreadable: Unreadable | null, };
+
+/**
+ * What the reader can do about a failure, drawn beside its sentence.
+ */
+export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, };
 
 /**
  * A repository the signed-in `gh` user can reach.
@@ -1572,11 +1579,28 @@ issues: Array<IssueRef>, };
 /**
  * A remote server as the frontend sees it. No token: that stays here.
  */
-export type ServerInfo = { id: string, name: string, url: string, status: ServerStatus, 
+export type ServerInfo = { id: string, name: string, 
+/**
+ * Whether the reader chose `name`, rather than it being the address's
+ * host — so Rename can open empty instead of on a name nobody picked.
+ */
+named: boolean, url: string, 
+/**
+ * `ssh user@host` for a server reached through a login, else `None`.
+ */
+ssh: string | null, on: boolean, status: ServerStatus, 
+/**
+ * Which step a connect through SSH is on.
+ */
+stage: Stage | null, 
 /**
  * Why the last connect failed, in the server's words where it gave any.
  */
-error: string | null, };
+error: string | null, 
+/**
+ * What the reader can do about `error`.
+ */
+fix: Fix | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
@@ -1911,6 +1935,8 @@ argumentHint: string,
  * Other names that reach the same command. Absent on most.
  */
 aliases: Array<string>, };
+
+export type Stage = "connecting" | "finding" | "starting";
 
 /**
  * Why a press could not start recording, or `None` where it did.

@@ -81,7 +81,7 @@ const remotes: Remote[] = [];
 const announce = () => void emit("servers_changed", remotes.map((r) => r.info));
 
 function addRemote(url: string, token: string, name: string, id = crypto.randomUUID().slice(0, 8)): ServerInfo {
-  const info: ServerInfo = { id, name, url, status: "connecting", error: null };
+  const info: ServerInfo = { id, name, named: true, url, ssh: null, on: true, status: "connecting", stage: null, error: null, fix: null };
   const remote: Remote = {
     info,
     conn: connect(

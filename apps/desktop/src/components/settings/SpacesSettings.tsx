@@ -364,22 +364,27 @@ function Grip({
   );
 }
 
-/// The one field a space is named in, new or renamed.
+/// The one field a space is named in, new or renamed — and a server, renamed.
 ///
 /// Full width, with its two answers under it. Nothing else ends it: Enter and
 /// the button commit, Escape and Cancel drop it, and **losing focus does
 /// neither** — reaching for anything else on the tab mid-name would otherwise
 /// throw the name away without saying so.
-function SpaceNameField({
+export function SpaceNameField({
   label,
   initial,
   action,
+  placeholder = "Space name",
+  allowEmpty = false,
   onCommit,
   onCancel,
 }: {
   label: string;
   initial: string;
   action: string;
+  placeholder?: string;
+  /// For a name with a default behind it, where empty means "use that".
+  allowEmpty?: boolean;
   onCommit: (value: string) => void;
   onCancel: () => void;
 }) {
@@ -405,7 +410,7 @@ function SpaceNameField({
         ref={field}
         autoFocus
         aria-label={label}
-        placeholder="Space name"
+        placeholder={placeholder}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
@@ -427,7 +432,7 @@ function SpaceNameField({
       </Button>
       {/* Disabled on an empty name rather than accepting one and dropping it,
           which reads as the button doing nothing. */}
-      <Button disabled={!value.trim()} onClick={() => onCommit(value)} className="text-ui">
+      <Button disabled={!allowEmpty && !value.trim()} onClick={() => onCommit(value)} className="text-ui">
         {action}
       </Button>
     </div>
