@@ -36,6 +36,13 @@ use std::path::PathBuf;
 /// version instead, so the answer names which half to update.
 pub const PROTOCOL_VERSION: u32 = 7;
 
+/// The oldest envelope the app still answers. Rises only when a shape is
+/// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
+/// `issues`, so a v3 line parses on a newer app as "link nothing" — the silent
+/// failure a bump exists to stop. Every bump since only added, so any v4+ line
+/// means what it says; 6 is simply the oldest still in the wild.
+pub const OLDEST_SPOKEN: u32 = 6;
+
 /// Where the app listens, unless [`endpoint`] is overridden.
 pub const SOCKET_NAME: &str = "dray.sock";
 
@@ -67,8 +74,28 @@ pub struct Envelope {
 impl Envelope {
     pub fn new(request: Request) -> Self {
         Self {
-            v: PROTOCOL_VERSION,
+            v: request.version(),
             request,
+        }
+    }
+}
+
+impl Request {
+    /// The oldest version that carries this request whole. The CLI stamps that
+    /// rather than its own, so an older app answers everything it understands
+    /// and refuses only what it cannot — and that refusal still names the app
+    /// as the half to update. No wildcard arm: a new variant has to say which.
+    pub fn version(&self) -> u32 {
+        match self {
+            Request::CreateSession(_)
+            | Request::ListSessions(_)
+            | Request::SendMessage(_)
+            | Request::LinkIssues(_)
+            | Request::Browser(_) => 6,
+            Request::CreateDraft(_)
+            | Request::ListDrafts(_)
+            | Request::RemoveDraft(_)
+            | Request::StartDraft(_) => 7,
         }
     }
 }
@@ -662,6 +689,41 @@ mod tests {
         assert_eq!(create.effort, None);
         assert_eq!(create.harness, None);
         assert_eq!(create.from, None);
+    }
+
+    /// Everything an app 0.26.0 (v6) could parse goes out as v6, so a stable
+    /// app answers it; drafts go out as v7 and are refused there by version.
+    /// And the constant is the newest any request needs — a bump that raises
+    /// it and stamps nothing with it would ship a version nobody sends.
+    #[test]
+    fn each_request_stamps_the_oldest_version_that_carries_it() {
+        let browser = BrowserRequest {
+            session_id: "s".into(),
+            action: BrowserAction::Back,
+        };
+        let old = [
+            Request::CreateSession(Default::default()),
+            Request::ListSessions(Default::default()),
+            Request::SendMessage(Default::default()),
+            Request::LinkIssues(Default::default()),
+            Request::Browser(browser),
+        ];
+        let drafts = [
+            Request::CreateDraft(Default::default()),
+            Request::ListDrafts(Default::default()),
+            Request::RemoveDraft(Default::default()),
+            Request::StartDraft(Default::default()),
+        ];
+
+        for request in &old {
+            assert_eq!(Envelope::new(request.clone()).v, 6, "{request:?}");
+        }
+        for request in &drafts {
+            assert_eq!(Envelope::new(request.clone()).v, 7, "{request:?}");
+        }
+        let newest = old.iter().chain(&drafts).map(Request::version).max();
+        assert_eq!(newest, Some(PROTOCOL_VERSION));
+        assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }
 
     #[test]

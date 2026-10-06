@@ -25,7 +25,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SessionSummary, MAX_LINE, PROTOCOL_VERSION,
+    Response, SendMessage, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -203,6 +203,22 @@ fn mismatch(theirs: u32) -> String {
     format!("this dray CLI speaks protocol v{theirs}, the app speaks v{PROTOCOL_VERSION} — {cure}")
 }
 
+/// Answered before the request is even looked at: a CLI older than
+/// [`OLDEST_SPOKEN`] must be told to upgrade, not handed a guess at what it
+/// meant — and one newer than this app must be told the same, which is why `v`
+/// is read on its own first. `Envelope` flattens the request in, so a variant
+/// this build cannot spell fails the whole parse and the version would never
+/// be seen. Anything in between is answered: the CLI stamps each request with
+/// the oldest version that carries it, so an in-range line means what it says.
+fn refusal(line: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Version {
+        v: u32,
+    }
+    let Version { v } = serde_json::from_str(line).ok()?;
+    (!(OLDEST_SPOKEN..=PROTOCOL_VERSION).contains(&v)).then(|| mismatch(v))
+}
+
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
 async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
@@ -214,19 +230,9 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
         .await
         .context("could not read the request")?;
 
-    // Answered before the request is even looked at: an old CLI against a
-    // new app must be told to upgrade, not handed a guess at what it meant —
-    // and a *new* CLI against an old app must be told the same, which is why
-    // `v` is read on its own first. `Envelope` flattens the request in, so a
-    // variant this build cannot spell fails the whole parse and the version
-    // would never be seen.
-    #[derive(serde::Deserialize)]
-    struct Version {
-        v: u32,
-    }
-    let response = match serde_json::from_str::<Version>(&line) {
-        Ok(Version { v }) if v != PROTOCOL_VERSION => Response::error(mismatch(v)),
-        _ => match serde_json::from_str::<Envelope>(&line) {
+    let response = match refusal(&line) {
+        Some(error) => Response::error(error),
+        None => match serde_json::from_str::<Envelope>(&line) {
             Ok(envelope) => match dispatch(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
@@ -1101,6 +1107,21 @@ mod tests {
         assert!(mismatch(PROTOCOL_VERSION - 1).contains("dray update"));
         assert!(mismatch(PROTOCOL_VERSION + 1).contains("update the Dray app"));
         assert!(!mismatch(PROTOCOL_VERSION + 1).contains("dray update"));
+    }
+
+    /// CLI 0.9.0 stamps v6 on everything a stable 0.26.0 app can run, and
+    /// cli-v0.8.0 stamps v6 on everything — both have to be answered here, or
+    /// one release of either half breaks the other.
+    #[test]
+    fn a_line_in_the_spoken_range_is_answered_and_one_outside_is_refused() {
+        let line = |v: u32| format!(r#"{{"v":{v},"cmd":"create_session","prompt":"hi"}}"#);
+
+        assert_eq!(refusal(&line(OLDEST_SPOKEN)), None);
+        assert_eq!(refusal(&line(PROTOCOL_VERSION)), None);
+        assert!(refusal(&line(OLDEST_SPOKEN - 1)).unwrap().contains("dray update"));
+        assert!(refusal(&line(PROTOCOL_VERSION + 1))
+            .unwrap()
+            .contains("update the Dray app"));
     }
 
     /// Every harness the app can run is reachable by name from the CLI.
