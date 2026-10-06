@@ -565,6 +565,11 @@ export type CheckState = "success" | "failure" | "pending" | "skipped" | "cancel
 export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", received: number, total: number, } | { "state": "extracting" } | { "state": "ready", version: string, sizeBytes: number, } | { "state": "failed", message: string, };
 
 /**
+ * One line of git's progress while a repo clones.
+ */
+export type CloneProgress = { slug: string, line: string, };
+
+/**
  * What kind of entry a timeline row is. A review carries a verdict where a
  * plain comment carries none, and that verdict is most of what the row says.
  */
@@ -727,6 +732,21 @@ newText: string | null,
  * reason instead of drawing an empty diff and looking broken.
  */
 unreadable: Unreadable | null, };
+
+/**
+ * A repository the signed-in `gh` user can reach.
+ */
+export type GithubRepo = { 
+/**
+ * `owner/name`.
+ */
+slug: string, description: string | null, 
+/**
+ * Where it already lives on this machine: an attached project, or a
+ * directory in `~/dray` whose GitHub remote names it. Picking one of these
+ * attaches it rather than cloning again.
+ */
+path: string | null, };
 
 /**
  * Which agent runs a session.

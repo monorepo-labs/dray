@@ -19,13 +19,22 @@ function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>)
 function DialogContent({
   className,
   children,
+  showClose = true,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  /// Off where the header's right end holds a control of its own.
+  showClose?: boolean
+}) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
         data-slot="dialog-overlay"
-        className="fixed inset-0 z-50 bg-black/50 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        // Lifts under the pointer because a click there closes the dialog; an
+        // alert's overlay, which a click does not close, stays put. Light lifts
+        // less, its scrim already reading thinner over a bright page. Durations
+        // are set raw: `duration-250` also sets `--tw-duration`, which would
+        // slow the open and close fades with it.
+        className="peer fixed inset-0 z-50 bg-black/50 transition-colors [transition-duration:250ms] hover:bg-black/48 dark:hover:bg-black/40 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"
@@ -36,13 +45,26 @@ function DialogContent({
         {...props}
       >
         {children}
-        <DialogPrimitive.Close
-          data-slot="dialog-close"
-          className="absolute top-5 right-5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        {/* Says what the lifted overlay means, dropping into place as it
+            fades in. Inside the card so it rides the card wherever its height
+            puts it; matched off the overlay's hover by sibling selector, since
+            `peer-hover` reaches siblings and not their children.
+            `pointer-events-none` so it never takes the hover off the overlay. */}
+        <p
+          aria-hidden
+          className="pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 -translate-y-1 text-ui whitespace-nowrap text-white/50 opacity-0 transition-[opacity,translate] [transition-duration:250ms] [.peer:hover~*_&]:translate-y-0 [.peer:hover~*_&]:opacity-100"
         >
-          <X className="size-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
+          Click or press Esc to close
+        </p>
+        {showClose && (
+          <DialogPrimitive.Close
+            data-slot="dialog-close"
+            className="absolute top-5 right-5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            <X className="size-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   )

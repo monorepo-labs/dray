@@ -1,10 +1,20 @@
-use anyhow::{Context, Result};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
+
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use tokio::{fs, sync::Mutex};
+use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex};
 use ts_rs::TS;
 
 use crate::{
+    binpath,
     events::now_rfc3339,
+    git,
+    github::{self, PrUnavailable},
+    sink::Sink,
     store::{get_home_app_dir, read_json, write_atomic},
     Fail,
 };
@@ -37,13 +47,26 @@ pub struct Project {
 static PROJECTS_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Resolves symlinks and drops any trailing slash, so `/x/proj` and `/x/proj/`
-/// can't become two projects and split the sidebar's grouping.
+/// can't become two projects and split the sidebar's grouping. A leading `~/`
+/// is the reader's home: typing a path on a server, they rarely know its
+/// absolute spelling.
 async fn canonical(path: &str) -> Result<String> {
-    let resolved = fs::canonicalize(path)
+    let expanded = match path.strip_prefix("~/") {
+        Some(rest) => home()?.join(rest),
+        None => PathBuf::from(path),
+    };
+    let resolved = fs::canonicalize(&expanded)
         .await
         .with_context(|| format!("no such directory: {path}"))?;
+    if !resolved.is_dir() {
+        bail!("not a directory: {path}");
+    }
 
     Ok(resolved.to_string_lossy().into_owned())
+}
+
+fn home() -> Result<PathBuf> {
+    std::env::home_dir().context("could not resolve home directory")
 }
 
 /// Reads `projects.json` in the reader's own order. A missing or empty file
@@ -217,6 +240,201 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
     Ok(projects)
 }
 
+// ── attaching from GitHub ─────────────────────────────────────────────────────
+
+/// Where a picked repo is cloned, under the reader's real home — never
+/// `DRAY_HOME`, which moves Dray's data, where a clone is the reader's work.
+const CLONE_DIR: &str = "dray";
+
+/// A repository the signed-in `gh` user can reach.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepo {
+    /// `owner/name`.
+    pub slug: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Where it already lives on this machine: an attached project, or a
+    /// directory in `~/dray` whose GitHub remote names it. Picking one of these
+    /// attaches it rather than cloning again.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// One line of git's progress while a repo clones.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+pub struct CloneProgress {
+    pub slug: String,
+    pub line: String,
+}
+
+/// Every repository the signed-in `gh` user can reach — own, collaborator,
+/// organisation member — newest push first, with the ones already on this
+/// machine moved to the front.
+///
+/// Fails the way the PR panel's read does, so a missing or logged-out `gh`
+/// arrives typed and the dialog draws the same setup reading.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn github_repos() -> Result<Vec<GithubRepo>, PrUnavailable> {
+    let home = home().map_err(|e| PrUnavailable::Other(e.to_string()))?;
+    let out = github::gh(
+        &home.to_string_lossy(),
+        &[
+            "api",
+            "--paginate",
+            "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member",
+            "--jq",
+            ".[] | {slug: .full_name, description}",
+        ],
+    )
+    .await
+    .map_err(github::unavailable)?;
+
+    let mut repos = out
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<GithubRepo>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PrUnavailable::Other(format!("could not read gh's answer: {e}")))?;
+
+    let here = local_copies(&home).await;
+    for repo in &mut repos {
+        repo.path = here.get(&repo.slug.to_lowercase()).cloned();
+    }
+    // Stable, so each half keeps gh's newest-first order.
+    repos.sort_by_key(|repo| repo.path.is_none());
+
+    Ok(repos)
+}
+
+/// Lowercased `owner/name` → where that repo already lives here. Attached
+/// projects are read first and win, being the copy the reader chose.
+async fn local_copies(home: &Path) -> HashMap<String, String> {
+    let mut dirs: Vec<String> = list_projects()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.path)
+        .collect();
+    if let Ok(mut entries) = fs::read_dir(home.join(CLONE_DIR)).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            dirs.push(entry.path().to_string_lossy().into_owned());
+        }
+    }
+
+    let slugs = futures_util::future::join_all(dirs.iter().map(|dir| git::github_slug(dir))).await;
+    let mut found = HashMap::new();
+    for (dir, slug) in dirs.into_iter().zip(slugs) {
+        if let Some(slug) = slug {
+            found.entry(slug.to_lowercase()).or_insert(dir);
+        }
+    }
+    found
+}
+
+/// Clones `slug` into `~/dray/<name>` and attaches it, emitting git's progress
+/// as `clone_progress` while it runs.
+///
+/// A folder already there is attached where it is a clone of `slug` — the
+/// reader cloned it before, or picked it twice — and refused otherwise, since
+/// cloning beside it is impossible and over it would destroy something.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn clone_github_repo(slug: String, sink: Sink) -> Result<Vec<Project>, Fail> {
+    let name = repo_name(&slug).ok_or_else(|| anyhow!("not a GitHub repository: {slug}"))?;
+    let parent = home()?.join(CLONE_DIR);
+    let dir = parent.join(name);
+    let path = dir.to_string_lossy().into_owned();
+    let shown = format!("~/{CLONE_DIR}/{name}");
+
+    if fs::try_exists(&dir).await.unwrap_or(false) {
+        return match git::github_slug(&path).await {
+            Some(found) if found.eq_ignore_ascii_case(&slug) => add_project(&path).await,
+            Some(found) => {
+                Err(anyhow!("{shown} already holds {found}. Move it aside, or attach it by path.").into())
+            }
+            None => Err(anyhow!(
+                "{shown} already exists and is not a clone of {slug}. Move it aside, or attach it by path."
+            )
+            .into()),
+        };
+    }
+
+    fs::create_dir_all(&parent).await.map_err(anyhow::Error::from)?;
+    clone(&slug, &dir, &sink).await.map_err(|e| anyhow!(e))?;
+    add_project(&path).await
+}
+
+/// The name half of `owner/name`, or `None` unless both halves are spelled the
+/// way GitHub allows: the name becomes a directory and the slug an argument to
+/// `gh`, so a `..` or a leading `-` must never reach either.
+fn repo_name(slug: &str) -> Option<&str> {
+    let (owner, name) = slug.split_once('/')?;
+    let fits = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s != "."
+            && s != ".."
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    };
+    (fits(owner) && fits(name)).then_some(name)
+}
+
+/// `gh repo clone`, on gh's own protocol and login. `Err` is the tail of what
+/// gh and git said, the sentence the reader would have seen in a terminal.
+async fn clone(slug: &str, dir: &Path, sink: &Sink) -> Result<(), String> {
+    let bin = binpath::gh().await.ok_or(github::NO_CLI)?;
+    let mut child = Command::new(bin)
+        .args(["repo", "clone", slug])
+        .arg(dir)
+        // git writes progress to a terminal alone unless asked.
+        .args(["--", "--progress"])
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        // A credential prompt nobody can answer is a clone that never returns.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("could not run gh: {e}"))?;
+
+    let mut stderr = child.stderr.take().ok_or("gh gave no stderr")?;
+    let mut buf = [0u8; 4096];
+    let mut pending = String::new();
+    // Lines ended by `\n` are messages; `\r` ends a progress redraw, which is
+    // shown live and never kept for the error.
+    let mut said: Vec<String> = Vec::new();
+    loop {
+        let n = stderr.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        pending.push_str(&String::from_utf8_lossy(&buf[..n]));
+        while let Some(end) = pending.find(['\r', '\n']) {
+            let message = pending.as_bytes()[end] == b'\n';
+            let line = pending[..end].trim().to_string();
+            pending.drain(..=end);
+            if line.is_empty() {
+                continue;
+            }
+            let _ = sink.emit("clone_progress", CloneProgress { slug: slug.to_string(), line: line.clone() });
+            if message && !line.starts_with("Cloning into") {
+                said.push(line);
+            }
+        }
+    }
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    if status.success() {
+        return Ok(());
+    }
+    let tail = said[said.len().saturating_sub(4)..].join("\n");
+    Err(if tail.is_empty() { "gh repo clone failed".to_string() } else { tail })
+}
+
 /// Trailing path segment. Mirrors the frontend's `basename` so a project's
 /// cached label matches what the UI would derive from the path.
 fn basename(path: &str) -> String {
@@ -301,6 +519,16 @@ mod tests {
         // Otherwise the switcher draws a nameless entry nothing can leave.
         assert_eq!(normalize_space(Some("  ".into())), None);
         assert_eq!(normalize_space(Some(" Work ".into())), Some("Work".into()));
+    }
+
+    #[test]
+    fn repo_name_takes_what_github_spells_and_nothing_else() {
+        assert_eq!(repo_name("monorepo-labs/dray"), Some("dray"));
+        assert_eq!(repo_name("acme/.github"), Some(".github"));
+        assert_eq!(repo_name("a_b/c.d-e"), Some("c.d-e"));
+        for bad in ["dray", "/dray", "acme/", "acme/..", "acme/.", "-x/y", "x/-y", "a/b/c", "a/b c", "a/b;rm"] {
+            assert_eq!(repo_name(bad), None, "{bad}");
+        }
     }
 
     #[test]
