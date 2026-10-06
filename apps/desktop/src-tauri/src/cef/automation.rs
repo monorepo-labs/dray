@@ -142,18 +142,19 @@ const DEVICES: &[(&str, u32, u32)] = &[
 ];
 
 wrap_dev_tools_message_observer! {
-    struct DrayDevTools;
+    struct DrayDevTools {
+        tab: i32,
+    }
 
     impl DevToolsMessageObserver {
         fn on_dev_tools_method_result(
             &self,
-            browser: Option<&mut Browser>,
+            _browser: Option<&mut Browser>,
             message_id: ::std::os::raw::c_int,
             success: ::std::os::raw::c_int,
             result: Option<&[u8]>,
         ) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
-            let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(id, message_id))) else {
+            let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(self.tab, message_id))) else {
                 return;
             };
             let value = result
@@ -175,10 +176,39 @@ wrap_dev_tools_message_observer! {
 
 /// Attach the observer to a browser the moment it exists; the registration
 /// lives on the tab and ends with it.
-pub(super) fn observe(browser: &Browser) -> Option<Registration> {
+pub(super) fn observe(browser: &Browser, tab: i32) -> Option<Registration> {
     browser
         .host()
-        .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new())))
+        .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new(tab))))
+}
+
+/// Whether a screenshot holds the capture lock. `sweep` waits it out rather
+/// than close a tab mid-shot.
+pub(super) fn capturing() -> bool {
+    CAPTURING.try_lock().is_err()
+}
+
+/// Wakes a discarded tab and waits for its page, so a verb aimed at it acts
+/// on a live one. The wake is asked for again each round: a tab still
+/// closing when the verb arrived is not a ghost yet, and `wake` skips it.
+async fn awake(tab: i32) -> Result<(), String> {
+    if browser_of(tab).is_some() {
+        return Ok(());
+    }
+    let start = Instant::now();
+    while browser_of(tab).is_none() {
+        if session_of(tab).is_none() {
+            return Err(format!("tab {tab} closed"));
+        }
+        if start.elapsed() > LOAD_TIMEOUT {
+            return Err("Chromium did not reopen the discarded tab".into());
+        }
+        if is_ghost(tab) {
+            on_main(move || wake(tab))?;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    wait_loaded(tab).await
 }
 
 /// The size a recorded tab's view is parked at, off-screen, instead of being
@@ -588,6 +618,22 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     );
     let _driving = Driving::start(session);
     let tab = active_id(session);
+    // Every verb counts as the tab being seen. All but these act on the
+    // active tab, so a discarded one is woken first.
+    let wakes = !matches!(
+        action,
+        BrowserAction::Tabs
+            | BrowserAction::TabNew { .. }
+            | BrowserAction::TabSwitch { .. }
+            | BrowserAction::TabClose { .. }
+            | BrowserAction::Close
+    );
+    if let Some(tab) = tab {
+        touch(tab);
+        if wakes {
+            awake(tab).await?;
+        }
+    }
     if let (true, Some(tab)) = (input, tab) {
         on_main(move || reveal(tab))?;
         // The renderer learns it is visible a frame later.
@@ -596,6 +642,9 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     let answer = perform(session, action).await;
     if input {
         let _ = on_main(apply_layout);
+    }
+    if let Some(tab) = active_id(session) {
+        touch(tab);
     }
     answer
 }
@@ -668,13 +717,17 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 "no tabs".to_string()
             } else {
                 tabs.iter()
-                    .map(|t| format!("{} {}{}", t.id, if t.active { "* " } else { "  " }, page(t.id).0))
+                    .map(|t| {
+                        let mark = if t.active { "* " } else { "  " };
+                        let asleep = if t.discarded { " (discarded, reloads when used)" } else { "" };
+                        format!("{} {mark}{}{asleep}", t.id, page(t.id).0)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             };
             let data = tabs
                 .iter()
-                .map(|t| json!({ "id": t.id, "active": t.active, "url": t.url, "title": t.title }))
+                .map(|t| json!({ "id": t.id, "active": t.active, "url": t.url, "title": t.title, "discarded": t.discarded }))
                 .collect();
             Ok((text, Value::Array(data)))
         }

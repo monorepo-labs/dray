@@ -12,8 +12,10 @@
 //! The frontend says which session is presented and where (`browser_layout`),
 //! from whichever pane is on screen — the Browser tab or the right panel's
 //! Live slot — and every other tab's view is hidden. A tab is a CEF browser
-//! and its id is CEF's own `identifier()`; a session's tabs share one
-//! `RequestContext` with its own cache path, so cookies are the session's.
+//! under an id Dray mints, carried on its client, so the id outlives the
+//! browser: a discarded tab (`sweep`) is a browser closed and made again. A
+//! session's tabs share one `RequestContext` with its own cache path, so
+//! cookies are the session's and survive a discard.
 
 // Glob import on purpose: the `wrap_*!` macros name the `Impl*`/`Wrap*`
 // traits unqualified, so this is the one place a glob is load-bearing.
@@ -26,7 +28,7 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -48,11 +50,20 @@ static ACTIVE: Mutex<Option<HashMap<String, i32>>> = Mutex::new(None);
 static CONTEXTS: Mutex<Option<HashMap<String, RequestContext>>> = Mutex::new(None);
 /// Which session is on screen and where. `None` shows nothing.
 static LAYOUT: Mutex<Option<(String, Layout)>> = Mutex::new(None);
+/// Tab ids. Not CEF's `identifier()`, which a woken tab would come back
+/// under a new one of, renaming it under the strip and `dray browser tab`.
+static NEXT_TAB: AtomicI32 = AtomicI32::new(1);
+
+/// A tab not seen for this long gives its renderer back. Measured: one tab
+/// on a page failing against a dead server reached 5.7GB in 20h.
+const DISCARD_AFTER: Duration = Duration::from_secs(30 * 60);
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 struct Tab {
     id: i32,
     session: String,
-    browser: Browser,
+    /// `None` while discarded, or while a woken one is being made.
+    browser: Option<Browser>,
     /// Keeps `dray browser`'s DevTools observer attached for the tab's life.
     _devtools: Option<Registration>,
     /// The `NSView` CEF created, as a pointer. Main thread only.
@@ -65,6 +76,14 @@ struct Tab {
     can_go_forward: bool,
     /// The main frame's last load failure, cleared when a new load starts.
     error: Option<String>,
+    /// Last drawn on screen or acted on by `dray browser`.
+    seen: Instant,
+    /// Set by `sweep` before the close, cleared by `wake`. `on_before_close`
+    /// reads it to keep the entry rather than drop it.
+    discarded: bool,
+    /// The tab whose `window.open` made this one. Neither half of a live
+    /// pair is discarded: the popup posts back through `window.opener`.
+    opener: Option<i32>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,6 +108,7 @@ pub struct TabInfo {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub error: Option<String>,
+    pub discarded: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -223,6 +243,14 @@ fn start() -> Option<bool> {
         return Some(false);
     }
     start_pump(app.clone());
+    let sweeper = app.clone();
+    std::thread::Builder::new()
+        .name("cef-sweep".into())
+        .spawn(move || loop {
+            std::thread::sleep(SWEEP_EVERY);
+            let _ = sweeper.run_on_main_thread(sweep);
+        })
+        .expect("cef sweep thread");
     eprintln!("cef: initialized");
     Some(true)
 }
@@ -417,7 +445,8 @@ fn start_pump(app: AppHandle) {
             let mut due: Option<Instant> = None;
             let mut ran = Instant::now();
             loop {
-                let live = CREATING.load(Ordering::SeqCst) > 0 || !TABS.lock().unwrap().is_empty();
+                let live = CREATING.load(Ordering::SeqCst) > 0
+                    || TABS.lock().unwrap().iter().any(|t| t.browser.is_some());
                 let net = live.then(|| ran + NET);
                 let wake = match (due, net) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -525,6 +554,7 @@ fn tabs_of(session: &str) -> Vec<TabInfo> {
             can_go_back: t.can_go_back,
             can_go_forward: t.can_go_forward,
             error: t.error.clone(),
+            discarded: t.discarded,
         })
         .collect()
 }
@@ -544,9 +574,10 @@ fn session_of(id: i32) -> Option<String> {
     TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.session.clone())
 }
 
-/// A handle to call CEF on, with the lock already released.
+/// A handle to call CEF on, with the lock already released. None for a tab
+/// being discarded, whose browser is on its way out.
 fn browser_of(id: i32) -> Option<Browser> {
-    TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.browser.clone())
+    TABS.lock().unwrap().iter().find(|t| t.id == id && !t.discarded).and_then(|t| t.browser.clone())
 }
 
 fn context_for(session: &str) -> Option<RequestContext> {
@@ -583,9 +614,10 @@ fn child_window_info() -> Result<WindowInfo, String> {
     Ok(info)
 }
 
-/// Creates a browser for `session`. Its tab appears in `on_after_created`,
-/// which is where CEF hands the browser back. Main thread.
-fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
+/// Creates a browser for `session`, as tab `tab` when waking a discarded
+/// one. Its tab appears in `on_after_created`, which is where CEF hands the
+/// browser back. Main thread.
+fn create_tab(session: &str, url: &str, activate: bool, tab: Option<i32>) -> Result<(), String> {
     // Before `ensure_started`, which remembers a failure for the life of the
     // process: a tab asked for mid-download must wait, not write CEF off.
     if paths().is_none() {
@@ -600,7 +632,8 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
         return Err("Chromium could not start".into());
     }
     let info = child_window_info()?;
-    let mut client = DrayClient::new(session.to_string(), activate);
+    let tab = tab.unwrap_or_else(|| NEXT_TAB.fetch_add(1, Ordering::SeqCst));
+    let mut client = DrayClient::new(session.to_string(), activate, tab, None);
     let mut context = context_for(session);
     creation_started();
     let ok = browser_host_create_browser(
@@ -619,23 +652,30 @@ fn create_tab(session: &str, url: &str, activate: bool) -> Result<(), String> {
     }
 }
 
-/// Moves the presented session's active tab onto the frontend's rect and
-/// hides every other tab's view. AppKit's y runs up from the bottom and the
-/// frontend's down from the top, so the rect is flipped against the parent's
-/// height. Main thread only.
-fn apply_layout() {
+/// The tab on screen: the presented session's active tab, while the pane
+/// is visible. The only tab the reader counts as seeing.
+fn shown_tab() -> Option<i32> {
     let presented = LAYOUT.lock().unwrap().clone();
-    let shown = presented
-        .as_ref()
-        .filter(|(_, l)| l.visible)
-        .and_then(|(session, _)| active_id(session));
-    let layout = presented.map(|(_, l)| l);
+    presented.filter(|(_, l)| l.visible).and_then(|(session, _)| active_id(&session))
+}
+
+/// Moves the presented session's active tab onto the frontend's rect and
+/// hides every other tab's view, waking that tab first if it was discarded.
+/// AppKit's y runs up from the bottom and the frontend's down from the top,
+/// so the rect is flipped against the parent's height. Main thread only.
+fn apply_layout() {
+    let shown = shown_tab();
+    if let Some(id) = shown {
+        touch(id);
+        wake(id);
+    }
+    let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
     let views: Vec<(i32, usize, Browser)> = TABS
         .lock()
         .unwrap()
         .iter()
         .filter(|t| t.view != 0)
-        .map(|t| (t.id, t.view, t.browser.clone()))
+        .filter_map(|t| Some((t.id, t.view, t.browser.clone()?)))
         .collect();
     for (id, view, browser) in views {
         let view: &NSView = unsafe { &*(view as *const NSView) };
@@ -662,6 +702,93 @@ fn apply_layout() {
             view.setHidden(false);
         } else {
             view.setHidden(!show);
+        }
+    }
+}
+
+/// Marks a tab seen now.
+fn touch(id: i32) {
+    if let Some(t) = TABS.lock().unwrap().iter_mut().find(|t| t.id == id) {
+        t.seen = Instant::now();
+    }
+}
+
+/// Whether a tab is discarded and waiting to be woken. False while one is
+/// still closing, so nothing wakes a browser that has not gone yet.
+fn is_ghost(id: i32) -> bool {
+    TABS.lock().unwrap().iter().any(|t| t.id == id && t.discarded && t.browser.is_none())
+}
+
+/// Makes a discarded tab's browser again on the URL it was left at, under
+/// the same id. Its history and page state are gone, as in Chrome. Main
+/// thread; a no-op on any other tab.
+fn wake(id: i32) {
+    let target = {
+        let mut tabs = TABS.lock().unwrap();
+        let Some(t) = tabs.iter_mut().find(|t| t.id == id && t.discarded && t.browser.is_none()) else { return };
+        t.discarded = false;
+        t.loading = true;
+        t.seen = Instant::now();
+        (t.session.clone(), t.url.clone())
+    };
+    let (session, url) = target;
+    let url = if url.is_empty() { "about:blank".to_string() } else { url };
+    if let Err(e) = create_tab(&session, &url, false, Some(id)) {
+        update_tab(id, |t| {
+            t.discarded = true;
+            t.loading = false;
+            t.error = Some(e);
+        });
+        return;
+    }
+    publish(&session);
+}
+
+/// Discards every tab not seen for `DISCARD_AFTER`: its browser is closed
+/// and its entry kept, so the strip still draws it and opening it again
+/// (`wake`) loads the URL afresh. CEF has no discard of its own — Chrome's
+/// lives above the layer CEF exposes — so this is a close. Skipped: the tab
+/// on screen, one still loading, one recording, picking, being driven or
+/// mid-screenshot, and either half of a live popup pair. Main thread.
+fn sweep() {
+    if let Some(id) = shown_tab() {
+        touch(id);
+    }
+    if automation::capturing() {
+        return;
+    }
+    let candidates: Vec<(i32, String)> = {
+        let tabs = TABS.lock().unwrap();
+        let openers: HashSet<i32> = tabs.iter().filter_map(|t| t.opener).collect();
+        tabs.iter()
+            .filter(|t| t.browser.is_some() && !t.discarded && !t.loading)
+            .filter(|t| t.seen.elapsed() >= DISCARD_AFTER)
+            .filter(|t| t.opener.is_none() && !openers.contains(&t.id))
+            .map(|t| (t.id, t.session.clone()))
+            .collect()
+    };
+    let picking = PICKING.lock().unwrap().clone().unwrap_or_default();
+    let candidates: Vec<i32> = candidates
+        .into_iter()
+        .filter(|(id, session)| {
+            !picking.contains(id) && automation::parked(*id).is_none() && !automation::driving(session)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let browsers: Vec<(i32, Browser)> = {
+        let mut tabs = TABS.lock().unwrap();
+        tabs.iter_mut()
+            .filter(|t| candidates.contains(&t.id))
+            .filter_map(|t| {
+                t.discarded = true;
+                Some((t.id, t.browser.clone()?))
+            })
+            .collect()
+    };
+    for (id, browser) in browsers {
+        eprintln!("cef: discarding tab {id}, unseen for {}m", DISCARD_AFTER.as_secs() / 60);
+        if let Some(host) = browser.host() {
+            host.close_browser(1);
         }
     }
 }
@@ -728,17 +855,19 @@ wrap_client! {
     struct DrayClient {
         session: String,
         activate: bool,
+        tab: i32,
+        opener: Option<i32>,
     }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(DrayLifeSpan::new(self.session.clone(), self.activate))
+            Some(DrayLifeSpan::new(self.session.clone(), self.activate, self.tab, self.opener))
         }
         fn display_handler(&self) -> Option<DisplayHandler> {
-            Some(DrayDisplay::new())
+            Some(DrayDisplay::new(self.tab))
         }
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(DrayLoad::new())
+            Some(DrayLoad::new(self.tab))
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(DrayKeyboard::new())
@@ -770,38 +899,48 @@ wrap_life_span_handler! {
     struct DrayLifeSpan {
         session: String,
         activate: bool,
+        tab: i32,
+        opener: Option<i32>,
     }
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser.cloned() else { return };
-            let id = browser.identifier();
+            let id = self.tab;
             let view = browser.host().map(|h| h.window_handle() as usize).unwrap_or(0);
-            let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
-            let devtools = automation::observe(&browser);
-            let tab = Tab {
-                id,
-                session: self.session.clone(),
-                browser,
-                _devtools: devtools,
-                view,
-                url,
-                title: String::new(),
-                favicon: String::new(),
-                loading: true,
-                can_go_back: false,
-                can_go_forward: false,
-                error: None,
-            };
-            // CEF can hand over a replacement browser under an id it has not
-            // yet closed the old one for; a second entry would then go out
-            // with the first's `on_before_close`, taking the live tab with
-            // it. Replace in place, and `on_before_close` removes only the
-            // instance it holds.
+            let devtools = automation::observe(&browser, id);
+            // A woken tab already has its entry, and keeps its title and
+            // favicon until the page says otherwise. Filled in place, never
+            // pushed beside it, and `on_before_close` removes only the
+            // browser instance it holds.
             let mut tabs = TABS.lock().unwrap();
             match tabs.iter_mut().find(|t| t.id == id) {
-                Some(slot) => *slot = tab,
-                None => tabs.push(tab),
+                Some(slot) => {
+                    slot.browser = Some(browser);
+                    slot._devtools = devtools;
+                    slot.view = view;
+                    slot.discarded = false;
+                }
+                None => {
+                    let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
+                    tabs.push(Tab {
+                        id,
+                        session: self.session.clone(),
+                        browser: Some(browser),
+                        _devtools: devtools,
+                        view,
+                        url,
+                        title: String::new(),
+                        favicon: String::new(),
+                        loading: true,
+                        can_go_back: false,
+                        can_go_forward: false,
+                        error: None,
+                        seen: Instant::now(),
+                        discarded: false,
+                        opener: self.opener,
+                    });
+                }
             }
             drop(tabs);
             // After the tab is in `TABS`, so the pump's net never lapses between.
@@ -839,7 +978,8 @@ wrap_life_span_handler! {
             let (Some(window_info), Some(client)) = (window_info, client) else { return 1 };
             let Ok(info) = child_window_info() else { return 1 };
             *window_info = info;
-            *client = Some(DrayClient::new(self.session.clone(), true));
+            let tab = NEXT_TAB.fetch_add(1, Ordering::SeqCst);
+            *client = Some(DrayClient::new(self.session.clone(), true, tab, Some(self.tab)));
             creation_started();
             0
         }
@@ -864,11 +1004,11 @@ wrap_life_span_handler! {
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let Some(mut closing) = browser.cloned() else { return };
-            let id = closing.identifier();
-            // Only the instance on record leaves; a replaced browser closing
-            // late must not take its successor's entry. Compared with the
-            // lock released, since `is_same` is a call into CEF.
-            let stored = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.browser.clone());
+            let id = self.tab;
+            // Only the instance on record leaves; a browser closing late must
+            // not take its successor's entry. Compared with the lock
+            // released, since `is_same` is a call into CEF.
+            let stored = TABS.lock().unwrap().iter().find(|t| t.id == id).and_then(|t| t.browser.clone());
             let Some(stored) = stored else { return };
             if stored.is_same(Some(&mut closing)) == 0 {
                 return;
@@ -876,25 +1016,56 @@ wrap_life_span_handler! {
             automation::forget(id);
             disarm_picker(id);
             let session = self.session.clone();
-            let remaining = {
+            // A discarded tab keeps its entry; only the browser goes.
+            let ghost = {
                 let mut tabs = TABS.lock().unwrap();
-                tabs.retain(|t| t.id != id);
-                tabs.iter().rev().find(|t| t.session == session).map(|t| t.id)
-            };
-            if active_id(&session) == Some(id) {
-                set_active(&session, remaining);
-            }
-            // The profile is what keeps a closed session's memory around; the
-            // next tab makes a fresh one on the same cache path.
-            if remaining.is_none() {
-                if let Some(map) = CONTEXTS.lock().unwrap().as_mut() {
-                    map.remove(&session);
+                match tabs.iter_mut().find(|t| t.id == id && t.discarded) {
+                    Some(t) => {
+                        t.browser = None;
+                        t._devtools = None;
+                        t.view = 0;
+                        t.loading = false;
+                        true
+                    }
+                    None => false,
                 }
+            };
+            if ghost {
+                settle(&session);
+            } else {
+                remove_tab(&session, id);
             }
-            apply_layout();
-            publish(&session);
         }
     }
+}
+
+/// Takes a tab's entry out, for a close. The active tab passes to the last
+/// one left.
+fn remove_tab(session: &str, id: i32) {
+    let remaining = {
+        let mut tabs = TABS.lock().unwrap();
+        tabs.retain(|t| t.id != id);
+        tabs.iter().rev().find(|t| t.session == session).map(|t| t.id)
+    };
+    if active_id(session) == Some(id) {
+        set_active(session, remaining);
+    }
+    settle(session);
+}
+
+/// After a tab's browser went: drops the session's profile once no tab of
+/// it has a browser alive or coming, then redraws. The profile is what keeps
+/// a closed session's memory around; the next tab makes a fresh one on the
+/// same cache path, so cookies outlive it.
+fn settle(session: &str) {
+    let alive = TABS.lock().unwrap().iter().any(|t| t.session == session && (!t.discarded || t.browser.is_some()));
+    if !alive {
+        if let Some(map) = CONTEXTS.lock().unwrap().as_mut() {
+            map.remove(session);
+        }
+    }
+    apply_layout();
+    publish(session);
 }
 
 fn update_tab(id: i32, f: impl FnOnce(&mut Tab)) {
@@ -940,27 +1111,26 @@ mod string_list_tests {
 }
 
 wrap_display_handler! {
-    struct DrayDisplay;
+    struct DrayDisplay {
+        tab: i32,
+    }
 
     impl DisplayHandler {
-        fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+        fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;
             }
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
             let url = url.map(CefString::to_string).unwrap_or_default();
-            update_tab(id, |t| t.url = url);
+            update_tab(self.tab, |t| t.url = url);
         }
-        fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
+        fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(CefString::to_string).unwrap_or_default();
-            update_tab(id, |t| t.title = title);
+            update_tab(self.tab, |t| t.title = title);
         }
 
-        fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
+        fn on_favicon_urlchange(&self, _browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let first = icon_urls.and_then(first_string).unwrap_or_default();
-            update_tab(id, |t| t.favicon = first);
+            update_tab(self.tab, |t| t.favicon = first);
         }
 
         /// The element picker reports through the console — the one channel
@@ -968,7 +1138,7 @@ wrap_display_handler! {
         /// Its lines are swallowed; everything else passes through.
         fn on_console_message(
             &self,
-            browser: Option<&mut Browser>,
+            _browser: Option<&mut Browser>,
             level: LogSeverity,
             message: Option<&CefString>,
             _source: Option<&CefString>,
@@ -976,13 +1146,11 @@ wrap_display_handler! {
         ) -> ::std::os::raw::c_int {
             let text = message.map(CefString::to_string).unwrap_or_default();
             let Some(rest) = text.strip_prefix(PICK_PREFIX) else {
-                if let Some(id) = browser.as_ref().map(|b| b.identifier()) {
-                    let error = sys::cef_log_severity_t::from(level) == sys::cef_log_severity_t::LOGSEVERITY_ERROR;
-                    automation::log(id, error, text);
-                }
+                let error = sys::cef_log_severity_t::from(level) == sys::cef_log_severity_t::LOGSEVERITY_ERROR;
+                automation::log(self.tab, error, text);
                 return 0;
             };
-            let Some(id) = browser.map(|b| b.identifier()) else { return 1 };
+            let id = self.tab;
             // Any page can log the prefix; only a tab whose picker this app
             // started is listened to, once, and only a payload of the shape
             // `PICK_JS` writes — `null` for a cancel. Parsed before the gate
@@ -1137,12 +1305,13 @@ const PICK_JS: &str = r#"(() => {
 })();"#;
 
 wrap_load_handler! {
-    struct DrayLoad;
+    struct DrayLoad {
+        tab: i32,
+    }
 
     impl LoadHandler {
-        fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
-            update_tab(id, |t| {
+        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
+            update_tab(self.tab, |t| {
                 t.loading = is_loading != 0;
                 t.can_go_back = can_go_back != 0;
                 t.can_go_forward = can_go_forward != 0;
@@ -1156,13 +1325,11 @@ wrap_load_handler! {
         /// with it. Judged here and not on the loading state, which reports
         /// the whole browser: an iframe loading would disarm a picker whose
         /// document is still there.
-        fn on_load_start(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+        fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;
             }
-            if let Some(id) = browser.map(|b| b.identifier()) {
-                disarm_picker(id);
-            }
+            disarm_picker(self.tab);
         }
 
         /// Chromium draws its own error page; this only records the reason
@@ -1170,7 +1337,7 @@ wrap_load_handler! {
         /// error.
         fn on_load_error(
             &self,
-            browser: Option<&mut Browser>,
+            _browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             error_code: Errorcode,
             error_text: Option<&CefString>,
@@ -1182,9 +1349,8 @@ wrap_load_handler! {
             if sys::cef_errorcode_t::from(error_code) == sys::cef_errorcode_t::ERR_ABORTED {
                 return;
             }
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
             let text = error_text.map(CefString::to_string).unwrap_or_default();
-            update_tab(id, |t| t.error = Some(text));
+            update_tab(self.tab, |t| t.error = Some(text));
         }
     }
 }
@@ -1338,7 +1504,7 @@ pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<()
                 return;
             }
         }
-        let _ = tx.send(create_tab(&session_id, &url, true));
+        let _ = tx.send(create_tab(&session_id, &url, true, None));
     })?;
     rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "Chromium did not answer".to_string())?
 }
@@ -1427,14 +1593,17 @@ mod tests {
     }
 }
 
-/// Closes one tab. The rest happens in `on_before_close`.
+/// Closes one tab. The rest happens in `on_before_close`, or here for a
+/// discarded tab, which has no browser to close.
 #[tauri::command]
 pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
     on_main(move || {
         if session_of(id).as_deref() != Some(session_id.as_str()) {
             return;
         }
-        if let Some(host) = browser_of(id).and_then(|b| b.host()) {
+        if is_ghost(id) {
+            remove_tab(&session_id, id);
+        } else if let Some(host) = browser_of(id).and_then(|b| b.host()) {
             host.close_browser(1);
         }
     })
@@ -1490,13 +1659,16 @@ pub fn close_session(session_id: &str) {
     automation::drop_recording(session_id);
     let session_id = session_id.to_string();
     let _ = on_main(move || {
-        let browsers: Vec<Browser> = TABS
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|t| t.session == session_id)
-            .map(|t| t.browser.clone())
-            .collect();
+        let browsers: Vec<Browser> = {
+            let mut tabs = TABS.lock().unwrap();
+            // Discarded tabs have no browser to close and go now.
+            tabs.retain(|t| t.session != session_id || !t.discarded || t.browser.is_some());
+            tabs.iter().filter(|t| t.session == session_id).filter_map(|t| t.browser.clone()).collect()
+        };
+        if browsers.is_empty() {
+            set_active(&session_id, None);
+            publish(&session_id);
+        }
         for host in browsers.iter().filter_map(|b| b.host()) {
             host.close_browser(1);
         }
