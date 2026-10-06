@@ -245,6 +245,9 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
 /// Where a picked repo is cloned, under the reader's real home — never
 /// `DRAY_HOME`, which moves Dray's data, where a clone is the reader's work.
 const CLONE_DIR: &str = "dray";
+/// Under `CLONE_DIR`, where a clone runs until it is finished. Never a clone's
+/// own root, so `local_copies` passes over it.
+const STAGING_DIR: &str = ".cloning";
 
 /// A repository the signed-in `gh` user can reach.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -318,13 +321,17 @@ async fn local_copies(home: &Path) -> HashMap<String, String> {
         .into_iter()
         .map(|p| p.path)
         .collect();
+    let attached = dirs.len();
     if let Ok(mut entries) = fs::read_dir(home.join(CLONE_DIR)).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             dirs.push(entry.path().to_string_lossy().into_owned());
         }
     }
 
-    let slugs = futures_util::future::join_all(dirs.iter().map(|dir| git::github_slug(dir))).await;
+    let slugs = futures_util::future::join_all(dirs.iter().enumerate().map(|(i, dir)| async move {
+        if i < attached { git::github_slug(dir).await } else { clone_of(dir).await }
+    }))
+    .await;
     let mut found = HashMap::new();
     for (dir, slug) in dirs.into_iter().zip(slugs) {
         if let Some(slug) = slug {
@@ -349,7 +356,7 @@ pub async fn clone_github_repo(slug: String, sink: Sink) -> Result<Vec<Project>,
     let shown = format!("~/{CLONE_DIR}/{name}");
 
     if fs::try_exists(&dir).await.unwrap_or(false) {
-        return match git::github_slug(&path).await {
+        return match clone_of(&path).await {
             Some(found) if found.eq_ignore_ascii_case(&slug) => add_project(&path).await,
             Some(found) => {
                 Err(anyhow!("{shown} already holds {found}. Move it aside, or attach it by path.").into())
@@ -361,9 +368,53 @@ pub async fn clone_github_repo(slug: String, sink: Sink) -> Result<Vec<Project>,
         };
     }
 
-    fs::create_dir_all(&parent).await.map_err(anyhow::Error::from)?;
-    clone(&slug, &dir, &sink).await.map_err(|e| anyhow!(e))?;
+    // Cloned beside the destination and renamed in, so `~/dray/<name>` only
+    // ever holds a finished clone: a half-downloaded or failed one is never
+    // listed as Cloned or attached by a second pick. A leftover from a clone
+    // that was killed is cleared first, or every retry fails on it; one clone
+    // per name at a time is what makes that clearing safe.
+    let Some(_running) = Running::claim(name) else {
+        return Err(anyhow!("{shown} is already being cloned.").into());
+    };
+    let staging = parent.join(STAGING_DIR).join(name);
+    let _ = fs::remove_dir_all(&staging).await;
+    fs::create_dir_all(staging.parent().unwrap_or(&parent)).await.map_err(anyhow::Error::from)?;
+    clone(&slug, &staging, &sink).await.map_err(|e| anyhow!(e))?;
+    fs::rename(&staging, &dir).await.map_err(|e| anyhow!("could not move the clone into {shown}: {e}"))?;
     add_project(&path).await
+}
+
+/// A clone into `~/dray/<name>` in flight, released on drop so a failed or
+/// cancelled clone frees the name too.
+struct Running(String);
+
+static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+impl Running {
+    fn claim(name: &str) -> Option<Running> {
+        let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if running.iter().any(|n| n == name) {
+            return None;
+        }
+        running.push(name.to_string());
+        Some(Running(name.to_string()))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).retain(|n| n != &self.0);
+    }
+}
+
+/// The GitHub repo `dir` is a clone of, read only where `dir` is a repository's
+/// own root. A plain folder inside some other checkout answers that checkout's
+/// remote, and attaching it would put sessions in a subfolder.
+async fn clone_of(dir: &str) -> Option<String> {
+    if !fs::try_exists(Path::new(dir).join(".git")).await.unwrap_or(false) {
+        return None;
+    }
+    git::github_slug(dir).await
 }
 
 /// The name half of `owner/name`, or `None` unless both halves are spelled the
@@ -519,6 +570,14 @@ mod tests {
         // Otherwise the switcher draws a nameless entry nothing can leave.
         assert_eq!(normalize_space(Some("  ".into())), None);
         assert_eq!(normalize_space(Some(" Work ".into())), Some("Work".into()));
+    }
+
+    #[test]
+    fn one_clone_per_name_until_it_ends() {
+        let first = Running::claim("one-clone-test").unwrap();
+        assert!(Running::claim("one-clone-test").is_none());
+        drop(first);
+        assert!(Running::claim("one-clone-test").is_some());
     }
 
     #[test]

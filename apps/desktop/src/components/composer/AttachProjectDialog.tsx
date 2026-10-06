@@ -77,10 +77,12 @@ export default function AttachProjectDialog({
   const [home, setHome] = useState("/");
 
   // Reset on open rather than on close, so a clone the reader closed the
-  // dialog on still lands in state nobody has wiped from under it.
+  // dialog on still lands in state nobody has wiped from under it — and
+  // reopens on the server it is running on, whose progress the row follows.
   useEffect(() => {
     if (!open) return;
-    setServer(initialServer === LOCAL || remotes.some((s) => s.id === initialServer) ? initialServer : LOCAL);
+    if (!cloning)
+      setServer(initialServer === LOCAL || remotes.some((s) => s.id === initialServer) ? initialServer : LOCAL);
     setQuery("");
     setPath("");
     setTyping(false);
@@ -92,28 +94,30 @@ export default function AttachProjectDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // The server on screen now, which a read landing after a switch is checked
-  // against rather than the one its closure saw.
   const search = useRef<HTMLInputElement>(null);
-  const current = useRef(server);
-  current.current = server;
+  // Only the newest read may land. A server switch and a recheck both start
+  // one, and an older read finishing late — a failure after the recheck that
+  // succeeded — would otherwise put back what the newer one replaced.
+  const reads = useRef(0);
 
   const read = () => {
     const asked = server;
+    const n = ++reads.current;
     setRepos(lastRead.get(asked) ?? null);
     setUnavailable(null);
     setLoading(true);
     invoke<GithubRepo[]>("github_repos", {}, asked)
       .then((list) => {
+        if (n !== reads.current) return;
         lastRead.set(asked, list);
-        if (asked === current.current) setRepos(list);
+        setRepos(list);
       })
       .catch((e: unknown) => {
-        if (asked !== current.current) return;
+        if (n !== reads.current) return;
         // A typed reason from `gh`, or the transport's own sentence.
         setUnavailable(e && typeof e === "object" && "kind" in e ? (e as PrUnavailable) : { kind: "other", detail: String(e) });
       })
-      .finally(() => asked === current.current && setLoading(false));
+      .finally(() => n === reads.current && setLoading(false));
   };
 
   useEffect(() => {
@@ -243,7 +247,10 @@ export default function AttachProjectDialog({
                 aria-label="Search repositories"
                 ref={search}
               />
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              {/* Padded out past the rows' edges, since a scroll box clips the
+                  selected row's shadow; the negative margin keeps them aligned
+                  with the search box. */}
+              <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 py-1">
                 {unavailable ? (
                   <p className="p-2 text-ui text-destructive">{unavailable.kind === "other" ? unavailable.detail : "Could not read repositories."}</p>
                 ) : !repos ? (
@@ -336,12 +343,20 @@ function RepoRow({
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        // Light takes the page's own colour: on a near-white dialog `--accent`
-        // is a grey that reads as disabled. Dark keeps the accent step.
-        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-background/60 focus-visible:bg-background/60 disabled:cursor-default disabled:hover:bg-transparent dark:hover:bg-accent/60 dark:focus-visible:bg-accent/60",
-        // `--shadow-card` is `none` in dark, so it needs no variant of its own.
+        // Light lifts a row as a white chip: `--accent` is a grey that reads as
+        // disabled there, and `--background` is lighter than the dialog when
+        // windowed (a veil over the scrim) and darker in fullscreen (a solid
+        // card). Plain white rather than `--surface-card`, which Latte and
+        // Gruvbox tint to the dialog's own colour. Dark keeps the accent step.
+        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none disabled:cursor-default",
+        // Hover draws the selected shadow's ring alone, so selecting only adds
+        // the lift. In fullscreen the dialog is the row's white, so the fill
+        // under the ring is grey there.
+        !selected &&
+          !disabled &&
+          "hover:bg-white/60 hover:shadow-[0_0_0_1px_#0000000a,0_0_0_1px_#0000000f] focus-visible:bg-white/60 focus-visible:shadow-[0_0_0_1px_#0000000a,0_0_0_1px_#0000000f] dark:hover:bg-accent/60 dark:hover:shadow-none dark:focus-visible:bg-accent/60 dark:focus-visible:shadow-none [html:not([data-transparency])_&]:hover:bg-accent/60 [html:not([data-transparency])_&]:focus-visible:bg-accent/60",
         selected &&
-          "bg-background shadow-(--shadow-card) hover:bg-background disabled:hover:bg-background dark:bg-accent dark:hover:bg-accent dark:disabled:hover:bg-accent",
+          "bg-white shadow-[0_0_0_1px_#0000000a,0_.85px_.5px_0_#fff_inset,0_1px_2px_0_#00000017,0_0_0_1px_#0000000f] dark:bg-accent dark:shadow-none",
         disabled && !cloning && "opacity-50",
       )}
     >
