@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@/lib/transport";
+import { invoke, type ServerId } from "@/lib/transport";
 
 import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 
-/// The last good read per directory, for the life of the process. A failed
+/// The last good read per server and directory, for the life of the process. A failed
 /// read writes nothing, so what is drawn is always something an agent said.
 const lastRead = new Map<string, AgentAccounts[]>();
 /// Which read each `lastRead` entry came from, numbered by when it was *issued*.
@@ -32,8 +32,13 @@ let issuedSeq = 0;
 /// CLI resolves its own config against the directory it is started in, so this
 /// has to ask where the agent runs, and it is the directory the sign-in
 /// terminal opens in too.
-export function useAgentAccounts(cwd: string) {
-  const [agents, setAgents] = useState<AgentAccounts[] | null>(() => lastRead.get(cwd) ?? null);
+///
+/// `server` is where every read and write goes, named outright: the writes
+/// carry no path to route by, so left to the transport they went to this Mac
+/// whatever server the rows were read from.
+export function useAgentAccounts(cwd: string, server: ServerId) {
+  const cacheKey = `${server}\n${cwd}`;
+  const [agents, setAgents] = useState<AgentAccounts[] | null>(() => lastRead.get(cacheKey) ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,12 +53,12 @@ export function useAgentAccounts(cwd: string) {
     const issued = ++issuedSeq;
     setBusy(true);
     try {
-      const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd });
+      const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd }, server);
       // Newest-issued wins, across mounts: the per-hook `generation` cannot see
       // a read left running by a tab that has since unmounted.
-      if ((cachedAt.get(cwd) ?? 0) < issued) {
-        lastRead.set(cwd, next);
-        cachedAt.set(cwd, issued);
+      if ((cachedAt.get(cacheKey) ?? 0) < issued) {
+        lastRead.set(cacheKey, next);
+        cachedAt.set(cacheKey, issued);
       }
       if (mine !== generation.current) return;
       setAgents(next);
@@ -69,14 +74,14 @@ export function useAgentAccounts(cwd: string) {
     } finally {
       if (mine === generation.current) setBusy(false);
     }
-  }, [cwd]);
+  }, [cwd, server, cacheKey]);
 
   // A moved `cwd` draws that directory's last answer, or waits — never the
   // previous directory's rows under the new one.
   useEffect(() => {
-    setAgents(lastRead.get(cwd) ?? null);
+    setAgents(lastRead.get(cacheKey) ?? null);
     void load();
-  }, [cwd, load]);
+  }, [cacheKey, load]);
 
   /// Saves a pasted key into the agent's own store.
   ///
@@ -98,7 +103,7 @@ export function useAgentAccounts(cwd: string) {
       setBusy(true);
       let took = true;
       try {
-        await invoke("add_agent_account", { harness, provider, auth, key });
+        await invoke("add_agent_account", { harness, provider, auth, key }, server);
       } catch (err) {
         setError(String(err));
         took = false;
@@ -110,7 +115,7 @@ export function useAgentAccounts(cwd: string) {
       await load();
       return took;
     },
-    [load],
+    [load, server],
   );
 
   const signOut = useCallback(
@@ -118,7 +123,7 @@ export function useAgentAccounts(cwd: string) {
       setError(null);
       setBusy(true);
       try {
-        await invoke("sign_out_agent", { harness, provider });
+        await invoke("sign_out_agent", { harness, provider }, server);
       } catch (err) {
         setError(String(err));
       } finally {
@@ -126,7 +131,7 @@ export function useAgentAccounts(cwd: string) {
       }
       await load();
     },
-    [load],
+    [load, server],
   );
 
   return { agents, busy, error, refresh: load, addAccount, signOut };
@@ -138,7 +143,7 @@ export function useAgentAccounts(cwd: string) {
 /// `add_account` checks against — a second copy in the frontend could offer a
 /// route the backend then refuses, which is a control that looks fine and does
 /// nothing.
-export function useAuthOptions(harness: Harness | null, provider: string | null) {
+export function useAuthOptions(harness: Harness | null, provider: string | null, server: ServerId) {
   const [options, setOptions] = useState<AuthOption[]>([]);
 
   useEffect(() => {
@@ -148,14 +153,14 @@ export function useAuthOptions(harness: Harness | null, provider: string | null)
     }
 
     let live = true;
-    invoke<AuthOption[]>("agent_auth_options", { harness, provider })
+    invoke<AuthOption[]>("agent_auth_options", { harness, provider }, server)
       .then((next) => live && setOptions(next))
       .catch(() => live && setOptions([]));
 
     return () => {
       live = false;
     };
-  }, [harness, provider]);
+  }, [harness, provider, server]);
 
   return options;
 }

@@ -51,12 +51,14 @@ Settled: a server is a property of the project. The same repo on two machines is
 
 ## Stage 4: Connecting the app to a VPS
 
-- [ ] Paste the SSH line (`ssh user@address`) into Add server, optional name
-- [ ] App connects through that login; no port opened, no password stored
-- [ ] App starts the server if it is installed but stopped
-- [ ] SSH asks for a password: say "set up a key first", show `ssh-copy-id`
-- [ ] First meeting with a server: show SSH's "is this the right server" question in a dialog
-- [ ] Accounts tab shows logins per server; Sign in opens Terminal on the VPS running that login
+Plan and what testing found: [SSH-PLAN.md](SSH-PLAN.md). Also: a server can be turned off without removing it, and renamed.
+
+- [x] Paste the SSH line (`ssh user@address`) into Add server, optional name
+- [x] App connects through that login; no port opened, no password stored
+- [x] App starts the server if it is installed but stopped
+- [x] SSH asks for a password: say "set up a key first", show `ssh-copy-id`
+- [x] First meeting with a server: show SSH's "is this the right server" question in a dialog
+- [x] Accounts tab shows logins per server; Sign in opens Terminal on the VPS running that login
 
 ## Stage 4b: Setting up through the app (flow B)
 

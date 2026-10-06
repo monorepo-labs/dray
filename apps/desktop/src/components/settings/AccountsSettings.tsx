@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@/lib/transport";
+import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
+import { serverName, useServers } from "@/lib/servers";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 
 import AgentIcon from "@/components/AgentIcon";
+import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,10 +101,6 @@ function StateDot({ state }: { state: AccountState }) {
 /// still stands for opening a *directory*, which is all the table behind it
 /// promises, and the copy button is what serves anybody who wants this
 /// elsewhere.
-///
-/// The chip is pinned to `h-6` with a `size-5` copy inside it so it matches the
-/// button beside it: its own `py-1` around a `size-6` button comes to 34px
-/// where a small button draws at 26.
 function CommandRow({
   command,
   onRun,
@@ -112,21 +110,9 @@ function CommandRow({
   onRun: () => void;
   busy: boolean;
 }) {
-  const [copied, copy] = useCopied();
-
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <div className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-border pr-0.5 pl-2 dark:border-input">
-        <code className="font-mono text-code text-foreground">{command}</code>
-        <button
-          type="button"
-          aria-label={`Copy ${command}`}
-          onClick={() => void copy(command)}
-          className="flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-        </button>
-      </div>
+      <CommandChip command={command} />
       <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onRun}>
         <SquareTerminal className="size-3.5" />
         Run in Terminal
@@ -317,6 +303,7 @@ function SignInForm({
   currentAuth,
   reauth,
   cwd,
+  server,
   onDone,
   onSubmit,
 }: {
@@ -327,6 +314,7 @@ function SignInForm({
   /// Redoing a credential already in place, as the row that opened this said.
   reauth: boolean;
   cwd: string;
+  server: ServerId;
   onDone: () => void;
   onSubmit: (
     harness: Harness,
@@ -352,7 +340,7 @@ function SignInForm({
   // asking them to pick again.
   const custom = provider === CUSTOM_PROVIDER;
   const effectiveProvider = custom ? typed.trim() || null : provider;
-  const options = useAuthOptions(agent.harness, effectiveProvider);
+  const options = useAuthOptions(agent.harness, effectiveProvider, server);
   const picked = options.find((option) => option.id === auth) ?? null;
 
   // pi's methods are per provider — six of its providers have OAuth and one has
@@ -519,12 +507,13 @@ function SignInForm({
               onRun={() => {
                 setRunFailed(null);
                 setRunning(true);
-                void invoke("run_agent_login", {
-                  harness: agent.harness,
-                  provider: effectiveProvider,
-                  auth: picked.id,
-                  cwd,
-                })
+                // A remote server's sign-in is a Terminal on this Mac logged in
+                // to that server, so both routes are this Mac's to run.
+                const ran =
+                  server === LOCAL
+                    ? invoke("run_agent_login", { harness: agent.harness, provider: effectiveProvider, auth: picked.id, cwd }, LOCAL)
+                    : invoke("run_server_login", { server, harness: agent.harness, provider: effectiveProvider, auth: picked.id }, LOCAL);
+                void ran
                   .catch((err) => setRunFailed(String(err)))
                   .finally(() => setRunning(false));
               }}
@@ -547,9 +536,9 @@ function SignInForm({
 
 /// An agent with no CLI behind it: the one row that is about the machine rather
 /// than about an account.
-function MissingAgent({ agent }: { agent: AgentAccounts }) {
+function MissingAgent({ agent, server }: { agent: AgentAccounts; server: ServerId }) {
   const [copied, copy] = useCopied();
-  const availability = useAgentAvailability()?.find((a) => a.harness === agent.harness);
+  const availability = useAgentAvailability(server)?.find((a) => a.harness === agent.harness);
   const installCommand = availability?.installCommand;
   const docsUrl = availability?.docsUrl;
 
@@ -612,7 +601,12 @@ export default function AccountsSettings({
   // which is the gate. Four child processes on every settings open, whichever
   // tab the reader wanted, is the cost the external-app scan next door is
   // deliberately not paying either.
-  const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(cwd);
+  // Which machine's accounts are drawn: the selected session's by default. A
+  // server other than the session's is asked in its own home directory.
+  const servers = useServers();
+  const [server, setServer] = useState<ServerId>(() => serverOfPath(cwd));
+  const askIn = serverOfPath(cwd) === server ? cwd : "";
+  const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(askIn, server);
   const [signingIn, setSigningIn] = useState<{
     harness: Harness;
     provider: string | null;
@@ -684,6 +678,17 @@ export default function AccountsSettings({
         )}
       </SettingsHeaderAction>
 
+      {servers.length > 0 && !signingIn && (
+        <ServerPicker
+          value={server}
+          options={[LOCAL, ...servers.map((s) => s.id)]}
+          onPick={(next) => {
+            setConfirming(null);
+            setServer(next);
+          }}
+        />
+      )}
+
       {error && <p className="text-ui text-destructive">{error}</p>}
 
       {agents === null ? (
@@ -704,7 +709,8 @@ export default function AccountsSettings({
           initialProvider={signingIn.provider}
           currentAuth={signingIn.currentAuth}
           reauth={signingIn.reauth}
-          cwd={cwd}
+          cwd={askIn}
+          server={server}
           onSubmit={addAccount}
           onDone={() => setSigningIn(null)}
         />
@@ -753,7 +759,7 @@ export default function AccountsSettings({
               </div>
 
               {!on ? null : !agent.installed ? (
-                <MissingAgent agent={agent} />
+                <MissingAgent agent={agent} server={server} />
               ) : (
                 <>
                   {agent.accounts.map((account) => {
@@ -827,6 +833,39 @@ export default function AccountsSettings({
           );
         })
       )}
+    </div>
+  );
+}
+
+/// Which machine the tab is about, drawn only once a remote server exists.
+function ServerPicker({
+  value,
+  options,
+  onPick,
+}: {
+  value: ServerId;
+  options: ServerId[];
+  onPick: (server: ServerId) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-ui text-muted-foreground">Accounts on</span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm">
+            {serverName(value)}
+            <ChevronDown className="size-3.5 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {options.map((id) => (
+            <DropdownMenuItem key={id} onSelect={() => onPick(id)}>
+              {serverName(id)}
+              {id === value && <Check className="ml-auto size-3.5" />}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

@@ -27,8 +27,13 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
   let ws: WebSocket | null = null;
   let admitted = false;
   let next = 0;
+  // Turned off from Settings: the socket closes and nothing reopens it.
+  let off = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
   const pending = new Map<number, Call>();
   const open = () => {
+    clearTimeout(retry);
+    if (off) return;
     onStatus("connecting");
     admitted = false;
     ws = new WebSocket(url);
@@ -50,8 +55,8 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
     ws.onclose = () => {
       for (const call of pending.values()) call.reject("connection lost");
       pending.clear();
-      onStatus("disconnected", "connection lost");
-      setTimeout(open, 1000);
+      onStatus("disconnected", off ? undefined : "connection lost");
+      if (!off) retry = setTimeout(open, 1000);
     };
   };
   // Next tick, so a caller's `onStatus` can name what this returns.
@@ -66,6 +71,14 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
       });
     },
     reconnect: () => ws?.close(),
+    /// `set_server_on`: off closes for good, on reopens — or, for a socket
+    /// still open, cycles it, which is what Try again asks for.
+    setOn(on: boolean) {
+      off = !on;
+      clearTimeout(retry);
+      if (on && (!ws || ws.readyState === WebSocket.CLOSED)) open();
+      else ws?.close();
+    },
   };
 }
 
@@ -81,7 +94,7 @@ const remotes: Remote[] = [];
 const announce = () => void emit("servers_changed", remotes.map((r) => r.info));
 
 function addRemote(url: string, token: string, name: string, id = crypto.randomUUID().slice(0, 8)): ServerInfo {
-  const info: ServerInfo = { id, name, url, status: "connecting", error: null };
+  const info: ServerInfo = { id, name, named: true, url, ssh: null, on: true, status: "connecting", stage: null, error: null, fix: null };
   const remote: Remote = {
     info,
     conn: connect(
@@ -117,6 +130,26 @@ mockIPC(
         remotes.splice(remotes.findIndex((r) => r.info.id === a.id), 1);
         announce();
         return null;
+      case "rename_server": {
+        const remote = remotes.find((r) => r.info.id === a.id)!;
+        const name = String(a.name).trim();
+        remote.info = { ...remote.info, name: name || new URL(remote.info.url).hostname, named: !!name };
+        announce();
+        return null;
+      }
+      case "set_server_on": {
+        const remote = remotes.find((r) => r.info.id === a.id)!;
+        remote.info = { ...remote.info, on: !!a.on };
+        remote.conn.setOn(!!a.on);
+        announce();
+        return null;
+      }
+      // SSH needs the Mac's own `ssh`, which a browser page cannot run.
+      case "add_ssh_server":
+        throw { message: "SSH is not available in the browser demo. Use an address and token.", fix: null };
+      case "trust_host_key":
+      case "run_server_login":
+        throw "SSH is not available in the browser demo.";
       case "reconnect_servers":
         for (const r of remotes) r.conn.reconnect();
         return null;

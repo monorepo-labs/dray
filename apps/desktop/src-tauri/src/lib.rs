@@ -61,6 +61,8 @@ pub mod serve;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
+#[cfg(feature = "desktop")]
+pub mod ssh;
 pub mod settings;
 pub mod sink;
 pub mod store;
@@ -761,6 +763,11 @@ pub fn run() {
             servers::remove_server,
             servers::reconnect_servers,
             servers::server_invoke,
+            servers::add_ssh_server,
+            servers::set_server_on,
+            servers::rename_server,
+            servers::trust_host_key,
+            servers::run_server_login,
             send_msg,
             attachments::read_attachments,
             attachments::paste_attachments,
