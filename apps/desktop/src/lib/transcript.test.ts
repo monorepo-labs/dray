@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -791,5 +791,27 @@ describe("segmentMedia", () => {
       `here: ${video}`,
     );
     expect(media).toEqual([]);
+  });
+
+  /// The More tab's grid: the reader's own pictures too, newest first, each
+  /// recording once, and nothing a subagent produced.
+  it("sessionMedia lists the main thread's media newest first", () => {
+    const attached = event(0, {
+      type: "user_message",
+      text: "look",
+      images: [{ path: "/att/mine.png", url: null, mimeType: "image/png" }],
+      issues: [],
+      baseline: null,
+      queued: false,
+      from: null,
+      cwd: null,
+    });
+    const fromSubagent = { ...result(3, "c", "", 1), subagent: { toolUseId: "t" } } as unknown as AgentEvent;
+    const media = sessionMedia([attached, result(1, "a", `saved ${video}`, 1), text(2, `watch ${video}`), fromSubagent]);
+    expect(media.map((m) => ["image" in m ? m.image.path : m.video, m.byYou])).toEqual([
+      [video, false],
+      ["/archived/a-0.png", false],
+      ["/att/mine.png", true],
+    ]);
   });
 });

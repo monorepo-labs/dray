@@ -12,14 +12,39 @@ export type LightboxImage = { src: string; name: string; video?: boolean };
 /// A picture's or a recording's thumbnail, cropped square to its box. A video
 /// shows its first frame under a play mark, since a still is otherwise
 /// indistinguishable from a screenshot of the same page.
+///
+/// A pulsing box stands in until the picture arrives. Keyed on `src` rather
+/// than a flag, so a thumb handed a different item starts loading again.
 export function Thumb({ item, className }: { item: LightboxImage; className?: string }) {
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const loading = loadedSrc !== item.src && "animate-pulse bg-muted";
+  // An error stops the pulse too, or a broken file shimmers forever.
+  const done = () => setLoadedSrc(item.src);
   if (!item.video) {
-    return <img src={item.src} alt="" loading="lazy" decoding="async" className={cn("object-cover", className)} />;
+    return (
+      <img
+        src={item.src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onLoad={done}
+        onError={done}
+        className={cn("object-cover", loading, className)}
+      />
+    );
   }
   return (
-    <span className={cn("relative block", className)}>
+    <span className={cn("relative block", loading, className)}>
       {/* `#t` paints the first frame; `metadata` keeps it to that. */}
-      <video src={`${item.src}#t=0.001`} preload="metadata" muted playsInline className="size-full object-cover" />
+      <video
+        src={`${item.src}#t=0.001`}
+        preload="metadata"
+        muted
+        playsInline
+        onLoadedData={done}
+        onError={done}
+        className="size-full object-cover"
+      />
       <span className="absolute inset-0 flex items-center justify-center">
         <span className="flex size-6 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
           <Play className="size-3 translate-x-px fill-current" />
@@ -162,20 +187,38 @@ export default function ImageLightbox({
                 <ChevronRight />
               </Button>
 
-              <div className="flex shrink-0 flex-col items-center gap-2">
+              <div className="flex max-w-full shrink-0 flex-col items-center gap-2">
                 {/* Jumping straight to a picture, which the arrows can only
                     reach by stepping. It also answers "how many are there and
-                    where am I", which nothing else in this view says. */}
-                <div className="flex items-center gap-2 rounded-xl bg-black/40 p-2">
+                    where am I", which nothing else in this view says. Scrolls
+                    sideways once it outgrows the window, keeping the current
+                    one centred, rather than running off both edges. Ten in view
+                    at most: 10 × 3rem thumbs, 9 × 0.5rem gaps, 1rem of padding.
+                    The backing sits on a wrapper so the edge fade takes the
+                    thumbs and not the strip itself; the scroller keeps 2px of
+                    padding so the current one's ring isn't clipped. */}
+                <div className="max-w-[min(100%,35.5rem)] rounded-xl bg-black/40 p-1.5">
+                  <div
+                    className={cn(
+                      "scrollbar-none flex items-center gap-2 overflow-x-auto p-0.5",
+                      images.length > 10 &&
+                        "[mask-image:linear-gradient(to_right,transparent,black_2.5rem,black_calc(100%-2.5rem),transparent)]",
+                    )}
+                  >
                   {images.map((image, i) => (
                     <button
                       key={i}
+                      ref={
+                        i === at
+                          ? (el) => el?.scrollIntoView({ block: "nearest", inline: "center" })
+                          : undefined
+                      }
                       type="button"
                       onClick={() => onIndex(i)}
                       aria-label={`Show image ${i + 1}`}
                       aria-current={i === at}
                       className={cn(
-                        "size-12 overflow-hidden rounded-md transition-opacity",
+                        "size-12 shrink-0 overflow-hidden rounded-md transition-opacity",
                         // The ring is the current marker. Opacity carries it
                         // too, so it survives for a reader who can't separate
                         // the ring from the picture behind it.
@@ -187,6 +230,7 @@ export default function ImageLightbox({
                       <Thumb item={image} className="size-full" />
                     </button>
                   ))}
+                  </div>
                 </div>
 
                 {/* A sentence, not a control. Bare caps beside the strip read as

@@ -155,7 +155,7 @@ import {
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
-import { buildTranscript } from "@/lib/transcript";
+import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -1313,6 +1313,10 @@ function App() {
     () => currentTodos(selectedSession?.events ?? []),
     [selectedSession?.events],
   );
+  const sessionAttachments = useMemo(
+    () => sessionMedia(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
 
   // The panel opens itself on a task list the reader has not been shown, and on
   // nothing else.
@@ -1434,7 +1438,10 @@ function App() {
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 || backgroundTasks.length > 0 || sessionTodos !== null;
+    subagents.length > 0 ||
+    backgroundTasks.length > 0 ||
+    sessionTodos !== null ||
+    sessionAttachments.length > 0;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -2861,6 +2868,8 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
+                media={sessionAttachments}
+                sessionId={shownSession.sessionId}
                 subagents={{
                   runs: subagents,
                   selectedId: selectedSubagentId,
