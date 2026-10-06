@@ -25,6 +25,11 @@ const KEYGEN: &str = "/usr/bin/ssh-keygen";
 /// Where `dray-serve` listens on the server, as `dray setup` leaves it.
 const REMOTE_PORT: u16 = 7317;
 
+/// The longest line the script is read for, and the most of `dray service
+/// start`'s output kept. A server on the far side of a network decides what
+/// it sends, and an unbounded `read_line` would grow until the app fell over.
+const MAX_READ: usize = 4096;
+
 /// A whole connect: login, script, `dray service start`'s own 1.5s check.
 const OPEN: Duration = Duration::from_secs(45);
 
@@ -106,7 +111,8 @@ pub fn parse(line: &str) -> Result<Target, String> {
     if !dest.chars().all(|c| c.is_ascii_alphanumeric() || "@._-:[]%".contains(c)) {
         return Err(format!("{dest} is not an address"));
     }
-    Ok(Target { dest: dest.to_string(), port: port.filter(|&p| p != 22) })
+    // Kept even when 22: it overrides a `Port` the reader's config sets.
+    Ok(Target { dest: dest.to_string(), port })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
@@ -226,13 +232,19 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
         let mut failed: Option<String> = None;
         loop {
             line.clear();
-            if stdout.read_line(&mut line).await.unwrap_or(0) == 0 {
+            let read = (&mut stdout).take(MAX_READ as u64).read_line(&mut line).await.unwrap_or(0);
+            if read == 0 {
                 return Err(failed);
+            }
+            if read == MAX_READ && !line.ends_with('\n') {
+                return Ok(Err("oversize"));
             }
             let said = line.trim_end();
             if let Some(out) = failed.as_mut() {
-                out.push_str(said);
-                out.push('\n');
+                if out.len() < MAX_READ {
+                    out.push_str(said);
+                    out.push('\n');
+                }
                 continue;
             }
             match said.strip_prefix("DRAY-SSH ") {
@@ -260,6 +272,11 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
         Ok(Ok(Ok(_) | Err("notoken"))) => Err(Failure::new(
             format!("Dray is on {host} but its server has never run there."),
             Some(Fix::Copy { command: "dray service start".into() }),
+            true,
+        )),
+        Ok(Ok(Err("oversize"))) => Err(Failure::new(
+            format!("{host} answered with something that is not Dray."),
+            None,
             true,
         )),
         Ok(Ok(Err(_))) => Err(Failure::new(
@@ -335,6 +352,8 @@ struct Resolved {
     port: u16,
     alias: Option<String>,
     known_hosts: PathBuf,
+    /// `HostKeyAlgorithms`, in ssh's order of preference.
+    algorithms: Vec<String>,
     proxied: bool,
 }
 
@@ -376,6 +395,7 @@ async fn resolve(target: &Target) -> Result<Resolved, String> {
         port: field("port").and_then(|p| p.parse().ok()).unwrap_or(22),
         alias: field("hostkeyalias"),
         known_hosts,
+        algorithms: field("hostkeyalgorithms").map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default(),
         proxied: field("proxyjump").is_some() || field("proxycommand").is_some(),
     })
 }
@@ -413,15 +433,23 @@ async fn scan(target: &Target) -> Result<ScannedKey, String> {
             Some((parts.next()?, parts.next()?))
         })
         .collect();
-    let preferred = ["ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa"];
-    let (kind, blob) = preferred
-        .iter()
-        .find_map(|want| keys.iter().find(|(kind, _)| kind == want))
-        .or(keys.first())
-        .ok_or("its host key could not be read")?;
+    let (kind, blob) = pick_key(&resolved.algorithms, &keys).ok_or(
+        "none of its host keys is one your ssh config accepts. Connect once with ssh in a terminal.",
+    )?;
     let key = format!("{kind} {blob}");
     let (key_type, fingerprint) = fingerprint(&key).await?;
     Ok(ScannedKey { host: target.host().to_string(), key_type, fingerprint, key, resolved })
+}
+
+/// The scanned key ssh will check: the first of its `HostKeyAlgorithms` the
+/// server has a key for. Certificate and security-key algorithms name no plain
+/// key keyscan returns; every `rsa-sha2-*` signs with an `ssh-rsa` key.
+fn pick_key<'a>(algorithms: &[String], keys: &[(&'a str, &'a str)]) -> Option<(&'a str, &'a str)> {
+    algorithms
+        .iter()
+        .filter(|alg| !alg.ends_with("-cert-v01@openssh.com") && !alg.contains("sk-"))
+        .map(|alg| if alg.starts_with("rsa-sha2-") { "ssh-rsa" } else { alg.as_str() })
+        .find_map(|kind| keys.iter().find(|(k, _)| *k == kind).copied())
 }
 
 /// `ssh-keygen -lf -` reads one public key and answers
@@ -522,7 +550,7 @@ mod tests {
         assert_eq!(parse("  root@1.2.3.4 ").unwrap(), t("root@1.2.3.4", None));
         assert_eq!(parse("ssh -p 2222 me@box").unwrap(), t("me@box", Some(2222)));
         assert_eq!(parse("ssh -p2222 vps").unwrap(), t("vps", Some(2222)));
-        assert_eq!(parse("ssh vps -p 22").unwrap(), t("vps", None));
+        assert_eq!(parse("ssh vps -p 22").unwrap(), t("vps", Some(22)));
         assert!(parse("ssh -i key me@box").unwrap_err().contains("~/.ssh/config"));
         assert!(parse("ssh -oProxyCommand=x box").is_err());
         assert!(parse("ssh a b").is_err());
@@ -557,12 +585,24 @@ mod tests {
     }
 
     #[test]
+    fn picks_the_key_ssh_will_check() {
+        let keys = [("ssh-rsa", "R"), ("ecdsa-sha2-nistp256", "E"), ("ssh-ed25519", "D")];
+        let algs = |list: &str| list.split(',').map(str::to_string).collect::<Vec<_>>();
+        let default = algs("ssh-ed25519-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512");
+        assert_eq!(pick_key(&default, &keys), Some(("ssh-ed25519", "D")));
+        assert_eq!(pick_key(&algs("ecdsa-sha2-nistp256"), &keys), Some(("ecdsa-sha2-nistp256", "E")));
+        assert_eq!(pick_key(&algs("rsa-sha2-256"), &keys), Some(("ssh-rsa", "R")));
+        assert_eq!(pick_key(&algs("sk-ssh-ed25519@openssh.com"), &keys), None);
+    }
+
+    #[test]
     fn files_keys_the_way_ssh_does() {
         let r = |port, alias: Option<&str>| Resolved {
             hostname: "1.2.3.4".into(),
             port,
             alias: alias.map(str::to_string),
             known_hosts: PathBuf::new(),
+            algorithms: Vec::new(),
             proxied: false,
         };
         assert_eq!(r(22, None).known_as(), "1.2.3.4");

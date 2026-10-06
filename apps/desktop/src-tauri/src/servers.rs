@@ -117,6 +117,9 @@ impl Conn {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        for (_, call) in self.pending.drain() {
+            let _ = call.send(Err(json!(format!("lost the connection to {}", self.saved.name))));
+        }
         self.outgoing = None;
         self.live = None;
         self.stage = None;
@@ -646,6 +649,18 @@ mod tests {
         assert_eq!(normalize(" ws://box:7317 ").unwrap(), "ws://box:7317");
         assert!(normalize("wss://box").is_err());
         assert!(normalize("").is_err());
+    }
+
+    /// Turning a server off must answer the calls already sent to it: no run
+    /// loop is left to drain them, so they would wait for ever.
+    #[test]
+    fn turning_off_answers_calls_in_flight() {
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        let mut conn = Conn::new(saved);
+        let (reply, mut answer) = oneshot::channel();
+        conn.pending.insert(1, reply);
+        conn.restart();
+        assert!(answer.try_recv().unwrap().is_err());
     }
 
     #[test]
