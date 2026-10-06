@@ -108,7 +108,9 @@ const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
 /// never pushes Background Tasks off the pane; past that the last cell is a
 /// count opening the viewer where the cells stop.
 function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId: string }) {
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  // The open picture by its source, not its position: the list is newest first,
+  // so a screenshot landing while the viewer is open would shift every index.
+  const [openSrc, setOpenSrc] = useState<string | null>(null);
   const [filter, setFilter] = useState<MediaFilter>("all");
   // Outside `ChatSessionContext`, so the session's server is named here rather
   // than through `useSessionPath`.
@@ -124,6 +126,7 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
           },
     )
     .filter((item): item is LightboxImage => Boolean(item.src));
+  const at = items.findIndex((item) => item.src === openSrc);
   const shown = items.length > MAX_TILES ? MAX_TILES - 1 : items.length;
   const hidden = items.length - shown;
   // Empty cells finish the last row, so the lines run the whole width rather
@@ -141,7 +144,7 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
             aria-pressed={filter === id}
             onClick={() => {
               setFilter(id);
-              setOpenIndex(null);
+              setOpenSrc(null);
             }}
             className={cn(
               "text-ui transition-colors",
@@ -157,11 +160,11 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
       ) : (
         // Edge to edge, with the panel's own sides as the outer frame.
         <div className="grid grid-cols-6 border-t-[0.5px] border-border">
-          {items.slice(0, shown).map((item, i) => (
+          {items.slice(0, shown).map((item) => (
             <button
               key={item.src}
               type="button"
-              onClick={() => setOpenIndex(i)}
+              onClick={() => setOpenSrc(item.src)}
               aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
               className={cn(cell, "cursor-zoom-in overflow-hidden transition-opacity hover:opacity-90")}
             >
@@ -171,7 +174,7 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
           {hidden > 0 && (
             <button
               type="button"
-              onClick={() => setOpenIndex(shown)}
+              onClick={() => setOpenSrc(items[shown].src)}
               aria-label={`Show ${hidden} more`}
               className={cn(
                 cell,
@@ -188,9 +191,9 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
       )}
       <ImageLightbox
         images={items}
-        index={openIndex}
-        onIndex={setOpenIndex}
-        onClose={() => setOpenIndex(null)}
+        index={at === -1 ? null : at}
+        onIndex={(i) => setOpenSrc(items[i].src)}
+        onClose={() => setOpenSrc(null)}
       />
     </div>
   );

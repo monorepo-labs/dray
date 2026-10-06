@@ -196,13 +196,16 @@ export default function ImageLightbox({
                     at most: 10 × 3rem thumbs, 9 × 0.5rem gaps, 1rem of padding.
                     The backing sits on a wrapper so the edge fade takes the
                     thumbs and not the strip itself; the scroller keeps 2px of
-                    padding so the current one's ring isn't clipped. */}
+                    padding so the current one's ring isn't clipped. Once it
+                    scrolls, each end is padded by half the strip less half a
+                    thumb, so the first and last can reach the centre too and
+                    the fade only ever lands on empty space beside them. */}
                 <div className="max-w-[min(100%,35.5rem)] rounded-xl bg-black/40 p-1.5">
                   <div
                     className={cn(
                       "scrollbar-none flex items-center gap-2 overflow-x-auto p-0.5",
                       images.length > 10 &&
-                        "[mask-image:linear-gradient(to_right,transparent,black_2.5rem,black_calc(100%-2.5rem),transparent)]",
+                        "px-[calc(50%-1.5rem)] [mask-image:linear-gradient(to_right,transparent,black_2.5rem,black_calc(100%-2.5rem),transparent)]",
                     )}
                   >
                   {images.map((image, i) => (

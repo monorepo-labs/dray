@@ -133,6 +133,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
@@ -1457,6 +1458,15 @@ function App() {
   // stands in. Not written back, so switching to a session without a PR keeps
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
+
+  // The attachment grid reads the session's whole log, but a transcript drawn
+  // as a crew strip never pages past its tail — so the More tab pages in the
+  // rest itself while it is on screen. The main column's transcript already
+  // does, and `loadOlder` runs one read per session for the two of them.
+  const pagedForMore = panelShown && activeTab === "more" ? selectedSession : null;
+  useEffect(() => {
+    if (pagedForMore?.olderBefore != null) loadOlder(pagedForMore.sessionId);
+  }, [pagedForMore?.sessionId, pagedForMore?.olderBefore]);
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
   // hand is the reader's.
