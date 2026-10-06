@@ -29,8 +29,11 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
   let next = 0;
   // Turned off from Settings: the socket closes and nothing reopens it.
   let off = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
   const pending = new Map<number, Call>();
   const open = () => {
+    clearTimeout(retry);
+    if (off) return;
     onStatus("connecting");
     admitted = false;
     ws = new WebSocket(url);
@@ -53,7 +56,7 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
       for (const call of pending.values()) call.reject("connection lost");
       pending.clear();
       onStatus("disconnected", off ? undefined : "connection lost");
-      if (!off) setTimeout(open, 1000);
+      if (!off) retry = setTimeout(open, 1000);
     };
   };
   // Next tick, so a caller's `onStatus` can name what this returns.
@@ -72,6 +75,7 @@ function connect(url: string, token: string, onEvent: (event: string, payload: u
     /// still open, cycles it, which is what Try again asks for.
     setOn(on: boolean) {
       off = !on;
+      clearTimeout(retry);
       if (on && (!ws || ws.readyState === WebSocket.CLOSED)) open();
       else ws?.close();
     },
