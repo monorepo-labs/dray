@@ -588,12 +588,16 @@ function MissingAgent({ agent, server }: { agent: AgentAccounts; server: ServerI
 /// shell.
 export default function AccountsSettings({
   cwd,
+  only,
 }: {
   /// Where the terminal button opens. The selected session's directory where
   /// there is one. A courtesy, and the whole of what the directory decides: all
   /// four stores live under the reader's home, so a sign-in run in one tree is
   /// a sign-in everywhere.
   cwd: string;
+  /// One server's installed agents and nothing else: the sign-in step of
+  /// installing Dray there, drawn inside a dialog rather than on the page.
+  only?: ServerId;
 }) {
   // Owned here rather than in `App`, unlike the issue tracker's, and the
   // dialog's own bargain is what makes that safe: bodies are *switched*, not
@@ -604,7 +608,7 @@ export default function AccountsSettings({
   // Which machine's accounts are drawn: the selected session's by default. A
   // server other than the session's is asked in its own home directory.
   const servers = useServers();
-  const [server, setServer] = useState<ServerId>(() => serverOfPath(cwd));
+  const [server, setServer] = useState<ServerId>(() => only ?? serverOfPath(cwd));
   const askIn = serverOfPath(cwd) === server ? cwd : "";
   const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(askIn, server);
   const [signingIn, setSigningIn] = useState<{
@@ -648,7 +652,7 @@ export default function AccountsSettings({
           title, where a reader already looks to get out of something. Refresh
           has nothing to re-read while a credential is being written, and the
           two would have sat side by side meaning different kinds of "leave". */}
-      <SettingsHeaderAction>
+      <HeaderControl inline={only !== undefined}>
         {signingIn ? (
           <Button
             variant="ghost"
@@ -676,9 +680,9 @@ export default function AccountsSettings({
             <TooltipContent>Refresh</TooltipContent>
           </Tooltip>
         )}
-      </SettingsHeaderAction>
+      </HeaderControl>
 
-      {servers.length > 0 && !signingIn && (
+      {servers.length > 0 && !signingIn && !only && (
         <ServerPicker
           value={server}
           options={[LOCAL, ...servers.map((s) => s.id)]}
@@ -715,8 +719,8 @@ export default function AccountsSettings({
           onDone={() => setSigningIn(null)}
         />
       ) : (
-        agents.map((agent) => {
-          const on = enabledAgents.includes(agent.harness);
+        agents.filter((agent) => !only || agent.installed).map((agent) => {
+          const on = only !== undefined || enabledAgents.includes(agent.harness);
           // pi's rows are the providers it is *configured* for, and its own
           // list is a seed rather than a catalogue — a name this build never
           // heard of is still one `pi auth check` can answer for, so there is
@@ -734,7 +738,7 @@ export default function AccountsSettings({
                     folds its accounts away but keeps the title, which is the
                     only way back on. The last one on stays on: a new session
                     needs somewhere to start. */}
-                <Tooltip>
+                {!only && <Tooltip>
                   <TooltipTrigger asChild>
                     {/* A span carries the tooltip: a disabled switch fires no
                         pointer events, and the last one on is exactly the one
@@ -755,7 +759,7 @@ export default function AccountsSettings({
                         ? "Turn off to hide from the agent picker"
                         : "Turn on to show in the agent picker"}
                   </TooltipContent>
-                </Tooltip>
+                </Tooltip>}
               </div>
 
               {!on ? null : !agent.installed ? (
@@ -835,6 +839,12 @@ export default function AccountsSettings({
       )}
     </div>
   );
+}
+
+/// The page's heading where the tab is drawn on the page, a row of its own
+/// inside a dialog, which has no heading to portal into.
+function HeaderControl({ inline, children }: { inline: boolean; children: React.ReactNode }) {
+  return inline ? <div className="flex">{children}</div> : <SettingsHeaderAction>{children}</SettingsHeaderAction>;
 }
 
 /// Which machine the tab is about, drawn only once a remote server exists.

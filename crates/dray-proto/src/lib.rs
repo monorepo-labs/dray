@@ -666,6 +666,18 @@ pub const AGENTS: [Agent; 5] = [
     },
 ];
 
+/// How each package manager installs git, the first one found winning. The
+/// app shows the same line to copy where `dray setup` would print it, so the
+/// two are one table.
+pub const GIT_INSTALLS: [(&str, &str); 6] = [
+    ("apt-get", "apt-get update && apt-get install -y git"),
+    ("dnf", "dnf install -y git"),
+    ("yum", "yum install -y git"),
+    ("apk", "apk add git"),
+    ("pacman", "pacman -S --noconfirm git"),
+    ("zypper", "zypper install -y git"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

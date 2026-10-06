@@ -190,15 +190,7 @@ fn install_git(stdin: Stdio) -> Result<(), InstallError> {
     if !LINUX {
         return Err(Manual("xcode-select --install".into()));
     }
-    let managers = [
-        ("apt-get", "apt-get update && apt-get install -y git"),
-        ("dnf", "dnf install -y git"),
-        ("yum", "yum install -y git"),
-        ("apk", "apk add git"),
-        ("pacman", "pacman -S --noconfirm git"),
-        ("zypper", "zypper install -y git"),
-    ];
-    let Some((_, cmd)) = managers.iter().find(|(pm, _)| find(pm).is_some()) else {
+    let Some((_, cmd)) = dray_proto::GIT_INSTALLS.iter().find(|(pm, _)| find(pm).is_some()) else {
         return Err(Failed("no package manager this knows".into()));
     };
     if output("id", &["-u"]).as_deref() == Some("0") {

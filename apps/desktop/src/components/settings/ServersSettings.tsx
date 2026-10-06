@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import SettingsHeaderAction from "@/components/settings/headerAction";
+import ServerSetupDialog from "@/components/settings/ServerSetupDialog";
 import { SpaceNameField } from "@/components/settings/SpacesSettings";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +71,12 @@ export default function ServersSettings() {
   const [renaming, setRenaming] = useState<string | null>(null);
   // The host-key question for a saved row, whose loop parked on it.
   const [trusting, setTrusting] = useState<{ server: ServerInfo; fix: TrustHost } | null>(null);
+  // A server with no Dray on it, being set up: from its row, or from Add.
+  const [installing, setInstalling] = useState<{
+    line: string;
+    name: string;
+    connect: () => Promise<string>;
+  } | null>(null);
 
   return (
     <>
@@ -113,9 +120,19 @@ export default function ServersSettings() {
             on={server.on}
             onToggle={(on) => void invoke("set_server_on", { id: server.id, on }, LOCAL).catch(console.error)}
             onRetry={
-              server.on && server.status === "disconnected"
-                ? () => void invoke("set_server_on", { id: server.id, on: true }, LOCAL).catch(console.error)
-                : undefined
+              !server.on || server.status !== "disconnected"
+                ? undefined
+                : server.fix?.kind === "install"
+                  ? () =>
+                      setInstalling({
+                        line: server.ssh!,
+                        name: server.name,
+                        connect: async () => {
+                          await invoke("set_server_on", { id: server.id, on: true }, LOCAL);
+                          return server.id;
+                        },
+                      })
+                  : () => void invoke("set_server_on", { id: server.id, on: true }, LOCAL).catch(console.error)
             }
             onRename={() => {
               setConfirming(null);
@@ -133,7 +150,20 @@ export default function ServersSettings() {
         ))}
       </div>
 
-      <AddServerDialog open={adding} onClose={() => setAdding(false)} />
+      <AddServerDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        onInstall={(line, name) => {
+          setAdding(false);
+          setInstalling({
+            line,
+            name: name || line.replace(/^ssh\s+/, ""),
+            connect: async () =>
+              (await invoke<ServerInfo>("add_ssh_server", { line, name: name || null }, LOCAL)).id,
+          });
+        }}
+      />
+      {installing && <ServerSetupDialog {...installing} onClose={() => setInstalling(null)} />}
       {trusting?.server.ssh && (
         <HostKeyDialog
           line={trusting.server.ssh}
@@ -263,7 +293,16 @@ function asFailure(err: unknown): Failure {
 /// Two ways in. The SSH line is the one a reader already has: the app logs in
 /// with it, forwards the server's port, reads its token and starts it if it is
 /// stopped. Address and token is for a server reached some other way.
-function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function AddServerDialog({
+  open,
+  onClose,
+  onInstall,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /// Reached Dray's absence over a working login: set it up there.
+  onInstall: (line: string, name: string) => void;
+}) {
   const [viaSsh, setViaSsh] = useState(true);
   const [line, setLine] = useState("");
   const [url, setUrl] = useState("");
@@ -310,6 +349,12 @@ function AddServerDialog({ open, onClose }: { open: boolean; onClose: () => void
       close();
     } catch (err) {
       const failed = asFailure(err);
+      if (failed.fix?.kind === "install") {
+        const [l, n] = [line.trim(), name.trim()];
+        close();
+        onInstall(l, n);
+        return;
+      }
       setFailure(failed);
       if (failed.fix?.kind === "trust_host") setTrusting(failed.fix);
     } finally {

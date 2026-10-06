@@ -33,7 +33,10 @@ const MAX_READ: usize = 4096;
 /// A whole connect: login, script, `dray service start`'s own 1.5s check.
 const OPEN: Duration = Duration::from_secs(45);
 
-pub const INSTALL_LINE: &str = "curl -fsSL https://www.drayhq.com/install.sh | sh";
+const INSTALLER: &str = "https://www.drayhq.com/install.sh";
+
+/// An install over a login: a package manager and five vendor scripts.
+const INSTALLING: Duration = Duration::from_secs(30 * 60);
 
 /// Where `dray setup` puts agents (the CLI's `HOME_BIN_DIRS`). A non-login
 /// `ssh host cmd` reads no `.profile`, so none of these are on its `PATH`.
@@ -137,6 +140,8 @@ pub enum Fix {
     /// SSH has never met this server: show its key and ask.
     #[serde(rename_all = "camelCase")]
     TrustHost { host: String, key_type: String, fingerprint: String },
+    /// Dray is not on the server: the app can install it over the login.
+    Install,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -280,8 +285,8 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
             true,
         )),
         Ok(Ok(Err(_))) => Err(Failure::new(
-            format!("Dray isn't installed on {host}. Install it there, then try again:"),
-            Some(Fix::Copy { command: INSTALL_LINE.into() }),
+            format!("Dray isn't installed on {host}."),
+            Some(Fix::Install),
             true,
         )),
         Ok(Err(Some(out))) => Err(Failure::new(
@@ -524,6 +529,164 @@ fn append(path: &std::path::Path, line: &str) -> std::io::Result<()> {
     file.write_all(line.as_bytes())
 }
 
+/// A tool `dray setup --install` takes, as a server has it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+pub struct Tool {
+    pub id: String,
+    pub name: String,
+    pub found: bool,
+}
+
+/// What a server has before Dray is installed on it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct Survey {
+    /// `uname -s`. Only Linux runs a server.
+    pub os: String,
+    pub tools: Vec<Tool>,
+    /// Where git is missing and this login has no admin rights to install it:
+    /// the line to run as root, the one `dray setup` would print.
+    pub git_command: Option<String>,
+}
+
+/// `(id, name, bin)` of everything `dray setup --install` takes, in its order.
+fn setup_tools() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut tools = vec![("git", "git", "git"), ("gh", "GitHub CLI", "gh")];
+    tools.extend(dray_proto::AGENTS.iter().map(|a| (a.id, a.name, a.bin)));
+    tools
+}
+
+/// Looks at a server with no Dray on it: which tools it has, its package
+/// manager, and whether this login can install git.
+pub async fn survey(target: &Target) -> Result<Survey, Failure> {
+    let tools = setup_tools();
+    let bins: Vec<_> = tools.iter().map(|t| t.2).collect();
+    let managers: Vec<_> = dray_proto::GIT_INSTALLS.iter().map(|g| g.0).collect();
+    let script = format!(
+        "PATH=\"{AGENT_DIRS}:$PATH\"; echo DRAY-SSH hello; echo \"os $(uname -s)\"; \
+         for b in {}; do command -v $b >/dev/null 2>&1 && echo \"found $b\"; done; \
+         for m in {}; do command -v $m >/dev/null 2>&1 && {{ echo \"pm $m\"; break; }}; done; \
+         {{ [ \"$(id -u)\" = 0 ] || sudo -n true 2>/dev/null; }} && echo admin; true",
+        bins.join(" "),
+        managers.join(" "),
+    );
+    let mut said = Vec::new();
+    run(target, &script, Duration::from_secs(30), |line| said.push(line.to_string())).await?;
+    let has = |what: &str| said.iter().any(|l| l == what);
+    let found = |bin: &str| has(&format!("found {bin}"));
+    let os = said.iter().find_map(|l| l.strip_prefix("os ")).unwrap_or_default().to_string();
+    let manager = said.iter().find_map(|l| l.strip_prefix("pm "));
+    let git_command = (!found("git") && !has("admin"))
+        .then(|| dray_proto::GIT_INSTALLS.iter().find(|g| Some(g.0) == manager))
+        .flatten()
+        .map(|(_, cmd)| format!("sudo sh -c '{cmd}'"));
+    Ok(Survey {
+        os,
+        tools: tools.iter().map(|&(id, name, bin)| Tool { id: id.into(), name: name.into(), found: found(bin) }).collect(),
+        git_command,
+    })
+}
+
+/// Installs Dray and `picks` over the login, then starts the server: the
+/// install line with its own setup skipped, since there is no terminal for it
+/// to ask in, and `dray setup --install` with the answers instead. Each line of
+/// output goes to `line`.
+pub async fn install(target: &Target, picks: &[String], line: impl FnMut(&str)) -> Result<(), Failure> {
+    let tools = setup_tools();
+    // These reach a shell.
+    if let Some(bad) = picks.iter().find(|p| !tools.iter().any(|t| t.0 == p.as_str())) {
+        return Err(Failure::new(format!("{bad} is not something Dray installs"), None, true));
+    }
+    let install = if picks.is_empty() { String::new() } else { format!(" --install {}", picks.join(",")) };
+    let script = format!(
+        "PATH=\"{AGENT_DIRS}:$PATH\"; echo DRAY-SSH hello; exec 2>&1; \
+         s=$(curl -fsSL {INSTALLER} 2>/dev/null || wget -qO- {INSTALLER} 2>/dev/null) \
+         || {{ echo Could not download {INSTALLER}; exit 1; }}; \
+         DRAY_UPDATING=1 sh -c \"$s\" && \"$HOME/.local/bin/dray\" setup{install}"
+    );
+    if run(target, &script, INSTALLING, line).await? {
+        Ok(())
+    } else {
+        Err(Failure::new(format!("The install on {} did not finish.", target.host()), None, false))
+    }
+}
+
+/// Runs `script` over a login with no forward and answers whether it exited 0.
+/// The script opens with `DRAY-SSH hello`; what it prints after that goes to
+/// `line`, colour codes stripped. A login that never got that far fails the
+/// way a connect does.
+async fn run(target: &Target, script: &str, limit: Duration, mut line: impl FnMut(&str)) -> Result<bool, Failure> {
+    // Quoted whole below, so `SCRIPT`'s rule holds here too.
+    debug_assert!(!script.contains(['\'', '\\']), "{script}");
+    let mut child = Command::new(SSH)
+        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+        .args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"])
+        .args(target.args())
+        .arg(format!("sh -c '{script}'"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| Failure::new(format!("could not run ssh: {e}"), None, true))?;
+    let mut pipe = child.stderr.take().expect("piped");
+    let stderr = tokio::spawn(async move {
+        let mut said = String::new();
+        let _ = (&mut pipe).take(MAX_READ as u64).read_to_string(&mut said).await;
+        // Drained past the cap, or a chatty ssh blocks on a full pipe.
+        let _ = tokio::io::copy(&mut pipe, &mut tokio::io::sink()).await;
+        said
+    });
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
+    let work = async {
+        let (mut text, mut logged_in) = (String::new(), false);
+        loop {
+            text.clear();
+            // A longer line arrives in pieces, which a log can stand.
+            if (&mut stdout).take(MAX_READ as u64).read_line(&mut text).await.unwrap_or(0) == 0 {
+                break;
+            }
+            let text = plain(&text);
+            if logged_in {
+                line(&text);
+            } else {
+                logged_in = text == "DRAY-SSH hello";
+            }
+        }
+        (logged_in, child.wait().await.is_ok_and(|s| s.success()))
+    };
+    let Ok((logged_in, ok)) = tokio::time::timeout(limit, work).await else {
+        return Err(Failure::new(format!("{} did not finish in time", target.host()), None, false));
+    };
+    if !logged_in {
+        return Err(classify(&stderr.await.unwrap_or_default(), target).await);
+    }
+    Ok(ok)
+}
+
+/// A line of terminal output as text: the last of what `\r` redrew over it,
+/// with colour and cursor codes taken out.
+fn plain(line: &str) -> String {
+    let line = line.trim_end();
+    let mut chars = line.rsplit('\r').next().unwrap_or_default().chars();
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+        } else if chars.next() == Some('[') {
+            // A CSI sequence ends at its first byte in @..~.
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The `.command` line that opens an interactive login on the server running
 /// `command` — a literal from `accounts::auth_options`, never typed text.
 pub fn terminal_line(target: &Target, command: &str) -> String {
@@ -585,6 +748,13 @@ mod tests {
     }
 
     #[test]
+    fn reads_terminal_output_as_text() {
+        assert_eq!(plain("\x1b[32m◇\x1b[0m  Done\n"), "◇  Done");
+        assert_eq!(plain("  10%\r 50%\r100%  \r\n"), "100%");
+        assert_eq!(plain("\x1b[?25lhi\x1b[?25h"), "hi");
+    }
+
+    #[test]
     fn picks_the_key_ssh_will_check() {
         let keys = [("ssh-rsa", "R"), ("ecdsa-sha2-nistp256", "E"), ("ssh-ed25519", "D")];
         let algs = |list: &str| list.split(',').map(str::to_string).collect::<Vec<_>>();
@@ -620,6 +790,25 @@ mod tests {
         assert_eq!(tunnel.token.len(), 64);
         assert_eq!(stages.lock().unwrap()[..2], [Stage::Connecting, Stage::Finding]);
         tokio::net::TcpStream::connect(("127.0.0.1", tunnel.port)).await.expect("forwarded port answers");
+    }
+
+    /// A Linux login with no Dray on it, which this installs: `DRAY_TEST_INSTALL="ssh me@host"`,
+    /// and `DRAY_TEST_PICKS="git,gh"` for what else to install.
+    #[tokio::test]
+    #[ignore]
+    async fn installs_on_a_live_server() {
+        let target = parse(&std::env::var("DRAY_TEST_INSTALL").expect("DRAY_TEST_INSTALL")).unwrap();
+        let fix = open(&target, |_| {}).await.err().and_then(|f| f.fix);
+        assert_eq!(fix, Some(Fix::Install), "Dray is already there");
+        let survey = survey(&target).await.map_err(|f| f.message).unwrap();
+        println!("{survey:#?}");
+        assert_eq!(survey.os, "Linux");
+        let picks: Vec<String> = std::env::var("DRAY_TEST_PICKS")
+            .map(|p| p.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+            .unwrap_or_default();
+        install(&target, &picks, |line| println!("| {line}")).await.map_err(|f| f.message).unwrap();
+        let tunnel = open(&target, |_| {}).await.map_err(|f| f.message).unwrap();
+        assert_eq!(tunnel.token.len(), 64);
     }
 
     /// A host `known_hosts` does not list yet — the VPS by a nip.io name works:

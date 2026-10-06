@@ -156,7 +156,35 @@ Live, from ignored tests in `ssh.rs` and `servers.rs` (each names its env var):
 - The Sign in line run with `--version`: Claude Code found in `~/.local/bin`
   over a non-login shell; the agents not installed there answer 127.
 
+## Stage 4b: installing Dray from the app
+
+A server with no Dray on it parks on `missing`, which now carries
+`Fix::Install` rather than the line to copy. The row and the Add dialog draw an
+**Install** button; it opens one dialog that runs the whole first meeting.
+
+1. **Look.** One ssh login runs a short script and prints what is there: the OS,
+   which of git, gh and the five agents are on `PATH` or in `dray setup`'s
+   home dirs, the package manager, and whether this user is root or has
+   passwordless sudo. No Dray needed. Not Linux → said, and nothing offered.
+2. **Pick.** Found tools are listed as found. Missing ones get a switch, git on
+   by default since Dray needs it. Git with no admin rights gets no switch: it
+   shows `sudo sh -c '<manager's command>'` to copy, the same line `dray setup`
+   prints. The managers table moves to `dray-proto` so the two cannot differ.
+3. **Install.** One more login runs the install line with `DRAY_UPDATING=1`
+   (skips its own setup, which has no terminal to ask in) and then
+   `~/.local/bin/dray setup --install <picks>`, which installs, starts the
+   server and turns on linger. The picks are checked against the known ids
+   before they reach a shell. Output streams into the dialog, colour codes
+   stripped. A failure keeps the output on screen with Try again.
+4. **Connect.** From the row, `set_server_on`; from the Add dialog,
+   `add_ssh_server`, which saves it. The dialog waits for the row to go green.
+5. **Sign in.** The Accounts tab's rows for that server, installed agents only,
+   with their Sign in buttons and forms. Done closes.
+
+No cancel once installing: the remote run would carry on regardless, so
+closing the dialog only stops watching it. gh's own login is not in the list;
+the setup output names `gh auth login`.
+
 ## Not here
 
-Stage 4b (installing Dray through the app). A second port when 7317 is taken
-by another user's server on one machine.
+A second port when 7317 is taken by another user's server on one machine.
