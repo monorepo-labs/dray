@@ -11,6 +11,7 @@
 use clap::{Args, Parser, Subcommand};
 
 mod draft;
+mod setup;
 use draft::DraftCommand;
 use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
@@ -61,6 +62,13 @@ enum Command {
     Browser(BrowserCommand),
     /// Upgrade this binary to the newest release.
     Update(Update),
+    /// Install what this machine is missing to run Dray, then start the server.
+    Setup(setup::Setup),
+    /// Run the Dray server in the foreground. Linux only.
+    Serve(setup::Serve),
+    /// Keep the Dray server running in the background. Linux only.
+    #[command(subcommand)]
+    Service(setup::ServiceCommand),
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -271,6 +279,9 @@ fn run() -> Result<(), String> {
         Command::Browser(args) => browser(args),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
+        Command::Setup(args) => setup::setup(args),
+        Command::Serve(args) => setup::serve(args),
+        Command::Service(command) => setup::service(command),
     }
 }
 
@@ -712,7 +723,9 @@ fn update(args: Update) -> Result<(), String> {
     ])
     // Where this binary lives, not ~/.local/bin. Renaming over a running
     // unix binary is safe: the process keeps the inode it started from.
-    .env("DRAY_INSTALL_DIR", dir);
+    .env("DRAY_INSTALL_DIR", dir)
+    // An update is not a first install: no setup questions.
+    .env("DRAY_UPDATING", "1");
 
     if args.force {
         // Cleared rather than left alone, or a value the caller exported makes
@@ -723,7 +736,17 @@ fn update(args: Update) -> Result<(), String> {
     }
 
     match sh.status() {
-        Ok(status) if status.success() => Ok(()),
+        Ok(status) if status.success() => {
+            // Not restarted for the reader: that stops every agent running on
+            // it, and the usual caller here is one of those agents.
+            if setup::unit_path().is_ok_and(|p| p.exists()) {
+                eprintln!(
+                    "The background server runs the old version until restarted, which \
+                     stops running agents: systemctl --user restart dray"
+                );
+            }
+            Ok(())
+        }
         Ok(status) => Err(format!("the installer failed ({status})")),
         Err(e) => Err(format!("could not run the installer: {e}")),
     }

@@ -81,10 +81,15 @@ jobs:
             os: macos-latest
           - target: x86_64-apple-darwin
             os: macos-latest
+          # 22.04, not latest: a binary needs the glibc it linked against or
+          # newer, so this is what lets Ubuntu 22.04 and Debian 12 run it.
+          # Linux also ships `dray-serve`, the server `dray setup` installs.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
+            serve: true
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04-arm
+            serve: true
 
     runs-on: ${{ matrix.os }}
 
@@ -100,12 +105,24 @@ jobs:
       # projects, so a change to the app's dependencies must not evict this.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: apps/cli
+          workspaces: |
+            apps/cli
+            apps/desktop/src-tauri
           key: ${{ matrix.target }}
 
       - name: Build
         working-directory: apps/cli
         run: cargo build --release --target ${{ matrix.target }}
+
+      # From the same commit as the CLI, so one tag is one version of both.
+      - name: Build dray-serve
+        if: matrix.serve
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo build --release --no-default-features --features serve \
+            --bin dray-serve --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/dray-serve" "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/"
+          strip "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/dray-serve"
 
       # Named after the target triple because that is what install.sh derives
       # from `uname`. Rename either and the installer 404s.
@@ -118,7 +135,9 @@ jobs:
         run: |
           set -euo pipefail
           archive="dray-${{ matrix.target }}.tar.gz"
-          tar -czf "$archive" -C "target/${{ matrix.target }}/release" dray
+          bins=dray
+          [ "${{ matrix.serve }}" = true ] && bins="dray dray-serve"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" $bins
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$archive" > "$archive.sha256"
           else

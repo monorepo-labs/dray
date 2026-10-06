@@ -589,6 +589,56 @@ pub fn encode_line<T: Serialize>(value: &T) -> serde_json::Result<String> {
     Ok(line)
 }
 
+/// An agent CLI as `dray setup` installs it. Not wire, but this is the one
+/// crate both sides compile, and the app's `Harness::install_command` and
+/// `login_command` are pinned to it by a test there.
+pub struct Agent {
+    /// `Harness::wire_name`, and what `dray setup --install` takes.
+    pub id: &'static str,
+    pub name: &'static str,
+    pub bin: &'static str,
+    pub install: &'static str,
+    pub login: &'static str,
+}
+
+pub const AGENTS: [Agent; 5] = [
+    Agent {
+        id: "claude_code",
+        name: "Claude Code",
+        bin: "claude",
+        install: "curl -fsSL https://claude.ai/install.sh | bash",
+        login: "claude auth login",
+    },
+    Agent {
+        id: "codex",
+        name: "Codex",
+        bin: "codex",
+        install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        login: "codex login",
+    },
+    Agent {
+        id: "pi",
+        name: "pi",
+        bin: "pi",
+        install: "curl -fsSL https://pi.dev/install.sh | sh",
+        login: "pi",
+    },
+    Agent {
+        id: "fx",
+        name: "fx",
+        bin: "fx",
+        install: "curl -fsSL https://fx.sh/setup.sh | bash",
+        login: "fx login",
+    },
+    Agent {
+        id: "grok",
+        name: "Grok Build",
+        bin: "grok",
+        install: "curl -fsSL https://x.ai/cli/install.sh | bash",
+        login: "grok login",
+    },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
