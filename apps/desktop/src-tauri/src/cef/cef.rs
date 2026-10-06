@@ -84,6 +84,14 @@ struct Tab {
     /// The tab whose `window.open` made this one. Neither half of a live
     /// pair is discarded: the popup posts back through `window.opener`.
     opener: Option<i32>,
+    /// Woken and not yet finished loading, so a verb waits for the page
+    /// even when the pane started the wake.
+    waking: bool,
+    /// Closed by the reader or the session going. A close landing while the
+    /// tab is mid-discard or mid-wake has no browser to act on, so the
+    /// callbacks read this instead: `on_before_close` drops the entry rather
+    /// than keep a ghost, and `on_after_created` closes what it was handed.
+    closing: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -727,6 +735,7 @@ fn wake(id: i32) {
         let mut tabs = TABS.lock().unwrap();
         let Some(t) = tabs.iter_mut().find(|t| t.id == id && t.discarded && t.browser.is_none()) else { return };
         t.discarded = false;
+        t.waking = true;
         t.loading = true;
         t.seen = Instant::now();
         (t.session.clone(), t.url.clone())
@@ -736,6 +745,7 @@ fn wake(id: i32) {
     if let Err(e) = create_tab(&session, &url, false, Some(id)) {
         update_tab(id, |t| {
             t.discarded = true;
+            t.waking = false;
             t.loading = false;
             t.error = Some(e);
         });
@@ -759,11 +769,14 @@ fn sweep() {
     }
     let candidates: Vec<(i32, String)> = {
         let tabs = TABS.lock().unwrap();
+        // A pair is live while both halves are: a popup outliving its opener
+        // is an ordinary tab, and an opener outliving its popup too.
+        let ids: HashSet<i32> = tabs.iter().map(|t| t.id).collect();
         let openers: HashSet<i32> = tabs.iter().filter_map(|t| t.opener).collect();
         tabs.iter()
-            .filter(|t| t.browser.is_some() && !t.discarded && !t.loading)
+            .filter(|t| t.browser.is_some() && !t.discarded && !t.loading && !t.closing)
             .filter(|t| t.seen.elapsed() >= DISCARD_AFTER)
-            .filter(|t| t.opener.is_none() && !openers.contains(&t.id))
+            .filter(|t| t.opener.map_or(true, |o| !ids.contains(&o)) && !openers.contains(&t.id))
             .map(|t| (t.id, t.session.clone()))
             .collect()
     };
@@ -914,12 +927,13 @@ wrap_life_span_handler! {
             // pushed beside it, and `on_before_close` removes only the
             // browser instance it holds.
             let mut tabs = TABS.lock().unwrap();
-            match tabs.iter_mut().find(|t| t.id == id) {
+            let doomed = match tabs.iter_mut().find(|t| t.id == id) {
                 Some(slot) => {
-                    slot.browser = Some(browser);
+                    slot.browser = Some(browser.clone());
                     slot._devtools = devtools;
                     slot.view = view;
                     slot.discarded = false;
+                    slot.closing.then_some(browser)
                 }
                 None => {
                     let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
@@ -939,12 +953,20 @@ wrap_life_span_handler! {
                         seen: Instant::now(),
                         discarded: false,
                         opener: self.opener,
+                        waking: false,
+                        closing: false,
                     });
+                    None
                 }
-            }
+            };
             drop(tabs);
             // After the tab is in `TABS`, so the pump's net never lapses between.
             creation_ended();
+            // Closed while it was being woken.
+            if let Some(host) = doomed.and_then(|b| b.host()) {
+                host.close_browser(1);
+                return;
+            }
             if self.activate || active_id(&self.session).is_none() {
                 set_active(&self.session, Some(id));
             }
@@ -1019,7 +1041,7 @@ wrap_life_span_handler! {
             // A discarded tab keeps its entry; only the browser goes.
             let ghost = {
                 let mut tabs = TABS.lock().unwrap();
-                match tabs.iter_mut().find(|t| t.id == id && t.discarded) {
+                match tabs.iter_mut().find(|t| t.id == id && t.discarded && !t.closing) {
                     Some(t) => {
                         t.browser = None;
                         t._devtools = None;
@@ -1313,6 +1335,7 @@ wrap_load_handler! {
         fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             update_tab(self.tab, |t| {
                 t.loading = is_loading != 0;
+                t.waking &= is_loading != 0;
                 t.can_go_back = can_go_back != 0;
                 t.can_go_forward = can_go_forward != 0;
                 if is_loading != 0 {
@@ -1601,7 +1624,13 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
         if session_of(id).as_deref() != Some(session_id.as_str()) {
             return;
         }
-        if is_ghost(id) {
+        let ghost = {
+            let mut tabs = TABS.lock().unwrap();
+            let Some(t) = tabs.iter_mut().find(|t| t.id == id) else { return };
+            t.closing = true;
+            t.discarded && t.browser.is_none()
+        };
+        if ghost {
             remove_tab(&session_id, id);
         } else if let Some(host) = browser_of(id).and_then(|b| b.host()) {
             host.close_browser(1);
@@ -1661,7 +1690,11 @@ pub fn close_session(session_id: &str) {
     let _ = on_main(move || {
         let browsers: Vec<Browser> = {
             let mut tabs = TABS.lock().unwrap();
-            // Discarded tabs have no browser to close and go now.
+            // Discarded tabs have no browser to close and go now; one mid-wake
+            // is closed by `on_after_created` on seeing `closing`.
+            for t in tabs.iter_mut().filter(|t| t.session == session_id) {
+                t.closing = true;
+            }
             tabs.retain(|t| t.session != session_id || !t.discarded || t.browser.is_some());
             tabs.iter().filter(|t| t.session == session_id).filter_map(|t| t.browser.clone()).collect()
         };

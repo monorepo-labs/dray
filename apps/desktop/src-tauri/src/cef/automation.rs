@@ -192,7 +192,8 @@ pub(super) fn capturing() -> bool {
 /// on a live one. The wake is asked for again each round: a tab still
 /// closing when the verb arrived is not a ghost yet, and `wake` skips it.
 async fn awake(tab: i32) -> Result<(), String> {
-    if browser_of(tab).is_some() {
+    let waking = TABS.lock().unwrap().iter().any(|t| t.id == tab && t.waking);
+    if browser_of(tab).is_some() && !waking {
         return Ok(());
     }
     let start = Instant::now();
