@@ -68,7 +68,15 @@ Same installer as stage 2, with dialogs on top.
 
 ## Stage 5: Projects on a VPS
 
-- [ ] Attach a project. Idea: list the user's repos through `gh`, clone on pick. Design later.
+#422. Plan in `ATTACH-PLAN.md`.
+
+- [x] Attach project opens a dialog: GitHub repos read through `gh` on the chosen server, with search
+- [x] Repos already cloned or attached marked and listed first; picking one attaches without cloning
+- [x] Pick → `gh repo clone` into `~/dray/<repo>` on that machine → attach, progress on screen, failure in gh's words
+- [x] `~/dray/<repo>` holding something else is refused in plain words
+- [x] A path field for anything else, checked to exist on that server; Choose folder on the Mac
+- [x] No `gh`, or not logged in, on that server: the PR panel's reading, with the command to run there
+- [ ] A clone and a session on a Linux server with `gh` logged in
 
 ## Stage 6: The browser on a VPS
 

@@ -53,7 +53,7 @@ type ComposerToolbarProps = {
   projects: Project[];
   projectPath: string | null;
   onSelectProject: (path: string) => void;
-  onAttachProject: () => void;
+  onAttachProject: (server: ServerId, list: Project[]) => void;
 
   branches: BranchList | null;
   branch: string | null;
@@ -174,7 +174,7 @@ export default function ComposerToolbar({
             projects={projects}
             value={projectPath}
             onSelect={onSelectProject}
-            onAttach={onAttachProject}
+            onAttached={onAttachProject}
           />
 
           {/* Both describe a repo, so neither means anything until one is

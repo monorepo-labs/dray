@@ -81,6 +81,8 @@ function qualifyRecord(value: unknown, server: ServerId): unknown {
 const QUALIFIED = new Set([
   "list_projects",
   "add_project",
+  "github_repos",
+  "clone_github_repo",
   "remove_project",
   "set_project_space",
   "move_project",

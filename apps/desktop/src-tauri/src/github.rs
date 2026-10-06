@@ -892,7 +892,7 @@ pub async fn recheck_gh() -> bool {
 
 /// Maps a raw `gh` failure onto the reason the panel branches on. Split out so
 /// the classifier can be tested without spawning anything.
-fn unavailable(message: String) -> PrUnavailable {
+pub(crate) fn unavailable(message: String) -> PrUnavailable {
     if message.starts_with(NO_CLI) {
         PrUnavailable::NoCli
     } else {

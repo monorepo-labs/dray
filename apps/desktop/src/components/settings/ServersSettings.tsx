@@ -33,7 +33,7 @@ function StatusDot({ status }: { status: ServerStatus }) {
   );
 }
 
-/// Every Dray server this app shows, Local Server first. A remote one's
+/// Every Dray server this app shows, This Mac first. A remote one's
 /// projects and sessions join the sidebar while it is connected and stay,
 /// dimmed, while it is not — its agents keep running there either way.
 export default function ServersSettings() {
@@ -51,7 +51,7 @@ export default function ServersSettings() {
       </SettingsHeaderAction>
 
       <div className="flex flex-col">
-        <Row name="Local Server" detail="This Mac" status="connected" />
+        <Row name="This Mac" detail="Where this app runs" status="connected" />
         {servers.map((server) => (
           <Row
             key={server.id}
@@ -87,7 +87,7 @@ function Row({
   detail: string;
   status: ServerStatus;
   confirming?: boolean;
-  /// Absent for Local Server, which is the app itself.
+  /// Absent for This Mac, which is the app itself.
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;

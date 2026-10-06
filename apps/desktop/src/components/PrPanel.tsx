@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
-import { invoke } from "@/lib/transport";
+import { invoke, LOCAL, serverOfPath } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -87,6 +87,9 @@ const UNAVAILABLE: Record<PrUnavailable["kind"], string> = {
 /// A reader without it has the command to search for, which is the same place
 /// GitHub's own install page would have sent them.
 const INSTALL_COMMAND = "brew install gh";
+/// On a server, `dray setup`'s pick-list, which installs `gh` from its release
+/// tarball whatever the distribution.
+const SERVER_INSTALL_COMMAND = "dray setup";
 const LOGIN_COMMAND = "gh auth login";
 
 /// The pull requests opened from this session's branch, one collapsible row
@@ -187,22 +190,30 @@ function errorText(error: PrUnavailable): string {
 /// cannot afford to look like. The logged-in half has no such answer to give
 /// (`gh` is right there; only GitHub knows whether the login took), so it
 /// leans on `loading` instead, which is the same promise made quieter.
+///
+/// `cwd` also names the machine: on a server the command is that server's to
+/// run, the recheck asks its `gh`, and no Mac terminal is offered.
 export function MissingCli({
   kind,
   cwd,
   loading,
   refresh,
+  lead,
 }: {
   kind: "no_cli" | "not_authenticated";
   cwd: string;
   loading: boolean;
   refresh: () => void;
+  /// The sentence over the command; the PR panel's by default.
+  lead?: ReactNode;
 }) {
   const [copied, copy] = useCopied();
   const [checking, setChecking] = useState(false);
   const [stillMissing, setStillMissing] = useState(false);
 
-  const command = kind === "no_cli" ? INSTALL_COMMAND : LOGIN_COMMAND;
+  const server = serverOfPath(cwd);
+  const command =
+    kind === "not_authenticated" ? LOGIN_COMMAND : server === LOCAL ? INSTALL_COMMAND : SERVER_INSTALL_COMMAND;
 
   const recheck = async () => {
     // Logging in changes nothing about where `gh` is, so that half only asks
@@ -215,7 +226,7 @@ export function MissingCli({
       // A rejection is the bridge failing, which is no answer about `gh` — but
       // it leaves the reader on this same pane either way, so it reads as the
       // miss it is indistinguishable from.
-      if (await invoke<boolean>("recheck_gh")) refresh();
+      if (await invoke<boolean>("recheck_gh", {}, server)) refresh();
       else setStillMissing(true);
     } catch {
       setStillMissing(true);
@@ -227,9 +238,10 @@ export function MissingCli({
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
       <p className="max-w-64 text-balance text-center text-ui text-muted-foreground">
-        {kind === "no_cli"
-          ? "This branch's pull requests belong here. Dray reads them through GitHub's CLI."
-          : "GitHub's CLI is here but not logged in."}
+        {lead ??
+          (kind === "no_cli"
+            ? "This branch's pull requests belong here. Dray reads them through GitHub's CLI."
+            : "GitHub's CLI is here but not logged in.")}
       </p>
 
       {/* The copy rides the command rather than sitting with the buttons

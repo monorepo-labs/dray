@@ -815,6 +815,8 @@ pub fn run() {
             drafts::delete_draft,
             projects::list_projects,
             projects::add_project,
+            projects::github_repos,
+            projects::clone_github_repo,
             projects::remove_project,
             projects::set_last_selected_project,
             projects::move_project,

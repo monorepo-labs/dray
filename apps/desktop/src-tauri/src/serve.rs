@@ -669,6 +669,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // Projects and settings.
         list_projects() => crate::projects::list_projects().await;
         add_project(path: String) => crate::projects::add_project(&path).await;
+        github_repos() => crate::projects::github_repos().await;
+        clone_github_repo(slug: String) => crate::projects::clone_github_repo(slug, sink).await;
         remove_project(path: String) => crate::projects::remove_project(&path).await;
         set_last_selected_project(path: String) => crate::projects::set_last_selected_project(&path).await;
         set_project_space(path: String, space: Option<String>) => crate::projects::set_project_space(&path, space).await;

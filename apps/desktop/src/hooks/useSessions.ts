@@ -1,6 +1,5 @@
 import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { mergeFrom, remoteServers, serverName, subscribeServers } from "@/lib/servers";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -498,19 +497,13 @@ const setUseWorktree = (next: boolean | ((prev: boolean) => boolean)) => {
   setPrefs({ useWorktree: resolved });
 };
 
-// Attaching a known project just selects it, so this doubles as "switch to one
-// I already have" without the picker growing duplicates.
-const handleAttachProject = async () => {
-  const picked = await open({ directory: true, multiple: false });
-  if (typeof picked !== "string") return;
-
-  try {
-    const list = await invoke<Project[]>("add_project", { path: picked });
-    setProjects((prev) => mergeFrom(prev, LOCAL, list, pathOfProject));
-    setProjectPath(picked);
-  } catch (e) {
-    setError(String(e));
-  }
+// The attach dialog's answer: `server`'s whole list, with the project just
+// attached stamped newest. Attaching a known project just selects it, so this
+// doubles as "switch to one I already have" without the picker growing
+// duplicates.
+const handleAttachProject = (server: ServerId, list: Project[]) => {
+  setProjects((prev) => mergeFrom(prev, server, list, pathOfProject));
+  setProjectPath(lastSelected(list)?.path ?? null);
 };
 
 // Detaches a project. Sessions that ran in it keep their own recorded paths and

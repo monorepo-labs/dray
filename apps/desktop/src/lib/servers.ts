@@ -7,7 +7,7 @@ import type { ServerInfo } from "@/types/events";
 /// The remote servers this app holds a connection to, as Rust last said. A
 /// module store: the sidebar, the picker, the header and Settings all read it,
 /// and a second copy could draw one server connected in one place and not in
-/// another. Local Server is not on it — it is the process itself.
+/// another. This Mac is not on it — it is the process itself.
 let servers: ServerInfo[] = [];
 let started = false;
 const changed = channel<void>();
@@ -53,9 +53,9 @@ export function useServers(): ServerInfo[] {
   return useSyncExternalStore(subscribeServers, remoteServers, remoteServers);
 }
 
-/// What the reader calls a server: its name, or "Local Server".
+/// What the reader calls a server: its name, or "This Mac" — the machine the app runs on.
 export function serverName(id: ServerId): string {
-  if (id === LOCAL) return "Local Server";
+  if (id === LOCAL) return "This Mac";
   return servers.find((s) => s.id === id)?.name ?? id;
 }
 
