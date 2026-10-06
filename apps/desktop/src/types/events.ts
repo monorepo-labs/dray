@@ -738,7 +738,7 @@ unreadable: Unreadable | null, };
 /**
  * What the reader can do about a failure, drawn beside its sentence.
  */
-export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, };
+export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" };
 
 /**
  * A repository the signed-in `gh` user can reach.
@@ -1959,6 +1959,20 @@ export type Subagent = { id: string,
 label: string | null, };
 
 /**
+ * What a server has before Dray is installed on it.
+ */
+export type Survey = { 
+/**
+ * `uname -s`. Only Linux runs a server.
+ */
+os: string, tools: Array<Tool>, 
+/**
+ * Where git is missing and this login has no admin rights to install it:
+ * the line to run as root, the one `dray setup` would print.
+ */
+gitCommand: string | null, };
+
+/**
  * What the webview needs to speak to PostHog for itself.
  *
  * Handed over whole rather than looked up on the other side, and that is the
@@ -1983,6 +1997,11 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * A tool `dray setup --install` takes, as a server has it.
+ */
+export type Tool = { id: string, name: string, found: boolean, };
 
 export type ToolResult = { 
 /**

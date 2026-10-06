@@ -767,6 +767,8 @@ pub fn run() {
             servers::set_server_on,
             servers::rename_server,
             servers::trust_host_key,
+            servers::survey_server,
+            servers::install_on_server,
             servers::run_server_login,
             send_msg,
             attachments::read_attachments,
