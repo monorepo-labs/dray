@@ -5,6 +5,23 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.27.0-beta.1
+
+### Added
+
+- **Connect to your own Dray servers.** Settings → Servers adds one by
+  address and token. Its projects join the sidebar and the project
+  picker, marked with the server's name, and its sessions run there.
+  Pairs with `dray` 0.9.0, which installs a server on Linux in one line.
+- **The header names the server** a remote session runs on:
+  `server / project / title`.
+- **A server that drops shows dimmed** in the sidebar, and picks up
+  where it left off when it reconnects.
+- **Save a task without starting it.** ⌘S on a new task saves it as a
+  draft under its project in the sidebar. Open it to keep editing, or
+  send it to start the session. Agents can make them too with
+  `dray draft`.
+
 ## 0.26.0
 
 ### Added
