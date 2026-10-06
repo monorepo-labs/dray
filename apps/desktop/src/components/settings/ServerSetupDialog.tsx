@@ -51,6 +51,9 @@ export default function ServerSetupDialog({
   const [error, setError] = useState<string | null>(null);
   const [picks, setPicks] = useState<string[]>([]);
   const [log, setLog] = useState<string[]>([]);
+  // Picks still missing after an install that otherwise worked: `dray setup`
+  // warns and carries on, so its exit code alone would lose them.
+  const [unfinished, setUnfinished] = useState<string[]>([]);
   const logEnd = useRef<HTMLDivElement>(null);
   const servers = useServers();
 
@@ -74,19 +77,6 @@ export default function ServerSetupDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (step.kind !== "installing") return;
-    let unlisten: (() => void) | undefined;
-    let live = true;
-    void listen<{ line: string; text: string }>("server_installing", ({ payload }) => {
-      if (payload.line === line) setLog((prev) => [...prev.slice(-(LOG_LINES - 1)), payload.text]);
-    }).then((off) => (live ? (unlisten = off) : off()));
-    return () => {
-      live = false;
-      unlisten?.();
-    };
-  }, [step.kind, line]);
-
   useEffect(() => logEnd.current?.scrollIntoView({ block: "nearest" }), [log]);
 
   // The row going green is the answer, whichever way the connect was asked for.
@@ -98,12 +88,27 @@ export default function ServerSetupDialog({
   const install = async () => {
     setStep({ kind: "installing" });
     setError(null);
+    setUnfinished([]);
     setLog([]);
+    // Listening before the run starts, or a fast failure's one line is lost.
+    const unlisten = await listen<{ line: string; text: string }>("server_installing", ({ payload }) => {
+      if (payload.line === line) setLog((prev) => [...prev.slice(-(LOG_LINES - 1)), payload.text]);
+    });
     try {
       await invoke("install_on_server", { line, picks }, LOCAL);
+      const after = await invoke<Survey>("survey_server", { line }, LOCAL);
+      const missing = after.tools.filter((t) => picks.includes(t.id) && !t.found);
+      if (missing.length > 0) {
+        setPicks(missing.map((t) => t.id));
+        setUnfinished(missing.map((t) => t.id));
+        setError(`${missing.map((t) => t.name).join(", ")} did not install. Why is in the output above.`);
+        return;
+      }
     } catch (err) {
       setError(message(err));
       return;
+    } finally {
+      unlisten();
     }
     await finish();
   };
@@ -228,6 +233,11 @@ export default function ServerSetupDialog({
               )}
               {step.kind === "looking" && error && <Button onClick={() => void look()}>Try again</Button>}
               {step.kind === "picking" && linux && <Button onClick={() => void install()}>Install</Button>}
+              {step.kind === "installing" && unfinished.length > 0 && (
+                <Button variant="ghost" onClick={() => void finish()}>
+                  Continue without
+                </Button>
+              )}
               {step.kind === "installing" && error && <Button onClick={() => void install()}>Try again</Button>}
               {step.kind === "connecting" && shownError && <Button onClick={() => void finish()}>Try again</Button>}
             </>

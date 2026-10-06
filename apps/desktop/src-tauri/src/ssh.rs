@@ -633,22 +633,24 @@ async fn run(target: &Target, script: &str, limit: Duration, mut line: impl FnMu
         .map_err(|e| Failure::new(format!("could not run ssh: {e}"), None, true))?;
     let mut pipe = child.stderr.take().expect("piped");
     let stderr = tokio::spawn(async move {
-        let mut said = String::new();
-        let _ = (&mut pipe).take(MAX_READ as u64).read_to_string(&mut said).await;
+        let mut said = Vec::new();
+        let _ = (&mut pipe).take(MAX_READ as u64).read_to_end(&mut said).await;
         // Drained past the cap, or a chatty ssh blocks on a full pipe.
         let _ = tokio::io::copy(&mut pipe, &mut tokio::io::sink()).await;
-        said
+        String::from_utf8_lossy(&said).into_owned()
     });
     let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
     let work = async {
-        let (mut text, mut logged_in) = (String::new(), false);
+        let (mut bytes, mut logged_in) = (Vec::new(), false);
         loop {
-            text.clear();
+            bytes.clear();
+            // Bytes, not `read_line`: the cap can split a character, which
+            // `read_line` reports as an error and would end the read early.
             // A longer line arrives in pieces, which a log can stand.
-            if (&mut stdout).take(MAX_READ as u64).read_line(&mut text).await.unwrap_or(0) == 0 {
+            if (&mut stdout).take(MAX_READ as u64).read_until(b'\n', &mut bytes).await.unwrap_or(0) == 0 {
                 break;
             }
-            let text = plain(&text);
+            let text = plain(&String::from_utf8_lossy(&bytes));
             if logged_in {
                 line(&text);
             } else {
