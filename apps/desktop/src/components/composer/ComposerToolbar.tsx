@@ -10,6 +10,7 @@ import PermissionSelector, {
 import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
+import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -24,6 +25,8 @@ import type {
 } from "@/types/events";
 
 type ComposerToolbarProps = {
+  /// The server sends go to — the session's, else the picked project's.
+  server: ServerId;
   /// Creation-time only, like project and branch: it decides which child runs.
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
@@ -90,6 +93,7 @@ type ComposerToolbarProps = {
 /// header already shows the project and branch. Its own spacing from the card is
 /// the caller's, since only the caller knows which side of it the row sits on.
 export default function ComposerToolbar({
+  server,
   harness,
   onHarnessChange,
   models,
@@ -146,6 +150,7 @@ export default function ComposerToolbar({
       </Tooltip>
 
       <ModelSelector
+        server={server}
         harness={harness}
         onHarnessChange={onHarnessChange}
         models={models}

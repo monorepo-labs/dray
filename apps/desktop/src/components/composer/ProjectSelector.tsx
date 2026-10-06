@@ -5,6 +5,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -16,6 +17,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
+import { serverConnected, serverName, useServers } from "@/lib/servers";
+import { displayPath, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
 export default function ProjectSelector({
@@ -29,6 +32,17 @@ export default function ProjectSelector({
   onSelect: (path: string) => void;
   onAttach: () => void;
 }) {
+  // Picking a project picks its server, so the menu is grouped by server and
+  // there is no server control anywhere else. One server draws no headings,
+  // which is every reader who has added none.
+  useServers();
+  const groups = new Map<ServerId, Project[]>();
+  for (const project of projects) {
+    const server = serverOfPath(project.path);
+    groups.set(server, [...(groups.get(server) ?? []), project]);
+  }
+  const grouped = groups.size > 1 || !groups.has(LOCAL);
+
   // Nothing to choose between yet, so the trigger does the only useful thing
   // rather than opening a menu whose sole item is the same action.
   if (projects.length === 0) {
@@ -63,7 +77,10 @@ export default function ProjectSelector({
                   open shape reads as a shard rather than a folder. */}
               <Folder className="size-3.5 shrink-0 fill-current" />
               <span className="truncate">
-                {value ? basename(value) : "Attach project"}
+                {value ? basename(displayPath(value)) : "Attach project"}
+                {value && serverOfPath(value) !== LOCAL && (
+                  <span className="text-muted-foreground/50">-{serverName(serverOfPath(value))}</span>
+                )}
               </span>
             </Button>
           </DropdownMenuTrigger>
@@ -80,17 +97,29 @@ export default function ProjectSelector({
 
       <DropdownMenuContent align="start" className="min-w-52">
         <DropdownMenuRadioGroup value={value ?? ""} onValueChange={onSelect}>
-          {projects.map((project) => (
-            // Two projects can share a folder name, so the full path is the
-            // tooltip rather than the label.
-            <DropdownMenuRadioItem
-              key={project.path}
-              value={project.path}
-              title={project.path}
-              className="text-ui"
-            >
-              <span className="truncate">{project.name}</span>
-            </DropdownMenuRadioItem>
+          {[...groups].map(([server, list]) => (
+            <div key={server} role="group" aria-label={grouped ? serverName(server) : undefined}>
+              {grouped && (
+                <DropdownMenuLabel className="flex text-ui font-normal text-muted-foreground">
+                  {serverName(server)}
+                  {!serverConnected(server) && <span className="ml-auto pl-3 opacity-70">disconnected</span>}
+                </DropdownMenuLabel>
+              )}
+              {list.map((project) => (
+                // Two projects can share a folder name, so the full path is the
+                // tooltip rather than the label. A disconnected server's
+                // projects stay listed and cannot be picked: nothing could send.
+                <DropdownMenuRadioItem
+                  key={project.path}
+                  value={project.path}
+                  title={displayPath(project.path)}
+                  disabled={!serverConnected(server)}
+                  className="text-ui"
+                >
+                  <span className="truncate">{project.name}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </div>
           ))}
         </DropdownMenuRadioGroup>
 

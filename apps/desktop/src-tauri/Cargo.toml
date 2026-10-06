@@ -118,6 +118,9 @@ desktop = [
   "dep:cpal",
   "dep:rubato",
   "dep:transcribe-cpp",
+  # The client half of the serve wire, for remote servers (servers.rs).
+  "dep:tokio-tungstenite",
+  "dep:form_urlencoded",
 ]
 cef = ["desktop", "dep:cef"]
 serve = ["dep:tokio-tungstenite", "dep:form_urlencoded"]

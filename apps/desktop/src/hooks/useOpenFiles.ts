@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import { invoke, listen } from "@/lib/transport";
+import { watchDocs } from "@/lib/servers";
 
 import { channel } from "@/lib/channel";
 import type { FileBody } from "@/types/events";
@@ -227,7 +228,7 @@ let watching: Promise<unknown> = Promise.resolve();
 
 function watch(paths: string[]): Promise<unknown> {
   watching = watching
-    .then(() => invoke("watch_docs", { scope: SCOPE, paths }))
+    .then(() => watchDocs(SCOPE, paths))
     .catch(() => {});
   return watching;
 }

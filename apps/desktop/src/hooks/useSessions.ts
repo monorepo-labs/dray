@@ -1,4 +1,5 @@
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { mergeFrom, remoteServers, serverName, subscribeServers } from "@/lib/servers";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -134,6 +135,24 @@ export type ApiRetryState = {
 /// composer remounting under a session switch while git is still working.
 const removingWorktrees = new Set<string>();
 
+/// Where a harness's model list is filed: bare for this Mac, as it always was.
+const modelsKey = (server: ServerId, harness: Harness): string =>
+  server === LOCAL ? harness : `${server}:${harness}`;
+
+const pathOfProject = (p: Project) => p.path;
+
+/// Each server's last index answer, per side (`<server>:<archived>`), so a
+/// server that cannot be asked still draws the side the reader picks.
+const lastIndex = new Map<string, SessionIndexItem[]>();
+
+/// Whether a remote server has been taken off the list since a read began.
+const removed = (server: ServerId): boolean =>
+  server !== LOCAL && !remoteServers().some((s) => s.id === server);
+
+/// Remote servers that can be asked something now.
+const connectedRemotes = (): ServerId[] =>
+  remoteServers().flatMap((s) => (s.status === "connected" ? [s.id] : []));
+
 /// One shared empty set, so a session with no tasks keeps its transcript memo.
 const NO_TASKS: ReadonlySet<string> = new Set();
 
@@ -252,9 +271,10 @@ export function useSessions() {
     // same frame the toggle moves, and only a first visit to one whose list is
     // a genuine read has nothing to draw — which is the one case where a
     // waiting row is the truth rather than a stutter.
-    const [modelsByHarness, setModelsByHarness] = useState<
-      Partial<Record<Harness, Model[]>>
-    >({});
+    //
+    // Keyed by server too (`modelsKey`): a remote server's agents are its own
+    // installs, so its list is not this Mac's.
+    const [modelsByHarness, setModelsByHarness] = useState<Record<string, Model[]>>({});
     // pi's list is a read, not a table, so it can be in flight. `0` is the
     // resting value and every refresh bumps it, which is what re-arms the
     // effect below without a second copy of the read beside it.
@@ -283,6 +303,11 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
+    // The server the composer talks to: the open session's, else the picked
+    // project's. Models and agent availability are read from it.
+    const activeServer: ServerId = selectedSessionId
+      ? serverOfSession(selectedSessionId)
+      : serverOfPath(projectPath ?? "");
     // Per-session, not global: sessions run concurrently and all of their events
     // arrive on the same channel, so a single value would clear on another's
     // turn. The backend drives this via `session_status`, and this map is the
@@ -369,9 +394,9 @@ export function useSessions() {
 // follows the pick, which is per session and names its provider. See
 // `fxListFor` for the bug that is.
 const models = useMemo(() => {
-  const active = modelsByHarness[harness] ?? [];
-  return harness === "fx" ? fxListFor(readFxModelCache(), modelId, active) : active;
-}, [modelsByHarness, harness, modelId]);
+  const active = modelsByHarness[modelsKey(activeServer, harness)] ?? [];
+  return harness === "fx" && activeServer === LOCAL ? fxListFor(readFxModelCache(), modelId, active) : active;
+}, [modelsByHarness, harness, modelId, activeServer]);
 
 // What actually gets sent for the current model: its remembered pick, else its
 // own default, and null for a model that takes no effort flag at all.
@@ -480,7 +505,8 @@ const handleAttachProject = async () => {
   if (typeof picked !== "string") return;
 
   try {
-    setProjects(await invoke<Project[]>("add_project", { path: picked }));
+    const list = await invoke<Project[]>("add_project", { path: picked });
+    setProjects((prev) => mergeFrom(prev, LOCAL, list, pathOfProject));
     setProjectPath(picked);
   } catch (e) {
     setError(String(e));
@@ -493,7 +519,7 @@ const handleAttachProject = async () => {
 const handleRemoveProject = async (path: string) => {
   try {
     const left = await invoke<Project[]>("remove_project", { path });
-    setProjects(left);
+    setProjects((prev) => mergeFrom(prev, serverOfPath(path), left, pathOfProject));
     // The newest stamp, not the front: the same project a restart would open.
     if (projectPath === path) setProjectPath(lastSelected(left)?.path ?? null);
   } catch (e) {
@@ -506,7 +532,8 @@ const handleRemoveProject = async (path: string) => {
 // project between them.
 const setProjectSpace = async (path: string, space: string | null) => {
   try {
-    setProjects(await invoke<Project[]>("set_project_space", { path, space }));
+    const list = await invoke<Project[]>("set_project_space", { path, space });
+    setProjects((prev) => mergeFrom(prev, serverOfPath(path), list, pathOfProject));
   } catch (e) {
     setError(String(e));
   }
@@ -516,24 +543,44 @@ const setProjectSpace = async (path: string, space: string | null) => {
 // both draw. Settings is the only caller.
 const moveProject = async (path: string, delta: number) => {
   try {
-    setProjects(await invoke<Project[]>("move_project", { path, delta }));
+    const list = await invoke<Project[]>("move_project", { path, delta });
+    setProjects((prev) => mergeFrom(prev, serverOfPath(path), list, pathOfProject));
   } catch (e) {
     setError(String(e));
   }
 };
 
 // Moves every project in one space to another, or out of any space with `null`.
-// One call, so a rename or a removal cannot half-happen: answers `false` where
-// nothing was written, which is what lets the caller keep its own record of
-// which spaces exist in step with the tags.
+// Answers `false` unless every server took it, which is what lets the caller
+// keep its own record of which spaces exist in step with the tags.
+//
+// A space is device-local and its tags live in each server's projects file,
+// so every server is retagged. One that holds the space and cannot be reached
+// refuses the whole move, since it would come back carrying the old name. One
+// that fails partway is named, and asking again finishes the job: a server
+// already retagged holds nothing under `from` and writes nothing.
 const retagSpace = async (from: string, to: string | null) => {
-  try {
-    setProjects(await invoke<Project[]>("retag_space", { from, to }));
-    return true;
-  } catch (e) {
-    setError(String(e));
+  const unreachable = remoteServers().find(
+    (s) => s.status !== "connected" && projects.some((p) => p.space === from && serverOfPath(p.path) === s.id),
+  );
+  if (unreachable) {
+    setError(`${unreachable.name} is disconnected and holds projects in this space. Reconnect it first.`);
     return false;
   }
+  const servers = [LOCAL, ...connectedRemotes()];
+  const results = await Promise.allSettled(
+    servers.map((server) => invoke<Project[]>("retag_space", { from, to }, server)),
+  );
+  const failed: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      setProjects((prev) => mergeFrom(prev, servers[i], result.value, pathOfProject));
+    } else {
+      failed.push(`${serverName(servers[i])}: ${String(result.reason)}`);
+    }
+  });
+  if (failed.length) setError(`Could not update the space on ${failed.join("; ")}`);
+  return !failed.length;
 };
 
 // `null` is no project at all, which a space holding none is — and it has to be
@@ -741,9 +788,17 @@ const handleSendMsg = async (
     setError("Attach a project first.");
     return false;
   }
+  // An attachment is a path on this Mac, which a remote server cannot read.
+  if (attachmentPaths.length && serverOfPath(cwd) !== LOCAL) {
+    setError("Attachments can't be sent to a remote server yet.");
+    return false;
+  }
 
   if (!sessionId) {
     sessionId = crypto.randomUUID();
+    // Before the selection moves, so the composer reads this server's models
+    // on the very frame it lands on the new session.
+    noteSession(sessionId, serverOfPath(cwd));
     // Claimed alongside the selection everywhere it moves, or a read still out
     // from an earlier click can land afterwards and roll this one away.
     selectionRequestRef.current = sessionId;
@@ -1110,7 +1165,7 @@ const handleNewSession = () => {
   // naming the model of the provider left. Coming back from another fx session
   // then drew "Select Model" with nothing to repair it: the harness had not
   // changed, so no fetch followed.
-  const ownList = modelsByHarness[prefs.harness] ?? [];
+  const ownList = modelsByHarness[modelsKey(serverOfPath(projectPath ?? ""), prefs.harness)] ?? [];
   const remembered = rememberedModel(prefs.modelByHarness, prefs.harness);
   setModelId(
     prefs.harness === "fx"
@@ -1637,31 +1692,38 @@ const deleteSession = async (sessionId: string) => {
 // A read outlived by a second press is dropped: two reads in flight land in
 // whatever order the backend answers, and the earlier one landing last put
 // the side just left back on screen under a toggle saying otherwise.
-// Bumped by a server's `live_state`, since rows created or retitled while the
-// socket was down announced themselves to nobody.
-const [indexReload, setIndexReload] = useState(0);
-
+//
+// Every server is read; a server's `live_state` reads it again, since rows
+// created or retitled while the socket was down announced themselves to
+// nobody. An unreachable server cannot be asked for the side just picked, so
+// its last answer for that side stands in, drawn dimmed like the rest of it.
+//
+// The side being left is cached from what is on screen rather than from the
+// last read, since settling or unsettling a row moves it without a read. A
+// row the side left now holds is never restored onto this one.
 useEffect(() => {
-  let cancelled = false;
-  invoke<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
-    .then((items) => {
-      if (cancelled) return;
-      setSessionIndexItems(items);
-      setIndexSide(showArchived);
-    })
-    .catch((e) => {
-      if (!cancelled) setError(String(e));
-    });
-  return () => {
-    cancelled = true;
-  };
-}, [showArchived, indexReload])
+  const servers = [LOCAL, ...connectedRemotes()];
+  setSessionIndexItems((prev) => {
+    let next = prev.filter((i) => servers.includes(serverOfPath(i.cwd)));
+    for (const s of remoteServers()) {
+      if (servers.includes(s.id)) continue;
+      const left = prev.filter((i) => serverOfPath(i.cwd) === s.id);
+      lastIndex.set(`${s.id}:${!showArchived}`, left);
+      const moved = new Set(left.map((i) => i.sessionId));
+      const kept = lastIndex.get(`${s.id}:${showArchived}`) ?? [];
+      next = [...next, ...kept.filter((i) => !moved.has(i.sessionId))];
+    }
+    return next;
+  });
+  for (const server of servers) readServer(server);
+}, [showArchived])
 
 useEffect(() => {
   let cancelled = false;
   setLoadingModels(true);
 
-  invoke<Model[]>("list_models", { harness })
+  const server = activeServer;
+  invoke<Model[]>("list_models", { harness }, server)
     .then((list) => {
       // Guarded because pi's read spawns a child and can take a moment, so a
       // reader switching harness twice would otherwise have the first answer
@@ -1669,17 +1731,18 @@ useEffect(() => {
       if (cancelled) return;
       // Filed under the harness it was read for, so it is still here — and
       // still right — when the reader comes back to that agent.
-      setModelsByHarness((prev) => ({ ...prev, [harness]: list }));
+      setModelsByHarness((prev) => ({ ...prev, [modelsKey(server, harness)]: list }));
       // fx's list is per-provider, so persist it under its provider for the
-      // instant seed a later switch back reads.
-      if (harness === "fx") cacheFxModels(list);
+      // instant seed a later switch back reads. This Mac's fx alone: a
+      // remote fx's provider is that server's setting.
+      if (harness === "fx" && server === LOCAL) cacheFxModels(list);
       // A model belongs to exactly one harness, so switching harness leaves the
       // pick naming something the new one cannot run. Repaired here, where the
       // real list has just landed, rather than guessed at when the toggle moved.
       // fx repairs per provider, restoring that provider's last model — see
       // `landedFxModel` for the pick it must leave alone.
       setModelId((current) =>
-        harness === "fx"
+        harness === "fx" && server === LOCAL
           ? landedFxModel(readFxModelCache(), list, current, readFxPicks())
           : usableModel(list, current, harness),
       );
@@ -1691,7 +1754,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [harness, modelsGeneration])
+}, [harness, modelsGeneration, activeServer])
 
 /// Drops whatever the harnesses cached and reads again.
 ///
@@ -1702,7 +1765,7 @@ useEffect(() => {
 /// with a CLI update without restarting. Claude Code is still a table, so this
 /// costs it one round trip and answers the same thing.
 const refreshModels = () => {
-  invoke("refresh_models")
+  invoke("refresh_models", {}, activeServer)
     .catch(() => {})
     .finally(() => setModelsGeneration((n) => n + 1));
 };
@@ -1718,6 +1781,7 @@ const reloadModels = () => setModelsGeneration((n) => n + 1);
 /// Nothing happens for a provider never visited (gateway on a cold install),
 /// which is the one case that still waits on the probe's loading state.
 const seedFxModels = (provider: string) => {
+  if (activeServer !== LOCAL) return;
   const cache = readFxModelCache();
   const cached = cache[provider];
   if (cached?.length) setModelsByHarness((prev) => ({ ...prev, fx: cached }));
@@ -1730,13 +1794,49 @@ const seedFxModels = (provider: string) => {
 useEffect(() => {
   invoke<Project[]>("list_projects")
     .then((list) => {
-      setProjects(list);
+      setProjects((prev) => mergeFrom(prev, LOCAL, list, pathOfProject));
       setProjectPath(lastSelected(list)?.path ?? null);
     })
     // Without this a failed read leaves the picker silently empty, and the
     // reason only reaches the console.
     .catch((e) => setError(String(e)));
 }, [])
+
+/// One server's projects and sessions, read again. A remote server is read
+/// each time it connects — its `live_state` says so — and a server that drops
+/// keeps its last answer, which the sidebar draws dimmed.
+const readServer = (server: ServerId) => {
+  const archived = showArchivedRef.current;
+  invoke<SessionIndexItem[]>("list_session_index_items", { archived }, server)
+    .then((items) => {
+      if (removed(server)) return;
+      lastIndex.set(`${server}:${archived}`, items);
+      // A read outlived by a toggle is the side just left.
+      if (archived !== showArchivedRef.current) return;
+      setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
+      if (server === LOCAL) setIndexSide(archived);
+    })
+    .catch((e) => {
+      if (server === LOCAL) setError(String(e));
+    });
+  if (server === LOCAL) return;
+  invoke<Project[]>("list_projects", {}, server)
+    .then((list) => !removed(server) && setProjects((prev) => mergeFrom(prev, server, list, pathOfProject)))
+    .catch(() => {});
+};
+
+// A server taken off the list takes its rows with it; one that is merely
+// unreachable keeps them.
+useEffect(
+  () =>
+    subscribeServers(() => {
+      const listed = new Set(remoteServers().map((s) => s.id));
+      const kept = (path: string) => serverOfPath(path) === LOCAL || listed.has(serverOfPath(path));
+      setProjects((prev) => (prev.every((p) => kept(p.path)) ? prev : prev.filter((p) => kept(p.path))));
+      setSessionIndexItems((prev) => (prev.every((i) => kept(i.cwd)) ? prev : prev.filter((i) => kept(i.cwd))));
+    }),
+  [],
+)
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a
@@ -2134,15 +2234,23 @@ const catchUp = async (sessionId: string) => {
 /// replaces rather than adds to what is held: a card answered while the socket
 /// was down must go, and one raised meanwhile must be drawn, or an agent waits
 /// on a question nobody can see. Applied quietly — none of it is news.
+///
+/// Only the sending server's sessions are touched: another server's cards and
+/// statuses are that server's to say, and its socket never dropped.
 useEffect(() => {
-  const listenerPromise = listen<LiveState>("live_state", ({ payload }) => {
+  const listenerPromise = listen<LiveState>("live_state", ({ payload, server }) => {
     const { asks, tasks } = payload;
-    dropHeldAsks();
+    for (const e of [...asks, ...tasks]) noteSession(e.sessionId, server);
+    const ours = (sessionId: string) => serverOfSession(sessionId) === server;
+    const without = <T,>(map: Record<string, T>): Record<string, T> =>
+      Object.fromEntries(Object.entries(map).filter(([id]) => !ours(id)));
+    dropHeldAsks(ours);
     setSessions((prev) => {
       for (const ask of asks) {
         if (!prev.some((s) => s.sessionId === ask.sessionId)) holdEarlyEvent(ask);
       }
       return prev.map((s) => {
+        if (!ours(s.sessionId)) return s;
         const kept = s.events.filter((e) => !isAsk(e));
         const mine = asks.filter((a) => a.sessionId === s.sessionId);
         return kept.length === s.events.length && !mine.length ? s : { ...s, events: [...kept, ...mine] };
@@ -2156,25 +2264,31 @@ useEffect(() => {
       }
     }
     for (const id of Object.keys(asksBySessionRef.current)) {
-      if (!open[id]) dismissNotice(id, "asking");
+      if (ours(id) && !open[id]) dismissNotice(id, "asking");
     }
-    setAsksBySession(open);
-    setTasksBySession(
-      Object.fromEntries(
+    setAsksBySession((prev) => ({ ...without(prev), ...open }));
+    setTasksBySession((prev) => ({
+      ...without(prev),
+      ...Object.fromEntries(
         tasks.flatMap((t) => (t.payload.type === "background_tasks_changed" ? [[t.sessionId, t.payload.tasks]] : [])),
       ),
-    );
+    }));
     // Status is written to the index on every change, so the re-read below is
     // the server's answer; a live reading held from before the drop would
     // outrank it.
-    setStatusBySession({});
-    setIndexReload((n) => n + 1);
+    setStatusBySession(without);
+    readServer(server);
 
     for (const s of sessionsRef.current) {
+      if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
       catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
     }
   });
+  // Remote servers connected before this webview was listening, so their
+  // `live_state` went nowhere: reopened once it is, every server says it
+  // again. Listeners registered before this one are already in place.
+  void listenerPromise.then(() => invoke("reconnect_servers", {}, LOCAL).catch(() => {}));
   return () => {
     listenerPromise.then((unlisten) => unlisten());
   };
@@ -2800,6 +2914,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

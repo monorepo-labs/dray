@@ -531,21 +531,32 @@ fn write_credentials_at(
 }
 
 async fn write_key(key: &str) -> Result<(), String> {
-    let _guard = CREDENTIALS_LOCK.lock().await;
-
-    let mut next = read_credentials().await;
-    next.insert(LINEAR_CREDENTIAL.to_string(), key.to_string());
-
-    write_credentials(&next).await
+    set_credential(LINEAR_CREDENTIAL, Some(key)).await
 }
 
 async fn delete_key() -> Result<(), String> {
+    set_credential(LINEAR_CREDENTIAL, None).await
+}
+
+/// A credential stored under `name`, or `None` where nothing is. The Linear
+/// key and each remote server's token (`servers.rs`) share this one file.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) async fn credential(name: &str) -> Option<String> {
+    read_credentials().await.remove(name).filter(|v| !v.trim().is_empty())
+}
+
+/// Stores `value` under `name`, or removes the entry for `None`.
+pub(crate) async fn set_credential(name: &str, value: Option<&str>) -> Result<(), String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
 
     let mut next = read_credentials().await;
-    // Already gone is what the caller asked for, and rewriting the file to say
+    let changed = match value {
+        Some(value) => next.insert(name.to_string(), value.to_string()).as_deref() != Some(value),
+        None => next.remove(name).is_some(),
+    };
+    // Already so is what the caller asked for, and rewriting the file to say
     // the same thing is work with no reader.
-    if next.remove(LINEAR_CREDENTIAL).is_none() {
+    if !changed {
         return Ok(());
     }
 

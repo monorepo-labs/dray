@@ -1,4 +1,5 @@
-import { invoke } from "@/lib/transport";
+import { displayPath, invoke, LOCAL, serverOfPath } from "@/lib/transport";
+import { serverName } from "@/lib/servers";
 import { Check } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -65,11 +66,14 @@ export default function SessionHeader({
   // A worktree session's `cwd` is the tree, not the repo, so the project name
   // has to come off `projectPath` or every worktree reads as its own project.
   const project = basename(session.projectPath);
+  // A remote session leads with its server — `server/project/title` — so a
+  // project on two machines is never mistaken for one.
+  const server = serverOfPath(session.cwd);
 
   // The branch is what's drawn, the directory is what gets copied — a name is
   // a thing to read, a path is a thing to paste into a terminal, and a
   // worktree session's two differ.
-  const cwd = session.cwd;
+  const cwd = displayPath(session.cwd);
   const title = saved?.sessionId === session.sessionId ? saved.title : session.title;
   const copied = copiedPath === cwd;
 
@@ -81,6 +85,14 @@ export default function SessionHeader({
           which is what the overlap was. `min-w-0` frees the box to shrink;
           only this makes what is inside it clip when it does. */}
       <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        {server !== LOCAL && (
+          <>
+            <span className="shrink-0 text-muted-foreground">{serverName(server)}</span>
+            <span aria-hidden className="shrink-0 text-muted-foreground/50">
+              /
+            </span>
+          </>
+        )}
         <span className="shrink-0 text-muted-foreground">{project}</span>
         <span aria-hidden className="shrink-0 text-muted-foreground/50">
           /

@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, qualify, serverOfSession } from "@/lib/transport";
+import { watchDocs } from "@/lib/servers";
 
 import { openInFiles } from "@/hooks/useOpenFiles";
 import { channel } from "@/lib/channel";
@@ -206,7 +207,10 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
 /// store would put this rule somewhere it cannot be read from.
-export function openPath(sid: string | null, path: string, line?: number): void {
+export function openPath(sid: string | null, raw: string, line?: number): void {
+  // An agent names its own machine's paths, so a remote session's are keyed
+  // on its server before either panel reads one.
+  const path = qualify(raw, serverOfSession(sid));
   if (isMarkdownPath(path)) return openDoc(sid, path);
   openInFiles(sid, path, line);
 }
@@ -473,7 +477,7 @@ function watch(paths: string[]): Promise<unknown> {
     // Scoped, since the Files view holds its own open set: one watcher for both
     // would mean whichever panel opened last silently took the other's watch
     // away.
-    .then(() => invoke("watch_docs", { scope: "docs", paths }))
+    .then(() => watchDocs("docs", paths))
     .catch(() => {});
   return watching;
 }
