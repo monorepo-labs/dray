@@ -570,13 +570,14 @@ pub async fn trust_host_key(line: String, fingerprint: String) -> Result<(), Str
 
 /// Sign in on a server: Terminal, already logged in to it, running the
 /// agent's login. Same closed set `run_agent_login` takes, so nothing typed in
-/// the webview reaches a shell.
+/// the webview reaches a shell. No `auth` is the composer's logged-out notice,
+/// which names a harness alone and runs the login line it shows.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn run_server_login(
     server: String,
     harness: crate::harness::Harness,
     provider: Option<String>,
-    auth: String,
+    auth: Option<String>,
 ) -> Result<(), String> {
     let target = conns()
         .iter()
@@ -586,7 +587,10 @@ pub async fn run_server_login(
         .ssh
         .clone()
         .ok_or("This server was added by address, so there is no login to open. Run the command on it yourself.")?;
-    let command = crate::accounts::login_command(harness, provider, &auth)?;
+    let command = match auth {
+        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
+        None => harness.login_command().to_string(),
+    };
     crate::apps::run_in_terminal(&ssh::terminal_line(&target, &command), "").await
 }
 

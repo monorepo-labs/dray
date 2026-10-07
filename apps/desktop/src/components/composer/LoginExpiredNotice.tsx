@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, KeyRound, SquareTerminal, TriangleAlert } from "lucide-react";
-import { invoke } from "@/lib/transport";
+import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -42,10 +42,12 @@ const FAILED_MS = 4000;
 /// path the script uses.
 export default function LoginExpiredNotice({
   agent,
+  server,
   cwd,
   onHandled,
 }: {
   agent: AgentAvailability;
+  server: ServerId;
   cwd: string;
   onHandled: () => void;
 }) {
@@ -57,7 +59,11 @@ export default function LoginExpiredNotice({
 
   const logIn = async () => {
     try {
-      await invoke("open_login_terminal", { harness: agent.harness, cwd });
+      // A remote session's `cwd` exists only on its server, so its login is a
+      // Terminal here logged in to that server, the one Accounts opens.
+      await (server === LOCAL
+        ? invoke("open_login_terminal", { harness: agent.harness, cwd })
+        : invoke("run_server_login", { server, harness: agent.harness }, LOCAL));
     } catch (err) {
       // A failed launch must not clear the block: nothing was opened, so the
       // reader has not been handed the cure yet.
