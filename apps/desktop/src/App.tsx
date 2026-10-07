@@ -1442,7 +1442,6 @@ function App() {
     issue: hasIssueTab,
     more: hasMoreTab,
     plan: hasPlanTab,
-    browser: activeServer === LOCAL,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -2466,7 +2465,7 @@ function App() {
   // split view's panes take ⌘⌥ above.
   useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
   useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
-  useHotkey("view.browser", () => !issuesOpen && activeServer === LOCAL && setViewTab("browser"));
+  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
   useHotkey("view.files", () => !issuesOpen && setViewTab("files"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
@@ -2741,7 +2740,7 @@ function App() {
             className="flex-1"
           />
 
-          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} browser={activeServer === LOCAL} />}
+          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can

@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use clap::{Args, Subcommand};
@@ -13,7 +13,8 @@ use clap::{Args, Subcommand};
 #[derive(Args)]
 pub struct Setup {
     /// Install these without asking, which is how a run with no terminal
-    /// installs anything: git, gh, claude_code, codex, pi, fx, grok.
+    /// installs anything: git, gh, claude_code, codex, pi, fx, grok, and on
+    /// Linux browser, ffmpeg and cloudflared.
     #[arg(long, value_delimiter = ',', value_name = "TOOL")]
     install: Vec<String>,
 }
@@ -53,7 +54,61 @@ fn tools() -> Vec<Tool> {
         Tool { id: "gh", name: "GitHub CLI", bin: "gh" },
     ];
     tools.extend(dray_proto::AGENTS.iter().map(|a| Tool { id: a.id, name: a.name, bin: a.bin }));
+    // A server's `dray browser` downloads its own Chromium; what it cannot
+    // fetch is the system libraries that Chromium links against, nor ffmpeg
+    // for `record`.
+    if LINUX {
+        tools.push(Tool { id: "browser", name: "Browser for agents", bin: "" });
+        tools.push(Tool { id: "ffmpeg", name: "ffmpeg", bin: "ffmpeg" });
+        tools.push(Tool { id: "cloudflared", name: "cloudflared", bin: "cloudflared" });
+    }
     tools
+}
+
+fn present(tool: &Tool) -> bool {
+    match tool.id {
+        "browser" => browser_libs_present(),
+        _ => find(tool.bin).is_some(),
+    }
+}
+
+/// What headless Chromium links against and a fresh Ubuntu lacks, as `ldd`
+/// reported it, each with the packages that carry it — the `t64` name first,
+/// since noble and later renamed them and the old name became virtual, which
+/// `apt-get install` refuses.
+const BROWSER_LIBS: [(&str, &[&str]); 12] = [
+    ("libnspr4.so", &["libnspr4"]),
+    ("libnss3.so", &["libnss3"]),
+    ("libatk-1.0.so.0", &["libatk1.0-0t64", "libatk1.0-0"]),
+    ("libatk-bridge-2.0.so.0", &["libatk-bridge2.0-0t64", "libatk-bridge2.0-0"]),
+    ("libatspi.so.0", &["libatspi2.0-0t64", "libatspi2.0-0"]),
+    ("libXcomposite.so.1", &["libxcomposite1"]),
+    ("libXdamage.so.1", &["libxdamage1"]),
+    ("libXfixes.so.3", &["libxfixes3"]),
+    ("libXrandr.so.2", &["libxrandr2"]),
+    ("libgbm.so.1", &["libgbm1"]),
+    ("libxkbcommon.so.0", &["libxkbcommon0"]),
+    ("libasound.so.2", &["libasound2t64", "libasound2"]),
+];
+
+/// No library Chromium links against, but without fontconfig's config it
+/// aborts on start, and without a font every page draws as boxes.
+const FONT_PACKAGES: [&str; 3] = ["fontconfig", "fonts-liberation", "fonts-dejavu-core"];
+
+fn browser_libs_present() -> bool {
+    let Some(cache) = output("/sbin/ldconfig", &["-p"]) else { return false };
+    Path::new("/etc/fonts/fonts.conf").is_file()
+        && BROWSER_LIBS.iter().all(|(lib, _)| cache.contains(lib))
+}
+
+/// Each library's package as this machine's apt names it.
+fn browser_packages() -> Result<String, InstallError> {
+    let known = |p: &&str| Command::new("apt-cache").args(["show", p]).output().is_ok_and(|o| o.status.success());
+    let mut picked = FONT_PACKAGES.to_vec();
+    for (lib, packages) in BROWSER_LIBS {
+        picked.push(packages.iter().copied().find(known).ok_or_else(|| Failed(format!("apt knows no package for {lib}")))?);
+    }
+    Ok(picked.join(" "))
 }
 
 /// Where vendor installers put a binary, reaching `PATH` only through
@@ -79,7 +134,7 @@ pub fn setup(args: Setup) -> Result<(), String> {
     }
 
     println!("\x1b[90m┌\x1b[0m  Dray setup");
-    let (found, missing): (Vec<&Tool>, Vec<&Tool>) = all.iter().partition(|t| find(t.bin).is_some());
+    let (found, missing): (Vec<&Tool>, Vec<&Tool>) = all.iter().partition(|t| present(t));
     if !found.is_empty() {
         let names: Vec<_> = found.iter().map(|t| t.name).collect();
         done("Found", &names.join(", "));
@@ -93,6 +148,9 @@ pub fn setup(args: Setup) -> Result<(), String> {
             .iter()
             .map(|t| match t.id {
                 "git" => (format!("git {DIM}(Dray needs it){RESET}"), true),
+                "browser" => (format!("Browser for agents {DIM}(system libraries for dray browser){RESET}"), false),
+                "ffmpeg" => (format!("ffmpeg {DIM}(dray browser record){RESET}"), false),
+                "cloudflared" => (format!("cloudflared {DIM}(public links to dev servers){RESET}"), false),
                 _ => (t.name.to_string(), false),
             })
             .collect();
@@ -111,7 +169,7 @@ pub fn setup(args: Setup) -> Result<(), String> {
     for tool in picked {
         println!("{BAR}\n\x1b[36m●\x1b[0m  Installing {}", tool.name);
         match install(tool, tty.as_ref()) {
-            Ok(()) if find(tool.bin).is_some() => done(&format!("{} installed", tool.name), ""),
+            Ok(()) if present(tool) => done(&format!("{} installed", tool.name), ""),
             Ok(()) => warn(&format!("{} installed, but not where dray can see it yet", tool.name)),
             Err(Manual(command)) => todo.push(command),
             Err(Failed(why)) => warn(&format!("{} did not install: {why}", tool.name)),
@@ -167,6 +225,13 @@ fn install(tool: &Tool, tty: Option<&File>) -> Result<(), InstallError> {
     let stdin = || tty.and_then(|t| t.try_clone().ok()).map_or(Stdio::null(), Stdio::from);
     let script = match tool.id {
         "git" => return install_git(stdin()),
+        // The browser's two rows know apt's package names alone.
+        "browser" | "ffmpeg" if find("apt-get").is_none() => {
+            return Err(Failed("this installs with apt alone; use your package manager".into()))
+        }
+        "browser" => return apt(&browser_packages()?, stdin()),
+        "ffmpeg" => return apt("ffmpeg", stdin()),
+        "cloudflared" => cloudflared_script()?,
         "gh" if LINUX => GH_LINUX.to_string(),
         "gh" if find("brew").is_some() => "brew install gh".to_string(),
         "gh" => return Err(Failed("get it from https://cli.github.com".into())),
@@ -201,6 +266,14 @@ fn install_git(stdin: Stdio) -> Result<(), InstallError> {
     let Some((_, cmd)) = managers.iter().find(|(pm, _)| find(pm).is_some()) else {
         return Err(Failed("no package manager this knows".into()));
     };
+    as_admin(cmd, stdin)
+}
+
+fn apt(packages: &str, stdin: Stdio) -> Result<(), InstallError> {
+    as_admin(&format!("apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {packages}"), stdin)
+}
+
+fn as_admin(cmd: &str, stdin: Stdio) -> Result<(), InstallError> {
     if output("id", &["-u"]).as_deref() == Some("0") {
         sh(cmd, stdin)
     } else if Command::new("sudo").args(["-n", "true"]).stderr(Stdio::null()).status().is_ok_and(|s| s.success()) {
@@ -225,6 +298,22 @@ curl -fsSL "https://github.com/cli/cli/releases/download/v$v/gh_${v}_checksums.t
 tar -xzf "$t/gh.tgz" -C "$t"
 mkdir -p "$HOME/.local/bin" && mv "$t/$n/bin/gh" "$HOME/.local/bin/gh"
 "#;
+
+/// The release the app itself would download, into ~/.local/bin, where the
+/// app looks first. Linux's asset is the bare binary.
+fn cloudflared_script() -> Result<String, InstallError> {
+    let build = dray_proto::cloudflared_build().ok_or_else(|| Failed("no cloudflared build for this machine".into()))?;
+    Ok(format!(
+        r#"set -eu
+t=$(mktemp); trap 'rm -f "$t"' EXIT
+curl -fsSL "{url}" -o "$t"
+[ "$(sha256sum "$t" | cut -d' ' -f1)" = "{sha}" ] || {{ echo "cloudflared checksum mismatch" >&2; exit 1; }}
+mkdir -p "$HOME/.local/bin" && install -m 755 "$t" "$HOME/.local/bin/cloudflared"
+"#,
+        url = build.url(),
+        sha = build.sha256
+    ))
+}
 
 /// Logins still to do, as commands. Asked where a CLI answers by exit code;
 /// pi, fx and grok have no such question, so they are listed whenever present.

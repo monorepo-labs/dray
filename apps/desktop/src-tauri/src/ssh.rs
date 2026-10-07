@@ -336,6 +336,56 @@ async fn classify(stderr: &str, target: &Target) -> Failure {
     Failure::new(format!("Could not reach {host}: {said}"), None, false)
 }
 
+/// A local port carrying a dev server on the far side, for the Mac's browser.
+/// A login of its own, since nothing here shares one; dropping it kills `ssh`.
+pub struct Forward {
+    child: Child,
+    pub port: u16,
+}
+
+impl Forward {
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+/// Forwards a free local port to `localhost:<remote>` on the server. Ready
+/// once the local end accepts; `ssh` exiting first says why it could not.
+pub async fn forward(target: &Target, remote: u16) -> Result<Forward, String> {
+    let port = free_port().map_err(|e| format!("no free local port: {e}"))?;
+    let mut child = Command::new(SSH)
+        .args(["-N", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ExitOnForwardFailure=yes"])
+        .args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"])
+        // `localhost` rather than 127.0.0.1: sshd tries every address it
+        // resolves to, and Vite binds `::1` alone on some machines.
+        .args(["-L", &format!("127.0.0.1:{port}:localhost:{remote}")])
+        .args(target.args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("could not run ssh: {e}"))?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            return Ok(Forward { child, port });
+        }
+        if let Ok(Some(_)) = child.try_wait() {
+            let mut said = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut said).await;
+            }
+            let said = last_line(&said).unwrap_or_else(|| "ssh exited".into());
+            return Err(format!("Could not forward port {remote} from {}: {said}", target.host()));
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(format!("{} did not open port {remote} in time", target.host()));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn last_line(text: &str) -> Option<String> {
     text.lines().map(str::trim).filter(|l| !l.is_empty()).last().map(str::to_string)
 }
@@ -542,6 +592,20 @@ pub fn terminal_line(target: &Target, command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Against a real server: `DRAY_SSH_TEST=user@host` and something listening
+    /// on `DRAY_SSH_TEST_PORT` there.
+    #[tokio::test]
+    #[ignore]
+    async fn forwards_a_real_dev_server() {
+        let target = parse(&std::env::var("DRAY_SSH_TEST").unwrap()).unwrap();
+        let remote: u16 = std::env::var("DRAY_SSH_TEST_PORT").unwrap().parse().unwrap();
+        let mut forward = forward(&target, remote).await.unwrap();
+        let body = reqwest::get(format!("http://localhost:{}/", forward.port)).await.unwrap().text().await.unwrap();
+        assert!(!body.is_empty());
+        assert!(forward.alive());
+        println!("forwarded {remote} to localhost:{}: {} bytes", forward.port, body.len());
+    }
 
     #[test]
     fn reads_the_line_a_reader_types() {

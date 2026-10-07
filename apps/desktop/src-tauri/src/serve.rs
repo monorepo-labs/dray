@@ -327,11 +327,12 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
 }
 
 /// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
-/// app — attached images and browser recordings — for a client elsewhere. An
+/// app — attached images, browser recordings and screenshots — for a client
+/// elsewhere. An
 /// `<img>` cannot set a header, hence the token in the query; a client that
 /// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
 ///
-/// Confined to those two directories, plus videos `read_file` handed out, by
+/// Confined to those three directories, plus videos `read_file` handed out, by
 /// **canonical** path, so neither `..` nor a symlink inside one reaches
 /// anything else.
 // ponytail: no Range support, so a long video plays but cannot seek; add it
@@ -431,7 +432,8 @@ async fn read_file(path: &str) -> Result<files::FileBody, String> {
 
 async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
     let real = tokio::fs::canonicalize(path).await.ok()?;
-    for root in [home.join("attachments"), home.join("browser").join("recordings")] {
+    let browser = home.join("browser");
+    for root in [home.join("attachments"), browser.join("recordings"), browser.join("shots")] {
         if let Ok(root) = tokio::fs::canonicalize(&root).await {
             if real.starts_with(&root) && real.is_file() {
                 return Some(real);
@@ -700,6 +702,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // Servers listening on *this* machine, which is the one a forwarded
         // port reaches.
         list_local_servers(session_id: String) => crate::local_servers::list_local_servers(session_id).await;
+        share_port(session_id: String, port: u16) => crate::share::share_port(session_id, port).await;
+        stop_share(session_id: String, port: u16) => ok(crate::share::stop_share(session_id, port));
+        share_ready() => ok(crate::share::share_ready().await);
         read_attachments(paths: Vec<String>) => ok(crate::attachments::read_attachments(paths).await);
         list_drafts() => crate::drafts::list_drafts().await;
         save_draft(draft: Value) => crate::drafts::save_draft(draft).await;

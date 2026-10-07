@@ -262,20 +262,42 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, app).await,
+        Request::Share(share) => share_port(share).await,
     }
 }
 
-/// One `dray browser` step. The browser is macOS-only and behind a feature,
-/// so the refusal names that rather than reading as a broken CLI.
+/// `dray share`: a public link to one of the session's dev servers, made on
+/// this machine. Every verb answers the session's links after it.
+async fn share_port(request: dray_proto::ShareRequest) -> Result<Response> {
+    use dray_proto::ShareAction;
+    let session = request.session_id;
+    let done = match request.action {
+        ShareAction::Start { port } => crate::share::start(&session, port).await.map(drop),
+        ShareAction::Stop { port } => Ok(crate::share::stop(&session, port)),
+        ShareAction::List => Ok(()),
+    };
+    Ok(match done {
+        Ok(()) => Response::Shared { shares: crate::share::list(&session) },
+        Err(message) => Response::error(message),
+    })
+}
+
+/// One `dray browser` step: CEF's tabs in the Mac app, a headless Chromium
+/// on a server. A build with neither says so rather than reading as a broken
+/// CLI.
 async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     #[cfg(all(feature = "cef", target_os = "macos"))]
+    let answer = crate::cef::automation::run(&request.session_id, request.action).await;
+    #[cfg(all(feature = "serve", not(feature = "cef")))]
+    let answer = crate::headless::automation::run(&request.session_id, request.action).await;
+    #[cfg(any(all(feature = "cef", target_os = "macos"), all(feature = "serve", not(feature = "cef"))))]
     {
-        Ok(match crate::cef::automation::run(&request.session_id, request.action).await {
+        Ok(match answer {
             Ok((output, data)) => Response::Browser { output, data },
             Err(message) => Response::error(message),
         })
     }
-    #[cfg(not(all(feature = "cef", target_os = "macos")))]
+    #[cfg(not(any(all(feature = "cef", target_os = "macos"), all(feature = "serve", not(feature = "cef")))))]
     {
         let _ = request;
         Ok(Response::error("this build of Dray has no browser"))

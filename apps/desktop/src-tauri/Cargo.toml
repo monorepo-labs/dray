@@ -83,6 +83,11 @@ tauri-plugin-window-state = { version = "2", optional = true }
 tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
 # The file route's query string. Already in the tree under `reqwest`'s `url`.
 form_urlencoded = { version = "1", optional = true }
+# Unpacks the headless Chromium a server downloads, since a fresh Ubuntu has no
+# `unzip`. Deflate alone; both crates are already in the lock file (the
+# updater's zip, `png`'s flate2). See headless/download.rs.
+zip = { version = "4.6", optional = true, default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", optional = true }
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables
@@ -123,7 +128,7 @@ desktop = [
   "dep:form_urlencoded",
 ]
 cef = ["desktop", "dep:cef"]
-serve = ["dep:tokio-tungstenite", "dep:form_urlencoded"]
+serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]
 
 [target.'cfg(target_os = "macos")'.dependencies.cef]
 version = "154.3.0"

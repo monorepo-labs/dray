@@ -1483,6 +1483,9 @@ impl SessionManager {
         };
         #[cfg(all(feature = "cef", target_os = "macos"))]
         crate::cef::close_session(session_id);
+        #[cfg(all(feature = "serve", not(feature = "cef")))]
+        crate::headless::close_session(session_id);
+        crate::share::close_session(session_id);
         killed
     }
 
@@ -1530,6 +1533,8 @@ impl SessionManager {
         }
         #[cfg(all(feature = "cef", target_os = "macos"))]
         crate::cef::automation::delete_recordings(session_id);
+        #[cfg(all(feature = "serve", not(feature = "cef")))]
+        crate::headless::automation::delete_recordings(session_id);
 
         // pi keeps its own transcript beside Dray's, because the *file* is its
         // resume handle. Left behind it is a whole conversation on disk that

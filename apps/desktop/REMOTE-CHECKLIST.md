@@ -82,8 +82,8 @@ Same installer as stage 2, with dialogs on top.
 
 ## Stage 6: The browser on a VPS
 
-- [ ] Agent's browser runs headless on the VPS
-- [ ] Dev servers viewed from the Mac through a forwarded port
+- [x] Agent's browser runs headless on the VPS
+- [x] Dev servers viewed from the Mac through a forwarded port
 - No live streaming planned.
 
 ## Stage 7: More ways to use it

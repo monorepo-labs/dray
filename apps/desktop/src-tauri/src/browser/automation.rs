@@ -1,23 +1,35 @@
 //! Driving a session's tabs for `dray browser`: the agent's half of the
-//! in-app browser, with agent-browser's verbs.
+//! browser, with agent-browser's verbs.
 //!
-//! No agent-browser and no debug port. CEF hands every browser its own
-//! DevTools channel (`send_dev_tools_message` in, an observer out), so each
-//! action is a few CDP calls on the session's active tab, and an agent can
-//! reach no other session's pages because the session is the only address
-//! there is. Pointer and key actions go through Chromium's real input path
-//! (`Input.dispatch*`) rather than `element.click()`, so what the agent does
-//! is what a person's click does; reads and locators are page JavaScript.
+//! No agent-browser and no debug port. Every tab has a DevTools channel of
+//! its own, so each action is a few CDP calls on the session's active tab,
+//! and an agent can reach no other session's pages because the session is the
+//! only address there is. Pointer and key actions go through Chromium's real
+//! input path (`Input.dispatch*`) rather than `element.click()`, so what the
+//! agent does is what a person's click does; reads and locators are page
+//! JavaScript.
+//!
+//! **Two browsers sit under this one file**, and the module that includes it
+//! is the seam: CEF's tabs inside the Mac app (`cef/cef.rs`), and a headless
+//! Chromium on a server (`headless.rs`). Each answers the functions imported
+//! from `super` below and nothing else, so the grammar and `HELPERS_JS` are one
+//! copy for both. See HEADLESS-PLAN.md.
 
-use super::*;
+use super::{
+    activate_tab, active_id, awake, browser_dir, close_tab, cover, emit, nav, open_url, relayout,
+    reveal_for_input, send_cdp, set_zoom, tab_state, tabs_of, touch, uncover,
+};
 use base64::Engine;
 use dray_proto::{BrowserAction, Get, Is, Locator};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
-type Reply = Result<Value, String>;
+pub(super) type Reply = Result<Value, String>;
 /// Text for the agent, and the same answer as JSON.
 type Answer = Result<(String, Value), String>;
 
@@ -47,7 +59,7 @@ const DEFAULT_VIEWPORT: (u32, u32) = (1440, 900);
 /// screenshots would clear each other's, and requests off the socket are
 /// not serialized. ponytail: one lock app-wide, per-tab if captures ever
 /// queue behind each other.
-static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// The recordings under way, one per session at most.
 static RECORDING: Mutex<std::collections::BTreeMap<String, Recording>> =
     Mutex::new(std::collections::BTreeMap::new());
@@ -68,35 +80,6 @@ struct Recording {
     closed: bool,
     recorder: crate::recording::Recorder,
 }
-/// The pane saying it has the page covered, so the reflow the capture needs
-/// happens behind a still rather than on screen. Waited on rather than
-/// guessed at: the cover is a page snapshot, an image decode and a layout
-/// call, which is a few hundred milliseconds on a good day and not a number
-/// worth hardcoding.
-///
-/// **An ack names the shot it is for, and a bare `Notify` was not enough.**
-/// One shot can be acked twice — the pane answers at once when it has
-/// nothing to cover, and the hide it asked for answers again when it lands
-/// — so the extra notification sat as a stored permit and released the
-/// *next* shot before its own still was painted, showing exactly the reflow
-/// this hides. `SHUTTER_ACK` carries how far the pane has got, the `Notify`
-/// only wakes the waiter to look, and a shot sleeps until the number
-/// reaches its own. A late ack from a finished shot is then a number too
-/// small to release anything.
-static SHUTTER_READY: tokio::sync::Notify = tokio::sync::Notify::const_new();
-/// The newest shot's number, minted per capture.
-static SHUTTER_SHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// The newest shot the pane has answered for. Monotonic, so a repeated ack
-/// for one shot is the same answer twice rather than a second one.
-static SHUTTER_ACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// True from the shutter opening until the override goes on — the window in
-/// which the page still reads the way the reader sees it, and the one thing
-/// that lets the pane's cover picture past `CAPTURING`.
-static SHUTTER_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// How long to wait for that. A pane with no browser on screen answers at
-/// once; this is for one that never answers at all, where giving up and
-/// shooting anyway is exactly what the verb did before it covered anything.
-const SHUTTER: Duration = Duration::from_millis(700);
 /// One repaint's worth of time, spent at all three edges of a shot, each
 /// one a frame where the wrong thing would otherwise be on screen: after
 /// the view is hidden, since hiding lands on the window's next frame and
@@ -104,11 +87,12 @@ const SHUTTER: Duration = Duration::from_millis(700);
 /// override goes on, or the shot catches the layout half-moved; and after
 /// it comes off, or the view is handed back still showing the size it was
 /// photographed at, which is this whole dance's own reflow arriving at the
-/// end instead of the start.
-const SETTLE: Duration = Duration::from_millis(150);
+/// end instead of the start. The first and last are the Mac's alone and
+/// spent in its `cover`/`uncover`.
+pub(super) const SETTLE: Duration = Duration::from_millis(150);
 
 const TIMEOUT: Duration = Duration::from_secs(30);
-const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 /// Snapshots and page text are for a model to read; past this they cost more
 /// than they say.
 const MAX_TEXT: usize = 40_000;
@@ -141,75 +125,18 @@ const DEVICES: &[(&str, u32, u32)] = &[
     ("4K", 3840, 2160),
 ];
 
-wrap_dev_tools_message_observer! {
-    struct DrayDevTools {
-        tab: i32,
+/// A CDP reply arriving from the backend's channel, handed to the call that
+/// is waiting on it. A failure carries the protocol's own message.
+pub(super) fn answer(tab: i32, id: i32, reply: Reply) {
+    if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
+        let _ = tx.send(reply);
     }
-
-    impl DevToolsMessageObserver {
-        fn on_dev_tools_method_result(
-            &self,
-            _browser: Option<&mut Browser>,
-            message_id: ::std::os::raw::c_int,
-            success: ::std::os::raw::c_int,
-            result: Option<&[u8]>,
-        ) {
-            let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(self.tab, message_id))) else {
-                return;
-            };
-            let value = result
-                .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
-                .unwrap_or(Value::Null);
-            let reply = if success != 0 {
-                Ok(value)
-            } else {
-                Err(value
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("the page refused the command")
-                    .to_string())
-            };
-            let _ = tx.send(reply);
-        }
-    }
-}
-
-/// Attach the observer to a browser the moment it exists; the registration
-/// lives on the tab and ends with it.
-pub(super) fn observe(browser: &Browser, tab: i32) -> Option<Registration> {
-    browser
-        .host()
-        .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new(tab))))
 }
 
 /// Whether a screenshot holds the capture lock. `sweep` waits it out rather
 /// than close a tab mid-shot.
 pub(super) fn capturing() -> bool {
     CAPTURING.try_lock().is_err()
-}
-
-/// Wakes a discarded tab and waits for its page, so a verb aimed at it acts
-/// on a live one. The wake is asked for again each round: a tab still
-/// closing when the verb arrived is not a ghost yet, and `wake` skips it.
-async fn awake(tab: i32) -> Result<(), String> {
-    let waking = TABS.lock().unwrap().iter().any(|t| t.id == tab && t.waking);
-    if browser_of(tab).is_some() && !waking {
-        return Ok(());
-    }
-    let start = Instant::now();
-    while browser_of(tab).is_none() {
-        if session_of(tab).is_none() {
-            return Err(format!("tab {tab} closed"));
-        }
-        if start.elapsed() > LOAD_TIMEOUT {
-            return Err("Chromium did not reopen the discarded tab".into());
-        }
-        if is_ghost(tab) {
-            on_main(move || wake(tab))?;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    wait_loaded(tab).await
 }
 
 /// The size a recorded tab's view is parked at, off-screen, instead of being
@@ -264,7 +191,7 @@ const TYPE_BUDGET: Duration = Duration::from_secs(4);
 /// page slower to encode than the clock films at the rate it manages. `last`
 /// is the digest of the frame `record start` took itself.
 fn film(session: String, tab: i32, shot: u64, mut last: u64) {
-    tauri::async_runtime::spawn(async move {
+    crate::spawn(async move {
         let mut tick = tokio::time::interval(RECORD_FRAME);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The layout generation a frame may be filed under; `None` while paused.
@@ -351,23 +278,19 @@ pub(super) fn forget(tab: i32) {
     }
 }
 
-/// One CDP call on one tab.
-async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
+/// One CDP call on one tab. The backend carries the message and answers
+/// through `answer`, failing it there for a tab that is gone.
+pub(super) async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
     let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
     let (tx, rx) = oneshot::channel();
     PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), tx);
-    let message = json!({ "id": id, "method": method, "params": params }).to_string();
-    on_main(move || {
-        let sent = browser_of(tab)
-            .and_then(|b| b.host())
-            .map(|host| host.send_dev_tools_message(Some(message.as_bytes())) == 1)
-            .unwrap_or(false);
-        if !sent {
-            if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
-                let _ = tx.send(Err("that tab is gone".into()));
-            }
+    let message = json!({ "id": id, "method": method, "params": params });
+    if let Err(e) = send_cdp(tab, id, message) {
+        if let Some(m) = PENDING.lock().unwrap().as_mut() {
+            m.remove(&(tab, id));
         }
-    })?;
+        return Err(e);
+    }
     match tokio::time::timeout(TIMEOUT, rx).await {
         Ok(Ok(reply)) => reply,
         Ok(Err(_)) => Err("the tab closed before answering".into()),
@@ -382,7 +305,7 @@ async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
 
 /// Runs `expression` in the page and answers its value. A thrown error is
 /// the error.
-async fn eval(tab: i32, expression: &str) -> Reply {
+pub(super) async fn eval(tab: i32, expression: &str) -> Reply {
     let reply = cdp(
         tab,
         "Runtime.evaluate",
@@ -429,21 +352,13 @@ fn describe_locator(at: &Locator) -> String {
     }
 }
 
-fn tab_state(tab: i32) -> Option<(String, String, bool)> {
-    TABS.lock()
-        .unwrap()
-        .iter()
-        .find(|t| t.id == tab)
-        .map(|t| (t.url.clone(), t.title.clone(), t.loading))
-}
-
 /// Waits for the tab's load to settle. A navigation takes a moment to
 /// start — a click's reply lands before the renderer has begun leaving the
 /// page — so this first watches for loading to *begin*, up to a short
 /// window, or "not loading" is answered before the previous page has even
 /// been left and the next command reads the old URL. Still loading at the
 /// deadline is an error, not a success with a half-loaded page behind it.
-async fn wait_loaded(tab: i32) -> Result<(), String> {
+pub(super) async fn wait_loaded(tab: i32) -> Result<(), String> {
     let start = Instant::now();
     let mut seen_loading = false;
     while start.elapsed() < LOAD_TIMEOUT {
@@ -483,7 +398,7 @@ fn owned(session: &str, id: i32) -> Result<i32, String> {
     }
 }
 
-fn active_tab(session: &str) -> Result<i32, String> {
+pub(super) fn active_tab(session: &str) -> Result<i32, String> {
     active_id(session).ok_or_else(|| {
         "no tab is open in this session's browser; `dray browser open <url>` first".to_string()
     })
@@ -636,13 +551,11 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
         }
     }
     if let (true, Some(tab)) = (input, tab) {
-        on_main(move || reveal(tab))?;
-        // The renderer learns it is visible a frame later.
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        reveal_for_input(tab).await?;
     }
     let answer = perform(session, action).await;
     if input {
-        let _ = on_main(apply_layout);
+        let _ = relayout();
     }
     if let Some(tab) = active_id(session) {
         touch(tab);
@@ -684,12 +597,12 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             web_url(&url)?;
             let tab = match active_id(session) {
                 Some(tab) => {
-                    browser_open(session.to_string(), url, false)?;
+                    open_url(session, url, false).await?;
                     tab
                 }
                 None => {
                     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    browser_open(session.to_string(), url, true)?;
+                    open_url(session, url, true).await?;
                     new_tab(session, &before).await?
                 }
             };
@@ -703,13 +616,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 BrowserAction::Forward => "forward",
                 _ => "reload",
             };
-            browser_nav(session.to_string(), verb.into())?;
+            nav(session, verb).await?;
             wait_loaded(tab).await?;
             Ok(page(tab))
         }
         BrowserAction::Close => {
             let tab = active_tab(session)?;
-            browser_close(session.to_string(), tab)?;
+            close_tab(session, tab).await?;
             ok(format!("closed tab {tab}"))
         }
         BrowserAction::Tabs => {
@@ -736,7 +649,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
             let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            browser_open(session.to_string(), url, true)?;
+            open_url(session, url, true).await?;
             let tab = new_tab(session, &before).await?;
             wait_loaded(tab).await?;
             let (text, mut data) = page(tab);
@@ -745,7 +658,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::TabSwitch { id } => {
             let id = owned(session, id)?;
-            activate(session.to_string(), id, false)?;
+            activate_tab(session, id).await?;
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {
@@ -753,7 +666,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 Some(id) => owned(session, id)?,
                 None => active_tab(session)?,
             };
-            browser_close(session.to_string(), id)?;
+            close_tab(session, id).await?;
             ok(format!("closed tab {id}"))
         }
         BrowserAction::Snapshot { interactive, compact, selector } => {
@@ -943,26 +856,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // pane is covered: opening it again adds nothing, and closing it
             // would uncover the page mid-recording.
             let recording = recording_of(session);
-            let shot = if recording.is_some() {
-                None
-            } else {
-                // Numbered before the event goes out, so an ack cannot name a
-                // shot that does not exist yet; `await_shutter` reads the mark
-                // before it waits, so one arriving early is not missed either.
-                let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-                SHUTTER_OPEN.store(true, AtomicOrdering::Release);
-                emit_shooting(session, true, shot);
-                await_shutter(shot).await;
-                // The hide has run, but a hidden view leaves the window on its
-                // next frame — so the page is given one before it is asked to
-                // reflow into a widget that may still be composited.
-                tokio::time::sleep(SETTLE).await;
-                // Closed before the override, never after: past here the page
-                // stops being the one on screen, so a cover taken from it would
-                // be a picture of the very reflow being hidden.
-                SHUTTER_OPEN.store(false, AtomicOrdering::Release);
-                Some(shot)
-            };
+            let shot = if recording.is_some() { None } else { Some(cover(session).await) };
             // The screenshot's size may not be the recording's — a phone shot
             // of a desktop recording — so the video holds its last frame for
             // the length of the capture rather than show the page reflowing.
@@ -984,13 +878,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
             }
             if let Some(shot) = shot {
-                // The page is back to the pane's size but has not painted it
-                // yet, and handing the view over inside that window puts the
-                // capture's layout on screen for a frame — the reflow, arriving
-                // at the end. The still is holding the pane meanwhile, so this
-                // costs nothing anybody can see.
-                tokio::time::sleep(SETTLE).await;
-                emit_shooting(session, false, shot);
+                uncover(session, shot).await;
             }
             drop(held);
             let bytes = bytes?;
@@ -1061,17 +949,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let recorder = crate::recording::Recorder::start(&recordings_dir(session), &stem)?;
             // The shutter a screenshot opens, held for the whole recording: the
             // page is laid out at w×h throughout, and the pane keeps its still
-            // up rather than show that layout squeezed into itself.
-            let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-            SHUTTER_OPEN.store(true, AtomicOrdering::Release);
-            emit_shooting(session, true, shot);
-            await_shutter(shot).await;
-            tokio::time::sleep(SETTLE).await;
-            SHUTTER_OPEN.store(false, AtomicOrdering::Release);
+            // up rather than show that layout squeezed into itself. Its number
+            // is also the recording's own, which `film` checks it is still for.
+            let shot = cover(session).await;
             RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
             emit_recording(session, true);
             let started = async {
-                on_main(apply_layout)?;
+                relayout()?;
                 cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
                 tokio::time::sleep(SETTLE).await;
                 // One frame before answering, so a `record stop` straight after
@@ -1135,20 +1019,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             if !(25..=500).contains(&percent) {
                 return Err(format!("zoom {percent}? between 25 and 500"));
             }
-            let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
-            // Waited on, so a busy main thread cannot leave the zoom queued
-            // behind an answer that already said it landed.
-            let (tx, rx) = oneshot::channel();
-            on_main(move || {
-                let host = browser_of(tab).and_then(|b| b.host());
-                if let Some(host) = &host {
-                    host.set_zoom_level(level);
-                }
-                let _ = tx.send(host.is_some());
-            })?;
-            if !rx.await.unwrap_or(false) {
-                return Err("that tab is gone".into());
-            }
+            set_zoom(tab, percent).await?;
             // The renderer lays the page out again a frame later, and a
             // screenshot straight after must not catch the old layout.
             tokio::time::sleep(SETTLE).await;
@@ -1181,7 +1052,7 @@ fn recordings_dir(session: &str) -> PathBuf {
 /// at the pane's size, or the reader is handed the recording's layout.
 async fn end_recording(session: &str, tab: i32, shot: u64) {
     let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
-    let _ = on_main(apply_layout);
+    let _ = relayout();
     tokio::time::sleep(SETTLE).await;
     emit_recording(session, false);
     emit_shooting(session, false, shot);
@@ -1192,9 +1063,7 @@ async fn end_recording(session: &str, tab: i32, shot: u64) {
 /// a screenshot holds the same shutter for a moment, and a notice flashing
 /// up for every screenshot is the flash `Snapshot` exists to avoid.
 fn emit_recording(session: &str, recording: bool) {
-    if let Some(app) = APP.get() {
-        let _ = app.emit("browser_recording", json!({ "sessionId": session, "recording": recording }));
-    }
+    emit("browser_recording", json!({ "sessionId": session, "recording": recording }));
 }
 
 /// The PNG of the page laid out at `w`×`h`. The widget is the pane's size,
@@ -1225,53 +1094,14 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
         .map_err(|e| format!("bad image data: {e}"))
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShootingEvent {
-    session_id: String,
-    shooting: bool,
-    /// Which shot, so the pane's ack can name it back. See `SHUTTER_READY`.
-    shot: u64,
-}
-
-/// Lets the shot numbered `shot` through. See `browser_shutter_ready`.
-/// `fetch_max`, so an ack that arrives after a later shot has been answered
-/// for cannot walk the mark backwards, and `notify_waiters` rather than
-/// `notify_one`, which would leave a permit behind for a shot nobody has
-/// taken yet — the bug this numbering exists to close.
-pub fn shutter_ready(shot: u64) {
-    SHUTTER_ACK.fetch_max(shot, AtomicOrdering::Release);
-    SHUTTER_READY.notify_waiters();
-}
-
-/// Waits until the pane has answered for `shot`, or `SHUTTER` passes. The
-/// registration is re-made around every check, or an ack landing between
-/// reading the mark and awaiting would be missed and the shot would sit out
-/// the whole timeout.
-async fn await_shutter(shot: u64) {
-    let _ = tokio::time::timeout(SHUTTER, async {
-        loop {
-            let mut waiting = Box::pin(SHUTTER_READY.notified());
-            waiting.as_mut().enable();
-            if SHUTTER_ACK.load(AtomicOrdering::Acquire) >= shot {
-                return;
-            }
-            waiting.await;
-        }
-    })
-    .await;
-}
-
 /// Opens and closes the pane's shutter. The capture lays the page out at
 /// the asked-for size, and the widget the reader is watching is the one
 /// doing it — so the pane hides the view and draws a camera card for the
 /// length of the shot, rather than showing a page reflowing to a size
-/// nobody asked to look at.
-fn emit_shooting(session: &str, shooting: bool, shot: u64) {
-    if let Some(app) = APP.get() {
-        let _ = app
-            .emit("browser_shooting", ShootingEvent { session_id: session.into(), shooting, shot });
-    }
+/// nobody asked to look at. `shot` names it, so the pane's ack can name it
+/// back; see the Mac's `cover`.
+pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64) {
+    emit("browser_shooting", json!({ "sessionId": session, "shooting": shooting, "shot": shot }));
 }
 
 /// Truncating write that refuses a symlink at the leaf, so a link planted
@@ -1497,53 +1327,6 @@ const HELPERS_JS: &str = r#"
     return document.title + ' — ' + location.href + '\n' + lines.join('\n');
   };
 "#;
-
-/// The active tab as the pane sees it, for drawing in its place while the
-/// native view is hidden under a modal. No metrics override: the picture
-/// must match the widget's own size, or it is drawn stretched. The view
-/// hides only once this lands, so the whole cost is a modal opening late
-/// over the page: one CSS pixel per image pixel (a quarter of retina) and
-/// a fast JPEG, since the picture lives as long as a menu is open. An
-/// agent's sized screenshot holding `CAPTURING` would hand back a
-/// phone-wide page, so this waits for it — briefly, since the pane gives
-/// up on the answer at 400ms and a full-page capture can run for seconds;
-/// past that the pane hides over nothing, as it did before. The tab is read
-/// after the wait, so the picture is of the tab up when it is taken.
-#[tauri::command]
-pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
-    // Not while the shutter is open, and that exception is the whole reason
-    // a shot can be covered by the page rather than by a blank. The lock is
-    // held for the length of a shot, so a cover asked for inside one would
-    // be refused — and the cover is what the shot hides behind. Safe
-    // precisely there: the shutter opens *before* the override goes on, so
-    // the page this reads is the one the reader is looking at.
-    let _held = if SHUTTER_OPEN.load(AtomicOrdering::Acquire) {
-        None
-    } else {
-        Some(
-            tokio::time::timeout(Duration::from_millis(300), CAPTURING.lock())
-                .await
-                .map_err(|_| "a screenshot is in progress")?,
-        )
-    };
-    let tab = active_tab(&session_id)?;
-    // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
-    // at the scrollbar, and a picture a scrollbar short of the view is
-    // stretched across it. The clip is in page coordinates, hence the
-    // scroll offset from the metrics.
-    let size = eval(tab, "({ w: innerWidth, h: innerHeight })").await?;
-    let metrics = cdp(tab, "Page.getLayoutMetrics", json!({})).await?;
-    let vp = &metrics["cssVisualViewport"];
-    let clip = json!({
-        "x": vp["pageX"], "y": vp["pageY"],
-        "width": size["w"], "height": size["h"],
-        "scale": 1,
-    });
-    let params = json!({ "format": "jpeg", "quality": 60, "optimizeForSpeed": true, "clip": clip });
-    let reply = cdp(tab, "Page.captureScreenshot", params).await?;
-    let data = reply["data"].as_str().ok_or("no image came back")?;
-    Ok(format!("data:image/jpeg;base64,{data}"))
-}
 
 #[cfg(test)]
 mod tests {

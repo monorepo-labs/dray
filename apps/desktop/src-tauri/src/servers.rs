@@ -101,13 +101,27 @@ struct Conn {
     outgoing: Option<mpsc::UnboundedSender<String>>,
     pending: HashMap<u64, oneshot::Sender<Reply>>,
     task: Option<tokio::task::JoinHandle<()>>,
+    /// Dev-server ports forwarded for the Mac's browser, by remote port. They
+    /// last as long as the connection does.
+    forwards: HashMap<u16, ssh::Forward>,
 }
 
 impl Conn {
     /// A connection to `saved`, running unless it is turned off.
     fn new(saved: Saved) -> Self {
         let status = ServerStatus::Disconnected;
-        let mut conn = Conn { saved, status, stage: None, error: None, fix: None, live: None, outgoing: None, pending: HashMap::new(), task: None };
+        let mut conn = Conn {
+            saved,
+            status,
+            stage: None,
+            error: None,
+            fix: None,
+            live: None,
+            outgoing: None,
+            pending: HashMap::new(),
+            task: None,
+            forwards: HashMap::new(),
+        };
         conn.restart();
         conn
     }
@@ -122,6 +136,7 @@ impl Conn {
         }
         self.outgoing = None;
         self.live = None;
+        self.forwards.clear();
         self.stage = None;
         self.error = None;
         self.fix = None;
@@ -278,6 +293,7 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
         if status != ServerStatus::Connected {
             conn.outgoing = None;
             conn.live = None;
+            conn.forwards.clear();
             // A call in flight on a dropped socket has no answer coming.
             for (_, call) in conn.pending.drain() {
                 let _ = call.send(Err(json!(format!("lost the connection to {}", conn.saved.name))));
@@ -604,6 +620,51 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
     answer
         .await
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")))
+}
+
+/// A local port carrying dev-server `port` on `server`, for the Mac's own
+/// browser to open. One per port for the life of the connection, so clicking
+/// the row again reuses it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
+    let target = {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == server).ok_or("that server is no longer on the list")?;
+        if let Some(open) = live_forward(conn, port) {
+            return Ok(open);
+        }
+        if conn.status != ServerStatus::Connected {
+            return Err(format!("{} is not connected", conn.saved.name));
+        }
+        conn.saved.ssh.clone().ok_or_else(|| {
+            format!(
+                "{} was added by address, so there is no SSH login to forward port {port} over. \
+                 Add it again from its SSH line to open its dev servers here.",
+                conn.saved.name
+            )
+        })?
+    };
+    let forward = ssh::forward(&target, port).await?;
+    let mut list = conns();
+    let conn = list
+        .iter_mut()
+        .find(|c| c.saved.id == server && c.status == ServerStatus::Connected)
+        .ok_or("lost the connection to the server")?;
+    // Two clicks racing: the first forward to land wins, so a page already
+    // open on it keeps working.
+    if let Some(open) = live_forward(conn, port) {
+        return Ok(open);
+    }
+    let local = forward.port;
+    conn.forwards.insert(port, forward);
+    Ok(local)
+}
+
+/// The local port of a forward still running; one whose `ssh` died is
+/// replaced.
+fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
+    let forward = conn.forwards.get_mut(&port)?;
+    forward.alive().then_some(forward.port)
 }
 
 /// A file on a remote server — an attachment, a recording — fetched through
