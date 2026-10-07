@@ -3011,9 +3011,10 @@ function App() {
           notice={
             !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
-            ) : loggedOutAgent && authTurn && selectedSession && activeServer === LOCAL ? (
+            ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
                 agent={loggedOutAgent}
+                server={activeServer}
                 cwd={selectedSession.cwd}
                 onHandled={() => setLoginHandled(authTurn)}
               />
