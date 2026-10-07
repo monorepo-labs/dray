@@ -39,6 +39,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /// Bumped per scenario. Fake work started under an older one stops, or its
 /// events land in the next scenario's dialog and it eats that one's failure.
 let epoch = 0;
+/// A `sleep` that gives up once a newer scenario has started, so old work
+/// cannot write into the new one's state or take its failure.
+const pause = async (ms: number) => {
+  const mine = epoch;
+  await sleep(ms);
+  stale(mine);
+};
 const stale = (mine: number) => {
   if (mine !== epoch) throw new Error("demo: superseded");
 };
@@ -143,20 +150,17 @@ const serverInfo = (over: Partial<ServerInfo> & Pick<ServerInfo, "id" | "name">)
 async function dial(line: string, report: (stage: Stage) => void): Promise<Failure | null> {
   const h = host(line);
   const name = hostOf(line);
-  const mine = epoch;
   report("connecting");
-  await sleep(STEP);
-  stale(mine);
+  await pause(STEP);
   if (takeFail()) return FAIL.unreachable(name);
   if (h.login) return FAIL[h.login](name, line);
   report("finding");
-  await sleep(STEP);
-  stale(mine);
+  await pause(STEP);
   if (h.dray === "missing") return FAIL.missing(name);
   if (h.dray === "never") return FAIL.neverRun(name);
   if (h.dray === "stopped") {
     report("starting");
-    await sleep(STEP);
+    await pause(STEP);
     h.dray = "running";
   }
   return null;
@@ -224,16 +228,28 @@ const localAccounts = (): AgentAccounts[] => [
   ]),
   agent("grok", "Grok Build", null),
 ];
-const remoteAccounts = (): AgentAccounts[] => [
-  agent("claude_code", "Claude Code", [account("Anthropic", "logged_out")]),
-  agent("codex", "Codex", [account("OpenAI", "logged_out")]),
-  agent("pi", "pi", null),
-  agent("fx", "fx", null),
-  agent("grok", "Grok Build", null),
-];
+// A fresh server's logins, all signed out, for whichever agents it has.
+const REMOTE_LOGINS: Record<string, () => Account[]> = {
+  claude_code: () => [account("Anthropic", "logged_out")],
+  codex: () => [account("OpenAI", "logged_out")],
+  pi: () => [],
+  fx: () => [
+    account("Vercel AI Gateway", "logged_out", null, null, "vercel"),
+    account("Codex", "logged_out", null, null, "codex"),
+    account("Grok", "logged_out", null, null, "grok"),
+  ],
+  grok: () => [account("xAI", "logged_out")],
+};
+/// Read off the server's survey, so an agent installed in setup has a login to sign into.
+const remoteAccounts = (server: string): AgentAccounts[] => {
+  const line = servers.find((s) => s.id === server)?.ssh;
+  return (line ? host(line).survey.tools : tools(["claude_code", "codex"]))
+    .filter((t) => t.id in REMOTE_LOGINS)
+    .map((t) => agent(t.id as Harness, t.name, t.found ? REMOTE_LOGINS[t.id]() : null));
+};
 let accounts = new Map<string, AgentAccounts[]>();
 const accountsOn = (server: string) =>
-  accounts.get(server) ?? accounts.set(server, server === "local" ? localAccounts() : remoteAccounts()).get(server)!;
+  accounts.get(server) ?? accounts.set(server, server === "local" ? localAccounts() : remoteAccounts(server)).get(server)!;
 function signIn(server: string, harness: string, provider: string | null, auth: string, on: boolean) {
   const AUTH: Record<string, string> = { claudeai: "Claude subscription", console: "Anthropic Console", chatgpt: "ChatGPT subscription", api_key: "API key" };
   accounts.set(
@@ -270,7 +286,7 @@ const AUTH_OPTIONS: Partial<Record<Harness, AuthOption[]>> = {
 async function core(cmd: string, a: Record<string, unknown>, server: string): Promise<unknown> {
   switch (cmd) {
     case "agent_accounts":
-      await sleep(STEP / 2);
+      await pause(STEP / 2);
       return accountsOn(server);
     case "agent_availability":
       return accountsOn(server).map(
@@ -288,12 +304,12 @@ async function core(cmd: string, a: Record<string, unknown>, server: string): Pr
     case "agent_auth_options":
       return AUTH_OPTIONS[a.harness as Harness] ?? [];
     case "add_agent_account":
-      await sleep(STEP);
+      await pause(STEP);
       if (takeFail()) throw "That key was refused.";
       signIn(server, String(a.harness), (a.provider as string) ?? null, String(a.auth), true);
       return null;
     case "sign_out_agent":
-      await sleep(STEP / 2);
+      await pause(STEP / 2);
       signIn(server, String(a.harness), (a.provider as string) ?? null, "", false);
       return null;
     case "run_agent_login":
@@ -312,7 +328,7 @@ mockIPC(
       case "list_servers":
         return servers;
       case "add_server": {
-        await sleep(STEP);
+        await pause(STEP);
         const url = String(a.url).replace(/^(?!ws:\/\/)/, "ws://");
         if (takeFail()) throw `the server refused: bad token`;
         const name = (a.name as string) || new URL(url).hostname;
@@ -337,7 +353,7 @@ mockIPC(
         return info;
       }
       case "trust_host_key": {
-        await sleep(STEP / 2);
+        await pause(STEP / 2);
         if (takeFail()) throw "could not write /Users/you/.ssh/known_hosts: Permission denied (os error 13)";
         host(String(a.line)).login = null;
         return null;
@@ -378,7 +394,7 @@ mockIPC(
         return null;
       case "survey_server": {
         const line = String(a.line);
-        await sleep(STEP * 1.5);
+        await pause(STEP * 1.5);
         if (takeFail()) throw FAIL.unreachable(hostOf(line));
         return structuredClone(host(line).survey);
       }
@@ -388,14 +404,12 @@ mockIPC(
         const h = host(line);
         const script = installScript(line, picks);
         const fail = takeFail();
-        const mine = epoch;
         for (const [i, text] of script.entries()) {
           if (fail && i === 6) {
             void emit("server_installing", { line, text: "curl: (6) Could not resolve host: dray.sh" });
             throw { message: `The install on ${hostOf(line)} did not finish.`, fix: null } satisfies Failure;
           }
-          await sleep(lineDelay);
-          stale(mine);
+          await pause(lineDelay);
           void emit("server_installing", { line, text });
         }
         for (const t of h.survey.tools) if (picks.includes(t.id) && !h.stubborn.includes(t.id)) t.found = true;
@@ -403,7 +417,7 @@ mockIPC(
         return null;
       }
       case "run_server_login":
-        await sleep(STEP / 2);
+        await pause(STEP / 2);
         signIn(String(a.server), String(a.harness), (a.provider as string) ?? null, String(a.auth), true);
         return null;
       case "server_invoke":
@@ -474,6 +488,12 @@ type Scenario = {
 };
 
 const VPS = (over: Partial<ServerInfo> = {}) => serverInfo({ id: "vps1", name: "vps", ssh: LINE, ...over });
+
+/// A server already set up, holding Claude Code and Codex.
+function setUpVps() {
+  servers = [VPS()];
+  hosts.set(LINE, freshHost({ survey: { os: "Linux", tools: tools(["git", "claude_code", "codex"]), gitCommand: null } }));
+}
 
 const GROUPS: { title: string; scenarios: Scenario[] }[] = [
   {
@@ -676,13 +696,13 @@ const GROUPS: { title: string; scenarios: Scenario[] }[] = [
   {
     title: "Accounts",
     scenarios: [
-      { id: "accounts-mac", label: "This Mac, a server added", tab: "accounts", setup: () => (servers = [VPS()]) },
+      { id: "accounts-mac", label: "This Mac, a server added", tab: "accounts", setup: setUpVps },
       {
         id: "accounts-remote",
         label: "A server picked",
         tab: "accounts",
         cwd: "dray://vps1/root/app",
-        setup: () => (servers = [VPS()]),
+        setup: setUpVps,
       },
     ],
   },
