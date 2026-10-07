@@ -61,14 +61,18 @@ jobs:
       # The release notes are read from CHANGELOG.md rather than written a
       # second time here. GitHub appends its generated commit list underneath,
       # so the hand-written part stays a summary and the file stays the source.
+      #
+      # A heading carries a date and a notify mark after the version, and
+      # media paths are relative to the file, so both are rewritten for GitHub.
       - id: notes
         run: |
           V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           BODY="$(awk -v want="## $V" '
-            $0 == want { found = 1; next }
+            $0 == want || index($0, want " ·") == 1 { found = 1; next }
             found && /^## / { exit }
             found { print }
           ' apps/desktop/CHANGELOG.md)"
+          BODY="$(printf '%s\n' "$BODY" | sed 's#](changelog/#](https://www.drayhq.com/changelog/#g')"
 
           # A stable release with no section would publish notes saying nothing,
           # which is worth stopping for — same reason the version guard above

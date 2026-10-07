@@ -832,6 +832,12 @@ The asymmetry is the point: appending to a private file is atomic, rewriting a s
 
 **Except when the user asks.** "Check for Updates…" is a question, so it is answered either way and both answers retire after 4s. The menu item **emit to the frontend** rather than checking in Rust, because the channel lives in frontend local storage; that also mean a manual check reuse the scheduled path and its in-flight guard. The verdict is read off `check_update` resolving with no `update_status` having arrived.
 
+## Changelog
+
+**[CHANGELOG.md](apps/desktop/CHANGELOG.md) is the one source** for the GitHub release notes, drayhq.com/changelog and Settings → Changelog; its format is written at its top. **The one parser lives on the site** ([changelog.ts](apps/web/src/lib/changelog.ts)), read at build and served as `/changelog.json`, which the app fetches ([changelog.ts](apps/desktop/src/lib/changelog.ts) holds the types again, the apps sharing no code). Fetched from `www.` — the apex redirects, and a redirect carries no CORS header. Media sits in `apps/web/public/changelog/` and is served by the site, never bundled into the app. Vercel meters those bytes, so heavy video belongs on R2 once there is much of it.
+
+**`notify` raises [WhatsNewCard](apps/desktop/src/components/WhatsNewCard.tsx)** for the newest flagged release the reader already runs and has not seen. No timer, and seen is recorded on Dismiss or View all, not on showing, so quitting brings it back. A fresh install marks everything seen, told apart from an older install meeting the feature by `localStorage` holding no keys at all. **Which is why `tauri dev` never shows the card**: the shim picks a new port each launch, so every dev run is a new origin with empty storage and reads as a fresh install. Test it with that check forced off.
+
 ## Settings
 
 **A page taking the whole window, seven groups down a list where the sidebar stands** ([SettingsPage.tsx](apps/desktop/src/components/SettingsPage.tsx)), gear in the sidebar's titlebar strip, ⌘, from anywhere. Appearance, Spaces, Accounts, Transcription, Integrations, Shortcuts, About. `SETTINGS_TABS` is set *and* order. It was a dialog through three shapes — tabs across the top at 28rem, a rail at 34rem, 44rem once the rail ate the prose's measure — and every one of them was a width argument a page does not have (#273).

@@ -7,6 +7,7 @@ import {
   Square3Stack3DIcon,
   PaintBrushIcon,
   KeyIcon,
+  NewspaperIcon,
   ServerStackIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
@@ -20,6 +21,7 @@ import type { PanelSide } from "@/components/RightPanel";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabButton from "@/components/TabButton";
 import ThemeSwatches, { useRovingGroup } from "@/components/ThemeSwatches";
+import ChangelogSettings from "@/components/settings/ChangelogSettings";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import {
@@ -177,7 +179,7 @@ export default function SettingsPage({
 
   return (
     <SettingsTabs initialTab={initialTab} onClose={onClose}>
-      {{
+      {(goTo) => ({
         appearance: (
           <>
             <Section>
@@ -256,6 +258,15 @@ export default function SettingsPage({
                 channel={updateChannel}
                 onChange={onUpdateChannelChange}
               />
+              <SettingRow
+                id="changelog"
+                label="What's new"
+                description="Every release, with what changed in each."
+              >
+                <Button id="changelog" variant="outline" size="sm" onClick={() => goTo("changelog")}>
+                  View changelog
+                </Button>
+              </SettingRow>
               <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
             </Section>
             {/* The two blocks here with no label of their own, so they are the
@@ -278,7 +289,8 @@ export default function SettingsPage({
             </p>
           </>
         ),
-      }}
+        changelog: <ChangelogSettings channel={updateChannel} />,
+      })}
     </SettingsTabs>
   );
 }
@@ -1058,6 +1070,7 @@ const SETTINGS_TABS = [
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
   { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
   { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
+  { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
   { id: "about", label: "About", Icon: InformationCircleIcon },
 ] as const;
 
@@ -1089,7 +1102,8 @@ function SettingsTabs({
 }: {
   initialTab: SettingsTab;
   onClose: () => void;
-  children: Record<SettingsTab, ReactNode>;
+  /// Handed a way to switch tab, which About's link to the changelog needs.
+  children: (goTo: (tab: SettingsTab) => void) => Record<SettingsTab, ReactNode>;
 }) {
   const id = useId();
   const fullscreen = useFullscreen();
@@ -1224,7 +1238,7 @@ function SettingsTabs({
               aria-labelledby={`${id}-${tab}`}
               className="flex flex-col gap-7 [&>*]:shrink-0"
             >
-              <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
+              <SettingsHeaderSlot.Provider value={slot}>{children(setTab)[tab]}</SettingsHeaderSlot.Provider>
             </div>
           </div>
         </div>
