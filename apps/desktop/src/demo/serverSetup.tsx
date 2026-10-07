@@ -264,6 +264,15 @@ const remoteAccounts = (server: string): AgentAccounts[] => {
 let accounts = new Map<string, AgentAccounts[]>();
 const accountsOn = (server: string) =>
   accounts.get(server) ?? accounts.set(server, server === "local" ? localAccounts() : remoteAccounts(server)).get(server)!;
+/// What a CLI calls each credential on its row, which `authIdOf` reads back to
+/// preselect the method. Not the form's option labels: the two differ.
+const AUTH_TYPES: Record<string, string> = {
+  claudeai: "Claude subscription",
+  console: "Anthropic Console",
+  chatgpt: "ChatGPT subscription",
+  api_key: "API key",
+  oauth: "OAuth",
+};
 function signIn(server: string, harness: Harness, provider: string | null, auth: string, on: boolean) {
   accounts.set(
     server,
@@ -280,7 +289,7 @@ function signIn(server: string, harness: Harness, provider: string | null, auth:
           acc.provider !== provider
             ? acc
             : on
-              ? { ...acc, state: "logged_in", authType: authOptions(harness, provider).find((o) => o.id === auth)?.label ?? null, detail: "you@example.com", canSignOut: true }
+              ? { ...acc, state: "logged_in", authType: AUTH_TYPES[auth] ?? null, detail: "you@example.com", canSignOut: true }
               : { ...acc, state: "logged_out", authType: null, detail: null, canSignOut: false },
         ),
       };
