@@ -1,0 +1,298 @@
+import { Check } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+import AccountsSettings from "@/components/settings/AccountsSettings";
+import CommandChip from "@/components/settings/CommandChip";
+import { SettingsHeaderSlot } from "@/components/settings/headerAction";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import Spinner from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { useServers } from "@/lib/servers";
+import { invoke, listen, LOCAL } from "@/lib/transport";
+import type { Survey } from "@/types/events";
+
+type Step =
+  | { kind: "looking" }
+  | { kind: "picking"; survey: Survey }
+  | { kind: "installing" }
+  | { kind: "connecting"; id: string | null }
+  | { kind: "signing_in"; id: string };
+
+/// Lines of install output kept on screen; a package manager can print
+/// thousands, and only the end says how it went.
+const LOG_LINES = 400;
+
+/// `uname -s` as people say it.
+const osName = (os: string) => (os === "Darwin" ? "macOS" : os || "something else");
+
+/// "a", "a and b", "a, b and c".
+const listed = (names: string[]) =>
+  names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+const message = (err: unknown) =>
+  err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+
+/// Puts Dray on a server that has none, over the login it was added with:
+/// asks what is there, offers what is missing, installs it, connects, then
+/// lists the logins. One dialog for the whole first meeting, since every step
+/// after the first needs the answer of the one before.
+export default function ServerSetupDialog({
+  line,
+  name,
+  connect,
+  onClose,
+}: {
+  line: string;
+  name: string;
+  /// Connects once Dray is on the server, answering its id.
+  connect: () => Promise<string>;
+  onClose: () => void;
+}) {
+  const [step, setStep] = useState<Step>({ kind: "looking" });
+  const [error, setError] = useState<string | null>(null);
+  const [picks, setPicks] = useState<string[]>([]);
+  const [log, setLog] = useState<string[]>([]);
+  // Picks still missing after an install that otherwise worked: `dray setup`
+  // warns and carries on, so its exit code alone would lose them.
+  const [unfinished, setUnfinished] = useState<string[]>([]);
+  // Whether gh ended up on the server, so the logins can say it needs one too.
+  const [gh, setGh] = useState(false);
+  // State, not a ref: the portal into it needs the node during render.
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const logEnd = useRef<HTMLDivElement>(null);
+  const servers = useServers();
+
+  const look = async () => {
+    setStep({ kind: "looking" });
+    setError(null);
+    try {
+      const survey = await invoke<Survey>("survey_server", { line }, LOCAL);
+      // git is on by default, since Dray needs it, unless this login cannot install it.
+      const git = survey.tools.find((t) => t.id === "git");
+      setPicks(git && !git.found && !survey.gitCommand ? ["git"] : []);
+      setStep({ kind: "picking", survey });
+    } catch (err) {
+      setError(message(err));
+    }
+  };
+
+  useEffect(() => {
+    void look();
+    // Once per dialog; `look` is the Look again button after that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Braced: Chromium's `scrollIntoView` answers a Promise, which React would take as the cleanup.
+  useEffect(() => {
+    logEnd.current?.scrollIntoView({ block: "nearest" });
+  }, [log]);
+
+  // The row going green is the answer, whichever way the connect was asked for.
+  const connecting = step.kind === "connecting" && step.id ? servers.find((s) => s.id === step.id) : undefined;
+  useEffect(() => {
+    if (connecting?.status === "connected") setStep({ kind: "signing_in", id: connecting.id });
+  }, [connecting?.status, connecting?.id]);
+
+  const install = async () => {
+    setStep({ kind: "installing" });
+    setError(null);
+    setUnfinished([]);
+    setLog([]);
+    // Listening before the run starts, or a fast failure's one line is lost.
+    const unlisten = await listen<{ line: string; text: string }>("server_installing", ({ payload }) => {
+      if (payload.line === line) setLog((prev) => [...prev.slice(-(LOG_LINES - 1)), payload.text]);
+    });
+    try {
+      await invoke("install_on_server", { line, picks }, LOCAL);
+      const after = await invoke<Survey>("survey_server", { line }, LOCAL);
+      setGh(after.tools.some((t) => t.id === "gh" && t.found));
+      const missing = after.tools.filter((t) => picks.includes(t.id) && !t.found);
+      if (missing.length > 0) {
+        setPicks(missing.map((t) => t.id));
+        setUnfinished(missing.map((t) => t.id));
+        setError(`${missing.map((t) => t.name).join(", ")} did not install. Why is in the output above.`);
+        return;
+      }
+    } catch (err) {
+      setError(message(err));
+      return;
+    } finally {
+      unlisten();
+    }
+    await finish();
+  };
+
+  const finish = async () => {
+    setStep({ kind: "connecting", id: null });
+    setError(null);
+    try {
+      const id = await connect();
+      setStep({ kind: "connecting", id });
+    } catch (err) {
+      setError(message(err));
+    }
+  };
+
+  const toggle = (id: string, on: boolean) =>
+    setPicks((prev) => (on ? [...prev, id] : prev.filter((p) => p !== id)));
+
+  // The row's own sentence once its connect gave up. Its old "not installed"
+  // can still be on screen for the moment before the new connect is announced.
+  const connectError =
+    connecting?.status === "disconnected" && connecting.fix?.kind !== "install" ? connecting.error : null;
+  const shownError = error ?? connectError;
+
+  const linux = step.kind !== "picking" || step.survey.os === "Linux";
+  const stillWaiting =
+    step.kind === "looking" || step.kind === "installing" || step.kind === "connecting";
+  // Closing mid-install would leave a half-set-up server with nothing on screen
+  // saying so; the run carries on there either way. A failure lets go.
+  const locked = (step.kind === "installing" || step.kind === "connecting") && !shownError;
+  const extras =
+    step.kind === "picking" ? listed(step.survey.tools.filter((t) => picks.includes(t.id)).map((t) => t.name)) : "";
+
+  return (
+    <Dialog open>
+      <DialogContent
+        className="grid-cols-[minmax(0,1fr)]"
+        showClose={false}
+        // Every step is part of setting a server up, so only its own buttons leave.
+        dismissible={false}
+      >
+        <DialogHeader>
+          <DialogTitle>
+            {step.kind === "signing_in"
+              ? `Sign in on ${name}`
+              : linux
+                ? `Install Dray on ${name}`
+                : `${name} can't run Dray`}
+          </DialogTitle>
+          <DialogDescription>
+            {step.kind === "signing_in"
+              ? "Dray is running there. Each agent needs its own login on that machine."
+              : step.kind === "picking" && !linux
+                ? `Dray's server needs Linux, and ${name} runs ${osName(step.survey.os)}.`
+                : `Dray isn't on ${name} yet. It has to be installed there${extras ? `, along with ${extras}` : ""}.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        {step.kind === "picking" && linux && (
+          <div className="flex flex-col">
+            <p className="pb-1 text-ui text-muted-foreground">Also install:</p>
+            {step.survey.tools.map((tool) => (
+              <div key={tool.id} className="flex min-h-9 flex-col justify-center gap-1.5 py-1">
+                <div className="flex items-center gap-3">
+                  <span className="flex-1 text-ui">{tool.name}</span>
+                  {tool.found ? (
+                    <span className="flex items-center gap-1 text-ui text-muted-foreground">
+                      <Check className="size-3.5" />
+                      Installed
+                    </span>
+                  ) : tool.id === "git" && step.survey.gitCommand ? null : (
+                    <Switch
+                      aria-label={`Install ${tool.name}`}
+                      checked={picks.includes(tool.id)}
+                      onCheckedChange={(on) => toggle(tool.id, on)}
+                    />
+                  )}
+                </div>
+                {!tool.found && tool.id === "git" && step.survey.gitCommand && (
+                  <>
+                    <span className="text-ui text-muted-foreground">
+                      Dray needs git, and installing it there takes admin rights. Run this on the server, then look again:
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <CommandChip command={step.survey.gitCommand} className="flex-1" />
+                      <Button variant="ghost" size="sm" onClick={() => void look()}>
+                        Look again
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(step.kind === "installing" || (step.kind === "connecting" && log.length > 0)) && (
+          <div className="max-h-56 overflow-auto rounded-md border border-border px-2 py-1.5 dark:border-input">
+            <pre className="font-mono text-code break-all whitespace-pre-wrap text-muted-foreground">
+              {log.join("\n") || "Logging in…"}
+            </pre>
+            <div ref={logEnd} />
+          </div>
+        )}
+
+        {step.kind === "signing_in" && (
+          // The footer's slot takes Refresh and the form's back arrow, which
+          // on the page sit in its heading; here a row of their own was empty.
+          <SettingsHeaderSlot.Provider value={slot}>
+            <div className="max-h-[50vh] overflow-auto">
+              <AccountsSettings cwd="" only={step.id} onFormOpen={setFormOpen} />
+            </div>
+          </SettingsHeaderSlot.Provider>
+        )}
+        {step.kind === "signing_in" && gh && (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-ui text-muted-foreground">GitHub CLI has its own login too. Run this on {name}:</p>
+            <CommandChip command="gh auth login" />
+          </div>
+        )}
+
+        {stillWaiting && !shownError && (
+          <p className="flex items-center gap-2 text-ui text-muted-foreground">
+            <Spinner className="size-3.5" />
+            {step.kind === "looking"
+              ? `Looking at ${name}…`
+              : step.kind === "installing"
+                ? "Installing…"
+                : "Starting the server…"}
+          </p>
+        )}
+        {shownError && <p className="text-ui text-destructive">{shownError}</p>}
+
+        <div className="flex items-center justify-end gap-2">
+          {step.kind === "signing_in" && <div ref={setSlot} className="mr-auto flex items-center gap-1" />}
+          {step.kind === "picking" && !linux ? (
+            <Button onClick={onClose} autoFocus>
+              Close
+            </Button>
+          ) : step.kind === "signing_in" ? (
+            // Not while one agent's form is up: Done there reads as done with
+            // that agent, and closes the logins the others still need.
+            !formOpen && (
+              <Button onClick={onClose} autoFocus>
+                Done
+              </Button>
+            )
+          ) : (
+            <>
+              {!locked && (
+                <Button variant="ghost" onClick={onClose}>
+                  Cancel
+                </Button>
+              )}
+              {step.kind === "looking" && error && <Button onClick={() => void look()}>Try again</Button>}
+              {step.kind === "picking" && linux && <Button onClick={() => void install()}>Install</Button>}
+              {step.kind === "installing" && unfinished.length > 0 && (
+                <Button variant="ghost" onClick={() => void finish()}>
+                  Continue without
+                </Button>
+              )}
+              {step.kind === "installing" && error && <Button onClick={() => void install()}>Try again</Button>}
+              {step.kind === "connecting" && shownError && <Button onClick={() => void finish()}>Try again</Button>}
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

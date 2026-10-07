@@ -6,7 +6,7 @@ import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
-import type { SubagentRun } from "@/lib/transcript";
+import type { SessionMedia, SubagentRun } from "@/lib/transcript";
 import type { AgentEvent, ToolResult } from "@/types/events";
 import "../App.css";
 
@@ -20,6 +20,27 @@ import "../App.css";
     throw new Error(`demo: nothing stubbed for ${cmd}`);
   },
 };
+
+/// Served out of `public/`, through `url` since a `path` goes to the asset
+/// protocol, which a plain browser has not got.
+/// Screenshot-shaped stand-ins, since real attachments are mostly a desktop or
+/// a phone screen rather than a square logo.
+const shot = (w: number, h: number, fill: string) =>
+  `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="${fill}"/><rect x="6%" y="8%" width="40%" height="6%" rx="8" fill="#ffffff55"/><rect x="6%" y="22%" width="88%" height="50%" rx="12" fill="#ffffff22"/></svg>`,
+  )}`;
+const SOURCES = [
+  shot(1440, 900, "#3b1414"),
+  "/automedon.png",
+  shot(390, 844, "#1e2a3a"),
+  shot(1280, 720, "#22303a"),
+  "/tauri.svg",
+];
+const media = (count: number): SessionMedia[] =>
+  Array.from({ length: count }, (_, i) => ({
+    image: { path: null, url: `${SOURCES[i % SOURCES.length]}#${i}`, mimeType: null },
+    byYou: i % 3 === 0,
+  }));
 
 const TODOS: Todo[] = [
   { content: "Read the grok ACP capture end to end", status: "completed", id: "1" },
@@ -265,6 +286,7 @@ function GreenPicker() {
 
 function Demo() {
   const [picked, setPicked] = useState(CASES[0]);
+  const [mediaCount, setMediaCount] = useState(4);
   // Seeded from what the pre-paint script settled, never from a literal — this
   // page is about a colour, so opening on the mode the reader is not in is the
   // one thing it must not do.
@@ -291,6 +313,23 @@ function Demo() {
             }}
           />
           <GreenPicker key={mode} />
+
+          <div className="mb-6 flex items-center gap-2 text-ui">
+            <span className="text-muted-foreground">Attachments</span>
+            {[0, 1, 4, 6, 12, 30].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setMediaCount(n)}
+                className={cn(
+                  "rounded-md border px-2 py-0.5",
+                  mediaCount === n ? "border-border bg-sidebar-accent" : "border-border/60",
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
 
 
           {CASES.map((demo) => (
@@ -322,6 +361,8 @@ function Demo() {
             <MorePanel
               todos={picked.todos}
               live
+              media={media(mediaCount)}
+              sessionId="demo"
               subagents={{
                 runs: picked.runs ?? RUNS,
                 selectedId: null,

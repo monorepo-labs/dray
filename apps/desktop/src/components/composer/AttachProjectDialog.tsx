@@ -356,7 +356,7 @@ function RepoRow({
           !disabled &&
           "hover:bg-white/60 hover:shadow-[0_0_0_1px_#0000000a,0_0_0_1px_#0000000f] focus-visible:bg-white/60 focus-visible:shadow-[0_0_0_1px_#0000000a,0_0_0_1px_#0000000f] dark:hover:bg-accent/60 dark:hover:shadow-none dark:focus-visible:bg-accent/60 dark:focus-visible:shadow-none [html:not([data-transparency])_&]:hover:bg-accent/60 [html:not([data-transparency])_&]:focus-visible:bg-accent/60",
         selected &&
-          "bg-white shadow-[0_0_0_1px_#0000000a,0_.85px_.5px_0_#fff_inset,0_1px_2px_0_#00000017,0_0_0_1px_#0000000f] dark:bg-accent dark:shadow-none",
+          "bg-white shadow-(--shadow-ring) dark:bg-accent dark:shadow-none",
         disabled && !cloning && "opacity-50",
       )}
     >

@@ -526,6 +526,27 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
     added.ok_or_else(|| failed("the server was removed while it was being added".into()))
 }
 
+/// What a server with no Dray on it already has, for the install dialog.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn survey_server(line: String) -> Result<ssh::Survey, ssh::Failure> {
+    let target = ssh::parse(&line).map_err(|message| ssh::Failure { message, fix: None, permanent: true })?;
+    ssh::survey(&target).await
+}
+
+/// Installs Dray and the picked tools on a server and starts it there. Its
+/// output streams as `server_installing`, keyed by the line, so a dialog
+/// closed meanwhile simply stops listening.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_on_server(line: String, picks: Vec<String>) -> Result<(), ssh::Failure> {
+    let target = ssh::parse(&line).map_err(|message| ssh::Failure { message, fix: None, permanent: true })?;
+    ssh::install(&target, &picks, |text| {
+        if let Some(sink) = SINK.get() {
+            let _ = sink.emit("server_installing", json!({ "line": line, "text": text }));
+        }
+    })
+    .await
+}
+
 /// Renames a server; an empty name puts back the default, its host. The id is
 /// what everything keys on, so nothing else moves.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -565,13 +586,14 @@ pub async fn trust_host_key(line: String, fingerprint: String) -> Result<(), Str
 
 /// Sign in on a server: Terminal, already logged in to it, running the
 /// agent's login. Same closed set `run_agent_login` takes, so nothing typed in
-/// the webview reaches a shell.
+/// the webview reaches a shell. No `auth` is the composer's logged-out notice,
+/// which names a harness alone and runs the login line it shows.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn run_server_login(
     server: String,
     harness: crate::harness::Harness,
     provider: Option<String>,
-    auth: String,
+    auth: Option<String>,
 ) -> Result<(), String> {
     let target = conns()
         .iter()
@@ -581,7 +603,10 @@ pub async fn run_server_login(
         .ssh
         .clone()
         .ok_or("This server was added by address, so there is no login to open. Run the command on it yourself.")?;
-    let command = crate::accounts::login_command(harness, provider, &auth)?;
+    let command = match auth {
+        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
+        None => harness.login_command().to_string(),
+    };
     crate::apps::run_in_terminal(&ssh::terminal_line(&target, &command), "").await
 }
 

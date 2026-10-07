@@ -112,7 +112,7 @@ function CommandRow({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <CommandChip command={command} />
+      <CommandChip command={command} className="flex-1" />
       <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onRun}>
         <SquareTerminal className="size-3.5" />
         Run in Terminal
@@ -239,6 +239,11 @@ function AccountRow({
   );
 }
 
+/// A sign-in form field: label above the control where the form is narrow (the
+/// install dialog), beside it where there is room (the page).
+const FIELD = "flex flex-col gap-1.5 @md:flex-row @md:gap-3";
+const FIELD_LABEL = "text-ui text-muted-foreground @md:w-20 @md:shrink-0";
+
 /// A labelled dropdown over a fixed list.
 function Picker({
   label,
@@ -256,8 +261,8 @@ function Picker({
   const current = items.find((item) => item.id === value);
 
   return (
-    <label className="flex items-center gap-3">
-      <span className="w-20 shrink-0 text-ui text-muted-foreground">{label}</span>
+    <label className={cn(FIELD, "@md:items-center")}>
+      <span className={FIELD_LABEL}>{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="sm" className="min-w-0 flex-1 justify-between">
@@ -367,11 +372,7 @@ function SignInForm({
 
   return (
     <form
-      // `mt-6` because this card is the panel's only child and the panel starts
-      // at the dialog's top edge: without it the card's own top corner runs
-      // under the close cross, which is absolute against the dialog and sits
-      // outside every layout in here.
-      className="mt-6 flex flex-col gap-3 rounded-xl border border-border/60 p-3"
+      className="@container flex flex-col gap-3 rounded-xl border border-border/60 p-3"
       onSubmit={(e) => {
         e.preventDefault();
         if (!ready || !picked?.needsKey) return;
@@ -407,8 +408,8 @@ function SignInForm({
             onPick={setProvider}
           />
           {custom && (
-            <label className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-ui text-muted-foreground">Name</span>
+            <label className={cn(FIELD, "@md:items-center")}>
+              <span className={FIELD_LABEL}>Name</span>
               <input
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
@@ -432,8 +433,8 @@ function SignInForm({
           billed. Drawn only where there is more than one: a group of one is a
           control that asks nothing. */}
       {options.length > 1 && (
-        <div className="flex gap-3">
-          <span className="w-20 shrink-0 pt-1.5 text-ui text-muted-foreground">Method</span>
+        <div className={FIELD}>
+          <span className={cn(FIELD_LABEL, "@md:pt-1.5")}>Method</span>
           <div role="radiogroup" aria-label="Sign-in method" className="flex min-w-0 flex-1 flex-col gap-1">
             {options.map((option) => (
               <button
@@ -477,8 +478,8 @@ function SignInForm({
       {/* The field appears with the method that takes one, so a key can never
           be typed into a form that is really a command to copy. */}
       {picked?.needsKey && (
-        <label className="flex items-center gap-3">
-          <span className="w-20 shrink-0 text-ui text-muted-foreground">Key</span>
+        <label className={cn(FIELD, "@md:items-center")}>
+          <span className={FIELD_LABEL}>Key</span>
           <input
             type="password"
             value={key}
@@ -498,8 +499,8 @@ function SignInForm({
           sign-in happens over in the terminal, so there is nothing here to
           Save. The reader comes back to Refresh once it has landed. */}
       {picked && !picked.needsKey && (
-        <div className="flex gap-3">
-          <span className="w-20 shrink-0 pt-1.5 text-ui text-muted-foreground">Run</span>
+        <div className={FIELD}>
+          <span className={cn(FIELD_LABEL, "@md:pt-1.5")}>Run</span>
           <div className="min-w-0 flex-1">
             <CommandRow
               command={picked.command ?? ""}
@@ -588,12 +589,20 @@ function MissingAgent({ agent, server }: { agent: AgentAccounts; server: ServerI
 /// shell.
 export default function AccountsSettings({
   cwd,
+  only,
+  onFormOpen,
 }: {
   /// Where the terminal button opens. The selected session's directory where
   /// there is one. A courtesy, and the whole of what the directory decides: all
   /// four stores live under the reader's home, so a sign-in run in one tree is
   /// a sign-in everywhere.
   cwd: string;
+  /// One server's installed agents and nothing else: the sign-in step of
+  /// installing Dray there, drawn inside a dialog rather than on the page.
+  only?: ServerId;
+  /// Told when a sign-in form opens and closes, so the install dialog can
+  /// withhold Done while one agent's form is up.
+  onFormOpen?: (open: boolean) => void;
 }) {
   // Owned here rather than in `App`, unlike the issue tracker's, and the
   // dialog's own bargain is what makes that safe: bodies are *switched*, not
@@ -604,7 +613,7 @@ export default function AccountsSettings({
   // Which machine's accounts are drawn: the selected session's by default. A
   // server other than the session's is asked in its own home directory.
   const servers = useServers();
-  const [server, setServer] = useState<ServerId>(() => serverOfPath(cwd));
+  const [server, setServer] = useState<ServerId>(() => only ?? serverOfPath(cwd));
   const askIn = serverOfPath(cwd) === server ? cwd : "";
   const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(askIn, server);
   const [signingIn, setSigningIn] = useState<{
@@ -625,6 +634,10 @@ export default function AccountsSettings({
 
   const agent = agents?.find((a) => a.harness === signingIn?.harness) ?? null;
   const enabledAgents = useEnabledAgents();
+  const formOpen = signingIn !== null;
+  useEffect(() => {
+    onFormOpen?.(formOpen);
+  }, [formOpen, onFormOpen]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -648,6 +661,7 @@ export default function AccountsSettings({
           title, where a reader already looks to get out of something. Refresh
           has nothing to re-read while a credential is being written, and the
           two would have sat side by side meaning different kinds of "leave". */}
+      {/* Inside the install dialog the slot is its footer, beside Done. */}
       <SettingsHeaderAction>
         {signingIn ? (
           <Button
@@ -678,7 +692,7 @@ export default function AccountsSettings({
         )}
       </SettingsHeaderAction>
 
-      {servers.length > 0 && !signingIn && (
+      {servers.length > 0 && !signingIn && !only && (
         <ServerPicker
           value={server}
           options={[LOCAL, ...servers.map((s) => s.id)]}
@@ -715,8 +729,8 @@ export default function AccountsSettings({
           onDone={() => setSigningIn(null)}
         />
       ) : (
-        agents.map((agent) => {
-          const on = enabledAgents.includes(agent.harness);
+        agents.filter((agent) => !only || agent.installed).map((agent) => {
+          const on = only !== undefined || enabledAgents.includes(agent.harness);
           // pi's rows are the providers it is *configured* for, and its own
           // list is a seed rather than a catalogue — a name this build never
           // heard of is still one `pi auth check` can answer for, so there is
@@ -734,7 +748,7 @@ export default function AccountsSettings({
                     folds its accounts away but keeps the title, which is the
                     only way back on. The last one on stays on: a new session
                     needs somewhere to start. */}
-                <Tooltip>
+                {!only && <Tooltip>
                   <TooltipTrigger asChild>
                     {/* A span carries the tooltip: a disabled switch fires no
                         pointer events, and the last one on is exactly the one
@@ -755,7 +769,7 @@ export default function AccountsSettings({
                         ? "Turn off to hide from the agent picker"
                         : "Turn on to show in the agent picker"}
                   </TooltipContent>
-                </Tooltip>
+                </Tooltip>}
               </div>
 
               {!on ? null : !agent.installed ? (

@@ -118,6 +118,8 @@ import { stepZoom } from "@/lib/zoom";
 import { cycleTheme } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
+import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
+import WhatsNewCard from "@/components/WhatsNewCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
@@ -133,6 +135,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
@@ -155,7 +158,7 @@ import {
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
-import { buildTranscript } from "@/lib/transcript";
+import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -422,12 +425,6 @@ function App() {
   // Owned here for the same reason: `RightPanel`, the shell and the settings
   // row all read it.
   const [panelSide, setPanelSide] = useLocalStorage<PanelSide>("ade.panelSide", "right");
-  // Whether the reader has been told the app does that. Written once and never
-  // cleared, the same bargain `splitLearned` makes below.
-  const [autoHideNoticed, setAutoHideNoticed] = useLocalStorage(
-    "ade.autoHideSidebarNoticed",
-    false,
-  );
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
   // session runs, and switching what you're *looking at* must not quietly move
   // where the next prompt would land.
@@ -541,6 +538,21 @@ function App() {
     setSettingsTab("appearance");
     setNamingSpace(false);
   }, []);
+  const openChangelog = useCallback(() => {
+    setSettingsTab("changelog");
+    setSettingsOpen(true);
+  }, []);
+  // Once a launch: a release flagged `notify` that the reader runs and has not
+  // dismissed yet gets the what's-new card.
+  const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  useEffect(() => {
+    checkChangelog().then(setWhatsNew, () => {});
+  }, []);
+  const closeWhatsNew = (view: boolean) => {
+    if (whatsNew) markChangelogSeen(whatsNew.seen);
+    setWhatsNew(null);
+    if (view) openChangelog();
+  };
   // Layout, not ordinary: the switch must be down before the page paints, or a
   // keystroke in that frame reaches a shell nobody can see.
   useLayoutEffect(() => setHotkeysSuspended(settingsOpen), [settingsOpen]);
@@ -1313,6 +1325,10 @@ function App() {
     () => currentTodos(selectedSession?.events ?? []),
     [selectedSession?.events],
   );
+  const sessionAttachments = useMemo(
+    () => sessionMedia(selectedSession?.events ?? []),
+    [selectedSession?.events],
+  );
 
   // The panel opens itself on a task list the reader has not been shown, and on
   // nothing else.
@@ -1397,17 +1413,6 @@ function App() {
     if (move === "hide") {
       hidForBrowser.current = true;
       setCollapsed(true);
-      // Said once ever, and only where the sidebar actually moved: chrome that
-      // rearranges itself with nothing to explain it reads as a bug.
-      if (!autoHideNoticed) {
-        setAutoHideNoticed(true);
-        pushNotice({
-          sessionId: "sidebar",
-          kind: "sidebar-auto",
-          label: "Sidebar hidden",
-          detail: "The browser gets the full width. Turn this off in Settings → Appearance.",
-        });
-      }
     } else if (move === "restore") {
       hidForBrowser.current = false;
       setCollapsed(false);
@@ -1421,8 +1426,6 @@ function App() {
     collapsed,
     setCollapsed,
     autoHideSidebar,
-    autoHideNoticed,
-    setAutoHideNoticed,
   ]);
   const expandBrowser = () => setViewTab("browser");
   const collapseBrowser = () => {
@@ -1434,7 +1437,10 @@ function App() {
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 || backgroundTasks.length > 0 || sessionTodos !== null;
+    subagents.length > 0 ||
+    backgroundTasks.length > 0 ||
+    sessionTodos !== null ||
+    sessionAttachments.length > 0;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -1449,6 +1455,15 @@ function App() {
   // stands in. Not written back, so switching to a session without a PR keeps
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
+
+  // The attachment grid reads the session's whole log, but a transcript drawn
+  // as a crew strip never pages past its tail — so the More tab pages in the
+  // rest itself while it is on screen. The main column's transcript already
+  // does, and `loadOlder` runs one read per session for the two of them.
+  const pagedForMore = panelShown && activeTab === "more" ? selectedSession : null;
+  useEffect(() => {
+    if (pagedForMore?.olderBefore != null) loadOlder(pagedForMore.sessionId);
+  }, [pagedForMore?.sessionId, pagedForMore?.olderBefore]);
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
   // hand is the reader's.
@@ -2860,6 +2875,8 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
+                media={sessionAttachments}
+                sessionId={shownSession.sessionId}
                 subagents={{
                   runs: subagents,
                   selectedId: selectedSubagentId,
@@ -2991,9 +3008,10 @@ function App() {
           notice={
             !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
-            ) : loggedOutAgent && authTurn && selectedSession && activeServer === LOCAL ? (
+            ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
                 agent={loggedOutAgent}
+                server={activeServer}
                 cwd={selectedSession.cwd}
                 onHandled={() => setLoginHandled(authTurn)}
               />
@@ -3212,6 +3230,13 @@ function App() {
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
+    {whatsNew && (
+      <WhatsNewCard
+        release={whatsNew.release}
+        onDismiss={() => closeWhatsNew(false)}
+        onView={() => closeWhatsNew(true)}
+      />
+    )}
     <DragGhost />
     <QuitDialog />
     <LinkDialog />

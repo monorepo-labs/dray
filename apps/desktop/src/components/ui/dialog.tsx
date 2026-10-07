@@ -20,10 +20,16 @@ function DialogContent({
   className,
   children,
   showClose = true,
+  dismissible = true,
+  onEscapeKeyDown,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   /// Off where the header's right end holds a control of its own.
   showClose?: boolean
+  /// Off while something the dialog started is still running: Escape and the
+  /// overlay do nothing, and the overlay stops promising otherwise.
+  dismissible?: boolean
 }) {
   return (
     <DialogPrimitive.Portal>
@@ -34,7 +40,10 @@ function DialogContent({
         // less, its scrim already reading thinner over a bright page. Durations
         // are set raw: `duration-250` also sets `--tw-duration`, which would
         // slow the open and close fades with it.
-        className="peer fixed inset-0 z-50 bg-black/50 transition-colors [transition-duration:250ms] hover:bg-black/48 dark:hover:bg-black/40 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        className={cn(
+          "peer fixed inset-0 z-50 bg-black/50 transition-colors [transition-duration:250ms] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          dismissible && "hover:bg-black/48 dark:hover:bg-black/40"
+        )}
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"
@@ -42,6 +51,14 @@ function DialogContent({
           "fixed top-1/2 left-1/2 z-50 grid w-full max-w-100 -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border bg-popover backdrop-blur-xl p-5 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
+        onEscapeKeyDown={(e) => {
+          if (!dismissible) e.preventDefault()
+          onEscapeKeyDown?.(e)
+        }}
+        onInteractOutside={(e) => {
+          if (!dismissible) e.preventDefault()
+          onInteractOutside?.(e)
+        }}
         {...props}
       >
         {children}
@@ -50,12 +67,14 @@ function DialogContent({
             puts it; matched off the overlay's hover by sibling selector, since
             `peer-hover` reaches siblings and not their children.
             `pointer-events-none` so it never takes the hover off the overlay. */}
-        <p
-          aria-hidden
-          className="pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 -translate-y-1 text-ui whitespace-nowrap text-white/50 opacity-0 transition-[opacity,translate] [transition-duration:250ms] [.peer:hover~*_&]:translate-y-0 [.peer:hover~*_&]:opacity-100"
-        >
-          Click or press Esc to close
-        </p>
+        {dismissible && (
+          <p
+            aria-hidden
+            className="pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 -translate-y-1 text-ui whitespace-nowrap text-white/50 opacity-0 transition-[opacity,translate] [transition-duration:250ms] [.peer:hover~*_&]:translate-y-0 [.peer:hover~*_&]:opacity-100"
+          >
+            Click or press Esc to close
+          </p>
+        )}
         {showClose && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
