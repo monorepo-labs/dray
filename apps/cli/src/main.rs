@@ -15,7 +15,8 @@ mod setup;
 use draft::DraftCommand;
 use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
-    LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary,
+    LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary, ShareAction,
+    ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -60,6 +61,9 @@ enum Command {
     Draft(DraftCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
+    /// Publish one of this session's dev servers as a public link, list the
+    /// live ones, or stop one.
+    Share(ShareCommand),
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Install what this machine is missing to run Dray, then start the server.
@@ -251,6 +255,22 @@ struct BrowserCommand {
     full: bool,
 }
 
+#[derive(Args)]
+#[command(after_help = "dray share <port>        public link to that dev server, printed
+dray share               the session's live links
+dray share stop <port>   take one down
+Anyone with a link can open it. Only the session's own dev servers can be shared.")]
+struct ShareCommand {
+    /// A port, `stop <port>`, or nothing to list.
+    #[arg(value_name = "PORT | stop PORT")]
+    words: Vec<String>,
+
+    /// The session whose dev server to share. Defaults to the session running
+    /// this command.
+    #[arg(long)]
+    session: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum SkillCommand {
     /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
@@ -277,6 +297,7 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
+        Command::Share(args) => share(args),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Setup(args) => setup::setup(args),
@@ -429,6 +450,47 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
         }
         Response::Error { message } => Err(message),
         other => Err(unexpected(other)),
+    }
+}
+
+fn share(args: ShareCommand) -> Result<(), String> {
+    let session_id = args
+        .session
+        .or_else(parent_session_id)
+        .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
+    let action = share_action(&args.words)?;
+    let asked = match action {
+        ShareAction::Start { port } => Some(port),
+        _ => None,
+    };
+    match send(Request::Share(ShareRequest { session_id, action }))? {
+        Response::Shared { shares } => {
+            match asked {
+                Some(port) => {
+                    let link = shares.iter().find(|s| s.port == port).ok_or("the app shared nothing")?;
+                    println!("{}", link.url);
+                }
+                None if shares.is_empty() => eprintln!("Nothing shared."),
+                None => {
+                    for s in &shares {
+                        println!("{}  {}", s.port, s.url);
+                    }
+                }
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn share_action(words: &[String]) -> Result<ShareAction, String> {
+    let port = |w: &str| w.parse::<u16>().map_err(|_| format!("{w} is not a port"));
+    match words {
+        [] => Ok(ShareAction::List),
+        [stop, p] if stop == "stop" => Ok(ShareAction::Stop { port: port(p)? }),
+        [p] => Ok(ShareAction::Start { port: port(p)? }),
+        _ => Err("dray share <port> | dray share stop <port> | dray share".into()),
     }
 }
 

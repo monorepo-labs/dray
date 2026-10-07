@@ -2,6 +2,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
+  Copy,
   Bug,
   ExternalLink,
   Globe,
@@ -10,6 +12,7 @@ import {
   Plus,
   RotateCcw,
   RotateCw,
+  Share2,
   Smartphone,
   SquareDashedMousePointer,
   Trash2,
@@ -19,9 +22,11 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCopied } from "@/hooks/useCopied";
 import { useDragReorder } from "@/hooks/useDragReorder";
 import {
   activateTab,
@@ -34,6 +39,10 @@ import {
   normalizeUrl,
   openDevTools,
   openInBrowser,
+  openRemoteServer,
+  shareReady,
+  shareServer,
+  stopShare,
   pickElement,
   removeCustomDevice,
   saveCustomDevice,
@@ -60,6 +69,8 @@ import {
 } from "@/lib/browser";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import { useWindowFocused } from "@/lib/focus";
+import { serverName, useServers } from "@/lib/servers";
+import { LOCAL, serverOfSession } from "@/lib/transport";
 import { zoomLevel } from "@/lib/zoom";
 import { cn } from "@/lib/utils";
 import type { ChromiumStatus } from "@/types/events";
@@ -936,6 +947,12 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   // and once more on coming back.
   const focused = useWindowFocused();
   const polling = active && focused;
+  // Bumped after a share or a stop, so the row moves without waiting a poll.
+  const [reread, setReread] = useState(0);
+  const [sharing, setSharing] = useState<number | null>(null);
+  // The first share on a machine fetches cloudflared, a wait of its own.
+  const [fetching, setFetching] = useState(false);
+  const [copied, copy] = useCopied();
 
   useEffect(() => {
     if (!polling) return;
@@ -950,9 +967,34 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
       live = false;
       clearInterval(timer);
     };
-  }, [sessionId, polling]);
+  }, [sessionId, polling, reread]);
 
-  const open = (url: string) => void openInBrowser(sessionId, url, true).catch(() => undefined);
+  // Cloudflare takes a few seconds to hand out a link, so the row says so.
+  const share = (port: number) => {
+    setSharing(port);
+    void shareReady(sessionId).then((ready) => setFetching(!ready));
+    void shareServer(sessionId, port)
+      .catch(() => undefined)
+      .finally(() => {
+        setSharing(null);
+        setFetching(false);
+        setReread((n) => n + 1);
+      });
+  };
+  const unshare = (port: number) =>
+    void stopShare(sessionId, port)
+      .catch(() => undefined)
+      .finally(() => setReread((n) => n + 1));
+
+  // A remote session's list is its server's, and the browser is this Mac's,
+  // so a row there is reached through a forwarded port.
+  const server = serverOfSession(sessionId);
+  useServers();
+  const open = (port: number) =>
+    void (server === LOCAL
+      ? openInBrowser(sessionId, `http://localhost:${port}`, true)
+      : openRemoteServer(sessionId, server, port)
+    ).catch(() => undefined);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.
@@ -960,19 +1002,63 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-4">
         {servers.length > 0 && (
-          <section className="flex flex-col gap-0.5">
-            <h3 className="px-2 pb-1 text-muted-foreground">Running locally</h3>
+          <section className="flex flex-col gap-1.5">
+            <h3 className="px-2 pb-1 text-muted-foreground">
+              {server === LOCAL ? "Running locally" : `Running on ${serverName(server)}`}
+            </h3>
             {servers.map((s) => (
-              <button
-                key={s.port}
-                type="button"
-                onClick={() => open(`http://localhost:${s.port}`)}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-              >
-                <span className="font-mono">localhost:{s.port}</span>
-                <span className="truncate text-muted-foreground">{s.process}</span>
-                {s.mine && <span className="ml-auto text-muted-foreground">this session</span>}
-              </button>
+              // A bordered card per server, so a link under it reads as part
+              // of the same thing rather than as a second row.
+              <div key={s.port} className="flex flex-col rounded-lg border border-border">
+                <div className="flex min-h-9 items-center gap-1 p-1">
+                  <button
+                    type="button"
+                    onClick={() => open(s.port)}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
+                  >
+                    <span className="font-mono">localhost:{s.port}</span>
+                    <span className="truncate text-muted-foreground">{s.process}</span>
+                    {s.mine && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
+                  </button>
+                  {!s.share && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => share(s.port)}
+                          disabled={sharing !== null}
+                          // The pane is `--background`, the outline fill's own
+                          // colour, and on glass `--muted` hovers into it too.
+                          className={cn("shrink-0", TOOL_BTN)}
+                        >
+                          {sharing === s.port ? <Spinner className="size-3.5" /> : <Share2 />}
+                          {sharing !== s.port
+                            ? "Get public link"
+                            : fetching
+                              ? "Downloading tunnel…"
+                              : "Creating link…"}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>A link anyone can open, until you stop it</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                {s.share && (
+                  <SharedLink
+                    url={s.share}
+                    copied={copied === s.share}
+                    onOpen={(external) =>
+                      void (external
+                        ? openUrl(s.share!)
+                        : openInBrowser(sessionId, s.share!, true)
+                      ).catch(() => undefined)
+                    }
+                    onCopy={() => void copy(s.share!)}
+                    onStop={() => unshare(s.port)}
+                  />
+                )}
+              </div>
             ))}
           </section>
         )}
@@ -980,6 +1066,53 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
           Search or enter a URL above, or open a link from the chat.
         </p>
       </div>
+    </div>
+  );
+}
+
+/// A dev server's public link, the lower half of its server's card. The
+/// address opens in this session's browser, ⌘-click in the system one — what
+/// the modifier means on every other link in the app.
+function SharedLink({
+  url,
+  copied,
+  onOpen,
+  onCopy,
+  onStop,
+}: {
+  url: string;
+  copied: boolean;
+  onOpen: (external: boolean) => void;
+  onCopy: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 border-t border-border p-1 pl-2.5">
+      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+      <button
+        type="button"
+        onClick={(e) => onOpen(e.metaKey)}
+        title={url}
+        className="min-w-0 flex-1 truncate text-left font-mono hover:underline"
+      >
+        {hostOf(url)}
+      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-xs" aria-label="Copy link" onClick={onCopy}>
+            {copied ? <Check /> : <Copy />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{copied ? "Copied" : "Copy link"}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-xs" aria-label="Stop sharing" onClick={onStop}>
+            <X />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Stop sharing</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

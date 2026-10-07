@@ -33,8 +33,9 @@ use std::path::PathBuf;
 /// half is behind so the reader — usually an agent, reading it as tool output —
 /// runs the cure that applies rather than the one that doesn't.
 /// v7 added the draft requests, which an older app fails to parse — refused by
-/// version instead, so the answer names which half to update.
-pub const PROTOCOL_VERSION: u32 = 7;
+/// version instead, so the answer names which half to update. v8 added
+/// `share`, for the same reason.
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -96,6 +97,7 @@ impl Request {
             | Request::ListDrafts(_)
             | Request::RemoveDraft(_)
             | Request::StartDraft(_) => 7,
+            Request::Share(_) => 8,
         }
     }
 }
@@ -112,6 +114,32 @@ pub enum Request {
     ListDrafts(ListSessions),
     RemoveDraft(DraftId),
     StartDraft(StartDraft),
+    Share(ShareRequest),
+}
+
+/// A public link to one of a session's dev servers, made where the server
+/// runs. Only a port the session's own Browser tab lists can be shared.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareRequest {
+    pub session_id: String,
+    pub action: ShareAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "verb", rename_all = "snake_case")]
+pub enum ShareAction {
+    Start { port: u16 },
+    Stop { port: u16 },
+    List,
+}
+
+/// One live link.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedPort {
+    pub port: u16,
+    pub url: String,
 }
 
 /// A task saved for later, the same thing ⌘S makes in the composer: a prompt
@@ -526,6 +554,8 @@ pub enum Response {
     /// What a browser action answers: `output` as text for the agent to
     /// read, `data` the same answer for `--json`.
     Browser { output: String, data: serde_json::Value },
+    /// The session's live links after the change, whichever verb asked.
+    Shared { shares: Vec<SharedPort> },
     Error { message: String },
 }
 
@@ -666,6 +696,57 @@ pub const AGENTS: [Agent; 5] = [
     },
 ];
 
+/// The cloudflared release public links run on, pinned so its bytes cannot
+/// move under the hashes: the app downloads it on first share, and `dray
+/// setup` offers it. Hashes are the release assets' own sha256, which GitHub
+/// publishes beside each.
+pub const CLOUDFLARED_VERSION: &str = "2026.10.0";
+
+pub struct CloudflaredBuild {
+    /// The release asset's name: a bare binary on Linux, a `.tgz` holding one
+    /// on macOS.
+    pub asset: &'static str,
+    pub size: u64,
+    pub sha256: &'static str,
+}
+
+/// This machine's build, by `(std::env::consts::OS, ARCH)`.
+pub fn cloudflared_build() -> Option<CloudflaredBuild> {
+    let (asset, size, sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => (
+            "cloudflared-linux-amd64",
+            40_129_756,
+            "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db",
+        ),
+        ("linux", "aarch64") => (
+            "cloudflared-linux-arm64",
+            37_687_584,
+            "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08",
+        ),
+        ("macos", "aarch64") => (
+            "cloudflared-darwin-arm64.tgz",
+            19_809_074,
+            "a2f79ff7b9420aa537d74af239f376da170bbabeb529aec416002adac6a72e70",
+        ),
+        ("macos", "x86_64") => (
+            "cloudflared-darwin-amd64.tgz",
+            21_741_581,
+            "903845b81828c8cb3c5d13d816a2de71c06a3da5785469df8eb0e1b736d92f9f",
+        ),
+        _ => return None,
+    };
+    Some(CloudflaredBuild { asset, size, sha256 })
+}
+
+impl CloudflaredBuild {
+    pub fn url(&self) -> String {
+        format!(
+            "https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{}",
+            self.asset
+        )
+    }
+}
+
 /// How each package manager installs git, the first one found winning. The
 /// app shows the same line to copy where `dray setup` would print it, so the
 /// two are one table.
@@ -733,7 +814,9 @@ mod tests {
         for request in &drafts {
             assert_eq!(Envelope::new(request.clone()).v, 7, "{request:?}");
         }
-        let newest = old.iter().chain(&drafts).map(Request::version).max();
+        let share = Request::Share(ShareRequest { session_id: "s".into(), action: ShareAction::List });
+        assert_eq!(Envelope::new(share.clone()).v, 8);
+        let newest = old.iter().chain(&drafts).chain([&share]).map(Request::version).max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }

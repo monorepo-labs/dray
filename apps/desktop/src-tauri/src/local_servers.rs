@@ -24,6 +24,8 @@ pub struct LocalServer {
     pub process: String,
     /// Started under this session's agent, as against by hand in its tree.
     pub mine: bool,
+    /// Its public link, where the reader or the agent shared it.
+    pub share: Option<String>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -35,9 +37,14 @@ pub async fn list_local_servers(
         .await
         .map_err(|e| e.to_string())?
         .map(|item| PathBuf::from(item.cwd));
-    tokio::task::spawn_blocking(move || Ok(discover(root, cwd.as_deref())))
+    let mut servers = tokio::task::spawn_blocking(move || discover(root, cwd.as_deref()))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let shares = crate::share::list(&session_id);
+    for server in &mut servers {
+        server.share = shares.iter().find(|s| s.port == server.port).map(|s| s.url.clone());
+    }
+    Ok(servers)
 }
 
 fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
@@ -61,7 +68,7 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
         .filter(|(pid, _, _)| *pid != me)
         .filter_map(|(pid, name, port)| {
             let is_mine = mine.contains(&pid);
-            (is_mine || in_tree(pid)).then_some(LocalServer { port, process: name, mine: is_mine })
+            (is_mine || in_tree(pid)).then_some(LocalServer { port, process: name, mine: is_mine, share: None })
         })
         .filter(|s| seen.insert(s.port))
         .collect();
@@ -118,6 +125,7 @@ pub(crate) async fn kill_descendants(root: u32) {
 
 /// `(pid, process name, port)` for every TCP listener, via lsof's machine
 /// format: one field per line, `p` opening a process and `n` naming a socket.
+#[cfg(not(target_os = "linux"))]
 fn listening() -> Vec<(u32, String, u16)> {
     let Ok(out) = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"])
@@ -130,6 +138,7 @@ fn listening() -> Vec<(u32, String, u16)> {
 
 /// Working directory per pid, for the listeners only. One lsof for the lot:
 /// `-a` ands the pid list with the `cwd` descriptor.
+#[cfg(not(target_os = "linux"))]
 fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
     if pids.is_empty() {
         return HashMap::new();
@@ -141,6 +150,60 @@ fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
     parse_cwds(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The same answer off `/proc`, since a fresh Ubuntu server has no lsof.
+/// A socket's inode joins the listener table to the process holding it; only
+/// processes this user may read are seen, which is every one it started.
+#[cfg(target_os = "linux")]
+fn listening() -> Vec<(u32, String, u16)> {
+    use std::fs;
+    let ports: HashMap<u64, u16> = ["/proc/net/tcp", "/proc/net/tcp6"]
+        .iter()
+        .filter_map(|f| fs::read_to_string(f).ok())
+        .flat_map(|text| parse_proc_net(&text))
+        .collect();
+    let mut rows = Vec::new();
+    let Ok(procs) = fs::read_dir("/proc") else { return rows };
+    for entry in procs.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else { continue };
+        let Ok(fds) = fs::read_dir(entry.path().join("fd")) else { continue };
+        for fd in fds.flatten() {
+            let Ok(link) = fs::read_link(fd.path()) else { continue };
+            let inode = link.to_str().and_then(|l| l.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok());
+            if let Some(&port) = inode.and_then(|i: u64| ports.get(&i)) {
+                let name = fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+                rows.push((pid, name.trim().to_string(), port));
+            }
+        }
+    }
+    rows
+}
+
+#[cfg(target_os = "linux")]
+fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
+    pids.into_iter()
+        .filter_map(|pid| Some((pid, std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?)))
+        .collect()
+}
+
+/// `inode → port` for each loopback or wildcard listener in `/proc/net/tcp`
+/// or `tcp6`. Addresses are hex in host byte order per 32-bit word, ports
+/// plain hex; `0A` is LISTEN.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_net(text: &str) -> Vec<(u64, u16)> {
+    const LOCAL: [&str; 3] = ["0100007F", "00000000000000000000000001000000", "0000000000000000FFFF00000100007F"];
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let (addr, port) = f.get(1)?.split_once(':')?;
+            let local = LOCAL.contains(&addr) || addr.bytes().all(|b| b == b'0');
+            (*f.get(3)? == "0A" && local).then_some(())?;
+            Some((f.get(9)?.parse().ok()?, u16::from_str_radix(port, 16).ok()?))
+        })
+        .collect()
+}
+
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn parse_cwds(text: &str) -> HashMap<u32, PathBuf> {
     let mut map = HashMap::new();
     let mut pid = 0u32;
@@ -156,6 +219,7 @@ fn parse_cwds(text: &str) -> HashMap<u32, PathBuf> {
     map
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn parse_lsof(text: &str) -> Vec<(u32, String, u16)> {
     let mut rows = Vec::new();
     let (mut pid, mut name) = (0u32, String::new());
@@ -190,6 +254,30 @@ mod tests {
         assert_eq!(rows[0], (123, "node".into(), 1420));
         assert_eq!(rows[1], (456, "postgres".into(), 5432));
         assert_eq!(rows.len(), 3, "a non-loopback bind is left out");
+    }
+
+    #[test]
+    fn parses_proc_net() {
+        let v4 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   \
+            0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000   501        0 111 1 0 100 0 0 10 0\n   \
+            1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000   501        0 222 1 0 100 0 0 10 0\n   \
+            2: 0500000A:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 333 1 0 100 0 0 10 0\n   \
+            3: 0100007F:0BB8 0100007F:D431 01 00000000:00000000 00:00000000 00000000   501        0 444 1 0 100 0 0 10 0\n";
+        assert_eq!(parse_proc_net(v4), vec![(111, 3000), (222, 8080)], "a LAN bind and an open connection are left out");
+        let v6 = "  sl  local_address remote_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n   \
+            0: 00000000000000000000000001000000:1324 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 501 0 555 1\n";
+        assert_eq!(parse_proc_net(v6), vec![(555, 4900)]);
+    }
+
+    /// The real read, lsof on a Mac and `/proc` on Linux, finding a socket
+    /// this process just opened, and where this process stands.
+    #[test]
+    fn finds_its_own_listener() {
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let me = std::process::id();
+        assert!(listening().iter().any(|(pid, _, p)| *pid == me && *p == port), "port {port} not listed");
+        assert_eq!(cwd_of(vec![me]).get(&me).map(|p| resolved(p)), Some(resolved(&std::env::current_dir().unwrap())));
     }
 
     #[test]

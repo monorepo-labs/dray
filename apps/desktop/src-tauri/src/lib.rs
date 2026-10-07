@@ -31,9 +31,13 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 pub mod chromium;
-// Without the feature too, for the same reason: its tests need no Chromium.
-#[cfg(target_os = "macos")]
-#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+// `dray browser` on a server: a headless Chromium under the same verbs the
+// Mac's CEF answers. See HEADLESS-PLAN.md.
+#[cfg(all(feature = "serve", not(feature = "cef")))]
+#[path = "headless/headless.rs"]
+pub mod headless;
+// Without a browser too, for the same reason: its tests need no Chromium.
+#[cfg_attr(not(any(feature = "cef", feature = "serve")), allow(dead_code))]
 pub mod recording;
 mod local_servers;
 pub mod docs;
@@ -61,6 +65,7 @@ pub mod serve;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
+pub mod share;
 #[cfg(feature = "desktop")]
 pub mod ssh;
 pub mod settings;
@@ -763,6 +768,7 @@ pub fn run() {
             servers::remove_server,
             servers::reconnect_servers,
             servers::server_invoke,
+            servers::forward_port,
             servers::add_ssh_server,
             servers::set_server_on,
             servers::rename_server,
@@ -798,7 +804,7 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_pick,
             #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::automation::browser_snapshot,
+            cef::browser_snapshot,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_status,
             #[cfg(all(feature = "cef", target_os = "macos"))]
@@ -806,6 +812,9 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_remove,
             local_servers::list_local_servers,
+            share::share_port,
+            share::stop_share,
+            share::share_ready,
             settings::get_settings,
             set_analytics_enabled,
             analytics::analytics_identity,

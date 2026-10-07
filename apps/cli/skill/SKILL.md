@@ -343,6 +343,22 @@ don't rush or pad. Screenshots work while recording.
 they cause. A local dev server is the usual page — start it in the background
 first, then open it. `--json` on any verb answers as JSON for scripting.
 
+## Sharing a dev server
+
+```bash
+dray share 5173          # prints a public https://….trycloudflare.com link
+dray share               # this session's live links
+dray share stop 5173
+```
+
+A Cloudflare quick tunnel to one of this session's own dev servers — the ones
+the user's Browser tab lists for it, nothing else on the machine. **Anyone with
+the link can open it**, so share when the user asked for a link they can open
+elsewhere or send on, and not to check your own work: `dray browser` does that
+without publishing anything. The link shows on that server's row in the app,
+where the user can stop it, and it goes when the session is settled or deleted.
+The URL is random each time and Cloudflare promises no uptime for it.
+
 ## Reporting back to the user
 
 Say briefly what is now running, in terms of the work — "three sessions, one per

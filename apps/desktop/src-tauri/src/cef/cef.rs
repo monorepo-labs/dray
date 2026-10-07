@@ -28,12 +28,12 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-#[path = "automation.rs"]
+#[path = "../browser/automation.rs"]
 pub mod automation;
 
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
@@ -921,7 +921,7 @@ wrap_life_span_handler! {
             let Some(browser) = browser.cloned() else { return };
             let id = self.tab;
             let view = browser.host().map(|h| h.window_handle() as usize).unwrap_or(0);
-            let devtools = automation::observe(&browser, id);
+            let devtools = observe(&browser, id);
             // A woken tab already has its entry, and keeps its title and
             // favicon until the page says otherwise. Filled in place, never
             // pushed beside it, and `on_before_close` removes only the
@@ -1486,6 +1486,237 @@ wrap_keyboard_handler! {
     }
 }
 
+// --- What `dray browser` reads ---------------------------------------------
+//
+// `automation.rs` reaches its tabs through these and nothing else; the
+// headless backend answers the same names. See HEADLESS-PLAN.md.
+
+wrap_dev_tools_message_observer! {
+    struct DrayDevTools {
+        tab: i32,
+    }
+
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            message_id: ::std::os::raw::c_int,
+            success: ::std::os::raw::c_int,
+            result: Option<&[u8]>,
+        ) {
+            let value = result
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let reply = if success != 0 {
+                Ok(value)
+            } else {
+                Err(value
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("the page refused the command")
+                    .to_string())
+            };
+            automation::answer(self.tab, message_id, reply);
+        }
+    }
+}
+
+/// Attach the observer to a browser the moment it exists; the registration
+/// lives on the tab and ends with it.
+fn observe(browser: &Browser, tab: i32) -> Option<Registration> {
+    browser
+        .host()
+        .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new(tab))))
+}
+
+/// CEF hands every browser its own DevTools channel; the reply comes back
+/// through `DrayDevTools`.
+fn send_cdp(tab: i32, id: i32, message: serde_json::Value) -> Result<(), String> {
+    let message = message.to_string();
+    on_main(move || {
+        let sent = browser_of(tab)
+            .and_then(|b| b.host())
+            .map(|host| host.send_dev_tools_message(Some(message.as_bytes())) == 1)
+            .unwrap_or(false);
+        if !sent {
+            automation::answer(tab, id, Err("that tab is gone".into()));
+        }
+    })
+}
+
+fn tab_state(tab: i32) -> Option<(String, String, bool)> {
+    TABS.lock()
+        .unwrap()
+        .iter()
+        .find(|t| t.id == tab)
+        .map(|t| (t.url.clone(), t.title.clone(), t.loading))
+}
+
+/// Wakes a discarded tab and waits for its page, so a verb aimed at it acts
+/// on a live one. The wake is asked for again each round: a tab still
+/// closing when the verb arrived is not a ghost yet, and `wake` skips it.
+async fn awake(tab: i32) -> Result<(), String> {
+    let waking = TABS.lock().unwrap().iter().any(|t| t.id == tab && t.waking);
+    if browser_of(tab).is_some() && !waking {
+        return Ok(());
+    }
+    let start = Instant::now();
+    while browser_of(tab).is_none() {
+        if session_of(tab).is_none() {
+            return Err(format!("tab {tab} closed"));
+        }
+        if start.elapsed() > automation::LOAD_TIMEOUT {
+            return Err("Chromium did not reopen the discarded tab".into());
+        }
+        if is_ghost(tab) {
+            on_main(move || wake(tab))?;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    automation::wait_loaded(tab).await
+}
+
+async fn open_url(session: &str, url: String, new_tab: bool) -> Result<(), String> {
+    browser_open(session.to_string(), url, new_tab)
+}
+
+async fn nav(session: &str, verb: &str) -> Result<(), String> {
+    browser_nav(session.to_string(), verb.to_string())
+}
+
+async fn close_tab(session: &str, id: i32) -> Result<(), String> {
+    browser_close(session.to_string(), id)
+}
+
+async fn activate_tab(session: &str, id: i32) -> Result<(), String> {
+    activate(session.to_string(), id, false)
+}
+
+/// Waited on, so a busy main thread cannot leave the zoom queued behind an
+/// answer that already said it landed.
+async fn set_zoom(tab: i32, percent: u32) -> Result<(), String> {
+    let level = (percent as f64 / 100.0).ln() / 1.2f64.ln();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    on_main(move || {
+        let host = browser_of(tab).and_then(|b| b.host());
+        if let Some(host) = &host {
+            host.set_zoom_level(level);
+        }
+        let _ = tx.send(host.is_some());
+    })?;
+    if !rx.await.unwrap_or(false) {
+        return Err("that tab is gone".into());
+    }
+    Ok(())
+}
+
+/// Brings a tab's view out of hiding for an input verb; see `reveal`.
+async fn reveal_for_input(tab: i32) -> Result<(), String> {
+    on_main(move || reveal(tab))?;
+    // The renderer learns it is visible a frame later.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    Ok(())
+}
+
+fn relayout() -> Result<(), String> {
+    on_main(apply_layout)
+}
+
+fn emit(event: &str, payload: serde_json::Value) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit(event, payload);
+    }
+}
+
+/// The pane saying it has the page covered, so the reflow the capture needs
+/// happens behind a still rather than on screen. Waited on rather than
+/// guessed at: the cover is a page snapshot, an image decode and a layout
+/// call, which is a few hundred milliseconds on a good day and not a number
+/// worth hardcoding.
+///
+/// **An ack names the shot it is for, and a bare `Notify` was not enough.**
+/// One shot can be acked twice — the pane answers at once when it has
+/// nothing to cover, and the hide it asked for answers again when it lands
+/// — so the extra notification sat as a stored permit and released the
+/// *next* shot before its own still was painted, showing exactly the reflow
+/// this hides. `SHUTTER_ACK` carries how far the pane has got, the `Notify`
+/// only wakes the waiter to look, and a shot sleeps until the number
+/// reaches its own. A late ack from a finished shot is then a number too
+/// small to release anything.
+static SHUTTER_READY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// The newest shot's number, minted per capture.
+static SHUTTER_SHOT: AtomicU64 = AtomicU64::new(0);
+/// The newest shot the pane has answered for. Monotonic, so a repeated ack
+/// for one shot is the same answer twice rather than a second one.
+static SHUTTER_ACK: AtomicU64 = AtomicU64::new(0);
+/// True from the shutter opening until the override goes on — the window in
+/// which the page still reads the way the reader sees it, and the one thing
+/// that lets the pane's cover picture past `CAPTURING`.
+static SHUTTER_OPEN: AtomicBool = AtomicBool::new(false);
+/// How long to wait for that. A pane with no browser on screen answers at
+/// once; this is for one that never answers at all, where giving up and
+/// shooting anyway is exactly what the verb did before it covered anything.
+const SHUTTER: Duration = Duration::from_millis(700);
+
+/// Opens the pane's shutter and waits until the page is covered, answering
+/// the shot's number.
+async fn cover(session: &str) -> u64 {
+    // Numbered before the event goes out, so an ack cannot name a shot that
+    // does not exist yet; `await_shutter` reads the mark before it waits, so
+    // one arriving early is not missed either.
+    let shot = SHUTTER_SHOT.fetch_add(1, Ordering::AcqRel) + 1;
+    SHUTTER_OPEN.store(true, Ordering::Release);
+    automation::emit_shooting(session, true, shot);
+    await_shutter(shot).await;
+    // The hide has run, but a hidden view leaves the window on its next frame
+    // — so the page is given one before it is asked to reflow into a widget
+    // that may still be composited.
+    tokio::time::sleep(automation::SETTLE).await;
+    // Closed before the override, never after: past here the page stops being
+    // the one on screen, so a cover taken from it would be a picture of the
+    // very reflow being hidden.
+    SHUTTER_OPEN.store(false, Ordering::Release);
+    shot
+}
+
+/// Hands the view back once the page has repainted at the pane's size. It
+/// has not painted it yet when the override comes off, and handing the view
+/// over inside that window puts the capture's layout on screen for a frame —
+/// the reflow, arriving at the end. The still is holding the pane meanwhile,
+/// so this costs nothing anybody can see.
+async fn uncover(session: &str, shot: u64) {
+    tokio::time::sleep(automation::SETTLE).await;
+    automation::emit_shooting(session, false, shot);
+}
+
+/// Lets the shot numbered `shot` through. See `browser_shutter_ready`.
+/// `fetch_max`, so an ack that arrives after a later shot has been answered
+/// for cannot walk the mark backwards, and `notify_waiters` rather than
+/// `notify_one`, which would leave a permit behind for a shot nobody has
+/// taken yet — the bug this numbering exists to close.
+fn shutter_ready(shot: u64) {
+    SHUTTER_ACK.fetch_max(shot, Ordering::Release);
+    SHUTTER_READY.notify_waiters();
+}
+
+/// Waits until the pane has answered for `shot`, or `SHUTTER` passes. The
+/// registration is re-made around every check, or an ack landing between
+/// reading the mark and awaiting would be missed and the shot would sit out
+/// the whole timeout.
+async fn await_shutter(shot: u64) {
+    let _ = tokio::time::timeout(SHUTTER, async {
+        loop {
+            let mut waiting = Box::pin(SHUTTER_READY.notified());
+            waiting.as_mut().enable();
+            if SHUTTER_ACK.load(Ordering::Acquire) >= shot {
+                return;
+            }
+            waiting.await;
+        }
+    })
+    .await;
+}
+
 // --- Commands --------------------------------------------------------------
 
 /// Which session is on screen and where, in CSS pixels from the window's
@@ -1510,7 +1741,7 @@ pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f6
 /// given in order, so arriving *here* means that hide has actually run.
 #[tauri::command]
 pub fn browser_shutter_ready(shot: u64) {
-    let _ = on_main(move || automation::shutter_ready(shot));
+    let _ = on_main(move || shutter_ready(shot));
 }
 
 /// Loads `url` in the session's active tab, or in a new one. A tab that
@@ -1707,3 +1938,51 @@ pub fn close_session(session_id: &str) {
         }
     });
 }
+
+/// The active tab as the pane sees it, for drawing in its place while the
+/// native view is hidden under a modal. No metrics override: the picture
+/// must match the widget's own size, or it is drawn stretched. The view
+/// hides only once this lands, so the whole cost is a modal opening late
+/// over the page: one CSS pixel per image pixel (a quarter of retina) and
+/// a fast JPEG, since the picture lives as long as a menu is open. An
+/// agent's sized screenshot holding `CAPTURING` would hand back a
+/// phone-wide page, so this waits for it — briefly, since the pane gives
+/// up on the answer at 400ms and a full-page capture can run for seconds;
+/// past that the pane hides over nothing, as it did before. The tab is read
+/// after the wait, so the picture is of the tab up when it is taken.
+#[tauri::command]
+pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
+    // Not while the shutter is open, and that exception is the whole reason
+    // a shot can be covered by the page rather than by a blank. The lock is
+    // held for the length of a shot, so a cover asked for inside one would
+    // be refused — and the cover is what the shot hides behind. Safe
+    // precisely there: the shutter opens *before* the override goes on, so
+    // the page this reads is the one the reader is looking at.
+    let _held = if SHUTTER_OPEN.load(Ordering::Acquire) {
+        None
+    } else {
+        Some(
+            tokio::time::timeout(Duration::from_millis(300), automation::CAPTURING.lock())
+                .await
+                .map_err(|_| "a screenshot is in progress")?,
+        )
+    };
+    let tab = automation::active_tab(&session_id)?;
+    // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
+    // at the scrollbar, and a picture a scrollbar short of the view is
+    // stretched across it. The clip is in page coordinates, hence the
+    // scroll offset from the metrics.
+    let size = automation::eval(tab, "({ w: innerWidth, h: innerHeight })").await?;
+    let metrics = automation::cdp(tab, "Page.getLayoutMetrics", serde_json::json!({})).await?;
+    let vp = &metrics["cssVisualViewport"];
+    let clip = serde_json::json!({
+        "x": vp["pageX"], "y": vp["pageY"],
+        "width": size["w"], "height": size["h"],
+        "scale": 1,
+    });
+    let params = serde_json::json!({ "format": "jpeg", "quality": 60, "optimizeForSpeed": true, "clip": clip });
+    let reply = automation::cdp(tab, "Page.captureScreenshot", params).await?;
+    let data = reply["data"].as_str().ok_or("no image came back")?;
+    Ok(format!("data:image/jpeg;base64,{data}"))
+}
+

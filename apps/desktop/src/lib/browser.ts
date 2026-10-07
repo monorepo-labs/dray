@@ -1,4 +1,4 @@
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfSession, type ServerId } from "@/lib/transport";
 import { useSyncExternalStore } from "react";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
@@ -354,10 +354,49 @@ export function removeChromium() {
 
 // --- Local servers -----------------------------------------------------------
 
-export type LocalServer = { port: number; process: string; mine: boolean };
+/// `share` is the server's public link, where somebody shared it.
+export type LocalServer = { port: number; process: string; mine: boolean; share: string | null };
 
+/// Asked of the session's own server, so a remote session lists what runs there.
 export function listLocalServers(sessionId: string) {
   return invoke<LocalServer[]>("list_local_servers", { sessionId });
+}
+
+/// A public link to one of the session's dev servers, made where it runs. A
+/// refusal reports where a failed open does.
+export function shareServer(sessionId: string, port: number) {
+  openErrors.delete(sessionId);
+  notify();
+  return invoke<string>("share_port", { sessionId, port }).catch((e: unknown) => {
+    openErrors.set(sessionId, String(e));
+    notify();
+    throw e;
+  });
+}
+
+/** False where the first share has cloudflared to download, asked of the session's own machine. */
+export function shareReady(sessionId: string) {
+  return invoke<boolean>("share_ready", {}, serverOfSession(sessionId)).catch(() => true);
+}
+
+export function stopShare(sessionId: string, port: number) {
+  return invoke("stop_share", { sessionId, port });
+}
+
+/// A remote session's dev server, opened in this Mac's browser through a port
+/// forwarded over that server's SSH login. A failed forward reports where a
+/// failed open does.
+export function openRemoteServer(sessionId: string, server: ServerId, port: number) {
+  openErrors.delete(sessionId);
+  notify();
+  return invoke<number>("forward_port", { server, port }, LOCAL).then(
+    (local) => openInBrowser(sessionId, `http://localhost:${local}`, true),
+    (e: unknown) => {
+      openErrors.set(sessionId, String(e));
+      notify();
+      throw e;
+    },
+  );
 }
 
 // --- Device viewport ---------------------------------------------------------

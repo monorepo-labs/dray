@@ -1,12 +1,14 @@
 //! A browser recording on disk: the page's JPEG frames streamed into a
 //! Photo-JPEG QuickTime file, then handed to macOS's own `avconvert` for an
-//! H.264 MP4 anything can play.
+//! H.264 MP4 anything can play — or, on Linux, where no `avconvert` exists,
+//! to `ffmpeg`.
 //!
 //! Hand-muxed rather than encoded here, because the frames arrive already
 //! compressed: the `.mov` is those bytes plus a table of where each starts
 //! and how long it shows, so recording costs a file append per frame and no
 //! encoder. `avconvert` is AVFoundation behind a command line and ships with
-//! every Mac, which is what keeps this free of ffmpeg and of new crates.
+//! every Mac, which is what keeps the app free of ffmpeg and of new crates; a
+//! server asks for ffmpeg in `dray setup` instead.
 
 use base64::Engine;
 use std::fs::File;
@@ -59,6 +61,11 @@ impl Recorder {
     /// Starts writing `<stem>.mov` in `dir`; `finish` turns it into
     /// `<stem>.mp4` beside it.
     pub fn start(dir: &Path, stem: &str) -> Result<Recorder, String> {
+        // Refused before anything is filmed: a recording that cannot be
+        // converted is one the agent would only find out about at the end.
+        if !cfg!(target_os = "macos") && ffmpeg().is_none() {
+            return Err("recording needs ffmpeg on this server; run `dray setup` and pick it".into());
+        }
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let mov = dir.join(format!("{stem}.mov"));
         let file = File::create(&mov).map_err(|e| format!("could not create {}: {e}", mov.display()))?;
@@ -142,21 +149,50 @@ fn unclaimed(dir: &Path, stem: &str) -> PathBuf {
 /// preset: `.mp4` with `PresetHighestQuality` is H.264 at the source size.
 /// Apple's Photo-JPEG decoder takes 4:2:0 frames, which is what Chromium
 /// sends, and answers "Cannot Decode" for 4:4:4 — hence the fixtures' format.
+#[cfg(target_os = "macos")]
 fn convert(mov: &Path, mp4: &Path) -> Result<(), String> {
-    let out = std::process::Command::new("/usr/bin/avconvert")
+    let mut command = std::process::Command::new("/usr/bin/avconvert");
+    command
         .args(["--preset", "PresetHighestQuality", "--replace", "--source"])
         .arg(mov)
         .arg("--output")
-        .arg(mp4)
-        .output()
-        .map_err(|e| format!("could not run avconvert: {e}"))?;
+        .arg(mp4);
+    run("avconvert", command)
+}
+
+/// ffmpeg reads the same `.mov`. `yuv420p` and `faststart`, or the file is
+/// one some players refuse and the webview cannot start until it is whole.
+#[cfg(not(target_os = "macos"))]
+fn convert(mov: &Path, mp4: &Path) -> Result<(), String> {
+    let ffmpeg = ffmpeg().ok_or("ffmpeg is gone; run `dray setup` and pick it")?;
+    let mut command = std::process::Command::new(ffmpeg);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(mov)
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+        .arg(mp4);
+    run("ffmpeg", command)
+}
+
+fn run(name: &str, mut command: std::process::Command) -> Result<(), String> {
+    let out = command.output().map_err(|e| format!("could not run {name}: {e}"))?;
     if !out.status.success() {
         let said = String::from_utf8_lossy(&out.stderr);
         let said = said.trim();
         let said = if said.is_empty() { String::from_utf8_lossy(&out.stdout).trim().to_string() } else { said.into() };
-        return Err(format!("avconvert could not encode the recording: {said}"));
+        return Err(format!("{name} could not encode the recording: {said}"));
     }
     Ok(())
+}
+
+/// `ffmpeg` on `PATH`, or where a package manager puts it — a server started
+/// by systemd has a short `PATH`.
+fn ffmpeg() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(["/usr/bin", "/usr/local/bin"].map(PathBuf::from))
+        .map(|dir| dir.join("ffmpeg"))
+        .find(|p| p.is_file())
 }
 
 /// The writer thread: frames go straight into `mdat` as they arrive, and the
@@ -340,12 +376,25 @@ mod tests {
         assert_eq!(jpeg_size(b"not a jpeg at all"), None);
     }
 
+    /// A recorder, or `None` on a Linux machine with no ffmpeg — where the
+    /// refusal is what gets checked instead.
+    fn started(dir: &Path, stem: &str) -> Option<Recorder> {
+        match Recorder::start(dir, stem) {
+            Ok(recorder) => Some(recorder),
+            Err(e) if !cfg!(target_os = "macos") && ffmpeg().is_none() => {
+                assert!(e.contains("dray setup"), "{e}");
+                None
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     /// The whole path, `avconvert` included: a muxer that writes an index
     /// AVFoundation cannot read fails here rather than on the reader's screen.
     #[test]
     fn records_frames_into_a_playable_mp4() {
         let dir = std::env::temp_dir().join(format!("dray-recording-{}", std::process::id()));
-        let recorder = Recorder::start(&dir, "test").unwrap();
+        let Some(recorder) = started(&dir, "test") else { return };
         let t = Instant::now();
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
         recorder.frame(b64(FRAME1), t);
@@ -378,7 +427,7 @@ mod tests {
     #[test]
     fn a_discarded_recording_leaves_no_file() {
         let dir = std::env::temp_dir().join(format!("dray-recording-discard-{}", std::process::id()));
-        let recorder = Recorder::start(&dir, "gone").unwrap();
+        let Some(recorder) = started(&dir, "gone") else { return };
         recorder.frame(base64::engine::general_purpose::STANDARD.encode(FRAME1), Instant::now());
         recorder.discard();
         assert!(!dir.join("gone.mov").exists());
@@ -388,7 +437,8 @@ mod tests {
     #[test]
     fn a_recording_with_no_frames_says_so() {
         let dir = std::env::temp_dir().join(format!("dray-recording-empty-{}", std::process::id()));
-        let err = Recorder::start(&dir, "empty").unwrap().finish(None).unwrap_err();
+        let Some(recorder) = started(&dir, "empty") else { return };
+        let err = recorder.finish(None).unwrap_err();
         assert!(err.contains("no frames"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
