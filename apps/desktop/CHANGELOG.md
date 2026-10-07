@@ -19,6 +19,23 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.27.0-beta.2 · 2026-10-07
+
+### New
+
+- **Add a server from one SSH line.** Paste how you reach it and the
+  app opens the connection, reads the token itself, starts a stopped
+  server, and says what is wrong in plain words: an unknown host key,
+  a refused key, a password wanted, or Dray missing.
+- **Install Dray on a server from the app.** Install it, pick what to
+  install, and see the logins left to do.
+- **Attach a project by picking one of your GitHub repos.** Dray clones
+  it, on a server or on the Mac.
+- **Agents on a server get a browser of their own.** Their screenshots
+  and recordings show in the transcript, and the Browser tab lists a
+  server's dev servers and opens them through a forwarded port.
+- Pairs with `dray` 0.10.0.
+
 ## 0.27.0-beta.1 · 2026-10-06
 
 ### New
