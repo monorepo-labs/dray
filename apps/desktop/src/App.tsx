@@ -425,12 +425,6 @@ function App() {
   // Owned here for the same reason: `RightPanel`, the shell and the settings
   // row all read it.
   const [panelSide, setPanelSide] = useLocalStorage<PanelSide>("ade.panelSide", "right");
-  // Whether the reader has been told the app does that. Written once and never
-  // cleared, the same bargain `splitLearned` makes below.
-  const [autoHideNoticed, setAutoHideNoticed] = useLocalStorage(
-    "ade.autoHideSidebarNoticed",
-    false,
-  );
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
   // session runs, and switching what you're *looking at* must not quietly move
   // where the next prompt would land.
@@ -1419,17 +1413,6 @@ function App() {
     if (move === "hide") {
       hidForBrowser.current = true;
       setCollapsed(true);
-      // Said once ever, and only where the sidebar actually moved: chrome that
-      // rearranges itself with nothing to explain it reads as a bug.
-      if (!autoHideNoticed) {
-        setAutoHideNoticed(true);
-        pushNotice({
-          sessionId: "sidebar",
-          kind: "sidebar-auto",
-          label: "Sidebar hidden",
-          detail: "The browser gets the full width. Turn this off in Settings → Appearance.",
-        });
-      }
     } else if (move === "restore") {
       hidForBrowser.current = false;
       setCollapsed(false);
@@ -1443,8 +1426,6 @@ function App() {
     collapsed,
     setCollapsed,
     autoHideSidebar,
-    autoHideNoticed,
-    setAutoHideNoticed,
   ]);
   const expandBrowser = () => setViewTab("browser");
   const collapseBrowser = () => {
