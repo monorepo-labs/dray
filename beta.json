@@ -1,23 +1,23 @@
 {
-  "version": "0.27.0-beta.1",
-  "notes": "### Added\n\n- **Connect to your own Dray servers.** Settings → Servers adds one by\n  address and token. Its projects join the sidebar and the project\n  picker, marked with the server's name, and its sessions run there.\n  Pairs with `dray` 0.9.0, which installs a server on Linux in one line.\n- **The header names the server** a remote session runs on:\n  `server / project / title`.\n- **A server that drops shows dimmed** in the sidebar, and picks up\n  where it left off when it reconnects.\n- **Save a task without starting it.** ⌘S on a new task saves it as a\n  draft under its project in the sidebar. Open it to keep editing, or\n  send it to start the session. Agents can make them too with\n  `dray draft`.",
-  "pub_date": "2026-10-06T05:33:04.096Z",
+  "version": "0.27.0-beta.2",
+  "notes": "### New\n\n- **Add a server from one SSH line.** Paste how you reach it and the\n  app opens the connection, reads the token itself, starts a stopped\n  server, and says what is wrong in plain words: an unknown host key,\n  a refused key, a password wanted, or Dray missing.\n- **Install Dray on a server from the app.** Install it, pick what to\n  install, and see the logins left to do.\n- **Attach a project by picking one of your GitHub repos.** Dray clones\n  it, on a server or on the Mac.\n- **Agents on a server get a browser of their own.** Their screenshots\n  and recordings show in the transcript, and the Browser tab lists a\n  server's dev servers and opens them through a forwarded port.\n- Pairs with `dray` 0.10.0.",
+  "pub_date": "2026-10-07T09:38:45.294Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ3MjROYVQyY0g3aC9xSmVTRlBXNXI3YkVQNEJTWm1UN1F1K2dZVEVtY1hlNE1IcG1XY2RqNTVGRnpTU1drblEyNHAyYm9yUEQremdpcThwdDkyeFFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjY0Nzc1CWZpbGU6RHJheS5hcHAudGFyLmd6Cmhpd3ltalZaT2IxSWcvbW9qVEpONG1KclBkOFQvWWFoNktKT09WZnRWZDhXY1lNc0Q5K25SWWE3V1Btb2VSd1FUK2ZmdDhId1N2QjhzTmhvRDI4YkRBPT0K",
-      "url": "https://downloads.drayhq.com/v0.27.0-beta.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCbnlrMGl4b3hpc3I5OFlnemUvVUVmbWVEV3ZOUVN0cDk0WmlTS3FTNjZDbENYQnFLVmNmbWJsbll0YTNKWDdiS1NnUGlMQkpGQ204dmlpQ3BpU2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMzY1OTE1CWZpbGU6RHJheS5hcHAudGFyLmd6Cm1veGNsUUtJb1BVUHdFQyswcW0wYkc2RC9qZTkxNG1PaERXZmo1L3ZCYm5pSThSaFhZc3V3emYvbFgwNmR4dFJoaVU3WExEei9xeEJxb3BMc3dQL0NBPT0K",
+      "url": "https://downloads.drayhq.com/v0.27.0-beta.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ3MjROYVQyY0g3aC9xSmVTRlBXNXI3YkVQNEJTWm1UN1F1K2dZVEVtY1hlNE1IcG1XY2RqNTVGRnpTU1drblEyNHAyYm9yUEQremdpcThwdDkyeFFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjY0Nzc1CWZpbGU6RHJheS5hcHAudGFyLmd6Cmhpd3ltalZaT2IxSWcvbW9qVEpONG1KclBkOFQvWWFoNktKT09WZnRWZDhXY1lNc0Q5K25SWWE3V1Btb2VSd1FUK2ZmdDhId1N2QjhzTmhvRDI4YkRBPT0K",
-      "url": "https://downloads.drayhq.com/v0.27.0-beta.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCbnlrMGl4b3hpc3I5OFlnemUvVUVmbWVEV3ZOUVN0cDk0WmlTS3FTNjZDbENYQnFLVmNmbWJsbll0YTNKWDdiS1NnUGlMQkpGQ204dmlpQ3BpU2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMzY1OTE1CWZpbGU6RHJheS5hcHAudGFyLmd6Cm1veGNsUUtJb1BVUHdFQyswcW0wYkc2RC9qZTkxNG1PaERXZmo1L3ZCYm5pSThSaFhZc3V3emYvbFgwNmR4dFJoaVU3WExEei9xeEJxb3BMc3dQL0NBPT0K",
+      "url": "https://downloads.drayhq.com/v0.27.0-beta.2/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ3MjROYVQyY0g3aC9xSmVTRlBXNXI3YkVQNEJTWm1UN1F1K2dZVEVtY1hlNE1IcG1XY2RqNTVGRnpTU1drblEyNHAyYm9yUEQremdpcThwdDkyeFFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjY0Nzc1CWZpbGU6RHJheS5hcHAudGFyLmd6Cmhpd3ltalZaT2IxSWcvbW9qVEpONG1KclBkOFQvWWFoNktKT09WZnRWZDhXY1lNc0Q5K25SWWE3V1Btb2VSd1FUK2ZmdDhId1N2QjhzTmhvRDI4YkRBPT0K",
-      "url": "https://downloads.drayhq.com/v0.27.0-beta.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCbnlrMGl4b3hpc3I5OFlnemUvVUVmbWVEV3ZOUVN0cDk0WmlTS3FTNjZDbENYQnFLVmNmbWJsbll0YTNKWDdiS1NnUGlMQkpGQ204dmlpQ3BpU2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMzY1OTE1CWZpbGU6RHJheS5hcHAudGFyLmd6Cm1veGNsUUtJb1BVUHdFQyswcW0wYkc2RC9qZTkxNG1PaERXZmo1L3ZCYm5pSThSaFhZc3V3emYvbFgwNmR4dFJoaVU3WExEei9xeEJxb3BMc3dQL0NBPT0K",
+      "url": "https://downloads.drayhq.com/v0.27.0-beta.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJ3MjROYVQyY0g3aC9xSmVTRlBXNXI3YkVQNEJTWm1UN1F1K2dZVEVtY1hlNE1IcG1XY2RqNTVGRnpTU1drblEyNHAyYm9yUEQremdpcThwdDkyeFFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjY0Nzc1CWZpbGU6RHJheS5hcHAudGFyLmd6Cmhpd3ltalZaT2IxSWcvbW9qVEpONG1KclBkOFQvWWFoNktKT09WZnRWZDhXY1lNc0Q5K25SWWE3V1Btb2VSd1FUK2ZmdDhId1N2QjhzTmhvRDI4YkRBPT0K",
-      "url": "https://downloads.drayhq.com/v0.27.0-beta.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJCbnlrMGl4b3hpc3I5OFlnemUvVUVmbWVEV3ZOUVN0cDk0WmlTS3FTNjZDbENYQnFLVmNmbWJsbll0YTNKWDdiS1NnUGlMQkpGQ204dmlpQ3BpU2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMzY1OTE1CWZpbGU6RHJheS5hcHAudGFyLmd6Cm1veGNsUUtJb1BVUHdFQyswcW0wYkc2RC9qZTkxNG1PaERXZmo1L3ZCYm5pSThSaFhZc3V3emYvbFgwNmR4dFJoaVU3WExEei9xeEJxb3BMc3dQL0NBPT0K",
+      "url": "https://downloads.drayhq.com/v0.27.0-beta.2/Dray_universal.app.tar.gz"
     }
   }
 }
