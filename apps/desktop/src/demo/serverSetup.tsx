@@ -23,6 +23,7 @@ import type {
   AuthOption,
   Failure,
   Harness,
+  ProviderChoice,
   ServerInfo,
   Stage,
   Survey,
@@ -206,12 +207,25 @@ const account = (label: string, state: Account["state"], authType: string | null
   canSignOut: state === "logged_in",
   canChangeMethod: true,
 });
+// `providers_of` in accounts.rs, cut down: fx's three, and a few of pi's.
+const PROVIDERS: Partial<Record<Harness, ProviderChoice[]>> = {
+  fx: [
+    { id: "vercel", label: "Vercel AI Gateway" },
+    { id: "codex", label: "Codex" },
+    { id: "grok", label: "Grok" },
+  ],
+  pi: [
+    { id: "anthropic", label: "Anthropic" },
+    { id: "openai", label: "OpenAI" },
+    { id: "openrouter", label: "OpenRouter" },
+  ],
+};
 const agent = (harness: Harness, label: string, accounts: Account[] | null): AgentAccounts => ({
   harness,
   label,
   installed: accounts !== null,
   accounts: accounts ?? [],
-  providers: [],
+  providers: PROVIDERS[harness] ?? [],
   providerFreeform: harness === "pi",
   loginHint: null,
   error: null,
@@ -250,37 +264,68 @@ const remoteAccounts = (server: string): AgentAccounts[] => {
 let accounts = new Map<string, AgentAccounts[]>();
 const accountsOn = (server: string) =>
   accounts.get(server) ?? accounts.set(server, server === "local" ? localAccounts() : remoteAccounts(server)).get(server)!;
-function signIn(server: string, harness: string, provider: string | null, auth: string, on: boolean) {
-  const AUTH: Record<string, string> = { claudeai: "Claude subscription", console: "Anthropic Console", chatgpt: "ChatGPT subscription", api_key: "API key" };
+function signIn(server: string, harness: Harness, provider: string | null, auth: string, on: boolean) {
   accounts.set(
     server,
-    accountsOn(server).map((a) =>
-      a.harness !== harness
-        ? a
-        : {
-            ...a,
-            accounts: a.accounts.map((acc) =>
-              acc.provider !== provider
-                ? acc
-                : on
-                  ? { ...acc, state: "logged_in", authType: AUTH[auth] ?? null, detail: "you@example.com", canSignOut: true }
-                  : { ...acc, state: "logged_out", authType: null, detail: null, canSignOut: false },
-            ),
-          },
-    ),
+    accountsOn(server).map((a) => {
+      if (a.harness !== harness) return a;
+      // pi's rows are the providers it holds a credential for, so a sign-in adds one.
+      const rows =
+        on && !a.accounts.some((acc) => acc.provider === provider)
+          ? [...a.accounts, account(PROVIDERS[harness]?.find((p) => p.id === provider)?.label ?? provider ?? a.label, "logged_out", null, null, provider)]
+          : a.accounts;
+      return {
+        ...a,
+        accounts: rows.map((acc) =>
+          acc.provider !== provider
+            ? acc
+            : on
+              ? { ...acc, state: "logged_in", authType: authOptions(harness, provider).find((o) => o.id === auth)?.label ?? null, detail: "you@example.com", canSignOut: true }
+              : { ...acc, state: "logged_out", authType: null, detail: null, canSignOut: false },
+        ),
+      };
+    }),
   );
 }
 
-const AUTH_OPTIONS: Partial<Record<Harness, AuthOption[]>> = {
-  claude_code: [
-    { id: "claudeai", label: "Claude subscription", needsKey: false, command: "claude auth login", hint: null },
-    { id: "console", label: "Anthropic Console", needsKey: false, command: "claude auth login --console", hint: "Billed per token against your Console account." },
-  ],
-  codex: [
-    { id: "chatgpt", label: "ChatGPT subscription", needsKey: false, command: "codex login", hint: null },
-    { id: "api_key", label: "OpenAI API key", needsKey: true, command: null, hint: "Billed per token. Replaces the ChatGPT sign-in until you sign in again." },
-  ],
-};
+const option = (id: string, label: string, command: string | null, hint: string | null = null): AuthOption => ({
+  id,
+  label,
+  needsKey: command === null,
+  command,
+  hint,
+});
+/// `auth_options` in accounts.rs, with pi offering both ways on every provider.
+function authOptions(harness: Harness, provider: string | null): AuthOption[] {
+  switch (harness) {
+    case "claude_code":
+      return [
+        option("claudeai", "Claude subscription", "claude auth login"),
+        option("console", "Anthropic Console", "claude auth login --console", "Billed per token against your Console account."),
+      ];
+    case "codex":
+      return [
+        option("chatgpt", "ChatGPT subscription", "codex login"),
+        option("api_key", "OpenAI API key", null, "Billed per token. Replaces the ChatGPT sign-in until you sign in again."),
+      ];
+    case "pi":
+      return [
+        option("oauth", "Sign in with the provider", "pi", "Type /login in pi, then pick the provider."),
+        option("api_key", "API key", null),
+      ];
+    case "fx":
+      return provider === "vercel"
+        ? [option("oauth", "Vercel account", "fx login vercel"), option("gateway_key", "AI Gateway key", "fx setup", "fx asks for the key itself.")]
+        : [option("oauth", "Sign in", provider ? `fx login ${provider}` : "fx login")];
+    case "grok":
+      return [
+        option("oauth", "Grok account", "grok login"),
+        option("device", "Device code", "grok login --device-auth", "For a machine with no browser. Finish the sign-in elsewhere."),
+      ];
+    default:
+      return [];
+  }
+}
 
 /// The commands one server answers, local or remote alike.
 async function core(cmd: string, a: Record<string, unknown>, server: string): Promise<unknown> {
@@ -302,19 +347,19 @@ async function core(cmd: string, a: Record<string, unknown>, server: string): Pr
         }),
       );
     case "agent_auth_options":
-      return AUTH_OPTIONS[a.harness as Harness] ?? [];
+      return authOptions(a.harness as Harness, (a.provider as string) ?? null);
     case "add_agent_account":
       await pause(STEP);
       if (takeFail()) throw "That key was refused.";
-      signIn(server, String(a.harness), (a.provider as string) ?? null, String(a.auth), true);
+      signIn(server, a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
       return null;
     case "sign_out_agent":
       await pause(STEP / 2);
-      signIn(server, String(a.harness), (a.provider as string) ?? null, "", false);
+      signIn(server, a.harness as Harness, (a.provider as string) ?? null, "", false);
       return null;
     case "run_agent_login":
       // A Terminal opens; Refresh is how the page learns. Signed in by then.
-      signIn(server, String(a.harness), (a.provider as string) ?? null, String(a.auth), true);
+      signIn(server, a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
       return null;
     default:
       throw new Error(`demo: nothing stubbed for ${cmd}`);
@@ -418,7 +463,7 @@ mockIPC(
       }
       case "run_server_login":
         await pause(STEP / 2);
-        signIn(String(a.server), String(a.harness), (a.provider as string) ?? null, String(a.auth), true);
+        signIn(String(a.server), a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
         return null;
       case "server_invoke":
         return core(String(a.cmd), (a.args ?? {}) as Record<string, unknown>, String(a.server));
