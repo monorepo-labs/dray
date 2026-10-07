@@ -118,6 +118,8 @@ import { stepZoom } from "@/lib/zoom";
 import { cycleTheme } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
+import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
+import WhatsNewCard from "@/components/WhatsNewCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
@@ -542,6 +544,21 @@ function App() {
     setSettingsTab("appearance");
     setNamingSpace(false);
   }, []);
+  const openChangelog = useCallback(() => {
+    setSettingsTab("changelog");
+    setSettingsOpen(true);
+  }, []);
+  // Once a launch: a release flagged `notify` that the reader runs and has not
+  // dismissed yet gets the what's-new card.
+  const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  useEffect(() => {
+    checkChangelog().then(setWhatsNew, () => {});
+  }, []);
+  const closeWhatsNew = (view: boolean) => {
+    if (whatsNew) markChangelogSeen(whatsNew.seen);
+    setWhatsNew(null);
+    if (view) openChangelog();
+  };
   // Layout, not ordinary: the switch must be down before the page paints, or a
   // keystroke in that frame reaches a shell nobody can see.
   useLayoutEffect(() => setHotkeysSuspended(settingsOpen), [settingsOpen]);
@@ -3233,6 +3250,13 @@ function App() {
       }}
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
+    {whatsNew && (
+      <WhatsNewCard
+        release={whatsNew.release}
+        onDismiss={() => closeWhatsNew(false)}
+        onView={() => closeWhatsNew(true)}
+      />
+    )}
     <DragGhost />
     <QuitDialog />
     <LinkDialog />

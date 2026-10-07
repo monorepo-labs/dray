@@ -1,13 +1,27 @@
 # Changelog
 
 What each release changed, newest first, in terms of what you'd notice using it.
-The release job reads the matching section into the GitHub release notes and the
-updater carries it, so this file is what a release says about itself — not a
-second description of it. GitHub's generated commit list is appended below it.
+The release job reads the matching section into the GitHub release notes, and
+drayhq.com/changelog and the app's Settings → Changelog are built from this
+file, so it is what a release says about itself — not a second description of
+it. GitHub's generated commit list is appended below it.
 
-## 0.27.0-beta.1
+Format, which the site's parser ([changelog.ts](../web/src/lib/changelog.ts))
+reads:
 
-### Added
+- `## <version> · <date> · notify` — date is `YYYY-MM-DD`. `notify` raises a
+  card in the app for people who update to it; leave it off and the release is
+  listed quietly.
+- `### New`, `### Improved`, `### Fixed`. Any other heading reaches GitHub
+  only.
+- `- **Title.** Description.` or a plain one-liner.
+- An image or video goes on its own line, indented under its item:
+  `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
+  and is served by drayhq.com.
+
+## 0.27.0-beta.1 · 2026-10-06
+
+### New
 
 - **Connect to your own Dray servers.** Settings → Servers adds one by
   address and token. Its projects join the sidebar and the project
@@ -22,9 +36,9 @@ second description of it. GitHub's generated commit list is appended below it.
   send it to start the session. Agents can make them too with
   `dray draft`.
 
-## 0.26.0
+## 0.26.0 · 2026-10-01
 
-### Added
+### New
 
 - **Rename a session from its header.** Double-click the title. A
   name you give it is kept, and no generated title replaces it.
@@ -44,7 +58,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Agents can zoom the browser** with `dray browser zoom`. Needs
   `dray` 0.8.0, which updates itself.
 
-### Changed
+### Improved
 
 - **The side panel hides in Diff and Files** as it does in Browser.
   ⌘E brings it back, and Chat restores it.
@@ -64,15 +78,15 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Long sessions no longer wobble** while older turns load.
 - **Paired keys in shortcut hints**, like `[ ]`, no longer touch.
 
-## 0.25.2
+## 0.25.2 · 2026-09-30
 
-### Changed
+### Improved
 
 - **New thinking orbs.** The working indicators are redrawn in the
   text colour, so they read the same on every theme and in both
   modes. Background tasks get their own spiral.
 
-## 0.25.1
+## 0.25.1 · 2026-09-26
 
 ### Fixed
 
@@ -80,9 +94,9 @@ second description of it. GitHub's generated commit list is appended below it.
   Collapsing or resizing the sidebar left the page drawn where the
   pane used to be.
 
-## 0.25.0
+## 0.25.0 · 2026-09-26
 
-### Added
+### New
 
 - **Hidden sessions for reviews.** A session started with `dray new
   --hidden` stays out of the sidebar and shows only in the crew beside
@@ -96,7 +110,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Grok Build takes a message mid-turn** into the turn it is running,
   instead of holding it until the turn ends.
 
-### Changed
+### Improved
 
 - **On a 14" screen with the side panel open, the crew sits under the
   chat** instead of squeezing in beside it.
@@ -111,9 +125,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Tooltips no longer stick** after closing the project or permission
   menu.
 
-## 0.24.0
+## 0.24.0 · 2026-09-25
 
-### Added
+### New
 
 - **Agents can record the browser.** `dray browser record start` and
   `record stop` save an MP4 that plays inline in chat, so checking a
@@ -136,9 +150,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A file the Files view can't show says why**, instead of "Not text".
 - **Answering a card in the crew column keeps you on the parent session.**
 
-## 0.23.7
+## 0.23.7 · 2026-09-24
 
-### Changed
+### Improved
 
 - **Faster everywhere.** Streaming a reply no longer redraws the whole
   app per token, long sessions open on their newest turns and load the
@@ -156,7 +170,7 @@ second description of it. GitHub's generated commit list is appended below it.
   the chat it starts hidden, and ⌘⇧C draws it under the transcript.
 - **Background task rows no longer scroll under the Stop all bar.**
 
-## 0.23.6
+## 0.23.6 · 2026-09-23
 
 ### Fixed
 
@@ -170,9 +184,9 @@ second description of it. GitHub's generated commit list is appended below it.
   Codex locks these controls mid-turn instead, since it can't honour them.
 - **pi switches model and effort without restarting the agent.**
 
-## 0.23.5
+## 0.23.5 · 2026-09-23
 
-### Added
+### New
 
 - **Paste images and files into the composer.** A copied file arrives as
   an attachment, the same as dropping it in.
@@ -192,9 +206,9 @@ second description of it. GitHub's generated commit list is appended below it.
   one-line summary.
 - **The browser pane stays put when the app is zoomed.**
 
-## 0.23.4
+## 0.23.4 · 2026-09-23
 
-### Changed
+### Improved
 
 - **Settings is a full-window page** instead of a dialog. Open
   transcripts stay as they were underneath.
@@ -210,9 +224,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **The Accounts tab shows the last reading while it re-reads**, rather
   than a spinner every visit.
 
-## 0.23.3
+## 0.23.3 · 2026-09-23
 
-### Added
+### New
 
 - **The new-task page says when your agent's CLI has an update**, with
   an Update button that runs the CLI's own updater in place. pi and fx
@@ -224,7 +238,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **GPT-6 Sol and Luna are in the Codex picker**, with 6 Astra, 6 Sol
   and 5.6 Sol at the top.
 
-### Changed
+### Improved
 
 - **Views moved to ⌘1–⌘4 and split-view panes to ⌘⌥1–⌘⌥9.** Custom
   bindings are kept.
@@ -236,17 +250,17 @@ second description of it. GitHub's generated commit list is appended below it.
   that fills its width.
 - **The Grok account row drops the raw team id.**
 
-## 0.23.2
+## 0.23.2 · 2026-09-23
 
-### Added
+### New
 
 - **Opus 5.5 is in the model picker**, as Claude Code's Opus. Opus 5
   stays reachable under More models, fast mode included, for anyone
   who wants to stay on it.
 
-## 0.23.1
+## 0.23.1 · 2026-09-22
 
-### Added
+### New
 
 - **A Grok Build session forks**, in a new worktree or in place, like
   every other harness. A session whose worktree has been removed is
@@ -262,9 +276,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A session whose very first message fails no longer leaves processes
   behind**, the agent's own children included.
 
-## 0.23.0
+## 0.23.0 · 2026-09-22
 
-### Added
+### New
 
 - **Grok Build is Dray's fifth agent harness.** Spawn, stream, resume
   and stop, with permission cards, questions, subagents and the
@@ -288,14 +302,14 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A grok plan gets a Plan tab**, since the approval card is the only
   copy of it.
 
-### Changed
+### Improved
 
 - **The landing page is the app itself**, drawn from its own component
   classes and animated in CSS rather than captured as video.
 - **Light mode's add accent is a deeper green** — it was clipped to
   the sRGB ceiling on displays that can show more.
 
-## 0.22.4
+## 0.22.4 · 2026-09-21
 
 ### Fixed
 
@@ -303,9 +317,9 @@ second description of it. GitHub's generated commit list is appended below it.
   carrying its own subject — "Always allow mkdir -p /tmp/thing" — wraps
   instead of overflowing the crew column's right edge.
 
-## 0.22.3
+## 0.22.3 · 2026-09-21
 
-### Added
+### New
 
 - **Chat input is a font size you can set**, in Appearance beside the
   other three. It had been stuck at the browser default; it now matches
@@ -320,7 +334,7 @@ second description of it. GitHub's generated commit list is appended below it.
   answer — a permission request is never written to the log, so that
   was the only copy.
 
-## 0.22.2
+## 0.22.2 · 2026-09-20
 
 ### Fixed
 
@@ -332,12 +346,12 @@ second description of it. GitHub's generated commit list is appended below it.
 - **The follow pin survives that open too**, so a long transcript lands
   at the bottom rather than a little above it.
 
-### Changed
+### Improved
 
 - **The crew column has a left edge**, a ramp at full strength beside the
   composer and gone by the top.
 
-## 0.22.1
+## 0.22.1 · 2026-09-20
 
 ### Fixed
 
@@ -349,9 +363,9 @@ second description of it. GitHub's generated commit list is appended below it.
   drop the follow pin mid-way. A drag or a wheel up still wins at once.
 - **Show more is readable on a filled bubble in light mode.**
 
-## 0.22.0
+## 0.22.0 · 2026-09-20
 
-### Added
+### New
 
 - **The crew: a conversation's spawned sessions beside it.** A column of
   the sessions the selected one started, a strip each, so a fan-out is
@@ -366,7 +380,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Settings groups moved to a rail.** Seven tabs across the top wrapped
   onto a second line; down the side they are one list.
 
-### Changed
+### Improved
 
 - **Placed tags are chips in the composer.** A session tag no longer puts
   36 characters of uuid in your sentence, a file mention shows its name
@@ -378,9 +392,9 @@ second description of it. GitHub's generated commit list is appended below it.
   trace or file no longer buries the answer it asked for. Click to open
   it; nothing is truncated.
 
-## 0.21.0
+## 0.21.0 · 2026-09-18
 
-### Added
+### New
 
 - **Mention another session from the composer with `&`.** A fourth
   picker beside `@`, `#` and `/`. A pick writes the session's title and
@@ -396,7 +410,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Stop all in the subagent panel.** Background tasks an agent left
   running end in one press instead of one at a time.
 
-### Changed
+### Improved
 
 - **fx's provider sits on the agent row as marks.** Both controls now
   fit on one track rather than provider taking a well of its own, and
@@ -419,9 +433,9 @@ second description of it. GitHub's generated commit list is appended below it.
   model picker had quietly moved the default for sessions created with
   no model named.
 
-## 0.20.6
+## 0.20.6 · 2026-09-17
 
-### Added
+### New
 
 - **The PR tab says how to turn pull requests on.** Without the GitHub
   CLI the tab simply vanished, so nothing said that one install puts
@@ -431,7 +445,7 @@ second description of it. GitHub's generated commit list is appended below it.
   appear for installs with usage reporting on; turning reporting off in
   Settings turns it off too.
 
-## 0.20.5
+## 0.20.5 · 2026-09-17
 
 ### Fixed
 
@@ -439,7 +453,7 @@ second description of it. GitHub's generated commit list is appended below it.
   in one session moved the model list under every other fx session, and
   could repair a session's model onto the provider it had just left.
 
-## 0.20.4
+## 0.20.4 · 2026-09-17
 
 ### Fixed
 
@@ -449,7 +463,7 @@ second description of it. GitHub's generated commit list is appended below it.
   claude-sonnet-4 — draws no effort control instead of offering four
   the model refuses.
 
-## 0.20.3
+## 0.20.3 · 2026-09-16
 
 ### Fixed
 
@@ -459,7 +473,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A session that fails to get a title now says why.** The agent's own
   reason was being thrown away as it was written.
 
-## 0.20.2
+## 0.20.2 · 2026-09-16
 
 ### Fixed
 
@@ -468,7 +482,7 @@ second description of it. GitHub's generated commit list is appended below it.
   working indicator spinning over finished work. Dray titles those
   sessions itself now.
 
-## 0.20.1
+## 0.20.1 · 2026-09-16
 
 ### Fixed
 
@@ -480,14 +494,14 @@ second description of it. GitHub's generated commit list is appended below it.
   over**, instead of leaving the transcript looking dead until the
   model spoke.
 
-### Changed
+### Improved
 
 - **The Changes panel says something useful when a turn changed
   nothing**, with a way through to the Diff view.
 
-## 0.20.0
+## 0.20.0 · 2026-09-16
 
-### Added
+### New
 
 - **The sidebar and the right panel drag wider.** Both were fixed
   widths; each now holds at its default mid-drag so you can find it
@@ -502,7 +516,7 @@ second description of it. GitHub's generated commit list is appended below it.
   creation-time only, and a session whose provider had moved
   underneath it could not be opened at all.
 
-### Changed
+### Improved
 
 - **A large file opens instantly in the Files view.** An 8000-line
   lockfile switched tabs in ~56ms where it took up to 900ms.
@@ -519,9 +533,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - A newly opened file tab scrolls into view rather than sitting off the
   end of the strip.
 
-## 0.19.0
+## 0.19.0 · 2026-09-16
 
-### Added
+### New
 
 - **A Files tab beside Chat, Changes and Browser.** A folder tree with a
   filter box, an editor's tab strip, and the same code renderer the diffs
@@ -532,7 +546,7 @@ second description of it. GitHub's generated commit list is appended below it.
   **Now** (⌘⏎) under the newest bubble stops the wait and sends
   immediately.
 
-### Changed
+### Improved
 
 - **Code colours ~6x faster.** A 2000-line diff took 5.8s to highlight and
   now takes 0.9s.
@@ -543,7 +557,7 @@ second description of it. GitHub's generated commit list is appended below it.
   sitting off screen for the seconds the agent takes to wake up.
 - ⌘⏎ no longer sends the draft by accident.
 
-## 0.18.5
+## 0.18.5 · 2026-09-16
 
 ### Fixed
 
@@ -553,9 +567,9 @@ second description of it. GitHub's generated commit list is appended below it.
   agent asks for is capture-only now, and the view hides behind a still of
   the page for the shot.
 
-## 0.18.4
+## 0.18.4 · 2026-09-15
 
-### Added
+### New
 
 - **fx is told Dray's rules**, which it had no way to learn before —
   `fx acp` has no system-prompt surface at all, so they ride the first
@@ -579,7 +593,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **fx is drawn last in the agent list**, and ⌘⇧A steps the same
   order.
 
-## 0.18.3
+## 0.18.3 · 2026-09-15
 
 ### Fixed
 
@@ -594,9 +608,9 @@ second description of it. GitHub's generated commit list is appended below it.
   only moved by project where a split group existed, and otherwise
   repeated ⌘⇧↑/↓.
 
-## 0.18.2
+## 0.18.2 · 2026-09-15
 
-### Added
+### New
 
 - **Fast mode**, a row in the model picker, on Claude Code, Codex and
   fx. Each vendor charges for it differently, so the row carries their
@@ -623,24 +637,24 @@ second description of it. GitHub's generated commit list is appended below it.
   permissions it found**, where it used to hand the file back
   world-readable on every switch.
 
-## 0.18.1
+## 0.18.1 · 2026-09-14
 
-### Added
+### New
 
 - **fx sessions get a `/` picker**, filled from the skills fx itself
   would run — its own roots on disk, since fx publishes no command
   list. A skill linked in from outside the workspace or home is left
   out, matching what fx will actually load.
 
-### Changed
+### Improved
 
 - **A harness with no slash commands says so in one line** instead of
   opening an empty menu, and only once its own list has answered — a
   CLI that could not be reached is not a CLI with nothing to offer.
 
-## 0.18.0
+## 0.18.0 · 2026-09-14
 
-### Added
+### New
 
 - **fx is a fourth harness.** Pick it in the composer like Claude Code,
   Codex or pi: sessions stream, resume and stop, permission requests
@@ -650,9 +664,9 @@ second description of it. GitHub's generated commit list is appended below it.
   own, Ask and Auto, so the picker offers those: a session arriving on
   Plan asks about everything, and one arriving on Bypass runs as Auto.
 
-## 0.17.3
+## 0.17.3 · 2026-09-14
 
-### Changed
+### Improved
 
 - **A failed turn draws one muted line, not a paragraph in red.** A
   refusal's own reasoning is truncated to its first line, and it leads
@@ -681,9 +695,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A subagent run with nothing to open no longer sits indented** under
   one that has something.
 
-## 0.17.2
+## 0.17.2 · 2026-09-13
 
-### Added
+### New
 
 - **Codex's model list comes from Codex.** A model OpenAI ships is
   pickable the day it lands rather than the day Dray next releases. The
@@ -691,7 +705,7 @@ second description of it. GitHub's generated commit list is appended below it.
   flagship arrives there on its own; the rest fold into More models. The
   built-in table stays as the offline fallback.
 
-### Changed
+### Improved
 
 - **A prompt running one of Greptile's commands is tinted to say whose
   it is**, queued or sent.
@@ -706,9 +720,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A subagent run with nothing to show can't be expanded** onto an
   empty box. It opens again as soon as it has events.
 
-## 0.17.1
+## 0.17.1 · 2026-09-12
 
-### Changed
+### Improved
 
 - **Analytics moved to PostHog, and the settings row now says what is
   measured.** Three events — a launch, a session starting, a feature
@@ -728,9 +742,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A subagent row stops shimmering once its run goes to background.**
 - **Sidebar dates stay on one line.**
 
-## 0.17.0
+## 0.17.0 · 2026-09-11
 
-### Added
+### New
 
 - **Font size and shortcut rebinding in Settings.** Interface, chat and
   code each take their own size, applied before the first paint like the
@@ -739,7 +753,7 @@ second description of it. GitHub's generated commit list is appended below it.
   row names the holder. Keycaps everywhere draw what the key actually
   fires.
 
-### Changed
+### Improved
 
 - **A fresh install opens in light mode.** A pick you have already made
   is untouched.
@@ -758,7 +772,7 @@ second description of it. GitHub's generated commit list is appended below it.
 - **PR comment previews read as text.** A bot writes HTML as often as
   markdown, so a collapsed row drew raw `<h2><a href="...">` tags.
 
-## 0.16.2
+## 0.16.2 · 2026-09-10
 
 ### Fixed
 
@@ -766,17 +780,17 @@ second description of it. GitHub's generated commit list is appended below it.
   were added, so in a 2×2 ⌘2 landed under ⌘1 rather than beside it. Now
   top row left to right, then bottom row right to left.
 
-## 0.16.1
+## 0.16.1 · 2026-09-10
 
-### Changed
+### Improved
 
 - **Each theme sets its own glass.** How much desktop shows through the
   window was one number for every palette, so it was tuned for none of
   them. Every shipping theme now names its own, light and dark apart.
 
-## 0.16.0
+## 0.16.0 · 2026-09-10
 
-### Added
+### New
 
 - **Up to four sessions side by side.** Drag a sidebar row onto the
   transcript to open it beside, above or below the one you are on, or to
@@ -802,9 +816,9 @@ second description of it. GitHub's generated commit list is appended below it.
   pane.** Only an agent opening the first tab does that, which is what it
   was for.
 
-## 0.15.0
+## 0.15.0 · 2026-09-09
 
-### Added
+### New
 
 - **An issue's status and priority change from Dray.** Menus on the opened
   issue's header and on the Issues page's rows — the first thing Dray
@@ -831,9 +845,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **Opening a menu no longer killed every keyboard shortcut for the rest of
   the session.**
 
-## 0.14.0
+## 0.14.0 · 2026-09-05
 
-### Added
+### New
 
 - **Dray has a browser.** ⌘3 for the full view, or the Browser tab in the
   right pane. Tabs with favicons, device sizes, zoom, hard reload and
@@ -857,7 +871,7 @@ second description of it. GitHub's generated commit list is appended below it.
   the query too — you found the row you came for, and the list it lands in
   is filtered by that same query.
 
-### Changed
+### Improved
 
 - **Transcripts you have stopped looking at leave memory.** Every one opened
   since launch used to stay resident, around 650MB after a day. A transcript
@@ -878,7 +892,7 @@ second description of it. GitHub's generated commit list is appended below it.
   what ⌘G and ⌘⇧D acted on for that whole moment — so one press did nothing
   and the other dismissed a card already leaving. One press is now one card.
 
-## 0.13.2
+## 0.13.2 · 2026-09-04
 
 ### Fixed
 
@@ -890,9 +904,9 @@ second description of it. GitHub's generated commit list is appended below it.
   took its width from the hover buttons, which a pinned row mid-turn draws
   none of.
 
-## 0.13.1
+## 0.13.1 · 2026-09-03
 
-### Changed
+### Improved
 
 - **The space switcher takes the project filter's shape** — a name over a
   dot track, click to step to the next — so the two controls that scope the
@@ -906,9 +920,9 @@ second description of it. GitHub's generated commit list is appended below it.
   repainted the whole document at animation rate whenever a session was
   mid-turn — which fed a WebKit leak of around a gigabyte an hour of use.
 
-## 0.13.0
+## 0.13.0 · 2026-09-03
 
-### Added
+### New
 
 - **Spaces scope the sidebar to a set of projects.** A space is a tag on a
   project, so joining one needs nothing set up. Switching narrows the
@@ -925,7 +939,7 @@ second description of it. GitHub's generated commit list is appended below it.
   as prompt text. A lookup that cannot be made fails the send rather than
   going out as literal text.
 
-### Changed
+### Improved
 
 - **A question card's free-text answer is a box that grows.** A typed answer
   runs to a sentence, where the old single-line input scrolled it sideways
@@ -940,9 +954,9 @@ second description of it. GitHub's generated commit list is appended below it.
   They are now dropped on archive, on settle, and after ten minutes
   unviewed, never the one on screen, one mid-turn, or one holding a card.
 
-## 0.12.8
+## 0.12.8 · 2026-09-02
 
-### Changed
+### Improved
 
 - **Dictation loads its model on the press, and lets it go.** The engine was
   warmed at launch and held for the session — most of a gigabyte resident
@@ -952,18 +966,18 @@ second description of it. GitHub's generated commit list is appended below it.
   reach while the work is live; a history has no use for the group, so it
   and the Pin action are gone from the settled view.
 
-## 0.12.7
+## 0.12.7 · 2026-09-02
 
-### Changed
+### Improved
 
 - **Light mode is tinted, and it is Default's own palette now.** Light was
   the derived ramp at no hue; it runs cool blue throughout — tinted greys,
   a blue primary, and veils mixed off the foreground so they take the hue
   without naming a colour.
 
-## 0.12.6
+## 0.12.6 · 2026-09-02
 
-### Added
+### New
 
 - **Check for Updates from About.** The menu bar's check reported into the
   sidebar, so a collapsed sidebar left the answer nowhere to land. The
@@ -976,9 +990,9 @@ second description of it. GitHub's generated commit list is appended below it.
   `old_string`/`new_string` — so every pi edit printed raw JSON instead of
   the change it made.
 
-## 0.12.5
+## 0.12.5 · 2026-09-02
 
-### Added
+### New
 
 - **A More models submenu, and Ultra on Codex.** The model menu keeps the
   models worth a chord at its top level and folds the rest under "More
@@ -1013,7 +1027,7 @@ second description of it. GitHub's generated commit list is appended below it.
   the previous harness's answer until the next landed, drawing one agent's
   models under the other's name.
 
-## 0.12.4
+## 0.12.4 · 2026-09-01
 
 ### Fixed
 
@@ -1023,9 +1037,9 @@ second description of it. GitHub's generated commit list is appended below it.
   already down. 0.12.3 made this everyone's problem by loading a model
   at launch rather than on the first press.
 
-## 0.12.3
+## 0.12.3 · 2026-09-01
 
-### Added
+### New
 
 - **A failed dictation keeps the audio.** The samples used to go into
   the engine and vanish with it, so the only cure was saying the whole
@@ -1037,7 +1051,7 @@ second description of it. GitHub's generated commit list is appended below it.
   said. Your prior state is restored, so a machine already muted stays
   that way.
 
-### Changed
+### Improved
 
 - **The model loads before you press the mic**, at launch and whenever
   the selected model changes. Loading takes seconds and a first
@@ -1049,9 +1063,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **The composer takes focus when dictated words land**, and only if
   you are still on the session you spoke into.
 
-## 0.12.2
+## 0.12.2 · 2026-09-01
 
-### Added
+### New
 
 - **Start work on an issue from the issues page.** The button hands you the
   empty composer with the issue already tagged, rather than starting a session
@@ -1071,9 +1085,9 @@ second description of it. GitHub's generated commit list is appended below it.
   draw without an answer, so for a beat they were the whole page and it read
   as a workspace with nothing left to do.
 
-## 0.12.1
+## 0.12.1 · 2026-09-01
 
-### Added
+### New
 
 - **Dictate a prompt, transcribed on this machine.** ⌘D, or the mic beside
   send. No audio leaves your computer.
@@ -1107,9 +1121,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **macOS 11 is now the minimum.** The transcription engine needs it, and the
   version claimed before was a default nothing had tested.
 
-## 0.11.0
+## 0.11.0 · 2026-09-01
 
-### Added
+### New
 
 - **pi runs, as a third agent.** Pick it in the composer beside Claude Code and
   Codex. Sessions stream, resume and stop; reasoning, answers, tool calls and
@@ -1140,9 +1154,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **A pi that dies mid-turn closes its own turn**, rather than leaving the
   session working with a finished transcript and a Stop that did nothing.
 
-## 0.10.1
+## 0.10.1 · 2026-09-01
 
-### Added
+### New
 
 - **Two more themes: One Dark Pro and Cobalt2.** Both dark-only. The default
   palette is called Dray now — the same colours under a name of its own, and
@@ -1170,9 +1184,9 @@ second description of it. GitHub's generated commit list is appended below it.
   is nothing behind a fullscreen window, so the layering cost contrast and
   bought no depth.
 
-## 0.10.0
+## 0.10.0 · 2026-08-31
 
-### Added
+### New
 
 - **Markdown opens in the side panel, and you can edit it there.** Clicking a
   `.md` file in the chat used to hand it to an external editor to read
@@ -1208,7 +1222,7 @@ second description of it. GitHub's generated commit list is appended below it.
   version, so beta readers saw nothing and a fresh opt-in could never reach
   the open beta.
 
-## 0.9.3
+## 0.9.3 · 2026-08-31
 
 ### Fixed
 
@@ -1226,9 +1240,9 @@ second description of it. GitHub's generated commit list is appended below it.
   link you can click. Codex also learns what "parent session" means — it read
   it as a git parent and went looking through commits.
 
-## 0.9.2
+## 0.9.2 · 2026-08-30
 
-### Added
+### New
 
 - **Light mode works for the Default theme.** It was the last theme with no
   light side, so the mode picker sat disabled for anyone who never changed
@@ -1239,7 +1253,7 @@ second description of it. GitHub's generated commit list is appended below it.
   a button opens the login in a terminal. A wording neither harness recognises
   still reports the failure as before.
 
-### Changed
+### Improved
 
 - **Model takes Shift+Tab**, the cheapest chord, since it is the pick reached
   for most often; effort moves to ⌘⇧E and double-tap Shift is gone. ⌘I opens
@@ -1256,9 +1270,9 @@ second description of it. GitHub's generated commit list is appended below it.
   read as "Dray isn't running", which named no cure when the real cause was
   the agent's own sandbox. Update the CLI with `dray update`.
 
-## 0.9.1
+## 0.9.1 · 2026-08-29
 
-### Added
+### New
 
 - **Codex knows Dray's rules.** Claude Code was given them at spawn and Codex
   was given nothing, so it knew neither the reply style nor that `dray`
@@ -1283,9 +1297,9 @@ second description of it. GitHub's generated commit list is appended below it.
   floating list with no blur behind it, so the transcript showed through the
   list of files or commands.
 
-## 0.9.0
+## 0.9.0 · 2026-08-29
 
-### Added
+### New
 
 - **Codex runs, as a second agent.** Pick it in the composer beside Claude
   Code and the session spawns `codex app-server` instead. Sessions stream,
@@ -1314,7 +1328,7 @@ second description of it. GitHub's generated commit list is appended below it.
   app you chose last, the chevron picks without launching anything. Installed
   apps are detected with their own icons.
 
-### Changed
+### Improved
 
 - **Settings has tabs.** Five groups in one scroll meant reading past four
   to change one.
@@ -1336,9 +1350,9 @@ second description of it. GitHub's generated commit list is appended below it.
 - **"Spin up a session" starts a Dray session.** That phrasing and its
   neighbours reached for the agent's own subagent tool instead.
 
-## 0.8.2
+## 0.8.2 · 2026-08-28
 
-### Added
+### New
 
 - **A Skill call reads as one.** The harness types it like any other tool and
   leaves the title empty, so the row said "Skill" over raw JSON and a result
@@ -1348,7 +1362,7 @@ second description of it. GitHub's generated commit list is appended below it.
   that otherwise just looked slow. The attempt count leads, and the cause is
   named where the wire carries one.
 
-### Changed
+### Improved
 
 - **Run server moved into the handoff row**, behind the composer, where the
   other canned prompts live — the toolbar sets things, and this one acts.
@@ -1371,9 +1385,9 @@ second description of it. GitHub's generated commit list is appended below it.
   reading — "resets 9:05pm", "run /login".
 - **The branch button in the session header says what it copies.**
 
-## 0.8.1
+## 0.8.1 · 2026-08-28
 
-### Added
+### New
 
 - **Run server, in the composer toolbar.** Starting a session's dev server
   meant finding its worktree path and pasting it into a terminal, once per
@@ -1399,9 +1413,9 @@ second description of it. GitHub's generated commit list is appended below it.
   padded the line out. A paragraph holding nothing but an image keeps its
   own spacing.
 
-## 0.8.0
+## 0.8.0 · 2026-08-27
 
-### Added
+### New
 
 - **Linear issues, read-only.** An Issues page in the main column with scope
   chips, search and groups by state; an Issue tab in the right panel carrying
@@ -1441,7 +1455,7 @@ second description of it. GitHub's generated commit list is appended below it.
   dev` refusing to start because another's is already running was the ordinary
   case with several sessions open; the port is now probed upward from 1420.
 
-## 0.7.3
+## 0.7.3 · 2026-08-26
 
 ### Fixed
 
@@ -1455,9 +1469,9 @@ second description of it. GitHub's generated commit list is appended below it.
   per branch, so a slow reply landing last stops winning, and two pull requests
   on one branch are now picked the same way in both places.
 
-## 0.7.2
+## 0.7.2 · 2026-08-26
 
-### Added
+### New
 
 - **A settings dialog, and analytics behind a switch in it.** Dray now reports
   one event — `app_started`, carrying no properties — so there is a count of
@@ -1482,9 +1496,9 @@ second description of it. GitHub's generated commit list is appended below it.
   who sent it, but it was drawn in the bubble too — the avatar above already
   says that.
 
-## 0.7.1
+## 0.7.1 · 2026-08-26
 
-### Changed
+### Improved
 
 - **The sidebar groups sessions by project.** All Projects used to interleave
   rows from every repo with nothing saying which one a row belonged to. Rows
@@ -1493,7 +1507,7 @@ second description of it. GitHub's generated commit list is appended below it.
   under its parent whatever its own project says, and ⌘⇧↑/↓ still walks the
   order you see.
 
-## 0.7.0
+## 0.7.0 · 2026-08-26
 
 ### Upgrading
 
@@ -1513,7 +1527,7 @@ curl -fsSL https://www.drayhq.com/install.sh | sh
 `dray update` shipped in 0.2.0, so the refusal names a command that version
 does not have. This is the last release that can happen to.
 
-### Added
+### New
 
 - **Fork a session from the sidebar.** Right-click a row to carry a
   conversation on twice — in place, or into a worktree of its own. The copy
@@ -1546,7 +1560,7 @@ does not have. This is the last release that can happen to.
 - **`dray update` upgrades the CLI in place.** Re-running the installer used to
   be the only route, and it reinstalled the same version forever.
 
-### Changed
+### Improved
 
 - **The commit buttons name what they act on.** "commit" on its own reads as a
   topic rather than an instruction; "commit your changes" settles it.
@@ -1583,9 +1597,9 @@ does not have. This is the last release that can happen to.
   you set going and can read in the transcript; CI reports on its own schedule
   and the row is the only place it lands.
 
-## 0.6.0
+## 0.6.0 · 2026-08-26
 
-### Added
+### New
 
 - **An agent can fan work out into its own Dray sessions.** "Work through these
   three issues" now becomes three sessions, each in its own worktree, each a row
@@ -1611,9 +1625,9 @@ does not have. This is the last release that can happen to.
   CLI reached a build that never carried it. It now asks for the CLI release by
   name.
 
-## 0.5.3
+## 0.5.3 · 2026-08-25
 
-### Added
+### New
 
 - **A pull request turning ready to merge says so.** CI reports with nobody
   watching, and the panel's own line going from "Checks not passing" to "Ready
@@ -1637,9 +1651,9 @@ does not have. This is the last release that can happen to.
   button under a pull request that couldn't take one, and would now have
   sounded a notification for it too.
 
-## 0.5.2
+## 0.5.2 · 2026-08-25
 
-### Added
+### New
 
 - **The sidebar says which work has landed.** A merged PR now marks its row
   alongside open and draft, so the question the list gets scanned for at the
@@ -1655,7 +1669,7 @@ does not have. This is the last release that can happen to.
 - **⌘R refreshes whichever panel tab you're reading**, the same action as the
   button in the tab row.
 
-### Changed
+### Improved
 
 - **The PR tab keeps its place whatever state the PR is in.** Merging one sent
   it to the end of the row, reshuffling the tabs under the cursor at the moment
@@ -1686,9 +1700,9 @@ does not have. This is the last release that can happen to.
   were cached under the file's name alone, so a longer diff reused the first
   one's and walked off the end mid-render.
 
-## 0.5.1
+## 0.5.1 · 2026-08-24
 
-### Added
+### New
 
 - **A row of end-of-turn actions, parked behind the composer.** Hover the strip
   above it and Commit, Commit & push, Push and Create PR slide clear. All but
@@ -1709,7 +1723,7 @@ does not have. This is the last release that can happen to.
   about three screenshots.
 - **⌘↓ scrolls the transcript to the bottom.**
 
-### Changed
+### Improved
 
 - **A PR now appears the moment the turn that opened it ends.** The panel used
   to poll only while the PR tab was visible, and that tab hides when there is
@@ -1732,9 +1746,9 @@ does not have. This is the last release that can happen to.
   branch as a feature branch and offered a PR against the branch already
   checked out.
 
-## 0.5.0
+## 0.5.0 · 2026-08-23
 
-### Added
+### New
 
 - **A session's worktree can be deleted, and the chat survives it.** Nothing
   else cleans these up — the CLI never sweeps a tree it made with
@@ -1752,7 +1766,7 @@ does not have. This is the last release that can happen to.
   Clamped to two lines, with "Show more" only where two genuinely don't hold
   it.
 
-### Changed
+### Improved
 
 - **⇧⇥ cycles effort now, not permission mode.** Permission gets set once and
   left; effort is the dial you reach for mid-work, so it takes the cheapest
@@ -1762,9 +1776,9 @@ does not have. This is the last release that can happen to.
 - **The sidebar's pin action and search are parked.** Neither was wired to
   anything you could use, so neither is drawn.
 
-## 0.4.0
+## 0.4.0 · 2026-08-22
 
-### Added
+### New
 
 - **The main column has tabs now, and Chat is one of them.** Beside it sits
   **Changes** — a read-only view of the session's whole repository: the files
@@ -1776,7 +1790,7 @@ does not have. This is the last release that can happen to.
   default — it's what you get in every other git client.
 - **A face on every commit**, resolved from the author's email.
 
-### Changed
+### Improved
 
 - **The right pane's Changes tab still answers the older question** — what did
   *this turn* do. The new view follows the branch instead. Two surfaces, not a
@@ -1799,9 +1813,9 @@ does not have. This is the last release that can happen to.
 The repo view reads and never writes. Committing and pushing stay with the
 conversation next door, which is where the work is being made.
 
-## 0.3.0
+## 0.3.0 · 2026-08-22
 
-### Added
+### New
 
 - **A PR tab in the right pane**, beside Changes and Subagents. It shows merge
   readiness, the checks on the tip commit, and the review and bot comments as
@@ -1826,9 +1840,9 @@ The PR tab runs on the `gh` CLI, so it uses the login and enterprise host you
 already have. Without `gh`, or on a checkout with no GitHub remote, the tab
 stays hidden; logged out, it says so rather than erroring.
 
-## 0.2.0
+## 0.2.0 · 2026-08-21
 
-### Added
+### New
 
 - **A session tells you when it wants you.** A turn finishing, a permission
   request and a question each announce themselves once, on the channel that
@@ -1849,9 +1863,9 @@ macOS asks for notification permission the first time Dray posts one. Deny it
 and the in-app card and the sidebar marks still work — the desktop banner is
 the only thing lost.
 
-## 0.1.2
+## 0.1.2 · 2026-08-15
 
-### Added
+### New
 
 - **The window is glass.** The desktop shows through the transcript, while
   cards, menus and the composer keep their own fill — so the wallpaper reads as
@@ -1870,15 +1884,15 @@ the only thing lost.
 - **The send hint hides while a picker is open.** It sat behind the list, and it
   was untrue there anyway: Enter completes the highlighted row.
 
-### Changed
+### Improved
 
 - **Stepping between sessions is ⌘⇧↑/↓**, was ⌘⌥↑/↓.
 - **Shift+Tab is stated on the permission button's tooltip**, rather than only
   inside the menu it opens — where the modes already are.
 
-## 0.1.1
+## 0.1.1 · 2026-08-14
 
-### Added
+### New
 
 - **Check for Updates… in the app menu.** Answers either way: "Up to date" or
   "Couldn't check", rather than going quiet the way the background check does.
@@ -1899,9 +1913,11 @@ the only thing lost.
 - **The blocked-install reason moved into a tooltip.** It sat under the button
   as a standing line of prose, which read as a permanent second row.
 
-## 0.1.0
+## 0.1.0 · 2026-08-14
 
 First stable release.
+
+### New
 
 - In-app updates on a stable and a beta channel, with the app checking on launch
   and every six hours and installing on request.

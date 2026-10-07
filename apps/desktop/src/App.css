@@ -285,6 +285,9 @@
      split is `--veil-card` against `--veil-float` read in shadows: what a surface
      means decides which it takes. `none` in dark for `--shadow-surface`'s reason. */
   --shadow-card: none;
+  /* A raised surface that draws its own edge, so it takes no border. Dark has
+     no drop to cast, so this is the hairline alone. */
+  --shadow-ring: 0 0 0 1px var(--border);
 }
 
 /* The light ramp. Not an inversion of the one above: the rungs reorder rather than
@@ -494,6 +497,10 @@
      what reads as a halo on something floating reads as air on something resting.
      Same two-stop shape, so the two are recognisably one family. */
   --shadow-card: 0 1px 1px oklch(0 0 1 / 4%), 0 1px 1px oklch(0 0 0 / 6%), 0 1px 4px oklch(0 0 0 / 4%);
+  /* Two hairline rings, a lit top edge and a short drop: first the picked row
+     in Attach project, now the What's new card too. */
+  --shadow-ring: 0 0 0 1px #0000000a, 0 0.85px 0.5px 0 #fff inset, 0 1px 2px 0 #00000017,
+    0 0 0 1px #0000000f;
 
   /* Below dark's 80%, and it took fixing a bug to get here. An NSVisualEffectView
      follows the *system* appearance rather than `data-mode`, so a light palette on
