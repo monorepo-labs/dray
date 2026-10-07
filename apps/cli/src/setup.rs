@@ -101,14 +101,25 @@ fn browser_libs_present() -> bool {
         && BROWSER_LIBS.iter().all(|(lib, _)| cache.contains(lib))
 }
 
-/// Each library's package as this machine's apt names it.
-fn browser_packages() -> Result<String, InstallError> {
-    let known = |p: &&str| Command::new("apt-cache").args(["show", p]).output().is_ok_and(|o| o.status.success());
-    let mut picked = FONT_PACKAGES.to_vec();
-    for (lib, packages) in BROWSER_LIBS {
-        picked.push(packages.iter().copied().find(known).ok_or_else(|| Failed(format!("apt knows no package for {lib}")))?);
-    }
-    Ok(picked.join(" "))
+/// Installs each library's package as this machine's apt names it. Chosen in
+/// the script, after `apt-get update`: a fresh image's lists are empty, so
+/// asking apt-cache first finds nothing. Single-quote free, since `as_admin`
+/// may wrap it in `sudo sh -c '…'`.
+fn browser_script() -> String {
+    let choose: String = BROWSER_LIBS
+        .iter()
+        .map(|(lib, packages)| {
+            let candidates = packages.join(" ");
+            format!(
+                "p=; for c in {candidates}; do if apt-cache show $c >/dev/null 2>&1; then p=$c; break; fi; done; \
+                 [ -n \"$p\" ] || {{ echo \"apt knows no package for {lib}\" >&2; exit 1; }}; pkgs=\"$pkgs $p\"; "
+            )
+        })
+        .collect();
+    format!(
+        "apt-get update && pkgs=\"{}\" && {{ {choose}DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs; }}",
+        FONT_PACKAGES.join(" ")
+    )
 }
 
 /// Where vendor installers put a binary, reaching `PATH` only through
@@ -229,7 +240,7 @@ fn install(tool: &Tool, tty: Option<&File>) -> Result<(), InstallError> {
         "browser" | "ffmpeg" if find("apt-get").is_none() => {
             return Err(Failed("this installs with apt alone; use your package manager".into()))
         }
-        "browser" => return apt(&browser_packages()?, stdin()),
+        "browser" => return as_admin(&browser_script(), stdin()),
         "ffmpeg" => return apt("ffmpeg", stdin()),
         "cloudflared" => cloudflared_script()?,
         "gh" if LINUX => GH_LINUX.to_string(),
@@ -608,6 +619,37 @@ fn multiselect(tty: &File, title: &str, items: &[(String, bool)]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::ssh_line_for;
+
+    /// Runs the browser script against a fake apt that knows only the old
+    /// spellings plus `libasound2t64`, and reads back what it installed.
+    #[test]
+    fn browser_script_picks_names_after_updating() {
+        use std::os::unix::fs::PermissionsExt;
+        let script = super::browser_script();
+        assert!(!script.contains('\''), "as_admin wraps it in single quotes");
+        let dir = std::env::temp_dir().join(format!("dray-apt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let stub = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // Lists are empty until `update` has run, the way a fresh image's are.
+        stub("apt-get", &format!("[ \"$1\" = update ] && touch {0}/updated; echo \"$@\" >> {0}/log", dir.display()));
+        stub(
+            "apt-cache",
+            &format!("[ -e {}/updated ] || exit 100; case $2 in libasound2t64) exit 0;; *t64) exit 100;; esac", dir.display()),
+        );
+        let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap());
+        let ok = std::process::Command::new("sh").args(["-c", &script]).env("PATH", path).status().unwrap();
+        let installed = std::fs::read_to_string(&log).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(ok.success(), "{installed}");
+        let install = installed.lines().last().unwrap();
+        assert!(install.starts_with("install -y fontconfig"), "{install}");
+        assert!(install.contains(" libatk1.0-0 ") && install.contains(" libasound2t64"), "{install}");
+    }
 
     #[test]
     fn the_ssh_line_names_the_address_and_port_the_reader_used() {

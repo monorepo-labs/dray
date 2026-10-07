@@ -24,7 +24,28 @@ struct Tunnel {
     url: String,
 }
 
-static TUNNELS: LazyLock<Mutex<HashMap<(String, u16), Tunnel>>> = LazyLock::new(Default::default);
+#[derive(Default)]
+struct Tunnels {
+    live: HashMap<(String, u16), Tunnel>,
+    /// How many times each link, and (`None`) each session's every link, has
+    /// been stopped. A start that waited through a download and Cloudflare's
+    /// registration publishes only if neither moved meanwhile, or a stop or a
+    /// settle landing in that wait would leave a public link nobody can see.
+    stops: HashMap<(String, Option<u16>), u64>,
+}
+
+impl Tunnels {
+    fn stamp(&self, session: &str, port: u16) -> (u64, u64) {
+        let count = |p| self.stops.get(&(session.to_string(), p)).copied().unwrap_or(0);
+        (count(None), count(Some(port)))
+    }
+
+    fn bump(&mut self, session: &str, port: Option<u16>) {
+        *self.stops.entry((session.to_string(), port)).or_default() += 1;
+    }
+}
+
+static TUNNELS: LazyLock<Mutex<Tunnels>> = LazyLock::new(Default::default);
 /// One download at a time; a second share waits for the first's.
 static FETCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Measured at ~6s from start to the URL on a VPS.
@@ -46,8 +67,9 @@ pub fn stop_share(session_id: String, port: u16) {
 /// dropped here, so a link Cloudflare closed stops being offered.
 pub fn list(session: &str) -> Vec<SharedPort> {
     let mut tunnels = TUNNELS.lock().unwrap();
-    tunnels.retain(|_, t| matches!(t.child.try_wait(), Ok(None)));
+    tunnels.live.retain(|_, t| matches!(t.child.try_wait(), Ok(None)));
     let mut shares: Vec<SharedPort> = tunnels
+        .live
         .iter()
         .filter(|((s, _), _)| s == session)
         .map(|((_, port), t)| SharedPort { port: *port, url: t.url.clone() })
@@ -60,6 +82,7 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
     if let Some(live) = list(session).into_iter().find(|s| s.port == port) {
         return Ok(live.url);
     }
+    let stamp = TUNNELS.lock().unwrap().stamp(session, port);
     let listed = crate::local_servers::list_local_servers(session.to_string()).await?;
     if !listed.iter().any(|s| s.port == port) {
         return Err(format!(
@@ -113,16 +136,23 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
     // Two shares racing: the first link stays, so a URL already handed out
     // keeps working, and the second child is dropped, which kills it.
     let mut tunnels = TUNNELS.lock().unwrap();
-    Ok(tunnels.entry((session.to_string(), port)).or_insert(Tunnel { child, url }).url.clone())
+    if tunnels.stamp(session, port) != stamp {
+        return Err("sharing was stopped before the link was ready".into());
+    }
+    Ok(tunnels.live.entry((session.to_string(), port)).or_insert(Tunnel { child, url }).url.clone())
 }
 
 pub fn stop(session: &str, port: u16) {
-    TUNNELS.lock().unwrap().remove(&(session.to_string(), port));
+    let mut tunnels = TUNNELS.lock().unwrap();
+    tunnels.bump(session, Some(port));
+    tunnels.live.remove(&(session.to_string(), port));
 }
 
 /// Every link the session has, for settle and delete.
 pub fn close_session(session: &str) {
-    TUNNELS.lock().unwrap().retain(|(s, _), _| s != session);
+    let mut tunnels = TUNNELS.lock().unwrap();
+    tunnels.bump(session, None);
+    tunnels.live.retain(|(s, _), _| s != session);
 }
 
 /// The quick tunnel's address out of cloudflared's banner, which boxes it:
@@ -201,6 +231,20 @@ async fn binary() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_during_the_wait_moves_the_stamp() {
+        let mut t = Tunnels::default();
+        let before = t.stamp("s", 5173);
+        t.bump("s", Some(3000));
+        t.bump("other", None);
+        assert_eq!(t.stamp("s", 5173), before, "another port or session leaves it");
+        t.bump("s", Some(5173));
+        assert_ne!(t.stamp("s", 5173), before);
+        let before = t.stamp("s", 5173);
+        t.bump("s", None);
+        assert_ne!(t.stamp("s", 5173), before, "a settle stops every port");
+    }
 
     #[test]
     fn reads_the_link_out_of_the_banner() {

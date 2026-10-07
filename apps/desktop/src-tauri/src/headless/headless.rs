@@ -570,6 +570,11 @@ fn gone(session: &str, generation: u64) {
     if ours {
         eprintln!("[headless] Chromium for {session} exited");
         discard_tabs(session);
+        // As a tab closing would: a recording stops filming a page that is
+        // gone and keeps its frames for `record stop`.
+        for id in tabs_of(session).iter().map(|t| t.id) {
+            automation::forget(id);
+        }
     }
     let mut calls = CALLS.lock().unwrap();
     let dead: Vec<i32> = calls.iter().filter(|(_, (g, _))| *g == generation).map(|(id, _)| *id).collect();

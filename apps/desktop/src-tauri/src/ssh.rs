@@ -207,23 +207,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
         .spawn()
         .map_err(|e| Failure::new(format!("could not run ssh: {e}"), None, true))?;
 
-    let stderr = Arc::new(Mutex::new(String::new()));
-    if let Some(mut pipe) = child.stderr.take() {
-        let stderr = stderr.clone();
-        tokio::spawn(async move {
-            let mut chunk = [0u8; 1024];
-            while let Ok(n @ 1..) = pipe.read(&mut chunk).await {
-                let mut said = stderr.lock().unwrap_or_else(|e| e.into_inner());
-                said.push_str(&String::from_utf8_lossy(&chunk[..n]));
-                // Only the end is ever read; a chatty server must not grow this.
-                if said.len() > 8192 {
-                    let cut = said.len() - 4096;
-                    let cut = (cut..said.len()).find(|&i| said.is_char_boundary(i)).unwrap_or(0);
-                    said.drain(..cut);
-                }
-            }
-        });
-    }
+    let (stderr, _) = drain_stderr(&mut child);
     let stdin = child.stdin.take().expect("piped");
     let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
 
@@ -366,17 +350,18 @@ pub async fn forward(target: &Target, remote: u16) -> Result<Forward, String> {
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("could not run ssh: {e}"))?;
+    // Drained for the forward's whole life: a dead dev server makes ssh
+    // complain on every connection, and a full pipe would stall the forward.
+    let (stderr, drained) = drain_stderr(&mut child);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
             return Ok(Forward { child, port });
         }
         if let Ok(Some(_)) = child.try_wait() {
-            let mut said = String::new();
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_string(&mut said).await;
-            }
-            let said = last_line(&said).unwrap_or_else(|| "ssh exited".into());
+            let _ = tokio::time::timeout(Duration::from_secs(1), drained).await;
+            let said = last_line(&stderr.lock().unwrap_or_else(|e| e.into_inner()));
+            let said = said.unwrap_or_else(|| "ssh exited".into());
             return Err(format!("Could not forward port {remote} from {}: {said}", target.host()));
         }
         if tokio::time::Instant::now() > deadline {
@@ -384,6 +369,28 @@ pub async fn forward(target: &Target, remote: u16) -> Result<Forward, String> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Reads ssh's stderr until it closes, keeping only the tail, which is all
+/// anything reads. The handle finishes when ssh has said its last.
+fn drain_stderr(child: &mut Child) -> (Arc<Mutex<String>>, tokio::task::JoinHandle<()>) {
+    let stderr = Arc::new(Mutex::new(String::new()));
+    let pipe = child.stderr.take();
+    let tail = stderr.clone();
+    let handle = tokio::spawn(async move {
+        let Some(mut pipe) = pipe else { return };
+        let mut chunk = [0u8; 1024];
+        while let Ok(n @ 1..) = pipe.read(&mut chunk).await {
+            let mut said = tail.lock().unwrap_or_else(|e| e.into_inner());
+            said.push_str(&String::from_utf8_lossy(&chunk[..n]));
+            if said.len() > 8192 {
+                let cut = said.len() - 4096;
+                let cut = (cut..said.len()).find(|&i| said.is_char_boundary(i)).unwrap_or(0);
+                said.drain(..cut);
+            }
+        }
+    });
+    (stderr, handle)
 }
 
 fn last_line(text: &str) -> Option<String> {
