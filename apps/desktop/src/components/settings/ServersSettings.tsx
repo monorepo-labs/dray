@@ -312,6 +312,8 @@ function AddServerDialog({
   const [stage, setStage] = useState<Stage | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [trusting, setTrusting] = useState<TrustHost | null>(null);
+  // Pressing Add starts the setup, and from then on only the buttons leave.
+  const [started, setStarted] = useState(false);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -333,10 +335,12 @@ function AddServerDialog({
     setName("");
     setFailure(null);
     setViaSsh(true);
+    setStarted(false);
     onClose();
   };
 
   const add = async () => {
+    setStarted(true);
     setBusy(true);
     setStage(null);
     setFailure(null);
@@ -372,13 +376,13 @@ function AddServerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent className="grid-cols-[minmax(0,1fr)]">
+      <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={false} dismissible={!started}>
         <DialogHeader>
           <DialogTitle>Add server</DialogTitle>
           <DialogDescription>
             {viaSsh
-              ? "A machine you can log in to with SSH and a key. Dray connects through that login, so no port is opened and no password is stored."
-              : "A dray serve this Mac can already reach — on this machine, over Tailscale, or through a tunnel of your own."}
+              ? "Run sessions on a machine you can SSH into. Dray uses your existing key."
+              : "Connect straight to a running dray serve."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex flex-col gap-3">
@@ -489,8 +493,8 @@ function HostKeyDialog({
   };
 
   return (
-    <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="grid-cols-[minmax(0,1fr)]">
+    <Dialog open>
+      <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={false} dismissible={false}>
         <DialogHeader>
           <DialogTitle>Is this the right server?</DialogTitle>
           <DialogDescription>

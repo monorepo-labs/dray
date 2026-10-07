@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import CommandChip from "@/components/settings/CommandChip";
+import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,6 +28,13 @@ type Step =
 /// Lines of install output kept on screen; a package manager can print
 /// thousands, and only the end says how it went.
 const LOG_LINES = 400;
+
+/// `uname -s` as people say it.
+const osName = (os: string) => (os === "Darwin" ? "macOS" : os || "something else");
+
+/// "a", "a and b", "a, b and c".
+const listed = (names: string[]) =>
+  names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 
 const message = (err: unknown) =>
   err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
@@ -54,6 +62,11 @@ export default function ServerSetupDialog({
   // Picks still missing after an install that otherwise worked: `dray setup`
   // warns and carries on, so its exit code alone would lose them.
   const [unfinished, setUnfinished] = useState<string[]>([]);
+  // Whether gh ended up on the server, so the logins can say it needs one too.
+  const [gh, setGh] = useState(false);
+  // State, not a ref: the portal into it needs the node during render.
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const logEnd = useRef<HTMLDivElement>(null);
   const servers = useServers();
 
@@ -77,7 +90,10 @@ export default function ServerSetupDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => logEnd.current?.scrollIntoView({ block: "nearest" }), [log]);
+  // Braced: Chromium's `scrollIntoView` answers a Promise, which React would take as the cleanup.
+  useEffect(() => {
+    logEnd.current?.scrollIntoView({ block: "nearest" });
+  }, [log]);
 
   // The row going green is the answer, whichever way the connect was asked for.
   const connecting = step.kind === "connecting" && step.id ? servers.find((s) => s.id === step.id) : undefined;
@@ -97,6 +113,7 @@ export default function ServerSetupDialog({
     try {
       await invoke("install_on_server", { line, picks }, LOCAL);
       const after = await invoke<Survey>("survey_server", { line }, LOCAL);
+      setGh(after.tools.some((t) => t.id === "gh" && t.found));
       const missing = after.tools.filter((t) => picks.includes(t.id) && !t.found);
       if (missing.length > 0) {
         setPicks(missing.map((t) => t.id));
@@ -139,18 +156,31 @@ export default function ServerSetupDialog({
   // Closing mid-install would leave a half-set-up server with nothing on screen
   // saying so; the run carries on there either way. A failure lets go.
   const locked = (step.kind === "installing" || step.kind === "connecting") && !shownError;
+  const extras =
+    step.kind === "picking" ? listed(step.survey.tools.filter((t) => picks.includes(t.id)).map((t) => t.name)) : "";
 
   return (
-    <Dialog open onOpenChange={(next) => !next && !locked && onClose()}>
-      <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={!locked}>
+    <Dialog open>
+      <DialogContent
+        className="grid-cols-[minmax(0,1fr)]"
+        showClose={false}
+        // Every step is part of setting a server up, so only its own buttons leave.
+        dismissible={false}
+      >
         <DialogHeader>
-          <DialogTitle>{step.kind === "signing_in" ? `Sign in on ${name}` : `Install Dray on ${name}`}</DialogTitle>
+          <DialogTitle>
+            {step.kind === "signing_in"
+              ? `Sign in on ${name}`
+              : linux
+                ? `Install Dray on ${name}`
+                : `${name} can't run Dray`}
+          </DialogTitle>
           <DialogDescription>
             {step.kind === "signing_in"
               ? "Dray is running there. Each agent needs its own login on that machine."
               : step.kind === "picking" && !linux
-                ? `Dray runs as a server on Linux, and ${name} is ${step.survey.os || "something else"}.`
-                : "Dray installs into your home directory there and runs in the background, so it keeps going when this Mac sleeps."}
+                ? `Dray's server needs Linux, and ${name} runs ${osName(step.survey.os)}.`
+                : `Dray isn't on ${name} yet. It has to be installed there${extras ? `, along with ${extras}` : ""}.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -180,7 +210,7 @@ export default function ServerSetupDialog({
                       Dray needs git, and installing it there takes admin rights. Run this on the server, then look again:
                     </span>
                     <div className="flex items-center gap-2">
-                      <CommandChip command={step.survey.gitCommand} />
+                      <CommandChip command={step.survey.gitCommand} className="flex-1" />
                       <Button variant="ghost" size="sm" onClick={() => void look()}>
                         Look again
                       </Button>
@@ -202,8 +232,18 @@ export default function ServerSetupDialog({
         )}
 
         {step.kind === "signing_in" && (
-          <div className="max-h-[50vh] overflow-auto">
-            <AccountsSettings cwd="" only={step.id} />
+          // The footer's slot takes Refresh and the form's back arrow, which
+          // on the page sit in its heading; here a row of their own was empty.
+          <SettingsHeaderSlot.Provider value={slot}>
+            <div className="max-h-[50vh] overflow-auto">
+              <AccountsSettings cwd="" only={step.id} onFormOpen={setFormOpen} />
+            </div>
+          </SettingsHeaderSlot.Provider>
+        )}
+        {step.kind === "signing_in" && gh && (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-ui text-muted-foreground">GitHub CLI has its own login too. Run this on {name}:</p>
+            <CommandChip command="gh auth login" />
           </div>
         )}
 
@@ -219,11 +259,20 @@ export default function ServerSetupDialog({
         )}
         {shownError && <p className="text-ui text-destructive">{shownError}</p>}
 
-        <div className="flex justify-end gap-2">
-          {step.kind === "signing_in" ? (
+        <div className="flex items-center justify-end gap-2">
+          {step.kind === "signing_in" && <div ref={setSlot} className="mr-auto flex items-center gap-1" />}
+          {step.kind === "picking" && !linux ? (
             <Button onClick={onClose} autoFocus>
-              Done
+              Close
             </Button>
+          ) : step.kind === "signing_in" ? (
+            // Not while one agent's form is up: Done there reads as done with
+            // that agent, and closes the logins the others still need.
+            !formOpen && (
+              <Button onClick={onClose} autoFocus>
+                Done
+              </Button>
+            )
           ) : (
             <>
               {!locked && (
