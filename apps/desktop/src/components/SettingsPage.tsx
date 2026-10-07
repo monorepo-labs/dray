@@ -1108,6 +1108,9 @@ function SettingsTabs({
   const id = useId();
   const fullscreen = useFullscreen();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  // A route in from outside — the What's new card's View all, the mic's
+  // missing model — can land while the page is already open.
+  useEffect(() => setTab(initialTab), [initialTab]);
   // State rather than a ref, since a portal needs the node during render and a
   // ref holds nothing on the first one.
   const [slot, setSlot] = useState<HTMLElement | null>(null);

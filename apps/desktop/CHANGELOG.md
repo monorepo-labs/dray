@@ -1917,6 +1917,8 @@ the only thing lost.
 
 First stable release.
 
+### New
+
 - In-app updates on a stable and a beta channel, with the app checking on launch
   and every six hours and installing on request.
 - Quitting asks first, so a turn in flight isn't killed by a stray ⌘Q.

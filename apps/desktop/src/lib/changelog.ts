@@ -24,16 +24,16 @@ const URL = "https://www.drayhq.com/changelog.json";
 /// The newest release the reader has been told about, or skipped past.
 const SEEN_KEY = "ade.changelogSeen";
 
-/// A webview that never ran Dray holds no keys at all, so this is the one
-/// reading that tells a fresh install from an older one meeting this feature.
-/// Read at module load, before anything has written a key.
-const FIRST_RUN = (() => {
-  try {
-    return localStorage.length === 0;
-  } catch {
-    return false;
-  }
-})();
+/// A webview that never ran Dray holds no keys at all, which is the one reading
+/// that tells a fresh install from an older one meeting this feature. So a fresh
+/// install records its own version as seen here, at module load, before
+/// anything else writes a key — not once the feed arrives, since a launch whose
+/// request fails would leave the next one looking like an old install.
+try {
+  if (localStorage.length === 0) writeLocalStorage(SEEN_KEY, APP_VERSION);
+} catch {
+  // No store at all; the card simply follows whatever reads succeed.
+}
 
 let request: Promise<Release[]> | null = null;
 
@@ -75,20 +75,19 @@ export function forChannel(releases: Release[], channel: UpdateChannel): Release
 ///
 /// Only a release the reader is already running counts: a post published ahead
 /// of its build would otherwise advertise something they cannot use yet.
-/// `seen` null is a reader who never had this recorded — a fresh install sees
-/// everything as read, an existing one sees the newest flagged release.
+/// `seen` null is an install from before this feature, which gets the newest
+/// flagged release; a fresh one was given its own version at load.
 export function announcement(
   releases: Release[],
   running: string,
   seen: string | null,
-  firstRun: boolean,
 ): { release: Release | null; seen: string | null } {
   const runnable = releases
     .filter((r) => compareVersions(r.version, running) <= 0)
     .sort((a, b) => compareVersions(b.version, a.version));
   const newest = runnable[0]?.version;
   if (!newest) return { release: null, seen };
-  const floor = seen ?? (firstRun ? newest : "0.0.0");
+  const floor = seen ?? "0.0.0";
   const release =
     runnable.find((r) => r.notify && compareVersions(r.version, floor) > 0) ?? null;
   return { release, seen: seen && compareVersions(seen, newest) >= 0 ? seen : newest };
@@ -102,7 +101,7 @@ export async function checkChangelog(): Promise<{ release: Release; seen: string
   const channel = readLocalStorage<UpdateChannel>("ade.updateChannel", "stable");
   const all = forChannel(await fetchChangelog(), channel);
   const seen = readLocalStorage<string | null>(SEEN_KEY, null);
-  const next = announcement(all, APP_VERSION, seen, FIRST_RUN);
+  const next = announcement(all, APP_VERSION, seen);
   if (next.release && next.seen) return { release: next.release, seen: next.seen };
   if (next.seen !== seen) writeLocalStorage(SEEN_KEY, next.seen);
   return null;
