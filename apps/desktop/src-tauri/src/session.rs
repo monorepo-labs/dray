@@ -2646,6 +2646,14 @@ async fn deliver_prompt(
 
     append_session_event(session_id, agent_event).await?;
 
+    // The frontend clears it on this event, so the index has to agree. Best
+    // effort: a sidebar flag is not worth failing a delivery over.
+    if queued {
+        if let Err(e) = crate::store::clear_aside(session_id).await {
+            eprintln!("[clear aside err] {e:#}");
+        }
+    }
+
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
         return Ok(text);

@@ -965,6 +965,19 @@ pub async fn touch_session_index_item(
     Ok(())
 }
 
+/// Brings a set-aside session back, for a queued prompt reaching the child:
+/// its send cleared the flag already, but the reader may have set the session
+/// aside again while it waited, and delivery is a message like any other.
+pub async fn clear_aside(session_id: &str) -> Result<()> {
+    edit_item(session_id, |item| {
+        let was = item.aside;
+        item.aside = false;
+        ((), was)
+    })
+    .await?;
+    Ok(())
+}
+
 /// Cuts a session loose from the parent that spawned it, so the sidebar draws
 /// it as a top-level row rather than nested.
 ///

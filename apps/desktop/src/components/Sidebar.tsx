@@ -1515,7 +1515,12 @@ export default function Sidebar({
                     // A row on a server that dropped stays listed — its agent
                     // is still running there — and fades with its heading.
                     faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
-                    aside={group.kind === "project" && group.state === "aside"}
+                    // The flag too, for a row drawn in a split group or under a
+                    // pinned ancestor, where no aside run holds it.
+                    aside={
+                      !archivedShown &&
+                      ((group.kind === "project" && group.state === "aside") || item.aside)
+                    }
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
