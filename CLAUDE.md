@@ -14,15 +14,15 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Status = open or closed, and the PR is what close it.** `Fixes #123` in the PR body, which GitHub read on merge. Body = the only slot: worktree branch is `worktree-<name>` minted by the CLI and carry no id, unlike the tracker this replaced. **Exception: work pushed straight to `main`.** No PR = nothing to read, so `gh issue close` yourself.
 
-**PR nobody need review carry `no-review` label and get no reviewer.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = reviewed.
+**PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
 
-**Default road = work → test → ponytail review → draft PR → Codex review.** No Greptile any more (credits gone).
+**Default road = work → test → ponytail review → ready PR → Greptile.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
 1. Do the work, then test it for real — run it, not just compile it.
 2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up. Changed anything? Test again — a cut that looked redundant is the easiest way to break what step 1 proved.
-3. Commit, push, open the PR as **draft**.
-4. Spawn one Codex reviewer on the branch: `dray new --harness codex --model gpt-6-sol --effort medium --from <this session id> "<brief>"`. Brief is self-contained — PR link, what changed and why, where bugs could hide — and ends by telling it to `dray send` its findings back to this session with file:line and a concrete failure each.
-5. Fix what is real, test, push, `dray send` the reviewer to look again. **Five rounds max**, then report what is left. Committing and pushing inside this loop needs no fresh ask.
+3. Commit, push, open the PR **ready**. Greptile review it on its own.
+4. Fix what Greptile raise and is real.
+5. **Once the PR is open, push nothing until Yogesh has tested it** in the dev app — every push is another Greptile run. Leave follow-ups uncommitted and push when he says push; "it works" is not that.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -895,7 +895,7 @@ The cost, stated: a `.command` handed to `open` is run by **Terminal.app alone**
 
 **Every probe runs in the session's own directory**, the one the sign-in terminal opens in. A CLI resolves its config against the directory it is started in, so "who is this agent running as" has to be asked where the agent runs, or the read and the write disagree about which project is being signed into. Only where it is still there: a settled session keeps a `cwd` whose worktree is gone, and spawning into a missing directory fails with ENOENT before the binary is reached — `binpath`'s own trap — so the process directory stands in. `add_account`'s `pi auth check` is deliberately the exception, reading whether pi knows a *name*, which no directory moves.
 
-**The last answer is drawn while a fresh one is read, and nothing polls.** Every open still reads, since the reader is on this page to change a login and a cached answer would otherwise be stale exactly where it is read — but the previous read per directory (`lastRead`, in memory) stands in meanwhile, so only the first visit waits on a spinner. A failed read writes nothing there. Mounting is the gate — the page switches tab bodies rather than hiding them, so `useAgentAccounts` takes no `enabled` flag. A terminal sign-in sends nothing back, so Refresh is how the page learns; four children on a timer to catch a browser round trip would be worse than a button. `what_the_installed_agents_answer` is the `#[ignore]`d live test every parser here was written against — run it when a CLI changes what it says.
+**The last answer is drawn while a fresh one is read, and nothing polls.** Every open still reads, since the reader is on this page to change a login and a cached answer would otherwise be stale exactly where it is read — but the previous read per directory (`lastRead`, in memory) stands in meanwhile, so only the first visit waits on a spinner. A failed read writes nothing there. Mounting is the gate — the page switches tab bodies rather than hiding them, so `useAgentAccounts` takes no `enabled` flag. A terminal sign-in sends nothing back, so the page re-reads on the form's back arrow and on the window coming back to front, with Refresh beside them; four children on a timer to catch a browser round trip would be worse than either. `what_the_installed_agents_answer` is the `#[ignore]`d live test every parser here was written against — run it when a CLI changes what it says.
 
 ### Closing with ⌘W
 

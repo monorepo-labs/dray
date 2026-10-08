@@ -486,9 +486,9 @@ mockIPC(
         await pause(STEP / 2);
         signIn(String(a.server), a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
         return null;
-      case "run_server_gh_login":
+      case "run_gh_login":
         await pause(STEP / 2);
-        ghSignedIn.add(String(a.server));
+        ghSignedIn.add((a.server as string | null) ?? "local");
         return null;
       case "server_invoke":
         return core(String(a.cmd), (a.args ?? {}) as Record<string, unknown>, String(a.server));

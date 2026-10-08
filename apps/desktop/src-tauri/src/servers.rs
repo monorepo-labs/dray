@@ -602,16 +602,20 @@ pub async fn run_server_login(
     run_on_server(&server, &command).await
 }
 
-/// Sign `gh` in on a server, the same way [`run_server_login`] signs in an
-/// agent. Takes no command: `gh` is not a harness, and the line is fixed here.
+/// Sign `gh` in, on this Mac (`None`) or on a server, in Terminal the way
+/// [`run_server_login`] signs in an agent. Takes no command: `gh` is not a
+/// harness, and the line is fixed here.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn run_server_gh_login(server: String) -> Result<(), String> {
-    run_on_server(&server, GH_LOGIN).await
+pub async fn run_gh_login(server: Option<String>) -> Result<(), String> {
+    match server {
+        Some(server) => run_on_server(&server, GH_LOGIN).await,
+        None => crate::apps::run_in_terminal(GH_LOGIN, "").await,
+    }
 }
 
 /// HTTPS and the browser flow named up front, so the only questions left are
 /// the device code and whether git should use the token, which agents pushing
-/// from the server want. A headless server cannot open the browser itself; gh
+/// from a server want. A headless server cannot open the browser itself; gh
 /// says so and prints the URL, which Terminal on this Mac makes clickable.
 const GH_LOGIN: &str = "gh auth login --hostname github.com --git-protocol https --web";
 

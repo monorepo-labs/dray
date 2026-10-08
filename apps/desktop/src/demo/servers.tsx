@@ -149,7 +149,7 @@ mockIPC(
         throw { message: "SSH is not available in the browser demo. Use an address and token.", fix: null };
       case "trust_host_key":
       case "run_server_login":
-      case "run_server_gh_login":
+      case "run_gh_login":
         throw "SSH is not available in the browser demo.";
       case "reconnect_servers":
         for (const r of remotes) r.conn.reconnect();
