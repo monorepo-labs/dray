@@ -1574,7 +1574,12 @@ queued: QueuedMessage | null,
  * link_session_issue`]'s reason — re-tagging *replaces* an entry, so what
  * changed is not a set the caller can apply on its own.
  */
-issues: Array<IssueRef>, };
+issues: Array<IssueRef>, 
+/**
+ * `Some` when the child is running a model other than the one sent — fx
+ * resuming on the model it restored after refusing the pick (#364).
+ */
+model: ModelId | null, };
 
 /**
  * A remote server as the frontend sees it. No token: that stays here.
