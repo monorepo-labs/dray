@@ -866,7 +866,7 @@ export default function AccountsSettings({
         })
       )}
 
-      {!signingIn && (!only || github.account) && (
+      {!signingIn && (!only || github.account || github.error) && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <GitHubIcon className="size-4 text-muted-foreground" />

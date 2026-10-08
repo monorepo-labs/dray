@@ -122,10 +122,13 @@ add_to_path() {
   [ "$(uname -s)" = Linux ] || return 1
   case "$INSTALL_DIR" in "$HOME"/*) ;; *) return 1 ;; esac
   sub=${INSTALL_DIR#"$HOME"/}
+  # Written inside double quotes, where these would expand or end the string.
+  case "$sub" in *[\"\$\`\\]*) return 1 ;; esac
   case "${SHELL:-}" in
-    # bash reads .bash_profile instead of .profile where one exists.
+    # A login bash reads the first of these that exists.
     */bash) files=".bashrc .profile"
-      if [ -f "$HOME/.bash_profile" ]; then files=".bashrc .bash_profile"; fi ;;
+      if [ -f "$HOME/.bash_profile" ]; then files=".bashrc .bash_profile"
+      elif [ -f "$HOME/.bash_login" ]; then files=".bashrc .bash_login"; fi ;;
     */zsh) files=".zshrc" ;;
     */fish)
       say "Run 'fish_add_path \$HOME/$sub' to put dray on your PATH."
