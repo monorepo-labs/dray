@@ -113,7 +113,7 @@ install_skill() {
 # the output, so a test on PATH passes and the note goes nowhere. Root's
 # default .profile on Ubuntu adds no ~/.local/bin, so the console opened later
 # answered `gh: command not found`. So the files are asked rather than PATH,
-# and one naming the directory in any spelling counts as done — which is also
+# and one naming the directory in any spelling is left alone — which is also
 # what heals a server on `dray update`. The line is guarded, so a shell reading
 # two of these files adds the directory once.
 #
@@ -132,14 +132,18 @@ add_to_path() {
       return 0 ;;
     *) files=".profile" ;;
   esac
+  # Each file on its own: a login shell and an interactive one read different
+  # files, and either may be the one already naming the directory.
+  added=
   for f in $files; do
-    grep -Fqs -e "\$HOME/$sub" -e "~/$sub" -e "$INSTALL_DIR" "$HOME/$f" && return 0
-  done
-  for f in $files; do
+    grep -Fqs -e "\$HOME/$sub" -e "~/$sub" -e "$INSTALL_DIR" "$HOME/$f" && continue
     printf '\n# Added by the Dray installer.\ncase ":$PATH:" in *":$HOME/%s:"*) ;; *) export PATH="$HOME/%s:$PATH" ;; esac\n' \
       "$sub" "$sub" >> "$HOME/$f"
+    added="$added ~/$f"
   done
-  say "Added $INSTALL_DIR to PATH in ~/$(echo $files | sed 's| | and ~/|g'). New shells will find dray and the tools beside it."
+  if [ -n "$added" ]; then
+    say "Added $INSTALL_DIR to PATH in$added. New shells will find dray and the tools beside it."
+  fi
 }
 
 TARGET=$(detect_target)

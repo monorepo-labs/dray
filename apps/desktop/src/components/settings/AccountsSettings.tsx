@@ -904,7 +904,8 @@ function useServerGithub(server: ServerId) {
 
   const refresh = useCallback(async () => {
     const mine = ++generation.current;
-    if (server === LOCAL) return;
+    // A remote read still in flight now skips its own cleanup.
+    if (server === LOCAL) return setBusy(false);
     setBusy(true);
     try {
       const found = await invoke<boolean>("recheck_gh", {}, server);
