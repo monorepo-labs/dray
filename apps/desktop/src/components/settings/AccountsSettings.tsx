@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import { serverName, useServers } from "@/lib/servers";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import AgentIcon from "@/components/AgentIcon";
+import GitHubIcon from "@/components/GitHubIcon";
 import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,7 @@ import { useCopied } from "@/hooks/useCopied";
 import { setAgentEnabled, useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import type { Account, AccountState, AgentAccounts, Harness } from "@/types/events";
+import type { Account, AccountState, AgentAccounts, Harness, IntegrationsView } from "@/types/events";
 
 /// What each state is called, in the reader's words rather than the wire's.
 ///
@@ -615,7 +616,10 @@ export default function AccountsSettings({
   const servers = useServers();
   const [server, setServer] = useState<ServerId>(() => only ?? serverOfPath(cwd));
   const askIn = serverOfPath(cwd) === server ? cwd : "";
-  const { agents, busy, error, refresh, addAccount, signOut } = useAgentAccounts(askIn, server);
+  const { agents, busy: agentsBusy, error, refresh: refreshAgents, addAccount, signOut } = useAgentAccounts(askIn, server);
+  const github = useServerGithub(server);
+  const busy = agentsBusy || github.busy;
+  const refresh = () => Promise.all([refreshAgents(), github.refresh()]);
   const [signingIn, setSigningIn] = useState<{
     harness: Harness;
     provider: string | null;
@@ -847,8 +851,101 @@ export default function AccountsSettings({
           );
         })
       )}
+
+      {server !== LOCAL && !signingIn && (!only || github.account) && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <GitHubIcon className="size-4 text-muted-foreground" />
+            <span className="text-ui font-medium">GitHub</span>
+          </div>
+          {github.account ? (
+            <AccountRow
+              account={github.account}
+              busy={busy}
+              confirming={false}
+              onChange={() => void github.signIn()}
+              onAskSignOut={() => {}}
+              onCancelSignOut={() => {}}
+              onSignOut={() => {}}
+            />
+          ) : github.account === false ? (
+            <div className="flex items-center gap-3 py-1.5">
+              <StateDot state="logged_out" />
+              <p className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
+                The GitHub CLI is not installed on this server.
+              </p>
+            </div>
+          ) : null}
+          {github.error && <p className="text-ui text-destructive">{github.error}</p>}
+        </div>
+      )}
     </div>
   );
+}
+
+/// `gh` on a remote server, drawn as one more account row beside the agents.
+///
+/// Remote alone: a fresh server is where `gh auth login` otherwise means the
+/// server's own console, and this Mac's `gh` already has the PR panel's setup
+/// pane. Read through `recheck_gh` first, since the server caches both a
+/// missing `gh` and a signed-out one for its life, and this row exists to
+/// notice a sign-in that just happened.
+///
+/// ponytail: `get_integrations` folds a failed `gh api user` into "nobody", so
+/// a network blip on the server reads as signed out. A command answering three
+/// states is the upgrade if that ever shows up.
+function useServerGithub(server: ServerId) {
+  // `false` is no `gh` on the server, `null` not read yet.
+  const [account, setAccount] = useState<Account | false | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // A switch of server can land the previous server's read after this one's.
+  const generation = useRef(0);
+
+  const refresh = useCallback(async () => {
+    const mine = ++generation.current;
+    if (server === LOCAL) return;
+    setBusy(true);
+    try {
+      const found = await invoke<boolean>("recheck_gh", {}, server);
+      const view = found ? await invoke<IntegrationsView>("get_integrations", {}, server) : null;
+      if (mine !== generation.current) return;
+      const who = view?.github;
+      setAccount(
+        found && {
+          provider: null,
+          label: "github.com",
+          state: who ? "logged_in" : "logged_out",
+          detail: who?.userId ?? null,
+          authType: null,
+          canSignOut: false,
+          canChangeMethod: false,
+        },
+      );
+      setError(null);
+    } catch (err) {
+      if (mine === generation.current) setError(String(err));
+    } finally {
+      if (mine === generation.current) setBusy(false);
+    }
+  }, [server]);
+
+  useEffect(() => {
+    setAccount(null);
+    setError(null);
+    void refresh();
+  }, [refresh]);
+
+  const signIn = useCallback(async () => {
+    setError(null);
+    try {
+      await invoke("run_server_gh_login", { server }, LOCAL);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [server]);
+
+  return { account, busy, error, refresh, signIn };
 }
 
 /// Which machine the tab is about, drawn only once a remote server exists.

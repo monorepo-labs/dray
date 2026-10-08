@@ -595,6 +595,27 @@ pub async fn run_server_login(
     provider: Option<String>,
     auth: Option<String>,
 ) -> Result<(), String> {
+    let command = match auth {
+        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
+        None => harness.login_command().to_string(),
+    };
+    run_on_server(&server, &command).await
+}
+
+/// Sign `gh` in on a server, the same way [`run_server_login`] signs in an
+/// agent. Takes no command: `gh` is not a harness, and the line is fixed here.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn run_server_gh_login(server: String) -> Result<(), String> {
+    run_on_server(&server, GH_LOGIN).await
+}
+
+/// HTTPS and the browser flow named up front, so the only questions left are
+/// the device code and whether git should use the token, which agents pushing
+/// from the server want. A headless server cannot open the browser itself; gh
+/// says so and prints the URL, which Terminal on this Mac makes clickable.
+const GH_LOGIN: &str = "gh auth login --hostname github.com --git-protocol https --web";
+
+async fn run_on_server(server: &str, command: &str) -> Result<(), String> {
     let target = conns()
         .iter()
         .find(|c| c.saved.id == server)
@@ -603,11 +624,7 @@ pub async fn run_server_login(
         .ssh
         .clone()
         .ok_or("This server was added by address, so there is no login to open. Run the command on it yourself.")?;
-    let command = match auth {
-        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
-        None => harness.login_command().to_string(),
-    };
-    crate::apps::run_in_terminal(&ssh::terminal_line(&target, &command), "").await
+    crate::apps::run_in_terminal(&ssh::terminal_line(&target, command), "").await
 }
 
 /// Reopens every connection, so each server sends a fresh `live_state`. The
