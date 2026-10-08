@@ -510,8 +510,9 @@ async fn set_session_flags(
     archived: Option<bool>,
     pinned: Option<bool>,
     hidden: Option<bool>,
+    aside: Option<bool>,
 ) -> Result<Option<SessionIndexItem>, Fail> {
-    let updated = store::set_session_flags(session_id, archived, pinned, hidden).await?;
+    let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
     }
@@ -776,6 +777,7 @@ pub fn run() {
             servers::survey_server,
             servers::install_on_server,
             servers::run_server_login,
+            servers::run_gh_login,
             send_msg,
             attachments::read_attachments,
             attachments::paste_attachments,

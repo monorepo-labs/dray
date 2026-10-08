@@ -105,6 +105,50 @@ install_skill() {
   fi
 }
 
+# Puts INSTALL_DIR on PATH in the reader's shell startup files, once. Answers
+# non-zero where it is not this function's to do, which leaves the note.
+#
+# Linux alone, where this usually runs from the app over `ssh host cmd`: that
+# PATH already carries ~/.local/bin (ssh.rs puts it there) and nobody reads
+# the output, so a test on PATH passes and the note goes nowhere. Root's
+# default .profile on Ubuntu adds no ~/.local/bin, so the console opened later
+# answered `gh: command not found`. So the files are asked rather than PATH,
+# and one naming the directory in any spelling is left alone — which is also
+# what heals a server on `dray update`. The line is guarded, so a shell reading
+# two of these files adds the directory once.
+#
+# A directory outside home is the reader's own choice and keeps the note.
+add_to_path() {
+  [ "$(uname -s)" = Linux ] || return 1
+  case "$INSTALL_DIR" in "$HOME"/*) ;; *) return 1 ;; esac
+  sub=${INSTALL_DIR#"$HOME"/}
+  # Written inside double quotes, where these would expand or end the string.
+  case "$sub" in *[\"\$\`\\]*) return 1 ;; esac
+  case "${SHELL:-}" in
+    # A login bash reads the first of these that exists.
+    */bash) files=".bashrc .profile"
+      if [ -f "$HOME/.bash_profile" ]; then files=".bashrc .bash_profile"
+      elif [ -f "$HOME/.bash_login" ]; then files=".bashrc .bash_login"; fi ;;
+    */zsh) files=".zshrc" ;;
+    */fish)
+      say "Run 'fish_add_path \$HOME/$sub' to put dray on your PATH."
+      return 0 ;;
+    *) files=".profile" ;;
+  esac
+  # Each file on its own: a login shell and an interactive one read different
+  # files, and either may be the one already naming the directory.
+  added=
+  for f in $files; do
+    grep -Fqs -e "\$HOME/$sub" -e "~/$sub" -e "$INSTALL_DIR" "$HOME/$f" && continue
+    printf '\n# Added by the Dray installer.\ncase ":$PATH:" in *":$HOME/%s:"*) ;; *) export PATH="$HOME/%s:$PATH" ;; esac\n' \
+      "$sub" "$sub" >> "$HOME/$f"
+    added="$added ~/$f"
+  done
+  if [ -n "$added" ]; then
+    say "Added $INSTALL_DIR to PATH in$added. New shells will find dray and the tools beside it."
+  fi
+}
+
 TARGET=$(detect_target)
 
 # `latest` is spelled as a request to resolve, not as a tag: it used to build a
@@ -134,6 +178,7 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
     if [ -x "$INSTALL_DIR/dray" ]; then
       install_skill
     fi
+    add_to_path || :
     exit 0
   fi
 fi
@@ -195,7 +240,7 @@ install_skill
 
 # `case` rather than grep, so a directory whose name contains another's does not
 # read as already present.
-case ":$PATH:" in
+add_to_path || case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
     say ""
