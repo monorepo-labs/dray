@@ -776,6 +776,7 @@ pub fn run() {
             servers::survey_server,
             servers::install_on_server,
             servers::run_server_login,
+            servers::run_gh_login,
             send_msg,
             attachments::read_attachments,
             attachments::paste_attachments,

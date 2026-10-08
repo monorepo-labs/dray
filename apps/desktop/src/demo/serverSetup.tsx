@@ -370,10 +370,22 @@ async function core(cmd: string, a: Record<string, unknown>, server: string): Pr
       // A Terminal opens; Refresh is how the page learns. Signed in by then.
       signIn(server, a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
       return null;
+    case "recheck_gh":
+      return true;
+    case "get_integrations":
+      return {
+        linear: null,
+        github: ghSignedIn.has(server)
+          ? { tracker: "github", userId: "octocat", userName: "The Octocat", orgName: "" }
+          : null,
+      };
     default:
       throw new Error(`demo: nothing stubbed for ${cmd}`);
   }
 }
+
+/// Servers whose `gh` is signed in. The Terminal sign-in lands at once here.
+const ghSignedIn = new Set<string>();
 
 mockIPC(
   async (cmd, args) => {
@@ -473,6 +485,10 @@ mockIPC(
       case "run_server_login":
         await pause(STEP / 2);
         signIn(String(a.server), a.harness as Harness, (a.provider as string) ?? null, String(a.auth), true);
+        return null;
+      case "run_gh_login":
+        await pause(STEP / 2);
+        ghSignedIn.add((a.server as string | null) ?? "local");
         return null;
       case "server_invoke":
         return core(String(a.cmd), (a.args ?? {}) as Record<string, unknown>, String(a.server));

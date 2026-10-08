@@ -62,8 +62,6 @@ export default function ServerSetupDialog({
   // Picks still missing after an install that otherwise worked: `dray setup`
   // warns and carries on, so its exit code alone would lose them.
   const [unfinished, setUnfinished] = useState<string[]>([]);
-  // Whether gh ended up on the server, so the logins can say it needs one too.
-  const [gh, setGh] = useState(false);
   // State, not a ref: the portal into it needs the node during render.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -113,7 +111,6 @@ export default function ServerSetupDialog({
     try {
       await invoke("install_on_server", { line, picks }, LOCAL);
       const after = await invoke<Survey>("survey_server", { line }, LOCAL);
-      setGh(after.tools.some((t) => t.id === "gh" && t.found));
       const missing = after.tools.filter((t) => picks.includes(t.id) && !t.found);
       if (missing.length > 0) {
         setPicks(missing.map((t) => t.id));
@@ -239,12 +236,6 @@ export default function ServerSetupDialog({
               <AccountsSettings cwd="" only={step.id} onFormOpen={setFormOpen} />
             </div>
           </SettingsHeaderSlot.Provider>
-        )}
-        {step.kind === "signing_in" && gh && (
-          <div className="flex flex-col gap-1.5">
-            <p className="text-ui text-muted-foreground">GitHub CLI has its own login too. Run this on {name}:</p>
-            <CommandChip command="gh auth login" />
-          </div>
         )}
 
         {stillWaiting && !shownError && (
